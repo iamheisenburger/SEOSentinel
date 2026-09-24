@@ -352,7 +352,7 @@ export default function SiteDetailPage() {
           onDelete={(id) => deleteArticle({ articleId: id })}
         />
       )}
-      {activeTab === "settings" && site.contentSetupRequestedAt && !site.serviceMode && (
+      {activeTab === "settings" && site.contentSetupRequestedAt && !site.serviceMode && site.publishMethod !== "manual" && (
         <div className="rounded-xl border border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.06] p-4 text-sm" role="status">
           <p className="font-medium text-[#EDEEF1]">Almost there</p>
           <p className="mt-1 text-[#8B8FA3]">Connect your website in the Connection section below and save. Once it&apos;s verified, go to your <Link className="underline text-[#0EA5E9]" href="/dashboard">Dashboard</Link> and choose Autopilot or Review first to turn Pentra on.</p>

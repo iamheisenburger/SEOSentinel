@@ -10,6 +10,7 @@ import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { PastedLiveCheck } from "@/components/pasted-live-check";
 import {
   ArrowLeft,
   Link2,
@@ -639,6 +640,12 @@ export default function ArticleDetailPage() {
                     <p className="basis-full text-xs text-[#8B8FA3]">{approveHint}</p>
                   )}
                 </>
+              )}
+              {article.status === "ready" && site?.publishMethod === "manual" && (
+                <p className="basis-full text-xs text-[#8B8FA3]">Approved and ready. Use Copy HTML (or Copy MD) and paste it into a new post in your site&apos;s blog editor, with the title and search description shown on this page.</p>
+              )}
+              {article.status === "ready" && site?.publishMethod === "manual" && site.contentSetupRequestedAt && (
+                <PastedLiveCheck articleId={article._id} domain={site.domain} />
               )}
               {article.status === "ready" && site?.publishMethod !== "manual" && (
                 <div className="flex max-w-sm flex-col gap-2">

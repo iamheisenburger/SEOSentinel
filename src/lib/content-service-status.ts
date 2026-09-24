@@ -30,3 +30,23 @@ export function contentServiceStatus(state: ServiceState | null | undefined) {
       (!state.schedule?.active && !work.some(w => ["prepare", "review", "publish", "verify", "failed"].includes(w.stage)))),
   };
 }
+
+type FundingState = { status: string; monthlyLimitMicroUsd?: number | null; settledActualMicroUsd?: number | null;
+  heldCeilingMicroUsd?: number | null; requestedMicroUsd?: number | null; monthlyResetAt?: number; dailyResetAt?: number };
+const dollars = (micro: number) => `$${(micro / 1_000_000).toFixed(2)}`;
+const day = (at: number, zone: string) => new Intl.DateTimeFormat("en-US", { timeZone: zone, weekday: "short", month: "short", day: "numeric" }).format(at);
+const clock = (at: number, zone: string) => new Intl.DateTimeFormat("en-US", { timeZone: zone, weekday: "short", hour: "numeric", minute: "2-digit" }).format(at);
+
+/** Plain, truthful reason new articles can't start: real dollars, the real limit, when it lifts. */
+export function fundingMessage(funding: FundingState, zone = "UTC") {
+  if (funding.status !== "blocked") return "Pentra can't start new articles right now. Your published articles are not affected.";
+  const limit = funding.monthlyLimitMicroUsd ?? null, spent = funding.settledActualMicroUsd ?? null, held = funding.heldCeilingMicroUsd ?? null;
+  const requested = funding.requestedMicroUsd ?? 0;
+  if (limit === null || spent === null || held === null) return "Pentra can't start new articles right now. Your published articles are not affected.";
+  if (limit - spent - held >= requested && funding.dailyResetAt) {
+    return `Today's spending limit is reached, so the next article starts after ${clock(funding.dailyResetAt, zone)}. Nothing is lost.`;
+  }
+  const inProgress = held > 0 ? ` and ${dollars(held)} set aside for articles in progress` : "";
+  const resets = funding.monthlyResetAt ? ` or on ${day(funding.monthlyResetAt, zone)}` : "";
+  return `This month's article budget is used: ${dollars(spent)} spent${inProgress}, of ${dollars(limit)}. New articles start again as set-aside money is released${resets}. For more each month, upgrade in Plans & billing.`;
+}

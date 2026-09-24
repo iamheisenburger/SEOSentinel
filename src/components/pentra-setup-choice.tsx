@@ -27,9 +27,12 @@ function rhythm(intervalMs: number) {
 /** New-customer setup: one clear choice instead of delivery windows. */
 export function PentraSetupChoice({ state }: { state: SetupState }) {
   const select = useMutation(api.contentWork.selectServiceMode);
-  const [choice, setChoice] = useState<"autopilot" | "review">("autopilot");
+  // Other platforms (paste your own): Pentra writes, the owner publishes — Review first only.
+  const paste = state.destination.kind === "manual";
+  const [picked, setChoice] = useState<"autopilot" | "review">("autopilot");
+  const choice = paste ? "review" : picked;
   const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
-  const reviewAvailable = state.destination.kind === "github" || state.destination.kind === "wordpress";
+  const reviewAvailable = state.destination.kind === "github" || state.destination.kind === "wordpress" || paste;
   const ready = state.destination.verified && state.entitlement;
   const start = async () => {
     setBusy(true); setError("");
@@ -52,21 +55,21 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
     </div>
     <ul className="space-y-1 text-sm">
       {step(true, "Business profile saved")}
-      {step(state.destination.verified, "Website connected and verified",
+      {step(state.destination.verified, paste ? "Website: you paste each approved article into your site" : "Website connected and verified",
         <Link className="ml-1 underline" href={`/sites/${state.siteId}?tab=settings`}>Connect your website</Link>)}
       {step(state.entitlement, "Plan active", <Link className="ml-1 underline" href="/settings/billing">Check billing</Link>)}
     </ul>
     <fieldset className="grid gap-3 md:grid-cols-2">
       <legend className="sr-only">How should Pentra work?</legend>
       <label className={`cursor-pointer rounded-xl border p-4 transition ${choice === "autopilot" ? "border-[#0EA5E9] bg-[#0EA5E9]/[0.06]" : "border-white/10 hover:border-white/20"}`}>
-        <input type="radio" name="pentra-mode" className="mr-2" checked={choice === "autopilot"} onChange={() => setChoice("autopilot")} />
+        <input type="radio" name="pentra-mode" className="mr-2" disabled={paste} checked={choice === "autopilot"} onChange={() => setChoice("autopilot")} />
         <span className="font-medium text-[#EDEEF1]">Autopilot (recommended)</span>
-        <p className="mt-1 text-sm text-[#8B8FA3]">Pentra researches, writes and publishes on its own, {rhythm(state.plan.autopilotIntervalMs)}. Drafts it isn&apos;t confident about are held back, never published; everything else goes live automatically.</p>
+        <p className="mt-1 text-sm text-[#8B8FA3]">{paste ? "Needs a WordPress or GitHub connection, so Pentra can publish for you. " : ""}Pentra researches, writes and publishes on its own, {rhythm(state.plan.autopilotIntervalMs)}. Drafts it isn&apos;t confident about are held back, never published; everything else goes live automatically.</p>
       </label>
       <label className={`rounded-xl border p-4 transition ${reviewAvailable ? "cursor-pointer hover:border-white/20" : "opacity-50"} ${choice === "review" ? "border-[#0EA5E9] bg-[#0EA5E9]/[0.06]" : "border-white/10"}`}>
         <input type="radio" name="pentra-mode" className="mr-2" disabled={!reviewAvailable} checked={choice === "review"} onChange={() => setChoice("review")} />
         <span className="font-medium text-[#EDEEF1]">Review first</span>
-        <p className="mt-1 text-sm text-[#8B8FA3]">{reviewAvailable ? "Pentra drafts; you read, edit and approve every article before it goes live." : "Connect GitHub or WordPress to choose this."}</p>
+        <p className="mt-1 text-sm text-[#8B8FA3]">{paste ? "Pentra researches and writes each article; you read it, then paste it into your site's blog." : reviewAvailable ? "Pentra drafts; you read, edit and approve every article before it goes live." : "Connect GitHub or WordPress to choose this."}</p>
       </label>
     </fieldset>
     {(choice === "autopilot" || !reviewAvailable) && <p className="text-xs text-[#8B8FA3]">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>}
@@ -99,6 +102,21 @@ export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAva
     }}>{on ? "Switch to review first" : "Turn on Autopilot"}</Button>}
     {error && <p role="alert" className="w-full text-sm text-red-400">{error}</p>}
   </div>;
+}
+
+/** Don't want to wait a day for the first article? Bring the next one forward. */
+export function StartNow({ siteId, reviewToken }: { siteId: Id<"sites">; reviewToken: string }) {
+  const start = useMutation(api.contentWork.startAutopilotNow);
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  return <span className="inline-flex flex-wrap items-center gap-2">
+    <Button size="sm" variant="secondary" loading={busy} onClick={async () => {
+      setBusy(true); setError("");
+      try { await start({ siteId, reviewToken }); }
+      catch (err) { setError(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Couldn't bring it forward. Refresh and try again."); }
+      finally { setBusy(false); }
+    }}>Publish the next one in about 2 hours</Button>
+    {error && <span role="alert" className="text-sm text-red-400">{error}</span>}
+  </span>;
 }
 
 /** Existing contracts (set up before Autopilot) can move onto Autopilot. */

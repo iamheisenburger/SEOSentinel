@@ -54,8 +54,9 @@ export function ContentStart() {
     finally { setBusy(false); }
   }
   if (siteId) return <div className="mx-auto max-w-3xl space-y-4"><h1 className="text-xl font-semibold">Finish setting up Pentra</h1>
+    {adapter === "manual" ? <p>Your profile is saved. Start Pentra below: it researches and writes each article, and you paste it into your site.</p> : <>
     <p>Your profile is saved. Connect and verify your website, then choose Autopilot or Review first.</p>
-    <Link className="underline" href={`/sites/${siteId}?tab=settings`}>Connect your website in settings</Link>
+    <Link className="underline" href={`/sites/${siteId}?tab=settings`}>Connect your website in settings</Link></>}
     <ContentWorkService key={siteId} siteId={siteId} />
   </div>;
   return <section className="mx-auto max-w-2xl space-y-4 rounded-xl border border-white/10 p-5"><h1 className="text-xl font-semibold">Set up Pentra for your website</h1>
@@ -72,7 +73,8 @@ export function ContentStart() {
     {ctaUrl.trim() && <Input label="Button text" value={ctaText} onChange={e => setCtaText(e.target.value)} placeholder="Book a visit" />}
     {!ctaValid && <p role="alert" className="text-sm">Use a full link that starts with https://</p>}
     <p className="text-sm text-[#8B8FA3]">Each article ends with one clear next step to this page. Leave it empty to link to your homepage.</p>
-    <label className="block">Publishing destination<select className="block w-full rounded-lg border border-white/15 bg-[#0F1117] p-2" aria-label="Content publishing destination" value={adapter} onChange={e => { setAdapter(e.target.value); setConfirmed(false); }}><option value="github">GitHub · plain Markdown/MDX</option><option value="wordpress">WordPress · install the Pentra publisher plugin</option></select></label>
+    <label className="block">Publishing destination<select className="block w-full rounded-lg border border-white/15 bg-[#0F1117] p-2" aria-label="Content publishing destination" value={adapter} onChange={e => { setAdapter(e.target.value); setConfirmed(false); }}><option value="github">GitHub · plain Markdown/MDX</option><option value="wordpress">WordPress · install the Pentra publisher plugin</option><option value="manual">Another platform (Shopify, Webflow, Wix, Squarespace…) · you paste articles in</option></select></label>
+    {adapter === "manual" && <p className="text-sm text-[#8B8FA3]">Pentra researches, writes and fact-checks every article for you to review; you paste each one into your site&apos;s blog. Automatic publishing for these platforms is coming soon.</p>}
     {adapter === "wordpress" && <p className="text-sm"><a className="underline" href="/pentra-wordpress-plugin.zip" download>Download the Pentra WordPress plugin (ZIP)</a>. In WordPress go to Plugins → Add New → Upload Plugin, choose the ZIP and activate it. You&apos;ll connect it in the next step.</p>}
     <p className="text-sm text-[#8B8FA3]">Saving doesn&apos;t charge you. Pentra only adds new articles; it never changes your pricing, checkout or legal pages.</p>
     <label className="block text-sm"><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /> These facts are accurate. Pentra writes only from them and from sources it cites.</label>

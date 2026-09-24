@@ -3962,6 +3962,7 @@ const SITE_DELETION_STAGES = [
   "search_page_daily",
   "search_performance",
   "site_health_checks",
+  "pasted_publications",
   "autopilot_alerts",
   "autopilot_health",
   "autopilot_runs",
@@ -4668,6 +4669,8 @@ async function deletionRowsForStage(
       return ctx.db.query("search_performance").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "site_health_checks":
       return ctx.db.query("site_health_checks").withIndex("by_site_checked", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "pasted_publications":
+      return ctx.db.query("pasted_publications").withIndex("by_site_status", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "autopilot_alerts":
       return ctx.db.query("autopilot_alerts").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "autopilot_health":

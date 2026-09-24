@@ -17,7 +17,7 @@ import type { CadenceScheduleResult } from "./lib/autopilotRunOutcome";
 import { liveAutopilotReadiness, publicationDestinationBlockers } from "./lib/autopilotReadiness";
 import { PUBLISHED_REVISION_LEASE_MS } from "./lib/publishedRevision";
 import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
-import { contentConnectionHash, confirmedContentProfileHash, contentConnectionComplete, contentConsentToken } from "./lib/contentSelection";
+import { contentConnectionHash, confirmedContentProfileHash, contentConnectionComplete, contentConsentToken, pasteDestination } from "./lib/contentSelection";
 import { contentFunding, contentIssue } from "./lib/contentCustomer";
 import { assertSafeImprovement } from "./lib/contentSelection";
 import { authorizedWorkPage, chooseImprovement, enrollVerifiedCreation, selectionConnection } from "./selectedPages";
@@ -201,7 +201,7 @@ async function creditRecoveryAuthority(ctx: MutationCtx, site: Doc<"sites">, job
     cw.profileHash !== confirmedContentProfileHash(site) || cw.connectionHash !== contentConnectionHash(site)) {
     throw new Error("Interrupted content authority changed");
   }
-  selectionConnection(site);
+  if (!pasteDestination(site)) selectionConnection(site);
   await authorizedWorkPage(ctx, site, job);
   if (!(await pricingConfiguration(ctx, site, job))) throw new Error("Interrupted content pricing unavailable");
   const binding = await contentValidationBinding(ctx, site, Date.now(), job);
@@ -409,7 +409,7 @@ export const reconfirm = mutation({ args: { siteId: v.id("sites"), reviewToken: 
     if (!review.needed) return { status: "unchanged" as const, retired: 0, issues: [] as SetupIssue[] };
     await ctx.db.patch(site._id, { contentSchedule: { ...schedule, paused: true }, updatedAt: Date.now() });
     await scheduleSetupReconciliation(ctx, site, jobs, review);
-    if (!contentConnectionComplete(site) || !publisherDestinationReceiptVerified({ site }) || publicationDestinationBlockers(site).length) review.issues.push({ code: "connection", action: "Reconnect and verify the exact current GitHub or WordPress destination in website settings, then review these changes again." });
+    if (!contentConnectionComplete(site) || (!pasteDestination(site) && (!publisherDestinationReceiptVerified({ site }) || publicationDestinationBlockers(site).length))) review.issues.push({ code: "connection", action: "Reconnect and verify the exact current GitHub or WordPress destination in website settings, then review these changes again." });
     if (!await contentEntitlementAuthorized(ctx, site)) review.issues.push({ code: "billing", action: "Verify the existing plan in Billing, then check these changes again. No plan or credit is purchased by confirming setup." });
     if (!site.siteSummary?.trim() || !site.targetAudienceSummary?.trim()) review.issues.push({ code: "profile", action: "Complete the confirmed business facts and audience in website settings, then review the saved setup again." });
     if (review.issues.length) return { status: "waiting" as const, retired: 0, issues: review.issues };
@@ -448,7 +448,7 @@ export const selectServiceMode = mutation({
       firstDeadlineAt: Date.now() + 24 * 3_600_000 } : rawArgs;
     if ((site.serviceMode ?? "legacy_articles") === args.mode) return { changed: false, status: "completed" as const };
     if (args.ownerReviewedOnly && (args.mode !== "growth_first" || args.authorizeAutomaticPublication ||
-      !site.contentSetupRequestedAt || site.contentSchedule || !["github", "wordpress"].includes(site.publishMethod ?? ""))) {
+      !site.contentSetupRequestedAt || site.contentSchedule || !["github", "wordpress", "manual"].includes(site.publishMethod ?? ""))) {
       throw new Error("Owner-reviewed setup is for a new GitHub or WordPress connection; existing contracts remain unchanged");
     }
     const rollback = args.mode === "legacy_articles";
@@ -539,8 +539,10 @@ export const selectServiceMode = mutation({
     if (!contentConnectionComplete(site)) {
       throw new Error("Connect a supported GitHub or conditional WordPress destination first");
     }
-    selectionConnection(site);
-    if (args.ownerReviewedOnly && !publisherDestinationReceiptVerified({ site })) throw new Error("Verify the exact website connection first");
+    // Other platforms (paste your own) are Review first only: Pentra never publishes there.
+    if (pasteDestination(site) && !args.ownerReviewedOnly) throw new Error("Autopilot needs a WordPress or GitHub connection. Choose Review first.");
+    if (!pasteDestination(site)) selectionConnection(site);
+    if (args.ownerReviewedOnly && !pasteDestination(site) && !publisherDestinationReceiptVerified({ site })) throw new Error("Verify the exact website connection first");
     if (!args.ownerReviewedOnly && (!Number.isSafeInteger(args.intervalMs) || args.intervalMs! < CONTENT_DELIVERY_WINDOW_MS ||
       !Number.isSafeInteger(args.firstDeadlineAt) || args.firstDeadlineAt! < Date.now() + CONTENT_DELIVERY_WINDOW_MS)) throw new Error("Choose a future fixed delivery window and interval");
     if (!(await contentEntitlementAuthorized(ctx, site))) throw new Error("Current plan entitlement is required");
@@ -603,6 +605,7 @@ export const setAutopilot = mutation({ args: { siteId: v.id("sites"), enabled: v
     if (args.reviewToken !== contentConsentToken(site)) throw new ConvexError("Your saved setup changed. Refresh and try again.");
     if (args.enabled) {
       if (!s.ownerReviewedOnly) return { changed: false };
+      if (pasteDestination(site)) throw new ConvexError("Autopilot needs a WordPress or GitHub connection. Connect one in website settings first.");
       if (!contentConnectionComplete(site) || !publisherDestinationReceiptVerified({ site })) throw new ConvexError("Connect and verify your website first.");
       if (!(await contentEntitlementAuthorized(ctx, site))) throw new ConvexError("Your plan needs to be active in Billing first.");
       const plan = await accountPlan(ctx, site);
@@ -627,6 +630,28 @@ export const setAutopilot = mutation({ args: { siteId: v.id("sites"), enabled: v
     return { changed: true };
   } });
 
+/** Autopilot's first article normally lands a day after it is switched on.
+ * An owner who doesn't want to wait can bring the next slot forward to about
+ * two hours from now. Only an upcoming slot with nothing prepared for it moves,
+ * and only earlier: missed slots, prepared work and history never change. */
+export const START_NOW_LEAD_MS = 2 * 3_600_000;
+export const startAutopilotNow = mutation({ args: { siteId: v.id("sites"), reviewToken: v.string() },
+  handler: async (ctx, args) => {
+    const site = await requireOwner(ctx, args.siteId), s = site.contentSchedule;
+    if (site.serviceMode !== "growth_first" || !s?.autopilotSelectedAt || !s.autopublishConsentAt || s.ownerReviewedOnly || s.paused) {
+      throw new ConvexError("Autopilot isn't running for this site.");
+    }
+    if (args.reviewToken !== contentConsentToken(site)) throw new ConvexError("Your saved setup changed. Refresh and try again.");
+    const now = Date.now(), target = now + START_NOW_LEAD_MS;
+    if (s.nextDeadlineAt <= target) return { changed: false, nextDeadlineAt: s.nextDeadlineAt };
+    const unfinished = (await jobsForSite(ctx, site._id)).some(j => j.contentWork && !j.contentWork.ownerRequest &&
+      j.contentWork.retiredAt === undefined && !["verified", "failed"].includes(j.contentWork.stage));
+    if (unfinished) throw new ConvexError("Pentra is already preparing your next article for its scheduled time.");
+    await ctx.db.patch(site._id, { contentSchedule: { ...s, nextDeadlineAt: target }, updatedAt: now });
+    await wake(ctx, site._id);
+    return { changed: true, nextDeadlineAt: target };
+  } });
+
 export const readiness = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
@@ -637,7 +662,7 @@ export const readiness = query({
     let verified = false, directory: string | null = null, bindingCurrent = !s;
     try {
       directory = publicationDeliveryConfig(site).contentDir ?? null;
-      verified = contentConnectionComplete(site) && publisherDestinationReceiptVerified({ site }) && publicationDestinationBlockers(site).length === 0;
+      verified = pasteDestination(site) || (contentConnectionComplete(site) && publisherDestinationReceiptVerified({ site }) && publicationDestinationBlockers(site).length === 0);
       bindingCurrent = !s || (s.profileHash === confirmedContentProfileHash(site) && s.connectionHash === contentConnectionHash(site));
     } catch { /* Incomplete destination is actionable readiness, not a query crash. */ }
     const reconciliation = await reviewChangedSetup(ctx, site, jobs);
@@ -646,6 +671,21 @@ export const readiness = query({
     const publishedRows = (await ctx.db.query("articles").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published"))
       .order("desc").take(20)).filter(a => articleMatchesCurrentDomain(site, a));
     const publishedTopics = new Set(publishedRows.map(a => a.topicId).filter(Boolean));
+    // Results at a glance: live articles on the current domain (lightweight projection rows).
+    const liveSummaries = (await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "published"))
+      .take(LIMIT)).filter(row => articleMatchesCurrentDomain(site, row));
+    const monthStart = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1);
+    // Other platforms: articles the owner pasted count once Pentra found them on the public page.
+    const pastedLive = new Map<string, { articleId: Id<"articles">; title: string; publishedAt: number; url: string }>();
+    if (pasteDestination(site)) {
+      for (const row of await ctx.db.query("pasted_publications").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "live")).take(LIMIT)) {
+        const seen = pastedLive.get(row.articleId);
+        if (seen && seen.publishedAt <= (row.checkedAt ?? row.requestedAt)) continue;
+        const article = await ctx.db.get(row.articleId);
+        if (article?.siteId === siteId) pastedLive.set(row.articleId, { articleId: row.articleId, title: article.title ?? article.slug ?? "Article",
+          publishedAt: row.checkedAt ?? row.requestedAt, url: row.url });
+      }
+    }
     // On sites set up with Autopilot, a draft the reviewer would not pass is
     // skipped (the schedule continues); it needs no action from the owner.
     const parkedByAutopilot = (j: Doc<"jobs">) => Boolean(s?.autopilotSelectedAt && !j.contentWork?.ownerRequest && j.contentWork?.intent === "create" &&
@@ -669,16 +709,23 @@ export const readiness = query({
         pricingScope: !pricing ? "unavailable" as const : pricing.validationAuthorizationId ? "validation_run" as const : "ordinary" as const },
       plan: await accountPlan(ctx, site),
       autopilot: { selectable: Boolean(site.contentSetupRequestedAt), on: Boolean(s && !s.ownerReviewedOnly && site.autopilotEnabled && !site.approvalRequired),
-        reviewAvailable: ["github", "wordpress"].includes(site.publishMethod ?? ""),
+        reviewAvailable: ["github", "wordpress"].includes(site.publishMethod ?? "") || pasteDestination(site),
+        autopilotAvailable: !pasteDestination(site),
+        canStartNow: Boolean(s?.autopilotSelectedAt && s.autopublishConsentAt && !s.ownerReviewedOnly && !s.paused &&
+          s.nextDeadlineAt > Date.now() + START_NOW_LEAD_MS + 30 * 60_000 && !jobs.some(j => j.contentWork && !j.contentWork.ownerRequest &&
+          j.contentWork.retiredAt === undefined && !["verified", "failed"].includes(j.contentWork.stage))),
         adoptable: Boolean(site.serviceMode === "growth_first" && s && !s.autopilotSelectedAt && !s.ownerReviewedOnly) },
       ownerDraft: { maximumMicroUsd: pricing?.budgetMicroUsd ?? null,
         allowance: pricing ? await ownerDraftAllowance(ctx, site, Boolean(pricing.validationAuthorizationId)) : null,
         latest: jobs.filter(j => j.contentWork?.ownerRequest).sort((a, b) => b.createdAt - a.createdAt).slice(0, 1).map(j => ({
           jobId: j._id, articleId: j.articleId, stage: j.contentWork!.stage, issue: contentIssue(j.contentWork!.failure),
         }))[0] ?? null },
-      published: [...publishedRows].sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0)).slice(0, 5)
-        .map(a => ({ articleId: a._id, title: a.title ?? a.slug ?? "Article", publishedAt: a.publishedAt ?? null,
+      results: { live: liveSummaries.length + pastedLive.size,
+        liveThisMonth: liveSummaries.filter(row => (row.publishedAt ?? 0) >= monthStart).length + [...pastedLive.values()].filter(p => p.publishedAt >= monthStart).length },
+      published: [...publishedRows.map(a => ({ articleId: a._id, title: a.title ?? a.slug ?? "Article", publishedAt: a.publishedAt ?? null,
           verified: a.publicUrlStatus === "verified", url: a.publicUrlStatus === "verified" && a.publicUrl?.startsWith("https://") ? a.publicUrl : null })),
+        ...[...pastedLive.values()].map(p => ({ ...p, verified: true }))]
+        .sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0)).slice(0, 5),
       complete: jobs.length <= LIMIT, ready: jobs.filter(j => j.contentWork?.stage === "ready" && !j.contentWork.ownerRequest && j.contentWork.retiredAt === undefined &&
         j.contentWork.profileHash === confirmedContentProfileHash(site) && j.contentWork.connectionHash === s?.connectionHash && bindingCurrent).length,
       work: jobs.filter(j => j.contentWork && !j.contentWork.ownerRequest).map(j => {
@@ -837,8 +884,8 @@ export const requestDraft = mutation({
       metadata: v.optional(v.object({ title: v.string(), metaTitle: v.string(), metaDescription: v.string() })) })) },
   handler: async (ctx, args) => {
     const site = await requireOwner(ctx, args.siteId), schedule = site.contentSchedule;
-    if (site.serviceMode !== "growth_first" || !schedule || !["github", "wordpress"].includes(site.publishMethod ?? "") ||
-      !contentConnectionComplete(site) || !publisherDestinationReceiptVerified({ site }) ||
+    if (site.serviceMode !== "growth_first" || !schedule || !(["github", "wordpress"].includes(site.publishMethod ?? "") || pasteDestination(site)) ||
+      !contentConnectionComplete(site) || (!pasteDestination(site) && !publisherDestinationReceiptVerified({ site })) ||
       !await contentEntitlementAuthorized(ctx, site)) throw new ConvexError("Confirm your business, website connection and billing in Settings first");
     if (args.reviewToken !== contentConsentToken(site) || schedule.profileHash !== confirmedContentProfileHash(site) ||
       schedule.connectionHash !== contentConnectionHash(site)) throw new ConvexError("Business or destination changed; review Settings first");
@@ -892,7 +939,8 @@ export const requestDraft = mutation({
     const requestedAt = Date.now(), { budgetMicroUsd, ...price } = pricing;
     const request = { siteId: site._id, userId: site.userId!, purpose: "content_work" as const,
       trigger: `content_slot:${requestedAt}`, reservedMicroUsd: budgetMicroUsd, timestamp: requestedAt };
-    const funding = await inspectSharedProviderBudget(ctx, request);
+    let funding = await inspectSharedProviderBudget(ctx, request);
+    if (!funding.ok && await closeFinishedContentHolds(ctx, site) > 0) funding = await inspectSharedProviderBudget(ctx, request);
     if (!funding.ok) throw new ConvexError(contentIssue(funding.reason) ?? "Draft funding is unavailable");
     const editedId = source && args.edit ? await createOwnerEditedCheckpoint(ctx, source, args.edit.markdown, metadata) : undefined;
     const jobId = await ctx.db.insert("jobs", { siteId: site._id, canonicalDomain: siteCanonicalDomain(site)!,
@@ -1133,8 +1181,11 @@ export const advance = internalMutation({
         const request = { siteId, userId: site.userId, purpose: "topic_plan" as const, trigger: `autopilot_topics:${Math.floor(Date.now() / TOPIC_REPLENISH_INTERVAL_MS)}`,
           reservedMicroUsd: TOPIC_REPLENISH_BUDGET_MICRO_USD, timestamp: Date.now() };
         const reserved = await reserveSharedProviderBudget(ctx, request);
-        await ctx.db.patch(siteId, { contentSchedule: { ...schedule, topicsReplenishedAt: Date.now() }, updatedAt: Date.now() });
-        if (reserved.ok) await ctx.scheduler.runAfter(0, internal.actions.growthTopics.replenish, { siteId, reservationId: reserved.reservationId });
+        // A refused reservation spends nothing; try again on the next check.
+        if (reserved.ok) {
+          await ctx.db.patch(siteId, { contentSchedule: { ...schedule, topicsReplenishedAt: Date.now() }, updatedAt: Date.now() });
+          await ctx.scheduler.runAfter(0, internal.actions.growthTopics.replenish, { siteId, reservationId: reserved.reservationId });
+        }
       }
       return { scheduled: 0, mode: "content_inputs_exhausted" };
     }
@@ -1153,7 +1204,8 @@ export const advance = internalMutation({
     if (work.some(j => j.contentWork!.deadlineAt === deadlineAt)) return { scheduled: 0, mode: "content_failed_slot" };
     const budgetRequest = { siteId, userId: site.userId!, purpose: "content_work" as const,
       trigger: `content_slot:${deadlineAt}`, reservedMicroUsd: pricing.budgetMicroUsd, timestamp: Date.now() };
-    const budget = await inspectSharedProviderBudget(ctx, budgetRequest);
+    let budget = await inspectSharedProviderBudget(ctx, budgetRequest);
+    if (!budget.ok && await closeFinishedContentHolds(ctx, site) > 0) budget = await inspectSharedProviderBudget(ctx, budgetRequest);
     if (!budget.ok) return { scheduled: 0, mode: "content_budget_exhausted", blockers: [budget.reason], budgetBlocker: budget };
     const { budgetMicroUsd, ...price } = pricing;
     const jobId = await ctx.db.insert("jobs", { siteId, canonicalDomain: siteCanonicalDomain(site)!, domainRevision: siteCanonicalDomainRevision(site),
@@ -1181,6 +1233,7 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">, r
   if (job.contentWork.intent === "improve" && ["verify", "verified"].includes(job.contentWork.stage)) return;
   if (!job.articleId) {
     await ctx.db.patch(job._id, { status: "failed", contentWork: { ...job.contentWork, stage: "failed", failure: "candidate_rejected_before_draft" } });
+    await closeContentWorkHold(ctx, (await ctx.db.get(job._id))!);
     await wake(ctx, job.siteId!);
     return;
   }
@@ -1218,14 +1271,10 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">, r
       assertSafeImprovement(page.editable, article, cw.editTarget);
     } catch (error) { stage = "review_failed"; selectedFailure = error instanceof Error ? error.message : "Selected-page review failed"; }
   }
-  const currentCalls = cw.providerCalls.filter(c => !c.reservationId || c.reservationId === job.providerSpendReservationId);
-  if (stage === "ready" && job.providerSpendReservationId && currentCalls.length > 0 && currentCalls.every(c => c.state === "completed" && c.actualMicroUsd !== undefined)) {
-    await settleSharedProviderReservation(ctx, { reservationId: job.providerSpendReservationId, siteId: job.siteId!, purpose: "content_work",
-      actualMicroUsd: currentCalls.reduce((sum, c) => sum + c.actualMicroUsd!, 0), reason: "verified_provider_receipt_actual_cost", timestamp: Date.now() });
-  }
   await ctx.db.patch(job._id, { contentWork: { ...cw, stage, failure: selectedFailure ?? (stage === "ready" ? undefined : cw.failure),
     approvedArtifactHash: stage === "ready" ? article.auditedContentHash : stage === "review_failed" ? undefined : cw.approvedArtifactHash,
     publishedAt: article.publishedAt, verifiedAt: article.publicUrlVerifiedAt } });
+  if (stage === "ready") await closeContentWorkHold(ctx, (await ctx.db.get(job._id))!);
   if (cw.ownerRequest) {
     if (stage === "review_failed") await ctx.scheduler.runAfter(0, internal.contentWork.advanceOwnerDraft, { jobId: job._id });
     return;
@@ -1252,6 +1301,50 @@ export async function contentWorkVerified(ctx: MutationCtx, site: Doc<"sites">, 
   await wake(ctx, site._id);
 }
 
+/** A finished content job no longer needs its whole article budget set aside.
+ * Close its hold only from the job's own receipts: no call started → release;
+ * every call completed with a reported cost → settle at that cost. A refused
+ * call is never assumed free and an uncertain call is unresolved, so either
+ * keeps the entire original hold (as does a credit-retry-able failure). */
+export async function closeContentWorkHold(ctx: MutationCtx, job: Doc<"jobs">) {
+  const cw = job.contentWork;
+  if (!cw || !job.siteId || !job.providerSpendReservationId) return "not_applicable" as const;
+  const receipt = await ctx.db.get(job.providerSpendReservationId);
+  if (!receipt || receipt.siteId !== job.siteId || receipt.purpose !== "content_work") throw new Error("Content work settlement binding changed");
+  if (receipt.settledAt !== undefined || receipt.releasedAt !== undefined) return "closed" as const;
+  const finished = job.status === "failed" ? cw.failure !== "content_provider_credit_unavailable"
+    : ["ready", "publish", "verify", "verified"].includes(cw.stage);
+  const calls = cw.providerCalls.filter(c => !c.reservationId || c.reservationId === receipt._id);
+  if (!finished || calls.some(c => c.state !== "completed" || !Number.isSafeInteger(c.actualMicroUsd) || c.actualMicroUsd! < 0)) return "held" as const;
+  if (calls.length === 0) {
+    await releaseSharedProviderReservation(ctx, { reservationId: receipt._id, siteId: job.siteId, purpose: "content_work",
+      reason: "content_work_closed_before_provider_execution", timestamp: Date.now() });
+    return "released" as const;
+  }
+  const actual = calls.reduce((sum, c) => sum + c.actualMicroUsd!, 0);
+  if (actual > receipt.reservedMicroUsd) return "held" as const;
+  await settleSharedProviderReservation(ctx, { reservationId: receipt._id, siteId: job.siteId, purpose: "content_work",
+    actualMicroUsd: actual, reason: "verified_provider_receipt_actual_cost", timestamp: Date.now() });
+  return "settled" as const;
+}
+
+/** Holds left open by finished work (before closeContentWorkHold covered every
+ * finish) are closed from the same job receipts. Own account only, this month. */
+export async function closeFinishedContentHolds(ctx: MutationCtx, site: Doc<"sites">) {
+  if (!site.userId) return 0;
+  const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0);
+  const rows = await ctx.db.query("provider_spend_reservations").withIndex("by_user_purpose_created", q =>
+    q.eq("userId", site.userId!).eq("purpose", "content_work").gte("createdAt", monthStart.getTime())).take(201);
+  let closed = 0;
+  for (const row of rows.slice(0, 200)) {
+    if (row.settledAt !== undefined || row.releasedAt !== undefined || !row.contentWorkJobId || !row.siteId) continue;
+    const job = await ctx.db.get(row.contentWorkJobId);
+    if (!job || job.siteId !== row.siteId || job.providerSpendReservationId !== row._id) continue;
+    if (["settled", "released"].includes(await closeContentWorkHold(ctx, job))) closed++;
+  }
+  return closed;
+}
+
 /** Close only a durably terminal job. Every possible paid call first appends a
  * started receipt in the same serializable job record. No receipt proves no
  * paid I/O; an incomplete receipt proves uncertainty, never free headroom. */
@@ -1260,17 +1353,7 @@ export async function settleFailedContentWork(ctx: MutationCtx, jobId: Id<"jobs"
   if (!job || job.status !== "failed" || !cw || !job.siteId || !job.providerSpendReservationId) return;
   const receipt = await ctx.db.get(job.providerSpendReservationId);
   if (!receipt || receipt.siteId !== job.siteId || receipt.purpose !== "content_work") throw new Error("Content work settlement binding changed");
-  const currentCalls = cw.providerCalls.filter(c => !c.reservationId || c.reservationId === receipt._id);
-  if (receipt.settledAt === undefined && receipt.releasedAt === undefined) {
-    if (currentCalls.length === 0) {
-      await releaseSharedProviderReservation(ctx, { reservationId: receipt._id, siteId: job.siteId, purpose: "content_work",
-        reason: "content_work_closed_before_provider_execution", timestamp: Date.now() });
-    } else if (currentCalls.every(c => c.state === "completed" && c.actualMicroUsd !== undefined)) {
-      await settleSharedProviderReservation(ctx, { reservationId: receipt._id, siteId: job.siteId, purpose: "content_work",
-        actualMicroUsd: currentCalls.reduce((sum, c) => sum + c.actualMicroUsd!, 0),
-        reason: "verified_provider_receipt_actual_cost", timestamp: Date.now() });
-    }
-  }
+  await closeContentWorkHold(ctx, job);
   await ctx.db.patch(job._id, { contentWork: { ...cw, stage: "failed", failure: cw.failure ??
     (cw.stage === "publish" ? "content_publication_failed_reconciliation_required" : "worker_failed_review_required") } });
 }

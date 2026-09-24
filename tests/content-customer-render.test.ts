@@ -76,10 +76,11 @@ test("new customers see one clear Autopilot or Review-first choice, not delivery
   assert.doesNotMatch(setup, /First deadline|Hours between deadlines|buffer|fixed window/i);
   const running = render("content-work-overview", { ...state, autopilot: { selectable: true, on: true },
     plan: { tier: "starter", articlesPerMonth: 10, autopilotIntervalMs: 259_200_000 },
-    schedule: { ...state.schedule, paused: false, autopilotSelected: true } }).html;
+    schedule: { ...state.schedule, paused: false, autopilotSelected: true }, results: { live: 3, liveThisMonth: 2 } }).html;
   assert.match(running, /Autopilot is on/); assert.match(running, /Switch to review first/); assert.match(running, /Site health/);
   assert.match(running, /Coming up next/); assert.match(running, /Irrigation valve inspection checklist/); assert.doesNotMatch(running, /Already written topic/);
   assert.doesNotMatch(running, /Ready buffer|Fixed window|original deadline/);
+  assert.match(running, /Articles live/); assert.match(running, /2 \/ 10/);
 });
 
 function renderSidebar(queryState: unknown, siteOverrides: Record<string, unknown> = {}) {

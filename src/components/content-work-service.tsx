@@ -9,7 +9,7 @@ import Link from "next/link";
 import { fundingCopy, money, workLabel, stageLabel, shownTime } from "./content-work-overview";
 import { ExactPageControls } from "./content-work-corrections";
 import { PUBLISHER_AUTOPUBLISH_CONSENT_TEXT } from "../../convex/lib/publisherProvisioning";
-import { contentServiceStatus } from "../lib/content-service-status";
+import { contentServiceStatus, fundingMessage } from "../lib/content-service-status";
 import { AutopilotSwitch, PentraSetupChoice } from "./pentra-setup-choice";
 
 export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
@@ -90,9 +90,8 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
       {!state.entitlement && <p role="alert" className="text-sm">Your plan isn&apos;t active. <Link href="/upgrade" className="underline">Plans &amp; billing</Link></p>}
       {!state.destination.verified && <p role="alert" className="text-sm">Connect and verify your website in <Link href={`/sites/${siteId}?tab=settings`} className="underline">website settings</Link>.</p>}
       {needsReview.length > 0 && <p role="alert" className="text-sm">{needsReview.length === 1 ? "A draft needs" : `${needsReview.length} drafts need`} your review in <Link href="/articles" className="underline">Articles</Link>. Nothing was published.</p>}
-      {state.funding.status !== "available" && <p className="text-sm">{state.funding.status === "blocked"
-        ? <>Pentra has used this month&apos;s writing capacity for your plan. New articles resume next month, or <Link href="/upgrade" className="underline">upgrade</Link> for more.</>
-        : "Pentra can't start new articles right now. Your published articles are not affected."}</p>}
+      {state.funding.status !== "available" && <p className="text-sm">{fundingMessage(state.funding, state.schedule?.timezone ?? "UTC")}{" "}
+        {state.funding.status === "blocked" && <Link href="/upgrade" className="underline">Plans &amp; billing</Link>}</p>}
       {(delivery.canPause || delivery.canResume) && <div className="flex flex-wrap gap-2">
         {delivery.canPause && <Button size="sm" variant="secondary" disabled={saving} onClick={() => operate("pause")}>Pause Pentra</Button>}
         {delivery.canResume && <Button size="sm" disabled={saving} onClick={() => operate("resume")}>Resume Pentra</Button>}

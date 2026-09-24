@@ -24,6 +24,7 @@ import type * as actions_onboardingPrefill from "../actions/onboardingPrefill.js
 import type * as actions_outcomeCredentials from "../actions/outcomeCredentials.js";
 import type * as actions_outreach from "../actions/outreach.js";
 import type * as actions_outreachFleet from "../actions/outreachFleet.js";
+import type * as actions_pastedPublication from "../actions/pastedPublication.js";
 import type * as actions_pipeline from "../actions/pipeline.js";
 import type * as actions_plannedTopicEvidenceRecovery from "../actions/plannedTopicEvidenceRecovery.js";
 import type * as actions_scheduler from "../actions/scheduler.js";
@@ -132,6 +133,7 @@ import type * as lib_outreachSequence from "../lib/outreachSequence.js";
 import type * as lib_outreachSmtp from "../lib/outreachSmtp.js";
 import type * as lib_outreachSuppression from "../lib/outreachSuppression.js";
 import type * as lib_outreachTargetLive from "../lib/outreachTargetLive.js";
+import type * as lib_pastedPublication from "../lib/pastedPublication.js";
 import type * as lib_planCandidateCheckpoint from "../lib/planCandidateCheckpoint.js";
 import type * as lib_planProviderBudget from "../lib/planProviderBudget.js";
 import type * as lib_planProviderReservation from "../lib/planProviderReservation.js";
@@ -176,6 +178,7 @@ import type * as oneSetupExecutions from "../oneSetupExecutions.js";
 import type * as outcomes from "../outcomes.js";
 import type * as outreach from "../outreach.js";
 import type * as pages from "../pages.js";
+import type * as pastedPublication from "../pastedPublication.js";
 import type * as planCandidateCheckpoints from "../planCandidateCheckpoints.js";
 import type * as planJobs from "../planJobs.js";
 import type * as planLimits from "../planLimits.js";
@@ -216,6 +219,7 @@ declare const fullApi: ApiFromModules<{
   "actions/outcomeCredentials": typeof actions_outcomeCredentials;
   "actions/outreach": typeof actions_outreach;
   "actions/outreachFleet": typeof actions_outreachFleet;
+  "actions/pastedPublication": typeof actions_pastedPublication;
   "actions/pipeline": typeof actions_pipeline;
   "actions/plannedTopicEvidenceRecovery": typeof actions_plannedTopicEvidenceRecovery;
   "actions/scheduler": typeof actions_scheduler;
@@ -324,6 +328,7 @@ declare const fullApi: ApiFromModules<{
   "lib/outreachSmtp": typeof lib_outreachSmtp;
   "lib/outreachSuppression": typeof lib_outreachSuppression;
   "lib/outreachTargetLive": typeof lib_outreachTargetLive;
+  "lib/pastedPublication": typeof lib_pastedPublication;
   "lib/planCandidateCheckpoint": typeof lib_planCandidateCheckpoint;
   "lib/planProviderBudget": typeof lib_planProviderBudget;
   "lib/planProviderReservation": typeof lib_planProviderReservation;
@@ -368,6 +373,7 @@ declare const fullApi: ApiFromModules<{
   outcomes: typeof outcomes;
   outreach: typeof outreach;
   pages: typeof pages;
+  pastedPublication: typeof pastedPublication;
   planCandidateCheckpoints: typeof planCandidateCheckpoints;
   planJobs: typeof planJobs;
   planLimits: typeof planLimits;

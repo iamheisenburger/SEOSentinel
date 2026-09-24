@@ -68,9 +68,16 @@ export function confirmedContentProfileHash(site: Doc<"sites">): string {
     site.targetAudienceSummary, site.anchorKeywords, site.keyFeatures, site.painPoints, site.productUsage,
     site.pricingInfo, site.founders]));
 }
+/** A new customer on another platform (Shopify, Webflow, Wix…): Pentra
+ * drafts and fact-checks; the owner pastes the article into their own site.
+ * There is no remote credential to verify and nothing is published by Pentra. */
+export function pasteDestination(site: { publishMethod?: string; contentSetupRequestedAt?: number }) {
+  return site.publishMethod === "manual" && Boolean(site.contentSetupRequestedAt);
+}
 export function contentConnectionComplete(site: Doc<"sites">) {
   return site.publishMethod === "github" ? Boolean(site.repoOwner && site.repoName && site.repoDefaultBranch && site.githubToken)
-    : site.publishMethod === "wordpress" && Boolean(site.wpUrl && site.wpUsername && site.wpAppPassword);
+    : site.publishMethod === "wordpress" ? Boolean(site.wpUrl && site.wpUsername && site.wpAppPassword)
+    : pasteDestination(site);
 }
 export function selectedUrl(site: Pick<Doc<"sites">, "domain" | "urlStructure">, slug: string) {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) throw new Error("Unsupported selected page slug");

@@ -148,7 +148,7 @@ function Features() {
               "Publish a draft that failed its fact check. It is held back.",
               "Guarantee rankings or traffic. Search results take time and depend on many factors.",
               "Build backlinks or send outreach emails.",
-              "Publish to Shopify or Webflow yet (coming soon). WordPress and GitHub-based sites are supported today.",
+              "Publish automatically to Shopify or Webflow yet (coming soon). On those sites Pentra writes and you paste each article in.",
             ].map((line) => (
               <li key={line} className="flex gap-2"><XCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#565A6E]" />{line}</li>
             ))}
@@ -168,7 +168,7 @@ const faqs = [
   },
   {
     q: "Which websites does Pentra work with?",
-    a: "WordPress sites (with the free Pentra publisher plugin) and sites built from Markdown or MDX files in a GitHub repository, such as Next.js, Astro, Hugo, Jekyll and Gatsby. Shopify and Webflow are coming soon.",
+    a: "WordPress sites (with the free Pentra publisher plugin) and sites built from Markdown or MDX files in a GitHub repository, such as Next.js, Astro, Hugo, Jekyll and Gatsby. On Shopify, Webflow, Wix, Squarespace or any other platform, Pentra researches and writes each article and you paste it into your blog (automatic publishing there is coming soon).",
   },
   {
     q: "Is Autopilot safe for my brand?",

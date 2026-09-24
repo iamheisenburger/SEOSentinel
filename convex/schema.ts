@@ -1602,6 +1602,22 @@ export default defineSchema({
     error: v.optional(v.string()),
   }).index("by_site_checked", ["siteId", "checkedAt"]),
 
+  // Articles an owner published themselves on another platform (paste), with
+  // Pentra's check of the public page. Evidence only; the article is unchanged.
+  pasted_publications: defineTable({
+    siteId: v.id("sites"),
+    articleId: v.id("articles"),
+    url: v.string(),
+    requestedAt: v.number(),
+    status: v.union(v.literal("checking"), v.literal("live"), v.literal("not_found")),
+    checkedAt: v.optional(v.number()),
+    titleFound: v.optional(v.boolean()),
+    matched: v.optional(v.number()),
+    total: v.optional(v.number()),
+    httpStatus: v.optional(v.number()),
+  }).index("by_article_requested", ["articleId", "requestedAt"])
+    .index("by_site_status", ["siteId", "status"]),
+
   // Onboarding "Fill in from my website" requests, kept only for throttling.
   site_prefill_requests: defineTable({
     userId: v.string(),

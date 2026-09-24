@@ -1027,7 +1027,8 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     assert.equal(r.autopilot.reviewAvailable, true, "WordPress customers can choose Review first too");
     f.get(site.id)!.publishMethod = "manual";
     r = await f.invoke("contentWork:readiness", { siteId: site.id });
-    assert.equal(r.autopilot.reviewAvailable, false);
+    assert.equal(r.autopilot.reviewAvailable, true, "other platforms review and paste each article themselves");
+    assert.equal(r.autopilot.autopilotAvailable, false, "Pentra cannot publish automatically where it has no connection");
     f.setIdentity(null); f.assertOffline();
   });
   await t.test("existing_contract_adopts_autopilot_by_owner_choice", async () => {
@@ -1094,6 +1095,132 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     assert.equal(f.tables.jobs.filter(j => j.contentWork).length, 1);
     f.assertOffline();
   });
+});
+
+test("SLC64 finished work stops holding its whole article budget; refused or uncertain calls keep the whole hold", async t => {
+  await t.test("refused_call_keeps_the_whole_hold", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await selectGrowth(f);
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_fill");
+    const job = f.tables.jobs.find(j => j.contentWork)!, workerToken = "slc64-worker";
+    await f.invoke("jobs:claimPending", { siteId: site.id, jobId: job._id, workerToken });
+    const refused = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken, key: "overloaded-call", ceilingMicroUsd: 100 });
+    await f.invoke("contentWork:recordProviderRejection", { jobId: job._id, workerToken, key: refused.key, status: 529, code: "overloaded_error" });
+    const done = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken, key: "completed-call", ceilingMicroUsd: 100 });
+    await f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken, key: done.key, actualMicroUsd: 70, result: { fixture: true } });
+    await f.invoke("jobs:markFailed", { jobId: job._id, workerToken, error: "Synthetic terminal failure" });
+    const hold = f.get(job.providerSpendReservationId)!;
+    assert.equal(f.get(job._id)!.status, "failed");
+    assert.equal(hold.settledMicroUsd, undefined, "a refused call is never assumed free");
+    assert.equal(hold.releasedAt, undefined);
+    f.assertOffline();
+  });
+  await t.test("uncertain_call_keeps_the_whole_hold", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await selectGrowth(f);
+    await f.invoke("contentWork:advance", { siteId: site.id });
+    const job = f.tables.jobs.find(j => j.contentWork)!, workerToken = "slc64-uncertain";
+    await f.invoke("jobs:claimPending", { siteId: site.id, jobId: job._id, workerToken });
+    await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken, key: "unknown-call", ceilingMicroUsd: 100 });
+    await f.invoke("jobs:markFailed", { jobId: job._id, workerToken, error: "Synthetic terminal failure" });
+    const hold = f.get(job.providerSpendReservationId)!;
+    assert.equal(hold.settledMicroUsd, undefined); assert.equal(hold.releasedAt, undefined);
+    f.assertOffline();
+  });
+  await t.test("an_old_open_hold_on_finished_work_is_closed_when_it_blocks_the_next_article", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await selectGrowth(f);
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_fill");
+    const job = f.tables.jobs.find(j => j.contentWork)!;
+    await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+    await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: job._id });
+    assert.equal(f.get(job._id)!.contentWork.stage, "ready", diagnostic(f));
+    const hold = f.get(job.providerSpendReservationId)!, actual = hold.settledMicroUsd!;
+    assert.ok(Number.isSafeInteger(actual) && actual < hold.reservedMicroUsd);
+    // Simulate a hold left open by the earlier release gap.
+    delete hold.settledMicroUsd; delete hold.settledAt; delete hold.settlementReason;
+    const readiness = await f.invoke("contentWork:readiness", { siteId: site.id }).catch(() => null);
+    const ceiling = readiness?.funding?.monthlyLimitMicroUsd ?? 28_000_000, budget = hold.reservedMicroUsd;
+    f.add("provider_spend_reservations", { siteId: site.id, userId: f.get(site.id)!.userId, purpose: "topic_plan",
+      trigger: "slc64-earlier-settled-work", reservedMicroUsd: ceiling - 2 * budget + 1, settledMicroUsd: ceiling - 2 * budget + 1,
+      settledAt: START - 86_400_000 + 1, settlementReason: "verified_provider_receipt_actual_cost", createdAt: START - 86_400_000 });
+    const next = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal(next.mode, "buffer_fill", JSON.stringify(next));
+    assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, actual, "closed at the provider's reported cost, from the job's receipts");
+    assert.equal(f.get(job.providerSpendReservationId)!.reservedMicroUsd, budget, "the original reservation amount stays on record");
+    f.assertOffline();
+  });
+});
+
+test("SLC65 an Autopilot owner can bring the first article forward; prepared work and history never move", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  const later = f.get(site.id)!.contentSchedule.nextDeadlineAt, interval = f.get(site.id)!.contentSchedule.intervalMs;
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  assert.equal(r.autopilot.canStartNow, true);
+  await assert.rejects(f.invoke("contentWork:startAutopilotNow", { siteId: site.id, reviewToken: "stale" }), /setup changed/);
+  const moved = await f.invoke("contentWork:startAutopilotNow", { siteId: site.id, reviewToken: r.reviewToken });
+  assert.equal(moved.changed, true); assert.ok(moved.nextDeadlineAt < later);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, f.now() + 2 * 3_600_000);
+  assert.equal(f.get(site.id)!.contentSchedule.intervalMs, interval, "the plan's rhythm is unchanged");
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  assert.equal(r.autopilot.canStartNow, false);
+  assert.equal((await f.invoke("contentWork:startAutopilotNow", { siteId: site.id, reviewToken: r.reviewToken })).changed, false, "never moves a slot later or twice");
+  f.setIdentity("someone-else");
+  await assert.rejects(f.invoke("contentWork:startAutopilotNow", { siteId: site.id, reviewToken: r.reviewToken }), /Not authorized/);
+  f.setIdentity(null); f.assertOffline();
+});
+
+test("SLC63 other platforms: Pentra researches and writes, the owner pastes; nothing is published by Pentra", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = f.sites[0], owner = f.get(site.id)!.userId;
+  f.tables.sites.splice(0); f.tables.pages.splice(0);
+  f.setIdentity(owner);
+  site.id = await f.invoke("sites:upsert", { createOnly: true, contentSetup: true, domain: site.domain, clerkUserId: owner,
+    siteName: site.name, siteSummary: site.niche, niche: site.niche, blogTheme: site.niche,
+    targetAudienceSummary: "Customers evaluating this business's confirmed offering", productUsage: site.niche,
+    anchorKeywords: site.keywords, painPoints: site.keywords, language: "en", publishMethod: "manual",
+    autopilotEnabled: false, approvalRequired: true, inferToneNiche: false });
+  let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  assert.equal(r.destination.kind, "manual"); assert.equal(r.destination.verified, true);
+  assert.equal(r.autopilot.autopilotAvailable, false); assert.equal(r.autopilot.reviewAvailable, true);
+  await assert.rejects(f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true,
+    reviewToken: r.reviewToken, autopilot: true }), /WordPress or GitHub/);
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", ownerReviewedOnly: true,
+    confirmBusinessProfile: true, reviewToken: r.reviewToken });
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  const requested = await f.invoke("contentWork:requestDraft", { siteId: site.id, reviewToken: r.reviewToken,
+    requestKey: "paste-platform-first-draft", maximumMicroUsd: r.ownerDraft.maximumMicroUsd });
+  await pumpUntil(f, () => ["ready", "failed"].includes(f.get(requested.jobId)!.contentWork.stage));
+  const job = f.get(requested.jobId)!;
+  assert.equal(job.contentWork.stage, "ready", diagnostic(f));
+  assert.notEqual(f.get(job.articleId)!.status, "published");
+  await assert.rejects(f.invoke("actions/pipeline:publishApproved", { siteId: site.id, articleId: job.articleId }));
+  assert.notEqual(f.get(job.articleId)!.status, "published", "Pentra never publishes to a paste-it-yourself site");
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await assert.rejects(f.invoke("contentWork:setAutopilot", { siteId: site.id, enabled: true, reviewToken: r.reviewToken }), /WordPress or GitHub/);
+  // The owner pastes it and gives the live address; Pentra checks the public page before counting it.
+  const draft = f.get(job.articleId)!;
+  if (draft.status === "ready") {
+    await assert.rejects(f.invoke("pastedPublication:confirm", { articleId: job.articleId, url: "https://elsewhere.example/post" }), /full https/);
+    await assert.rejects(f.invoke("pastedPublication:confirm", { articleId: job.articleId, url: `http://${site.domain}/post` }), /full https/);
+    const { checkId } = await f.invoke("pastedPublication:confirm", { articleId: job.articleId, url: `https://www.${site.domain}/blog/post#top` });
+    assert.equal(f.get(checkId)!.url, `https://www.${site.domain}/blog/post`);
+    await assert.rejects(f.invoke("pastedPublication:confirm", { articleId: job.articleId, url: `https://${site.domain}/blog/post` }), /already checking/);
+    assert.equal((await f.invoke("pastedPublication:forCheck", { checkId })).title, draft.title);
+    await f.invoke("pastedPublication:record", { checkId, live: true, titleFound: true, matched: 6, total: 8, httpStatus: 200 });
+    r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    assert.equal(r.results.live, 1); assert.equal(r.published[0].url, `https://www.${site.domain}/blog/post`);
+    assert.equal(f.get(job.articleId)!.status, "ready", "the article itself is unchanged; the live page is the evidence");
+    f.setIdentity("someone-else");
+    assert.equal(await f.invoke("pastedPublication:forArticle", { articleId: job.articleId }), null);
+    await assert.rejects(f.invoke("pastedPublication:confirm", { articleId: job.articleId, url: `https://${site.domain}/x` }), /Not authorized/);
+  } else assert.fail(`paste flow draft should be ready for the owner, got ${draft.status}`);
+  f.setIdentity(null);
+  f.assertOffline();
 });
 
 test("SLC54 owner draft completes two fresh approved publication cycles without changing the paused cadence", async () => {

@@ -5,8 +5,8 @@ import type { FunctionReturnType } from "convex/server";
 import Link from "next/link";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { contentServiceStatus } from "../lib/content-service-status";
-import { AdoptAutopilot, AutopilotSwitch } from "./pentra-setup-choice";
+import { contentServiceStatus, fundingMessage } from "../lib/content-service-status";
+import { AdoptAutopilot, AutopilotSwitch, StartNow } from "./pentra-setup-choice";
 export const money = (value: number | null) => value === null ? "Unknown" : `$${(value / 1_000_000).toFixed(4)}`;
 export const shownTime = (value: number, zone = "UTC") => new Intl.DateTimeFormat("en", { timeZone: zone, dateStyle: "medium", timeStyle: "long" }).format(value);
 export const fundingCopy = { available: "Internal capacity currently available; every paid admission rechecks it.", blocked: "Admission blocked by the existing spending or entitlement guards.", unknown: "Funding readiness unknown. No extra spending is authorized.", unconfigured: "Provider pricing is not configured. Preparation is not funded." };
@@ -53,7 +53,12 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
     {state.autopilot?.adoptable && state.plan && state.bindingCurrent && state.destination.verified && state.entitlement &&
       <AdoptAutopilot siteId={siteId} reviewToken={state.reviewToken} intervalMs={state.plan.autopilotIntervalMs} articlesPerMonth={state.plan.articlesPerMonth} />}
     {state.autopilot?.on && s && !s.paused && s.nextDeadlineAt > state.funding.checkedAt &&
-      <p className="text-[14px] text-[#EDEEF1]">Next article is scheduled for <span className="font-medium">{when(s.nextDeadlineAt)}</span>.</p>}
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="text-[14px] text-[#EDEEF1]">Next article is scheduled for <span className="font-medium">{when(s.nextDeadlineAt)}</span>.</p>
+        {state.autopilot.canStartNow && <StartNow siteId={siteId} reviewToken={state.reviewToken} />}
+      </div>}
+    {plain && state.results && <ResultsStrip siteId={siteId} live={state.results.live} liveThisMonth={state.results.liveThisMonth}
+      planPerMonth={state.plan?.articlesPerMonth ?? null} />}
     <div className="grid gap-4 md:grid-cols-2">
       <section className={CARD}><h2 className={H2}>Upcoming work</h2>
         {s?.ownerReviewedOnly ? <p className={BODY}>Request, review and publish from <Link className="text-[#0EA5E9] hover:underline" href="/articles">Articles</Link>. Nothing publishes automatically.</p>
@@ -63,7 +68,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
         {!upcoming.length && !s?.ownerReviewedOnly && !simple && <p className={BODY}>No upcoming item is prepared yet.</p>}
         {upcoming.length > 0 && <ul className="divide-y divide-white/[0.06] text-[14px]">{upcoming.map(w => <li key={w.jobId} className="flex items-center justify-between gap-3 py-2">
           <span className="text-[#EDEEF1]">{workLabel(w)}</span>
-          <span className="text-[12px] text-[#8B8FA3]">{stageLabel(w.stage)}{simple ? "" : ` · due ${shownTime(w.deadlineAt, zone)}`}</span></li>)}</ul>}
+          <span className="text-[12px] text-[#8B8FA3]">{stageLabel(w.stage)}{simple ? (w.stage === "ready" ? ` · goes live ${friendlyTime(w.deadlineAt, zone)}` : "") : ` · due ${shownTime(w.deadlineAt, zone)}`}</span></li>)}</ul>}
       </section>
       <section className={CARD}><h2 className={H2}>{plain ? "Published articles" : "Verified changes"}</h2>
         {published.length > 0 && <ul className="divide-y divide-white/[0.06] text-[14px]" aria-label="Recently published">{published.map(a => <li key={a.articleId} className="space-y-1 py-2">
@@ -90,8 +95,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
       {!state.bindingCurrent && <p role="alert">Business or destination changed. <Link className="text-[#0EA5E9] hover:underline" href="/settings#changed-content-setup">Review changed setup</Link> to replace stale unstarted work safely. Existing costs and deadlines remain.</p>}
       {state.approvalRequired && !s?.ownerReviewedOnly && <p role="alert">Automatic publication consent is not active.</p>}
       {state.funding.status !== "available" && !delivery.systemFailure && <p role="alert">{plain
-        ? state.funding.status === "blocked" ? "Pentra has used this month's writing capacity for your plan. New articles resume next month, or upgrade in Plans & billing for more."
-          : "Pentra can't start new articles right now. Your published articles are not affected."
+        ? fundingMessage(state.funding, zone)
         : state.funding.reason ?? fundingCopy[state.funding.status]}</p>}
       {!state.complete && !plain && <p role="alert">Work history is incomplete. No clean-health claim is possible.</p>}
       {attention.map(w => plain
@@ -142,6 +146,21 @@ function OrganicOutcome({ siteId, simple = false }: { siteId: Id<"sites">; simpl
   </section>;
 }
 
+/** The result at a glance: what is live, how much of the plan is used, how healthy the site is. */
+function ResultsStrip({ siteId, live, liveThisMonth, planPerMonth }: { siteId: Id<"sites">; live: number; liveThisMonth: number; planPerMonth: number | null }) {
+  const check = useQuery(api.siteHealth.latest, { siteId });
+  const tile = (label: string, value: string, hint?: string) => <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] px-4 py-3">
+    <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#565A6E]">{label}</p>
+    <p className="mt-1 text-2xl font-semibold tracking-tight text-[#EDEEF1]">{value}</p>
+    {hint && <p className="text-[12px] text-[#8B8FA3]">{hint}</p>}
+  </div>;
+  return <div className="grid grid-cols-2 gap-3 md:grid-cols-3" aria-label="Results at a glance">
+    {tile("Articles live", String(live), "published and confirmed on your site")}
+    {tile("This month", planPerMonth ? `${liveThisMonth} / ${planPerMonth}` : String(liveThisMonth), "articles published")}
+    {tile("Site health", check ? `${check.score}/100` : "—", check ? "latest weekly check" : "first check pending")}
+  </div>;
+}
+
 /** What Autopilot will write next, so a hands-off customer can see and steer it. */
 function UpcomingTopics({ siteId }: { siteId: Id<"sites"> }) {
   const topics = useQuery(api.topics.listBySite, { siteId });
@@ -153,7 +172,7 @@ function UpcomingTopics({ siteId }: { siteId: Id<"sites"> }) {
       ? <p className={BODY}>Pentra is researching topics your customers search for. They&apos;ll appear here.</p>
       : <ol className="space-y-2 text-[14px]">{next.map((t, n) => <li key={t._id} className="flex gap-3">
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#0EA5E9]/10 text-[12px] font-semibold text-[#0EA5E9]">{n + 1}</span>
-          <span><span className="text-[#EDEEF1]">{t.label}</span> <span className="text-[12px] text-[#8B8FA3]">“{t.primaryKeyword}”</span></span></li>)}</ol>}
+          <span><span className="text-[#EDEEF1]">{t.label.replace(/^./, c => c.toUpperCase())}</span> <span className="text-[12px] text-[#8B8FA3]">“{t.primaryKeyword}”</span></span></li>)}</ol>}
     <Link className="text-[13px] text-[#0EA5E9] hover:underline" href="/plan">See or change all topics</Link>
   </section>;
 }
