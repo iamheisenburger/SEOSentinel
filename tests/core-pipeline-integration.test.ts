@@ -986,8 +986,8 @@ test("SLC61 new customers choose Autopilot with a plan-derived rhythm and can sw
   await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
   let s = f.get(site.id)!;
   assert.equal(s.autopilotEnabled, true); assert.equal(s.approvalRequired, false);
-  assert.equal(s.contentSchedule.intervalMs, 12 * 3_600_000, "150 articles a month is capped at one every 12 hours");
-  assert.ok(s.contentSchedule.nextDeadlineAt >= f.now() + 23 * 3_600_000);
+  assert.equal(s.contentSchedule.intervalMs, Math.floor(7 * 86_400_000 / s.cadencePerWeek), "Autopilot follows the site's chosen cadence");
+  assert.ok(s.contentSchedule.nextDeadlineAt <= f.now() + 2 * 3_600_000 && s.contentSchedule.nextDeadlineAt > f.now() + 3_600_000, "the first article starts right away");
   assert.ok(s.contentSchedule.autopilotSelectedAt); assert.ok(s.contentSchedule.autopublishConsentAt);
   r = await f.invoke("contentWork:readiness", { siteId: site.id });
   assert.equal(r.autopilot.on, true);
@@ -1043,8 +1043,8 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     assert.equal(r.autopilot.adoptable, true);
     await f.invoke("contentWork:adoptAutopilot", { siteId: site.id, reviewToken: r.reviewToken, confirm: true });
     const s = f.get(site.id)!;
-    assert.ok(s.contentSchedule.autopilotSelectedAt); assert.equal(s.contentSchedule.intervalMs, 12 * 3_600_000);
-    assert.ok(s.contentSchedule.nextDeadlineAt >= f.now() + 23 * 3_600_000, "the forward schedule starts fresh");
+    assert.ok(s.contentSchedule.autopilotSelectedAt); assert.equal(s.contentSchedule.intervalMs, Math.floor(7 * 86_400_000 / s.cadencePerWeek));
+    assert.ok(s.contentSchedule.nextDeadlineAt > before && s.contentSchedule.nextDeadlineAt <= f.now() + 2 * 3_600_000, "the forward schedule starts fresh, right away");
     assert.equal(JSON.stringify(f.get(missed)), recorded, "the missed slot stays exactly as recorded");
     r = await f.invoke("contentWork:readiness", { siteId: site.id });
     assert.equal(r.autopilot.adoptable, false);
@@ -1152,26 +1152,38 @@ test("SLC64 finished work stops holding its whole article budget; refused or unc
   });
 });
 
-test("SLC65 an Autopilot owner can bring the first article forward; prepared work and history never move", async () => {
+test("SLC65 Autopilot follows the customer's cadence, starts right away, and never moves an overdue slot", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
   f.setIdentity(saved.userId);
   let r = await f.invoke("contentWork:readiness", { siteId: site.id });
   await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
-  const later = f.get(site.id)!.contentSchedule.nextDeadlineAt, interval = f.get(site.id)!.contentSchedule.intervalMs;
   r = await f.invoke("contentWork:readiness", { siteId: site.id });
-  assert.equal(r.autopilot.canStartNow, true);
-  await assert.rejects(f.invoke("contentWork:startAutopilotNow", { siteId: site.id, reviewToken: "stale" }), /setup changed/);
-  const moved = await f.invoke("contentWork:startAutopilotNow", { siteId: site.id, reviewToken: r.reviewToken });
-  assert.equal(moved.changed, true); assert.ok(moved.nextDeadlineAt < later);
-  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, f.now() + 2 * 3_600_000);
-  assert.equal(f.get(site.id)!.contentSchedule.intervalMs, interval, "the plan's rhythm is unchanged");
+  await assert.rejects(f.invoke("contentWork:setAutopilotCadence", { siteId: site.id, reviewToken: r.reviewToken, cadencePerWeek: 5 }), /listed paces/);
+  assert.equal((await f.invoke("contentWork:setAutopilotCadence", { siteId: site.id, reviewToken: r.reviewToken, cadencePerWeek: 21 })).changed, true);
   r = await f.invoke("contentWork:readiness", { siteId: site.id });
-  assert.equal(r.autopilot.canStartNow, false);
-  assert.equal((await f.invoke("contentWork:startAutopilotNow", { siteId: site.id, reviewToken: r.reviewToken })).changed, false, "never moves a slot later or twice");
-  f.setIdentity("someone-else");
-  await assert.rejects(f.invoke("contentWork:startAutopilotNow", { siteId: site.id, reviewToken: r.reviewToken }), /Not authorized/);
-  f.setIdentity(null); f.assertOffline();
+  assert.equal(r.plan.cadencePerWeek, 21); assert.equal(r.plan.autopilotIntervalMs, 8 * 3_600_000, "21 a week is one every 8 hours");
+  // A slot a day away with nothing prepared is pulled in: the next article starts now.
+  f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 22 * 3_600_000;
+  f.setIdentity(null);
+  const start = f.now();
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_fill");
+  let sched = f.get(site.id)!.contentSchedule;
+  assert.equal(sched.intervalMs, 8 * 3_600_000);
+  assert.ok(sched.nextDeadlineAt >= start + 2 * 3_600_000 && sched.nextDeadlineAt <= f.now() + 2 * 3_600_000);
+  const job = f.tables.jobs.find(j => j.contentWork && j.siteId === site.id)!;
+  assert.equal(job.contentWork.deadlineAt, sched.nextDeadlineAt);
+  // An overdue slot is never moved to hide the miss.
+  const g = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const other = await createEmptyContentSite(g); g.setIdentity(g.get(other.id)!.userId);
+  const rr = await g.invoke("contentWork:readiness", { siteId: other.id });
+  await g.invoke("contentWork:selectServiceMode", { siteId: other.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: rr.reviewToken, autopilot: true });
+  g.setIdentity(null);
+  const overdue = g.now() - 3_600_000; g.get(other.id)!.contentSchedule.nextDeadlineAt = overdue;
+  await g.invoke("contentWork:advance", { siteId: other.id });
+  assert.equal(g.get(other.id)!.contentSchedule.nextDeadlineAt, overdue);
+  sched = f.get(site.id)!.contentSchedule; assert.ok(sched.autopilotSelectedAt);
+  f.assertOffline(); g.assertOffline();
 });
 
 test("SLC63 other platforms: Pentra researches and writes, the owner pastes; nothing is published by Pentra", async () => {

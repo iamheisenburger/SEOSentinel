@@ -80,7 +80,7 @@ test("new customers see one clear Autopilot or Review-first choice, not delivery
   assert.match(running, /Autopilot is on/); assert.match(running, /Switch to review first/); assert.match(running, /Site health/);
   assert.match(running, /Coming up next/); assert.match(running, /Irrigation valve inspection checklist/); assert.doesNotMatch(running, /Already written topic/);
   assert.doesNotMatch(running, /Ready buffer|Fixed window|original deadline/);
-  assert.match(running, /Articles live/); assert.match(running, /4 of 10 plan articles used \(all sites\)/);
+  assert.match(running, /Articles live/); assert.match(running, /Autopilot has used 4 of your 10 monthly articles \(all sites\)/);
 });
 
 function renderSidebar(queryState: unknown, siteOverrides: Record<string, unknown> = {}) {

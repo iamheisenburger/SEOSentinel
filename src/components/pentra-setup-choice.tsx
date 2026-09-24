@@ -82,16 +82,21 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
 }
 
 /** Autopilot on/off for sites set up through the new flow. */
-export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAvailable = true, paused = false }:
-  { siteId: Id<"sites">; reviewToken: string; on: boolean; intervalMs: number; reviewAvailable?: boolean; paused?: boolean }) {
+const PACES = [1, 2, 4, 7, 14, 21];
+
+export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAvailable = true, paused = false, cadencePerWeek = null, articlesPerMonth = null }:
+  { siteId: Id<"sites">; reviewToken: string; on: boolean; intervalMs: number; reviewAvailable?: boolean; paused?: boolean;
+    cadencePerWeek?: number | null; articlesPerMonth?: number | null }) {
   const setAutopilot = useMutation(api.contentWork.setAutopilot);
+  const setCadence = useMutation(api.contentWork.setAutopilotCadence);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const pace = cadencePerWeek ? `${cadencePerWeek} article${cadencePerWeek === 1 ? "" : "s"} a week (${rhythm(intervalMs)})` : rhythm(intervalMs);
   return <div className="flex flex-wrap items-center gap-3 rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
     <span aria-hidden className={`h-2.5 w-2.5 rounded-full ${on && !paused ? "bg-[#22C55E] shadow-[0_0_8px_#22C55E]" : on ? "bg-[#F59E0B]" : "bg-[#8B8FA3]"}`} />
     <div className="flex-1">
       <p className="font-medium text-[#EDEEF1]">Autopilot is {on ? (paused ? "paused" : "on") : "off"}</p>
       <p className="text-sm text-[#8B8FA3]">{on ? paused ? "No new articles start while paused. Resume from Service settings."
-        : `Pentra publishes ${rhythm(intervalMs)}. Drafts it isn't confident about are held back and never published.`
+        : `Pentra publishes ${pace}${articlesPerMonth ? `, up to ${articlesPerMonth} a month on your plan` : ""}. Drafts it isn't confident about are held back and never published.`
         : "Every article waits for your approval in Articles."}</p>
     </div>
     {(!on || reviewAvailable) && <Button size="sm" variant={on ? "secondary" : "primary"} loading={busy} onClick={async () => {
@@ -100,23 +105,21 @@ export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAva
       catch (err) { setError(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Couldn't change Autopilot. Refresh and try again."); }
       finally { setBusy(false); }
     }}>{on ? "Switch to review first" : "Turn on Autopilot"}</Button>}
+    {on && !paused && <label className="flex w-full items-center gap-2 text-sm text-[#8B8FA3]">Pace
+      <select aria-label="Articles per week" className="rounded-md border border-white/[0.1] bg-[#08090E] px-2 py-1 text-[#EDEEF1]"
+        value={cadencePerWeek ?? ""} disabled={busy} onChange={async e => {
+          setBusy(true); setError("");
+          try { await setCadence({ siteId, reviewToken, cadencePerWeek: Number(e.target.value) }); }
+          catch (err) { setError(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Couldn't change the pace. Refresh and try again."); }
+          finally { setBusy(false); }
+        }}>
+        {!cadencePerWeek && <option value="">Plan default</option>}
+        {PACES.map(n => <option key={n} value={n}>{n} a week</option>)}
+      </select>
+      <span className="text-xs">Applies from the next article not yet prepared.</span>
+    </label>}
     {error && <p role="alert" className="w-full text-sm text-red-400">{error}</p>}
   </div>;
-}
-
-/** Don't want to wait a day for the first article? Bring the next one forward. */
-export function StartNow({ siteId, reviewToken }: { siteId: Id<"sites">; reviewToken: string }) {
-  const start = useMutation(api.contentWork.startAutopilotNow);
-  const [busy, setBusy] = useState(false), [error, setError] = useState("");
-  return <span className="inline-flex flex-wrap items-center gap-2">
-    <Button size="sm" variant="secondary" loading={busy} onClick={async () => {
-      setBusy(true); setError("");
-      try { await start({ siteId, reviewToken }); }
-      catch (err) { setError(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Couldn't bring it forward. Refresh and try again."); }
-      finally { setBusy(false); }
-    }}>Publish the next one in about 2 hours</Button>
-    {error && <span role="alert" className="text-sm text-red-400">{error}</span>}
-  </span>;
 }
 
 /** Existing contracts (set up before Autopilot) can move onto Autopilot. */

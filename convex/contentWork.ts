@@ -7,7 +7,7 @@ import { publicationArtifactHash, publicationDeliveryConfig, sha256Hex } from ".
 import { legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
-import { resolvePlanFromFeatures } from "./planLimits";
+import { resolvePlanFromFeatures, cadenceFitsOperationalLimit, targetCadenceOptions } from "./planLimits";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
 import { inspectSharedProviderBudget, reserveSharedProviderBudget, settleSharedProviderReservation, releaseSharedProviderReservation } from "./lib/providerSpendReservation";
 import { contentValidationBinding } from "./lib/providerBudgetAuthorization";
@@ -38,11 +38,22 @@ export const OWNER_DRAFTS_PER_MONTH = { free: 1, starter: 10, pro: 25, scale: 60
 export function autopilotIntervalMs(articlesPerMonth: number) {
   return Math.max(12 * 3_600_000, Math.floor((30 * 86_400_000) / Math.max(1, articlesPerMonth)));
 }
+/** Autopilot follows the publishing cadence the customer chose for the site
+ * (articles per week, set in site settings; new sites default to a pace their
+ * plan sustains). The plan's monthly allowance still caps the total. */
+export function siteAutopilotIntervalMs(site: { cadencePerWeek?: number }, articlesPerMonth: number) {
+  const cadence = site.cadencePerWeek;
+  return cadence !== undefined && cadenceFitsOperationalLimit(cadence)
+    ? Math.floor((7 * 86_400_000) / cadence) : autopilotIntervalMs(articlesPerMonth);
+}
+/** With nothing prepared, the next Autopilot article starts now and lands in about this long. */
+export const FIRST_ARTICLE_LEAD_MS = 2 * 3_600_000;
 async function accountPlan(ctx: QueryCtx | MutationCtx, site: Doc<"sites">) {
   const entitlement = site.userId ? await ctx.db.query("account_plan_entitlements").withIndex("by_user", q => q.eq("userId", site.userId!)).unique() : null;
   const tier = resolvePlanFromFeatures(entitlement?.planFeatures ?? site.planFeatures ?? []).tier;
   const articlesPerMonth = OWNER_DRAFTS_PER_MONTH[tier] as number;
-  return { tier, articlesPerMonth, autopilotIntervalMs: autopilotIntervalMs(articlesPerMonth) };
+  return { tier, articlesPerMonth, cadencePerWeek: site.cadencePerWeek !== undefined && cadenceFitsOperationalLimit(site.cadencePerWeek) ? site.cadencePerWeek : null,
+    autopilotIntervalMs: siteAutopilotIntervalMs(site, articlesPerMonth) };
 }
 /** New owner drafts used this UTC month across the account's sites, against
  * the plan allowance. Null for the scoped owner validation grant. */
@@ -445,7 +456,7 @@ export const selectServiceMode = mutation({
     }
     const plan = rawArgs.autopilot ? await accountPlan(ctx, site) : null;
     const args = plan ? { ...rawArgs, authorizeAutomaticPublication: true, intervalMs: plan.autopilotIntervalMs,
-      firstDeadlineAt: Date.now() + 24 * 3_600_000 } : rawArgs;
+      firstDeadlineAt: Date.now() + FIRST_ARTICLE_LEAD_MS } : rawArgs;
     if ((site.serviceMode ?? "legacy_articles") === args.mode) return { changed: false, status: "completed" as const };
     if (args.ownerReviewedOnly && (args.mode !== "growth_first" || args.authorizeAutomaticPublication ||
       !site.contentSetupRequestedAt || site.contentSchedule || !["github", "wordpress", "manual"].includes(site.publishMethod ?? ""))) {
@@ -590,7 +601,7 @@ export const adoptAutopilot = mutation({ args: { siteId: v.id("sites"), reviewTo
     await ctx.db.patch(site._id, { approvalRequired: false, autopilotEnabled: true, autopilotRolloutMode: "warm",
       contentSetupRequestedAt: site.contentSetupRequestedAt ?? Date.now(),
       contentSchedule: { ...forward, autopilotSelectedAt: Date.now(), autopublishConsentAt: Date.now(), active: false, paused: false,
-        intervalMs: plan.autopilotIntervalMs, nextDeadlineAt: Date.now() + 24 * 3_600_000,
+        intervalMs: plan.autopilotIntervalMs, nextDeadlineAt: Date.now() + FIRST_ARTICLE_LEAD_MS,
         profileHash: confirmedContentProfileHash(site), connectionHash: contentConnectionHash(site) }, updatedAt: Date.now() });
     await wake(ctx, site._id);
     return { changed: true };
@@ -618,7 +629,7 @@ export const setAutopilot = mutation({ args: { siteId: v.id("sites"), enabled: v
       await ctx.db.patch(site._id, { approvalRequired: false, autopilotEnabled: true, autopilotRolloutMode: "warm",
         contentSchedule: { ...rest, autopilotSelectedAt: Date.now(), autopublishConsentAt: Date.now(), active: false, paused: false,
           intervalMs: unfinished.length ? s.intervalMs : plan.autopilotIntervalMs,
-          nextDeadlineAt: unfinished.length ? unfinished[0] : Date.now() + 24 * 3_600_000,
+          nextDeadlineAt: unfinished.length ? unfinished[0] : Date.now() + FIRST_ARTICLE_LEAD_MS,
           profileHash: confirmedContentProfileHash(site), connectionHash: contentConnectionHash(site) }, updatedAt: Date.now() });
       await wake(ctx, site._id);
       return { changed: true };
@@ -630,26 +641,17 @@ export const setAutopilot = mutation({ args: { siteId: v.id("sites"), enabled: v
     return { changed: true };
   } });
 
-/** Autopilot's first article normally lands a day after it is switched on.
- * An owner who doesn't want to wait can bring the next slot forward to about
- * two hours from now. Only an upcoming slot with nothing prepared for it moves,
- * and only earlier: missed slots, prepared work and history never change. */
-export const START_NOW_LEAD_MS = 2 * 3_600_000;
-export const startAutopilotNow = mutation({ args: { siteId: v.id("sites"), reviewToken: v.string() },
+/** The customer's Autopilot pace (articles per week) for this site. */
+export const setAutopilotCadence = mutation({ args: { siteId: v.id("sites"), reviewToken: v.string(), cadencePerWeek: v.number() },
   handler: async (ctx, args) => {
     const site = await requireOwner(ctx, args.siteId), s = site.contentSchedule;
-    if (site.serviceMode !== "growth_first" || !s?.autopilotSelectedAt || !s.autopublishConsentAt || s.ownerReviewedOnly || s.paused) {
-      throw new ConvexError("Autopilot isn't running for this site.");
-    }
+    if (site.serviceMode !== "growth_first" || !s?.autopilotSelectedAt || s.ownerReviewedOnly) throw new ConvexError("Turn on Autopilot first.");
     if (args.reviewToken !== contentConsentToken(site)) throw new ConvexError("Your saved setup changed. Refresh and try again.");
-    const now = Date.now(), target = now + START_NOW_LEAD_MS;
-    if (s.nextDeadlineAt <= target) return { changed: false, nextDeadlineAt: s.nextDeadlineAt };
-    const unfinished = (await jobsForSite(ctx, site._id)).some(j => j.contentWork && !j.contentWork.ownerRequest &&
-      j.contentWork.retiredAt === undefined && !["verified", "failed"].includes(j.contentWork.stage));
-    if (unfinished) throw new ConvexError("Pentra is already preparing your next article for its scheduled time.");
-    await ctx.db.patch(site._id, { contentSchedule: { ...s, nextDeadlineAt: target }, updatedAt: now });
+    if (!targetCadenceOptions().some(option => option.value === args.cadencePerWeek)) throw new ConvexError("Choose one of the listed paces.");
+    if (site.cadencePerWeek === args.cadencePerWeek) return { changed: false };
+    await ctx.db.patch(site._id, { cadencePerWeek: args.cadencePerWeek, updatedAt: Date.now() });
     await wake(ctx, site._id);
-    return { changed: true, nextDeadlineAt: target };
+    return { changed: true };
   } });
 
 export const readiness = query({
@@ -711,9 +713,6 @@ export const readiness = query({
       autopilot: { selectable: Boolean(site.contentSetupRequestedAt), on: Boolean(s && !s.ownerReviewedOnly && site.autopilotEnabled && !site.approvalRequired),
         reviewAvailable: ["github", "wordpress"].includes(site.publishMethod ?? "") || pasteDestination(site),
         autopilotAvailable: !pasteDestination(site),
-        canStartNow: Boolean(s?.autopilotSelectedAt && s.autopublishConsentAt && !s.ownerReviewedOnly && !s.paused &&
-          s.nextDeadlineAt > Date.now() + START_NOW_LEAD_MS + 30 * 60_000 && !jobs.some(j => j.contentWork && !j.contentWork.ownerRequest &&
-          j.contentWork.retiredAt === undefined && !["verified", "failed"].includes(j.contentWork.stage))),
         adoptable: Boolean(site.serviceMode === "growth_first" && s && !s.autopilotSelectedAt && !s.ownerReviewedOnly) },
       ownerDraft: { maximumMicroUsd: pricing?.budgetMicroUsd ?? null,
         allowance: pricing ? await ownerDraftAllowance(ctx, site, Boolean(pricing.validationAuthorizationId)) : null,
@@ -1200,13 +1199,30 @@ export const advance = internalMutation({
         return { scheduled: 0, mode: "quota_reached", blockers: ["plan_monthly_articles_reached"] };
       }
     }
-    const deadlineAt = schedule.nextDeadlineAt + waiting.length * schedule.intervalMs;
+    // Autopilot keeps the customer's cadence. With nothing prepared, the next
+    // article is never more than one cadence interval away: it starts now and
+    // lands in about two hours. Only a future slot moves, and only earlier;
+    // an overdue slot stays exactly as recorded.
+    // A cadence change applies to the next slot not yet prepared; slots already
+    // prepared keep their deadlines.
+    let slot = schedule;
+    if (schedule.autopilotSelectedAt && !schedule.ownerReviewedOnly && !schedule.paused &&
+      (waiting.length === 0 || (waiting.length === 1 && waiting[0].contentWork!.deadlineAt === schedule.nextDeadlineAt))) {
+      const rhythm = (await accountPlan(ctx, site)).autopilotIntervalMs, now = Date.now();
+      const nextDeadlineAt = waiting.length === 0 && schedule.nextDeadlineAt > now + rhythm
+        ? now + Math.min(rhythm, FIRST_ARTICLE_LEAD_MS) : schedule.nextDeadlineAt;
+      if (rhythm !== schedule.intervalMs || nextDeadlineAt !== schedule.nextDeadlineAt) slot = { ...schedule, intervalMs: rhythm, nextDeadlineAt };
+    }
+    const deadlineAt = slot.nextDeadlineAt + waiting.length * slot.intervalMs;
     if (work.some(j => j.contentWork!.deadlineAt === deadlineAt)) return { scheduled: 0, mode: "content_failed_slot" };
     const budgetRequest = { siteId, userId: site.userId!, purpose: "content_work" as const,
       trigger: `content_slot:${deadlineAt}`, reservedMicroUsd: pricing.budgetMicroUsd, timestamp: Date.now() };
     let budget = await inspectSharedProviderBudget(ctx, budgetRequest);
     if (!budget.ok && await closeFinishedContentHolds(ctx, site) > 0) budget = await inspectSharedProviderBudget(ctx, budgetRequest);
     if (!budget.ok) return { scheduled: 0, mode: "content_budget_exhausted", blockers: [budget.reason], budgetBlocker: budget };
+    // Move the slot only once the work is actually admitted, so an unfunded
+    // pull-forward can never create a missed deadline.
+    if (slot !== schedule) await ctx.db.patch(siteId, { contentSchedule: slot, updatedAt: Date.now() });
     const { budgetMicroUsd, ...price } = pricing;
     const jobId = await ctx.db.insert("jobs", { siteId, canonicalDomain: siteCanonicalDomain(site)!, domainRevision: siteCanonicalDomainRevision(site),
       rolloutEpoch: site.autopilotRolloutEpoch ?? 0, type: "article", status: "pending", workerAttempts: 0, publicationAttempts: 0,

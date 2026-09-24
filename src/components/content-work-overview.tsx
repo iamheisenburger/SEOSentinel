@@ -6,7 +6,7 @@ import Link from "next/link";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { contentServiceStatus, fundingMessage } from "../lib/content-service-status";
-import { AdoptAutopilot, AutopilotSwitch, StartNow } from "./pentra-setup-choice";
+import { AdoptAutopilot, AutopilotSwitch } from "./pentra-setup-choice";
 export const money = (value: number | null) => value === null ? "Unknown" : `$${(value / 1_000_000).toFixed(4)}`;
 export const shownTime = (value: number, zone = "UTC") => new Intl.DateTimeFormat("en", { timeZone: zone, dateStyle: "medium", timeStyle: "long" }).format(value);
 export const fundingCopy = { available: "Internal capacity currently available; every paid admission rechecks it.", blocked: "Admission blocked by the existing spending or entitlement guards.", unknown: "Funding readiness unknown. No extra spending is authorized.", unconfigured: "Provider pricing is not configured. Preparation is not funded." };
@@ -49,14 +49,12 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
     </header>
     {state.autopilot?.selectable && state.plan && (s?.ownerReviewedOnly || s?.autopilotSelected) &&
       <AutopilotSwitch siteId={siteId} reviewToken={state.reviewToken} on={Boolean(state.autopilot.on)} intervalMs={state.plan.autopilotIntervalMs}
-        reviewAvailable={state.autopilot.reviewAvailable ?? true} paused={Boolean(s?.paused)} />}
+        reviewAvailable={state.autopilot.reviewAvailable ?? true} paused={Boolean(s?.paused)}
+        cadencePerWeek={state.plan.cadencePerWeek ?? null} articlesPerMonth={state.plan.articlesPerMonth} />}
     {state.autopilot?.adoptable && state.plan && state.bindingCurrent && state.destination.verified && state.entitlement &&
       <AdoptAutopilot siteId={siteId} reviewToken={state.reviewToken} intervalMs={state.plan.autopilotIntervalMs} articlesPerMonth={state.plan.articlesPerMonth} />}
     {state.autopilot?.on && s && !s.paused && s.nextDeadlineAt > state.funding.checkedAt &&
-      <div className="flex flex-wrap items-center gap-3">
-        <p className="text-[14px] text-[#EDEEF1]">Next article is scheduled for <span className="font-medium">{when(s.nextDeadlineAt)}</span>.</p>
-        {state.autopilot.canStartNow && <StartNow siteId={siteId} reviewToken={state.reviewToken} />}
-      </div>}
+      <p className="text-[14px] text-[#EDEEF1]">Next article is scheduled for <span className="font-medium">{when(s.nextDeadlineAt)}</span>.</p>}
     {plain && state.results && <ResultsStrip siteId={siteId} live={state.results.live} liveThisMonth={state.results.liveThisMonth}
       planPerMonth={state.plan?.articlesPerMonth ?? null} planUsed={state.results.planUsedThisMonth ?? 0} />}
     <div className="grid gap-4 md:grid-cols-2">
@@ -156,7 +154,7 @@ function ResultsStrip({ siteId, live, liveThisMonth, planPerMonth, planUsed }: {
   </div>;
   return <div className="grid grid-cols-2 gap-3 md:grid-cols-3" aria-label="Results at a glance">
     {tile("Articles live", String(live), "published and confirmed on your site")}
-    {tile("This month", String(liveThisMonth), planPerMonth ? `published here · ${planUsed} of ${planPerMonth} plan articles used (all sites)` : "articles published here")}
+    {tile("This month", String(liveThisMonth), planPerMonth ? `published on this site · Autopilot has used ${planUsed} of your ${planPerMonth} monthly articles (all sites)` : "articles published on this site")}
     {tile("Site health", check ? `${check.score}/100` : "—", check ? "latest weekly check" : "first check pending")}
   </div>;
 }
