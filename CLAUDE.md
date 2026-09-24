@@ -16,7 +16,7 @@ Pentra is an **autonomous AI-powered SEO content engine**. Users connect their w
 | Language | TypeScript (strict) |
 | Database + Backend | Convex (real-time, serverless) |
 | Auth | Clerk (with Convex integration via `ConvexProviderWithClerk`) |
-| Styling | Tailwind CSS 4 + custom CSS variables in `globals.css` |
+| Styling | Tailwind CSS 4 + custom CSS variables in `pentra.css` (renamed from globals.css) |
 | AI - Articles | Anthropic Claude (`claude-haiku-4-5-20251001`) via `@anthropic-ai/sdk` |
 | AI - Research | OpenAI `o4-mini-deep-research-2025-06-26` via `web_search_preview` tool |
 | AI - Images | OpenAI `gpt-image-1.5` for hero images and infographics |
@@ -118,7 +118,7 @@ This is the largest and most important file. Key exported actions:
 |------|---------|
 | `app/layout.tsx` | Root layout — ClerkProvider, Convex Providers, Geist fonts, dark theme |
 | `app/providers.tsx` | ConvexProviderWithClerk setup |
-| `app/globals.css` | Design system CSS variables, animations, Clerk dark-theme overrides |
+| `app/pentra.css` | Design system CSS variables, animations, Clerk dark-theme overrides |
 | `middleware.ts` | Clerk auth middleware, public route matching, dynamic article path rewriting |
 | `contexts/site-context.tsx` | Active site context (multi-site support via SiteProvider) |
 | `hooks/usePlanLimits.ts` | Hook: reads Clerk features, syncs to Convex, returns plan limits |

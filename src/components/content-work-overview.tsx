@@ -7,6 +7,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { contentServiceStatus, fundingMessage } from "../lib/content-service-status";
 import { AdoptAutopilot, AutopilotSwitch } from "./pentra-setup-choice";
+import { topicTitle } from "@/lib/topic-title";
 export const money = (value: number | null) => value === null ? "Unknown" : `$${(value / 1_000_000).toFixed(4)}`;
 export const shownTime = (value: number, zone = "UTC") => new Intl.DateTimeFormat("en", { timeZone: zone, dateStyle: "medium", timeStyle: "long" }).format(value);
 export const fundingCopy = { available: "Internal capacity currently available; every paid admission rechecks it.", blocked: "Admission blocked by the existing spending or entitlement guards.", unknown: "Funding readiness unknown. No extra spending is authorized.", unconfigured: "Provider pricing is not configured. Preparation is not funded." };
@@ -65,6 +66,8 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
       <p className="text-[14px] text-[#F7F8F8]">Next article is scheduled for <span className="font-medium">{when(s.nextDeadlineAt)}</span>.</p>}
     {plain && state.results && <ResultsStrip siteId={siteId} live={state.results.live} liveThisMonth={state.results.liveThisMonth}
       planPerMonth={state.plan?.articlesPerMonth ?? null} planUsed={state.results.planUsedThisMonth ?? 0} />}
+    {/* Results first: the clicks trend sits directly under the headline numbers. */}
+    {plain && <OrganicOutcome key={`${siteId}-top`} siteId={siteId} simple />}
     <div className="grid gap-4 md:grid-cols-2 md:items-start">
       <div className="space-y-4">
       <section className={CARD}><h2 className={H2}>Upcoming work</h2>
@@ -94,7 +97,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
       <SiteHealth siteId={siteId} />
       </div>
     </div>
-    <OrganicOutcome key={siteId} siteId={siteId} simple={plain} />
+    {!plain && <OrganicOutcome key={siteId} siteId={siteId} simple={false} />}
     {(!plain || !state.entitlement || !state.destination.verified || !state.bindingCurrent || state.funding.status !== "available" || attention.length > 0) &&
     <section className={`${CARD} border-[#F59E0B]/20`}><h2 className={H2}>Needs attention</h2>
       <div className="space-y-2 text-[14px] text-[#F7F8F8]">
@@ -209,9 +212,7 @@ function ResultsStrip({ siteId, live, liveThisMonth, planPerMonth, planUsed }: {
   </div>;
 }
 
-const ACRONYMS = /\b(ai|seo|crm|saas|b2b|b2c|api|faq|roi|kpi|ux|ui|llm|mdx|cms|ppc|smb|hr|it)\b/gi;
-/** Sentence-case topic label with common acronyms kept upper case ("AI sales automation"). */
-export const topicTitle = (label: string) => label.replace(ACRONYMS, m => m.toUpperCase()).replace(/^./, c => c.toUpperCase());
+export { topicTitle };
 
 /** What Autopilot will write next, so a hands-off customer can see and steer it. */
 function UpcomingTopics({ siteId }: { siteId: Id<"sites"> }) {

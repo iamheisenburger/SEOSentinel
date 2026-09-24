@@ -93,7 +93,7 @@ export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAva
   const pace = cadencePerWeek ? `${cadencePerWeek} article${cadencePerWeek === 1 ? "" : "s"} a week (${rhythm(intervalMs)})` : rhythm(intervalMs);
   return <div className="flex flex-wrap items-center gap-3 rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
     <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${on && !paused ? "bg-[#4CB782] shadow-[0_0_0_3px_rgba(76,183,130,0.15)]" : on ? "bg-[#F2994A]" : "bg-[#62666D]"}`} />
-    <div className="min-w-0 flex-1">
+    <div className="min-w-[14rem] flex-1">
       <p className="text-[14px] font-medium text-[#F7F8F8]">Autopilot is {on ? (paused ? "paused" : "on") : "off"}</p>
       <p className="text-[13px] leading-relaxed text-[#8A8F98]">{on ? paused ? "No new articles start while paused. Resume from Service settings."
         : `Pentra publishes ${pace}${articlesPerMonth ? `, up to ${articlesPerMonth} a month on your plan` : ""}. Drafts it isn't confident about are held back and never published.`

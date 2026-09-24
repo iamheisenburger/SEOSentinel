@@ -1,3 +1,5 @@
+/* Global styles. Renamed from globals.css on Sep 24 so Vercel's restored Turbopack build cache
+ * cannot keep serving a stale copy of the old file (it did: old Clerk button rules survived edits). */
 @import "tailwindcss";
 
 :root {

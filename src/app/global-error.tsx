@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { BrandedErrorState } from "@/components/layout/branded-error-state";
-import "./globals.css";
+import "./pentra.css";
 
 export default function GlobalError({
   error,

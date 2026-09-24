@@ -32,7 +32,7 @@ import Link from "next/link";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
 import { cadenceLabel } from "../../../../convex/planLimits";
-import { topicTitle } from "@/components/content-work-overview";
+import { topicTitle } from "@/lib/topic-title";
 
 /** Format search volume with K/M suffixes */
 function formatVolume(vol: number): string {

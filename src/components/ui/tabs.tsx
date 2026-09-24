@@ -14,13 +14,13 @@ interface TabsProps {
 
 export function Tabs({ tabs, active, onChange }: TabsProps) {
   return (
-    <div className="flex gap-1 border-b border-white/[0.06]">
+    <div className="flex gap-1 overflow-x-auto shadow-[inset_0_-1px_0_rgba(255,255,255,0.06)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {tabs.map((tab) => (
         <button
           key={tab.id}
           onClick={() => onChange(tab.id)}
           className={`
-            relative px-3 pb-2.5 pt-1 text-[13px] font-medium transition-colors
+            relative shrink-0 whitespace-nowrap px-3 pb-2.5 pt-1 text-[13px] font-medium transition-colors
             ${
               active === tab.id
                 ? "text-[#F7F8F8]"
@@ -39,7 +39,7 @@ export function Tabs({ tabs, active, onChange }: TabsProps) {
             </span>
           )}
           {active === tab.id && (
-            <span className="absolute inset-x-0 -bottom-px h-px bg-[#F7F8F8]" />
+            <span className="absolute inset-x-0 bottom-0 h-px bg-[#F7F8F8]" />
           )}
         </button>
       ))}

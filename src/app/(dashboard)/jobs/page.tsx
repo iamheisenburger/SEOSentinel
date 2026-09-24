@@ -20,6 +20,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { formatDistanceToNow, formatDuration, intervalToDuration } from "date-fns";
+import { topicTitle } from "@/lib/topic-title";
 
 export default function JobsPage() {
   const jobs = useQuery(api.jobs.listAll);
@@ -164,6 +165,9 @@ export default function JobsPage() {
                         <span className="text-[10px] text-[#F87171]">stopped</span>
                       )}
                     </div>
+                    {job.type === "article" && job.stepProgress?.topicLabel && (
+                      <p className="mt-0.5 truncate text-[12px] text-[#8A8F98]">{topicTitle(job.stepProgress.topicLabel)}</p>
+                    )}
 
                     {/* Step progress (live) */}
                     {job.status === "running" && job.stepProgress && (
@@ -181,7 +185,7 @@ export default function JobsPage() {
                             {job.stepProgress.current}/{job.stepProgress.total}
                           </span>
                         </div>
-                        <p className="mt-1 text-[11px] text-[#38BDF8]">
+                        <p className="mt-1 text-[11px] text-[#8A8F98]">
                           {job.stepProgress.stepLabel}
                         </p>
                       </div>
