@@ -26,24 +26,28 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
     <header><h1 className="text-xl font-semibold">Pentra for {state.destination.domain}</h1><p>{state.profile.name}</p><Link className="underline text-sm" href="/settings#content-service-heading">Service settings</Link></header>
     {state.autopilot?.selectable && state.plan && (s?.ownerReviewedOnly || s?.autopilotSelected) &&
       <AutopilotSwitch siteId={siteId} reviewToken={state.reviewToken} on={Boolean(state.autopilot.on)} intervalMs={state.plan.autopilotIntervalMs} />}
-    {state.autopilot?.on && s && <p className="text-sm">Next article is scheduled for {shownTime(s.nextDeadlineAt, zone)}. Drafts with a factual concern wait for you in <Link className="underline" href="/articles">Articles</Link>.</p>}
+    {state.autopilot?.on && s && s.nextDeadlineAt > state.funding.checkedAt &&
+      <p className="text-sm">Next article is scheduled for {shownTime(s.nextDeadlineAt, zone)}. Drafts with a factual concern wait for you in <Link className="underline" href="/articles">Articles</Link>.</p>}
     <div className="grid gap-4 md:grid-cols-2">
       <section className="rounded-xl border border-white/10 p-5 space-y-2"><h2 className="font-medium">Upcoming work</h2>
         {s?.ownerReviewedOnly ? <p>Request, review and publish from <Link className="underline" href="/articles">Articles</Link>. Nothing publishes automatically.</p>
           : simple ? <p>{upcoming.length ? "Pentra is preparing your next articles." : "Pentra will start preparing your next article shortly."}</p>
-          : <p>{delivery.label}. Ready buffer: {state.complete ? `${state.ready}/2` : "Unknown: incomplete inventory"}.</p>}
-        {s && !s.ownerReviewedOnly && !simple && <p>Fixed window: {shownTime(s.nextDeadlineAt - 300_000, zone)}–{shownTime(s.nextDeadlineAt, zone)} ({zone}). {s.nextDeadlineAt < state.funding.checkedAt && <span role="alert">Overdue. The original deadline is retained.</span>}</p>}
+          : <p>{delivery.label}. Articles ready to publish: {state.complete ? `${state.ready} of 2` : "unknown (history incomplete)"}.</p>}
+        {s && !s.ownerReviewedOnly && !simple && <p>Next delivery due: {shownTime(s.nextDeadlineAt, zone)} ({zone}). {s.nextDeadlineAt < state.funding.checkedAt && <span role="alert">Overdue. The missed deadline stays on record.</span>}</p>}
         {!upcoming.length && !s?.ownerReviewedOnly && !simple && <p>No upcoming item is prepared yet.</p>}
         <ul className="space-y-2 text-sm">{upcoming.map(w => <li key={w.jobId}>{workLabel(w)} · {stageLabel(w.stage)}{simple ? "" : ` · due ${shownTime(w.deadlineAt, zone)}`}</li>)}</ul>
       </section>
       <section className="rounded-xl border border-white/10 p-5 space-y-2"><h2 className="font-medium">{simple ? "Published articles" : "Verified changes"}</h2>
-        {simple ? !verified.length && <p>Your first published article will appear here once Pentra confirms it&apos;s live.</p> : s?.ownerReviewedOnly ? <p><Link className="underline" href="/articles">View reviewed drafts and publication status</Link>. A page counts as delivered only after live verification.</p> : !verified.length && <p>No live changes verified yet. Preparation and monitoring are not publications.</p>}
-        <ul className="space-y-2 text-sm">{verified.map(w => <li key={w.jobId}>{workLabel(w)}{w.articleId && <> · <Link className="underline" href={`/articles/${w.articleId}`}>View article</Link></>}{w.publishedAt && <p>Published {shownTime(w.publishedAt, zone)}</p>}{w.verifiedAt && <p>Verified {shownTime(w.verifiedAt, zone)}</p>}</li>)}</ul>
+        {(state.published ?? []).length > 0 && <ul className="space-y-1 text-sm" aria-label="Recently published">{(state.published ?? []).map(a => <li key={a.articleId}>
+          <Link className="underline" href={`/articles/${a.articleId}`}>{a.title}</Link>{a.publishedAt && <> · {shownTime(a.publishedAt, zone)}</>}{a.verified ? " · live" : " · checking the live page"}
+          {a.url && <> · <a className="underline" href={a.url} target="_blank" rel="noreferrer">View on your site</a></>}</li>)}</ul>}
+        {(state.published ?? []).length === 0 && (simple ? !verified.length && <p>Your first published article will appear here once Pentra confirms it&apos;s live.</p> : s?.ownerReviewedOnly ? <p><Link className="underline" href="/articles">View reviewed drafts and publication status</Link>. A page counts as delivered only after live verification.</p> : !verified.length && <p>No live changes verified yet. Preparation and monitoring are not publications.</p>)}
+        <ul className="space-y-2 text-sm">{verified.filter(w => !(state.published ?? []).some(a => a.articleId === w.articleId)).map(w => <li key={w.jobId}>{workLabel(w)}{w.articleId && <> · <Link className="underline" href={`/articles/${w.articleId}`}>View article</Link></>}{w.publishedAt && <p>Published {shownTime(w.publishedAt, zone)}</p>}{w.verifiedAt && <p>Verified {shownTime(w.verifiedAt, zone)}</p>}</li>)}</ul>
       </section>
     </div>
     <OrganicOutcome key={siteId} siteId={siteId} simple={simple} />
     <SiteHealth siteId={siteId} />
-    {(!simple || !state.entitlement || !state.destination.verified || !state.bindingCurrent || state.funding.status !== "available" || state.work.some(w => w.failure && !w.retiredAt)) &&
+    {(!simple || !state.entitlement || !state.destination.verified || !state.bindingCurrent || state.funding.status !== "available" || state.work.some(w => w.failure && !w.retiredAt && !(state.published ?? []).some(a => a.articleId === w.articleId))) &&
     <section className="rounded-xl border border-white/10 p-5 space-y-2"><h2 className="font-medium">Needs attention</h2>
       {!state.entitlement && <p role="alert">Verify your existing plan in <Link href="/settings/billing" className="underline">Billing</Link>.</p>}
       {!state.destination.verified && <p role="alert">Publishing destination verification required.</p>}
@@ -54,7 +58,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
           : "Pentra can't start new articles right now. Your published articles are not affected."
         : state.funding.reason ?? fundingCopy[state.funding.status]}</p>}
       {!state.complete && !simple && <p role="alert">Work history is incomplete. No clean-health claim is possible.</p>}
-      {state.work.filter(w => w.failure && !w.retiredAt).map(w => simple
+      {state.work.filter(w => w.failure && !w.retiredAt && !(state.published ?? []).some(a => a.articleId === w.articleId)).map(w => simple
         ? <p role="alert" key={w.jobId}>{workLabel(w)}: {w.failure} {w.articleId && <Link className="underline" href={`/articles/${w.articleId}`}>Open draft</Link>}</p>
         : <div role="alert" key={w.jobId}>{workLabel(w)}: {w.failure} <details><summary>Technical details</summary>{w.jobId}{w.technicalReason && <p>{w.technicalReason}</p>}</details></div>)}
       {!simple && <p className="text-sm">Delivery acceptance and organic growth are separate. A successful API response alone is not verification.</p>}
@@ -93,7 +97,7 @@ function OrganicOutcome({ siteId, simple = false }: { siteId: Id<"sites">; simpl
 
 function SiteHealth({ siteId }: { siteId: Id<"sites"> }) {
   const check = useQuery(api.siteHealth.latest, { siteId });
-  const run = useAction(api.siteHealth.run);
+  const run = useAction(api.actions.siteHealth.run);
   const [busy, setBusy] = useState(false), [message, setMessage] = useState("");
   const issues = (check?.pages ?? []).flatMap(p => p.issues.map(i => ({ ...i, url: p.url })))
     .sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1)).slice(0, 8);

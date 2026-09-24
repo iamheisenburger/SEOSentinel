@@ -121,7 +121,7 @@ const features = [
   { icon: BarChart3, title: "Improves pages near page one", desc: "Pentra updates its pages to answer the searches they already appear for in Google, then measures the result." },
   { icon: PencilLine, title: "Written for AI answers too", desc: "Each section answers its question in the first line and stands on its own, the way Google and ChatGPT quote pages." },
   { icon: GitBranch, title: "WordPress and GitHub publishing", desc: "Articles are published to your site and confirmed live, with a receipt for every change." },
-  { icon: Globe, title: "Search Console reporting", desc: "See clicks, impressions and positions for every page Pentra published or improved." },
+  { icon: Globe, title: "Weekly site health + Search Console", desc: "Every week Pentra checks your key pages for what stops Google showing them (blocked or unreachable pages, missing titles and descriptions) and shows your clicks and positions." },
 ];
 
 function Features() {
@@ -287,6 +287,7 @@ const organizationSchema = {
     "Improvement of pages already ranking",
     "Live-page verification",
     "Google Search Console reporting",
+    "Weekly site health checks",
   ],
 };
 

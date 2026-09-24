@@ -1268,7 +1268,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
               )}
               {isWp && (
                 <>
-                  <p className="text-[12px] text-[#8B8FA3]">Pentra publishes to WordPress through a small plugin. <a className="underline" href="https://github.com/iamheisenburger/SEOSentinel/blob/main/connectors/wordpress/README.md" target="_blank" rel="noreferrer">Install the Pentra WordPress plugin</a>, then enter your details below and click Save to check the connection.</p>
+                  <p className="text-[12px] text-[#8B8FA3]">Pentra publishes to WordPress through a small plugin. <a className="underline" href="/pentra-wordpress-plugin.zip" download>Download the plugin (ZIP)</a> and install it in WordPress (Plugins → Add New → Upload Plugin → Activate). Then create an Application Password under Users → Profile, enter your details below and click Save to check the connection.</p>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-[12px] font-medium text-[#8B8FA3]">WordPress URL</label>
                     <input value={wpUrl} onChange={(e) => setWpUrl(e.target.value)} placeholder="https://yoursite.com" className={inputCls} />

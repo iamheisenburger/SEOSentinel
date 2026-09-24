@@ -115,3 +115,42 @@ export function healthScore(results: PageHealthResult[]) {
   const penalty = results.reduce((sum, r) => sum + r.issues.reduce((s, i) => s + (i.severity === "critical" ? 25 : 6), 0), 0);
   return Math.max(0, Math.round(100 - penalty / results.length));
 }
+
+/** robots.txt: does it block all crawlers from the whole site, and which
+ * sitemaps does it declare? Only the `*` and Googlebot groups matter here. */
+export function robotsTxtFindings(txt: string): { blocksAll: boolean; sitemaps: string[] } {
+  const sitemaps: string[] = [];
+  let agents: string[] = [], inRules = false, blocksAll = false, allowsRoot = false, relevant = false;
+  for (const raw of txt.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, "").trim();
+    const m = /^([A-Za-z-]+)\s*:\s*(.*)$/.exec(line);
+    if (!m) continue;
+    const key = m[1].toLowerCase(), value = m[2].trim();
+    if (key === "sitemap") { if (/^https:\/\//i.test(value)) sitemaps.push(value); continue; }
+    if (key === "user-agent") {
+      if (inRules) { agents = []; inRules = false; }
+      agents.push(value.toLowerCase());
+      relevant = agents.some(a => a === "*" || a === "googlebot");
+      continue;
+    }
+    inRules = true;
+    if (!relevant) continue;
+    if (key === "disallow" && value === "/") blocksAll = true;
+    if (key === "allow" && (value === "/" || value === "/$")) allowsRoot = true;
+  }
+  return { blocksAll: blocksAll && !allowsRoot, sitemaps: sitemaps.slice(0, 5) };
+}
+
+/** Child sitemaps listed by a sitemap index on the same host. */
+export function sitemapIndexChildren(xml: string, siteHost: string, limit = 3): string[] {
+  if (!/<sitemapindex\b/i.test(xml)) return [];
+  const host = siteHost.replace(/^www\./, "").toLowerCase(), out: string[] = [];
+  for (const match of xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)) {
+    try {
+      const url = new URL(decode(match[1]));
+      if (url.protocol === "https:" && url.host.replace(/^www\./, "").toLowerCase() === host && !out.includes(url.toString())) out.push(url.toString());
+    } catch { /* ignore */ }
+    if (out.length >= limit) break;
+  }
+  return out;
+}

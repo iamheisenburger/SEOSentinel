@@ -160,7 +160,7 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
               )}
               {isWp && (
                 <>
-                  <p className="text-[12px] text-[#8B8FA3]">WordPress publishing needs the Pentra plugin on your site. <a className="underline" href="https://github.com/iamheisenburger/SEOSentinel/blob/main/connectors/wordpress/README.md" target="_blank" rel="noreferrer">Follow the install steps</a>, then enter your site details below and save.</p>
+                  <p className="text-[12px] text-[#8B8FA3]">WordPress publishing needs the Pentra plugin on your site. <a className="underline" href="/pentra-wordpress-plugin.zip" download>Download the plugin (ZIP)</a>, install it in WordPress (Plugins → Add New → Upload Plugin → Activate), then enter your site details below and save.</p>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-[12px] font-medium text-[#8B8FA3]">WordPress URL</label>
                     <input value={wpUrl} onChange={(e) => setWpUrl(e.target.value)} placeholder="https://yoursite.com" className={inputCls} />

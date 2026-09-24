@@ -37,3 +37,13 @@ test("sitemap parsing keeps only first-party HTTPS pages and is bounded", () => 
   assert.deepEqual(sitemapUrls(xml, "acme.example"), ["https://acme.example/", "https://www.acme.example/a", "https://acme.example/b"]);
   assert.equal(sitemapUrls(xml, "acme.example", 1).length, 1);
 });
+
+test("robots.txt that blocks everything is found, and declared sitemaps are read", async () => {
+  const { robotsTxtFindings, sitemapIndexChildren } = await import("../convex/lib/siteHealth.ts");
+  assert.deepEqual(robotsTxtFindings("User-agent: *\nDisallow: /\nSitemap: https://acme.example/sm.xml"), { blocksAll: true, sitemaps: ["https://acme.example/sm.xml"] });
+  assert.equal(robotsTxtFindings("User-agent: *\nDisallow: /admin\n").blocksAll, false);
+  assert.equal(robotsTxtFindings("User-agent: BadBot\nDisallow: /\n\nUser-agent: *\nAllow: /\n").blocksAll, false);
+  assert.equal(robotsTxtFindings("User-agent: Googlebot\nDisallow: / # everything\n").blocksAll, true);
+  assert.deepEqual(sitemapIndexChildren(`<sitemapindex><sitemap><loc>https://acme.example/posts.xml</loc></sitemap><sitemap><loc>https://evil.example/x.xml</loc></sitemap></sitemapindex>`, "acme.example"), ["https://acme.example/posts.xml"]);
+  assert.deepEqual(sitemapIndexChildren("<urlset></urlset>", "acme.example"), []);
+});

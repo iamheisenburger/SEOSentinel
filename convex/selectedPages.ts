@@ -1,4 +1,5 @@
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { moneyPagesFirst, nearPageOne } from "./lib/moneyPages";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -162,7 +163,9 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
   if (!candidates.length) return null;
   let measurements: Awaited<ReturnType<typeof takeCurrentGscQueryRows>>;
   try { measurements = await takeCurrentGscQueryRows(ctx, site, 1000); } catch { return null; }
-  for (const page of candidates) {
+  // "Money pages" first: a page already ranking on positions 4-20 is the
+  // cheapest to lift onto page one, so it is considered before the rest.
+  for (const page of moneyPagesFirst(candidates, measurements.rows)) {
     const e = page.editable!;
     await ctx.db.patch(page._id, { editable: { ...e, lastReviewedAt: Date.now() } });
     try { assertUnprotectedPage(page.slug, e.title, e.sourceContent); } catch { continue; }
@@ -170,14 +173,14 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
       (!e.lastImprovedAt || r.date > new Date(e.lastImprovedAt).toISOString().slice(0, 10)) &&
       !e.markdown.toLowerCase().includes(r.query.toLowerCase()) &&
       evaluateTopicBusinessFit({ keyword: r.query, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible)
-      .sort((a,b) => b.impressions - a.impressions);
+      .sort((a,b) => Number(nearPageOne(b)) - Number(nearPageOne(a)) || b.impressions - a.impressions);
     // An actual first-party reader question may be useful without Search Console.
     const question = rows[0]?.query ?? (site.painPoints ?? []).find(q => q.endsWith("?") &&
       !e.markdown.toLowerCase().includes(q.toLowerCase()) && evaluateTopicBusinessFit({ keyword: q, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible);
     if (!question) continue;
     const editTarget = targetedImprovement(e, site, question);
     if (contentWords(e.markdown) >= 1200 && !editTarget) continue;
-    return { page, question, editTarget, reason: rows[0] ? `Current Search Console query: ${question}; impressions=${rows[0].impressions}; date=${rows[0].date}. No claim of causal growth.`
+    return { page, question, editTarget, reason: rows[0] ? `Current Search Console query: ${question}; impressions=${rows[0].impressions}; date=${rows[0].date}${nearPageOne(rows[0]) ? `; position=${Math.round(rows[0].position!)} (close to page one)` : ""}. No claim of causal growth.`
       : `Confirmed first-party reader question: ${question}. Search metrics unavailable; do not invent them.` };
   }
   return null;

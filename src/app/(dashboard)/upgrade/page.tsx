@@ -89,6 +89,7 @@ const FEATURES = [
   "Improves pages near page one",
   "WordPress and GitHub publishing",
   "Search Console reporting",
+  "Weekly site health check",
 ];
 
 function savingPercent(tier: Tier) {

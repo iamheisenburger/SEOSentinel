@@ -28,7 +28,7 @@ import { contentServiceStatus } from "../../lib/content-service-status";
 const navSections = [
   {
     items: [
-      { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
+      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     ],
   },
   {

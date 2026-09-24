@@ -12,6 +12,7 @@ const allFeatures = [
   "Improves pages near page one",
   "WordPress and GitHub publishing",
   "Search Console reporting",
+  "Weekly site health check",
 ];
 
 // Fixed plans billed through Clerk. Article allowance counts new drafts;
