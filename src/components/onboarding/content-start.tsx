@@ -53,33 +53,72 @@ export function ContentStart() {
     } catch { setError("We couldn't save your setup. Check that your plan allows another website (Plans & billing) and that this domain is yours. Nothing was charged."); }
     finally { setBusy(false); }
   }
-  if (siteId) return <div className="mx-auto max-w-3xl space-y-4"><h1 className="text-xl font-semibold">Finish setting up Pentra</h1>
-    {adapter === "manual" ? <p>Your profile is saved. Start Pentra below: it researches and writes each article, and you paste it into your site.</p> : <>
-    <p>Your profile is saved. Connect and verify your website, then choose Autopilot or Review first.</p>
-    <Link className="underline" href={`/sites/${siteId}?tab=settings`}>Connect your website in settings</Link></>}
+  const steps = (active: number) => <ol className="flex flex-wrap gap-2 text-[12px]" aria-label="Setup steps">
+    {["Your business", "Connect your website", "Autopilot or Review first"].map((step, n) => <li key={step}
+      className={`flex items-center gap-2 rounded-full border px-3 py-1 ${n === active ? "border-[#0EA5E9]/40 bg-[#0EA5E9]/10 text-[#EDEEF1]" : n < active ? "border-[#22C55E]/30 text-[#22C55E]" : "border-white/[0.08] text-[#8B8FA3]"}`}>
+      <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold ${n === active ? "bg-[#0EA5E9] text-white" : n < active ? "bg-[#22C55E]/20" : "bg-white/[0.06]"}`}>{n < active ? "✓" : n + 1}</span>{step}</li>)}
+  </ol>;
+  if (siteId) return <div className="mx-auto max-w-3xl space-y-5">
+    <header className="space-y-3"><h1 className="text-2xl font-semibold tracking-tight text-[#EDEEF1]">Finish setting up Pentra</h1>{steps(adapter === "manual" ? 2 : 1)}</header>
+    {adapter === "manual" ? <p className="text-[14px] text-[#8B8FA3]">Your profile is saved. Start Pentra below: it researches and writes each article, and you paste it into your site.</p> : <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#0EA5E9]/30 bg-[#0EA5E9]/[0.04] p-4">
+      <p className="flex-1 text-[14px] text-[#EDEEF1]">Your profile is saved. Connect and verify your website, then choose Autopilot or Review first.</p>
+      <Link className="rounded-lg bg-[#0EA5E9] px-4 py-2 text-[13px] font-medium text-white hover:bg-[#0284C7]" href={`/sites/${siteId}?tab=settings`}>Connect your website in settings</Link></div>}
     <ContentWorkService key={siteId} siteId={siteId} />
   </div>;
-  return <section className="mx-auto max-w-2xl space-y-4 rounded-xl border border-white/10 p-5"><h1 className="text-xl font-semibold">Set up Pentra for your website</h1>
-    <p>Tell Pentra what your business does and who it serves, connect your website, and choose Autopilot or Review first. Pentra handles the research, writing, publishing and checks.</p>
-    <Input label="Website domain" value={domain} onChange={e => { setDomain(e.target.value); setConfirmed(false); }} placeholder="yourbusiness.com" />
-    <div className="flex flex-wrap items-center gap-3"><Button size="sm" variant="secondary" disabled={!domain.trim() || filling} loading={filling} onClick={fillFromWebsite}>Fill in from my website</Button>
-      <span className="text-sm text-[#8B8FA3]" role="status">{fillNote || "Pentra reads your homepage and suggests the details below. You check them before anything is written."}</span></div>
-    <Input label="Business name" value={name} onChange={e => { setName(e.target.value); setConfirmed(false); }} />
-    <Textarea label="Confirmed business facts" value={summary} onChange={e => { setSummary(e.target.value); setConfirmed(false); }} />
-    <Textarea label="Who you serve" value={audience} onChange={e => { setAudience(e.target.value); setConfirmed(false); }} />
-    <Textarea label="What your product or service does" value={product} onChange={e => { setProduct(e.target.value); setConfirmed(false); }} />
-    <Textarea label="Real customer questions (one per line)" value={questions} onChange={e => { setQuestions(e.target.value); setConfirmed(false); }} />
-    <Input label="Where should readers go to become customers? (optional)" value={ctaUrl} onChange={e => { setCtaUrl(e.target.value); setConfirmed(false); }} placeholder="https://yourbusiness.com/book" />
-    {ctaUrl.trim() && <Input label="Button text" value={ctaText} onChange={e => setCtaText(e.target.value)} placeholder="Book a visit" />}
-    {!ctaValid && <p role="alert" className="text-sm">Use a full link that starts with https://</p>}
-    <p className="text-sm text-[#8B8FA3]">Each article ends with one clear next step to this page. Leave it empty to link to your homepage.</p>
-    <label className="block">Publishing destination<select className="block w-full rounded-lg border border-white/15 bg-[#0F1117] p-2" aria-label="Content publishing destination" value={adapter} onChange={e => { setAdapter(e.target.value); setConfirmed(false); }}><option value="github">GitHub · plain Markdown/MDX</option><option value="wordpress">WordPress · install the Pentra publisher plugin</option><option value="manual">Another platform (Shopify, Webflow, Wix, Squarespace…) · you paste articles in</option></select></label>
-    {adapter === "manual" && <p className="text-sm text-[#8B8FA3]">Pentra researches, writes and fact-checks every article for you to review; you paste each one into your site&apos;s blog. Automatic publishing for these platforms is coming soon.</p>}
-    {adapter === "wordpress" && <p className="text-sm"><a className="underline" href="/pentra-wordpress-plugin.zip" download>Download the Pentra WordPress plugin (ZIP)</a>. In WordPress go to Plugins → Add New → Upload Plugin, choose the ZIP and activate it. You&apos;ll connect it in the next step.</p>}
-    <p className="text-sm text-[#8B8FA3]">Saving doesn&apos;t charge you. Pentra only adds new articles; it never changes your pricing, checkout or legal pages.</p>
-    <label className="block text-sm"><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /> These facts are accurate. Pentra writes only from them and from sources it cites.</label>
-    <Button disabled={busy || !isLoaded || !userId || !confirmed || !ctaValid || !domain.trim() || !summary.trim() || !audience.trim() || !product.trim()} onClick={save}>{busy ? "Saving…" : "Save and continue"}</Button>
-    <p><Link className="underline text-sm" href="/upgrade">Plans & billing</Link></p>
-    {error && <p role="alert">{error}</p>}
-  </section>;
+  const PANEL = "space-y-4 rounded-xl border border-white/[0.06] bg-[#0F1117] p-5", H2 = "text-[15px] font-semibold text-[#EDEEF1]", HELP = "text-[13px] leading-relaxed text-[#8B8FA3]";
+  const edit = (set: (value: string) => void) => (e: { target: { value: string } }) => { set(e.target.value); setConfirmed(false); };
+  return <div className="mx-auto max-w-2xl space-y-5">
+    <header className="space-y-3">
+      <h1 className="text-2xl font-semibold tracking-tight text-[#EDEEF1]">Set up Pentra for your website</h1>
+      <p className="text-[14px] leading-relaxed text-[#8B8FA3]">Tell Pentra about your business, connect your website, and choose Autopilot or Review first. Then Pentra researches, writes, publishes and checks every article for you.</p>
+      {steps(0)}
+    </header>
+    <section className={PANEL} aria-labelledby="setup-website">
+      <h2 id="setup-website" className={H2}>Your website</h2>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <div className="flex-1"><Input label="Website domain" value={domain} onChange={edit(setDomain)} placeholder="yourbusiness.com" /></div>
+        <Button disabled={!domain.trim() || filling} loading={filling} onClick={fillFromWebsite}>Fill in from my website</Button>
+      </div>
+      <p className={HELP} role="status">{fillNote || "Pentra reads your homepage and suggests the details below. You check them before anything is written."}</p>
+    </section>
+    <section className={PANEL} aria-labelledby="setup-business">
+      <div className="space-y-1"><h2 id="setup-business" className={H2}>About your business</h2>
+        <p className={HELP}>Pentra writes only from these facts and from sources it cites, so keep them accurate.</p></div>
+      <Input label="Business name" value={name} onChange={edit(setName)} />
+      <Textarea label="Confirmed business facts" value={summary} onChange={edit(setSummary)} />
+      <Textarea label="Who you serve" value={audience} onChange={edit(setAudience)} />
+      <Textarea label="What your product or service does" value={product} onChange={edit(setProduct)} />
+      <Textarea label="Real customer questions (one per line)" value={questions} onChange={edit(setQuestions)} />
+    </section>
+    <section className={PANEL} aria-labelledby="setup-next-step">
+      <div className="space-y-1"><h2 id="setup-next-step" className={H2}>Turning readers into customers</h2>
+        <p className={HELP}>Each article ends with one clear next step to this page. Leave it empty to link to your homepage.</p></div>
+      <Input label="Where should readers go to become customers? (optional)" value={ctaUrl} onChange={edit(setCtaUrl)} placeholder="https://yourbusiness.com/book" />
+      {ctaUrl.trim() && <Input label="Button text" value={ctaText} onChange={e => setCtaText(e.target.value)} placeholder="Book a visit" />}
+      {!ctaValid && <p role="alert" className="text-[13px] text-[#F59E0B]">Use a full link that starts with https://</p>}
+    </section>
+    <section className={PANEL} aria-labelledby="setup-destination">
+      <h2 id="setup-destination" className={H2}>Where Pentra publishes</h2>
+      <label className="block space-y-1.5"><span className="text-[13px] font-medium text-[#8B8FA3]">Publishing destination</span>
+        <select className="block w-full rounded-lg border border-white/[0.1] bg-[#08090E] px-3 py-2.5 text-[14px] text-[#EDEEF1] focus:border-[#0EA5E9] focus:outline-none"
+          aria-label="Content publishing destination" value={adapter} onChange={e => { setAdapter(e.target.value); setConfirmed(false); }}>
+          <option value="github">GitHub · plain Markdown/MDX</option>
+          <option value="wordpress">WordPress · install the Pentra publisher plugin</option>
+          <option value="manual">Another platform (Shopify, Webflow, Wix, Squarespace…) · you paste articles in</option>
+        </select></label>
+      {adapter === "github" && <p className={HELP}>Pentra commits each article as a Markdown/MDX file to your site&apos;s repository. You&apos;ll connect GitHub in the next step.</p>}
+      {adapter === "manual" && <p className={HELP}>Pentra researches, writes and fact-checks every article for you to review; you paste each one into your site&apos;s blog and Pentra confirms it&apos;s live. Automatic publishing for these platforms is coming soon.</p>}
+      {adapter === "wordpress" && <p className={HELP}><a className="font-medium text-[#0EA5E9] hover:underline" href="/pentra-wordpress-plugin.zip" download>Download the Pentra WordPress plugin (ZIP)</a>. In WordPress go to Plugins → Add New → Upload Plugin, choose the ZIP and activate it. You&apos;ll connect it in the next step.</p>}
+    </section>
+    <section className={PANEL}>
+      <label className="flex items-start gap-3 text-[14px] text-[#EDEEF1]"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#0EA5E9]" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+        <span>These facts are accurate. Pentra writes only from them and from sources it cites.</span></label>
+      <div className="flex flex-wrap items-center gap-4">
+        <Button disabled={busy || !isLoaded || !userId || !confirmed || !ctaValid || !domain.trim() || !summary.trim() || !audience.trim() || !product.trim()} onClick={save}>{busy ? "Saving…" : "Save and continue"}</Button>
+        <Link className="text-[13px] text-[#0EA5E9] hover:underline" href="/upgrade">Plans &amp; billing</Link>
+      </div>
+      <p className={HELP}>Saving doesn&apos;t charge you. Pentra only adds new articles; it never changes your pricing, checkout or legal pages.</p>
+      {error && <p role="alert" className="text-[13px] text-red-400">{error}</p>}
+    </section>
+  </div>;
 }

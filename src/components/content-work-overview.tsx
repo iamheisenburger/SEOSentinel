@@ -14,8 +14,12 @@ export const workLabel = (w: { intent: string; operation?: string }) => w.operat
 export const stageLabel = (stage: string) => ({ prepare: "Preparing", review: "Quality review", review_failed: "Revision needed", ready: "Reviewed and ready", publish: "Publishing", verify: "Checking the live page", verified: "Live and verified", failed: "Needs your review" }[stage] ?? "State needs review");
 
 /** Friendly date for customers: "Thu, Sep 25, 6:19 PM". */
-export const friendlyTime = (value: number, zone = "UTC") =>
-  new Intl.DateTimeFormat("en", { timeZone: zone, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(value);
+export const friendlyTime = (value: number, zone = viewerZone()) =>
+  new Intl.DateTimeFormat("en", { timeZone: zone, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(value);
+/** The viewer's own time zone, so "4:00 PM PDT" means what it says to the person reading it. */
+export function viewerZone() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; }
+}
 const CARD = "rounded-xl border border-white/[0.06] bg-[#0F1117] p-5 space-y-3";
 const H2 = "text-[15px] font-semibold text-[#EDEEF1]";
 const BODY = "text-[14px] leading-relaxed text-[#8B8FA3]";
@@ -23,17 +27,21 @@ const BODY = "text-[14px] leading-relaxed text-[#8B8FA3]";
 export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
   const state = useQuery(api.contentWork.readiness, { siteId });
   if (!state || state.siteId !== siteId) return <p className={BODY}>Loading your content service…</p>;
-  const s = state.schedule, zone = s?.timezone ?? "UTC";
+  const s = state.schedule;
   const delivery = contentServiceStatus(state);
   // Customers who set up through the new flow see plain language, not delivery-window internals.
   const simple = Boolean(state.autopilot?.selectable && s?.autopilotSelected);
   // Both new-setup choices (Autopilot and Review first) get plain language.
   const plain = Boolean(state.autopilot?.selectable && (s?.autopilotSelected || s?.ownerReviewedOnly));
+  // Plain-language dates are shown in the reader's own time zone, with its name.
+  const zone = plain ? viewerZone() : s?.timezone ?? "UTC";
   const when = (value: number) => plain ? friendlyTime(value, zone) : shownTime(value, zone);
   const upcoming = state.work.filter(w => !["verified", "failed"].includes(w.stage)).sort((a, b) => a.deadlineAt - b.deadlineAt).slice(0, 5);
   const verified = state.work.filter(w => w.stage === "verified").sort((a, b) => (b.verifiedAt ?? 0) - (a.verifiedAt ?? 0)).slice(0, 5);
   const published = state.published ?? [];
-  const attention = state.work.filter(w => w.failure && !w.retiredAt && !w.superseded && !w.parked && !published.some(a => a.articleId === w.articleId));
+  // Plain-mode owners only see what needs them: a revision Pentra is still working through is not their problem.
+  const attention = state.work.filter(w => w.failure && !w.retiredAt && !w.superseded && !w.parked && !published.some(a => a.articleId === w.articleId) &&
+    (!plain || w.systemFailure || w.stage === "failed"));
   const tone = delivery.status === "failed" || delivery.status === "changed" ? "bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/20"
     : delivery.status === "paused" ? "bg-white/[0.04] text-[#8B8FA3] border-white/10" : "bg-[#22C55E]/10 text-[#22C55E] border-[#22C55E]/20";
   return <div className="space-y-5" aria-label="Content service overview">
@@ -57,7 +65,8 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
       <p className="text-[14px] text-[#EDEEF1]">Next article is scheduled for <span className="font-medium">{when(s.nextDeadlineAt)}</span>.</p>}
     {plain && state.results && <ResultsStrip siteId={siteId} live={state.results.live} liveThisMonth={state.results.liveThisMonth}
       planPerMonth={state.plan?.articlesPerMonth ?? null} planUsed={state.results.planUsedThisMonth ?? 0} />}
-    <div className="grid gap-4 md:grid-cols-2">
+    <div className="grid gap-4 md:grid-cols-2 md:items-start">
+      <div className="space-y-4">
       <section className={CARD}><h2 className={H2}>Upcoming work</h2>
         {s?.ownerReviewedOnly ? <p className={BODY}>Request, review and publish from <Link className="text-[#0EA5E9] hover:underline" href="/articles">Articles</Link>. Nothing publishes automatically.</p>
           : simple ? <p className={BODY}>{upcoming.length ? "Pentra is preparing your next articles." : "Pentra will start preparing your next article shortly."}</p>
@@ -68,6 +77,9 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
           <span className="text-[#EDEEF1]">{workLabel(w)}</span>
           <span className="text-[12px] text-[#8B8FA3]">{stageLabel(w.stage)}{simple ? (w.stage === "ready" ? ` · goes live ${friendlyTime(w.deadlineAt, zone)}` : "") : ` · due ${shownTime(w.deadlineAt, zone)}`}</span></li>)}</ul>}
       </section>
+      {plain && <UpcomingTopics siteId={siteId} />}
+      </div>
+      <div className="space-y-4">
       <section className={CARD}><h2 className={H2}>{plain ? "Published articles" : "Verified changes"}</h2>
         {published.length > 0 && <ul className="divide-y divide-white/[0.06] text-[14px]" aria-label="Recently published">{published.map(a => <li key={a.articleId} className="space-y-1 py-2">
           <Link className="font-medium text-[#EDEEF1] hover:text-[#0EA5E9]" href={`/articles/${a.articleId}`}>{a.title}</Link>
@@ -79,10 +91,8 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
         {published.length === 0 && (plain ? !verified.length && <p className={BODY}>Your first published article will appear here once Pentra confirms it&apos;s live.</p> : s?.ownerReviewedOnly ? <p className={BODY}><Link className="text-[#0EA5E9] hover:underline" href="/articles">View reviewed drafts and publication status</Link>. A page counts as delivered only after live verification.</p> : !verified.length && <p className={BODY}>No live changes verified yet. Preparation and monitoring are not publications.</p>)}
         <ul className="space-y-2 text-[14px]">{verified.filter(w => !published.some(a => a.articleId === w.articleId)).map(w => <li key={w.jobId}>{workLabel(w)}{w.articleId && <> · <Link className="text-[#0EA5E9] hover:underline" href={`/articles/${w.articleId}`}>View article</Link></>}{w.publishedAt && <p className="text-[12px] text-[#8B8FA3]">Published {shownTime(w.publishedAt, zone)}</p>}{w.verifiedAt && <p className="text-[12px] text-[#8B8FA3]">Verified {shownTime(w.verifiedAt, zone)}</p>}</li>)}</ul>
       </section>
-    </div>
-    <div className="grid gap-4 md:grid-cols-2">
-      {plain && <UpcomingTopics siteId={siteId} />}
       <SiteHealth siteId={siteId} />
+      </div>
     </div>
     <OrganicOutcome key={siteId} siteId={siteId} simple={plain} />
     {(!plain || !state.entitlement || !state.destination.verified || !state.bindingCurrent || state.funding.status !== "available" || attention.length > 0) &&
@@ -159,6 +169,10 @@ function ResultsStrip({ siteId, live, liveThisMonth, planPerMonth, planUsed }: {
   </div>;
 }
 
+const ACRONYMS = /\b(ai|seo|crm|saas|b2b|b2c|api|faq|roi|kpi|ux|ui|llm|mdx|cms|ppc|smb|hr|it)\b/gi;
+/** Sentence-case topic label with common acronyms kept upper case ("AI sales automation"). */
+export const topicTitle = (label: string) => label.replace(ACRONYMS, m => m.toUpperCase()).replace(/^./, c => c.toUpperCase());
+
 /** What Autopilot will write next, so a hands-off customer can see and steer it. */
 function UpcomingTopics({ siteId }: { siteId: Id<"sites"> }) {
   const topics = useQuery(api.topics.listBySite, { siteId });
@@ -170,7 +184,7 @@ function UpcomingTopics({ siteId }: { siteId: Id<"sites"> }) {
       ? <p className={BODY}>Pentra is researching topics your customers search for. They&apos;ll appear here.</p>
       : <ol className="space-y-2 text-[14px]">{next.map((t, n) => <li key={t._id} className="flex gap-3">
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#0EA5E9]/10 text-[12px] font-semibold text-[#0EA5E9]">{n + 1}</span>
-          <span><span className="text-[#EDEEF1]">{t.label.replace(/^./, c => c.toUpperCase())}</span> <span className="text-[12px] text-[#8B8FA3]">“{t.primaryKeyword}”</span></span></li>)}</ol>}
+          <span><span className="text-[#EDEEF1]">{topicTitle(t.label)}</span> <span className="text-[12px] text-[#8B8FA3]">“{t.primaryKeyword}”</span></span></li>)}</ol>}
     <Link className="text-[13px] text-[#0EA5E9] hover:underline" href="/plan">See or change all topics</Link>
   </section>;
 }
@@ -193,12 +207,12 @@ function SiteHealth({ siteId }: { siteId: Id<"sites"> }) {
     {check === undefined ? <p className={BODY}>Loading…</p> : check === null ? <p className={BODY}>Pentra checks your important pages weekly: can Google reach them, are titles and descriptions right, is anything hidden from search, and does every page lead to your next step.</p> : <>
       <div className="flex flex-wrap items-baseline gap-3">
         <span className={`text-3xl font-semibold tracking-tight ${scoreTone}`}>{check.score}</span>{" "}
-        <span className="text-[13px] text-[#8B8FA3]">Score {check.score}/100 across {check.pages.length} page{check.pages.length === 1 ? "" : "s"} · checked {shownTime(check.checkedAt)}</span>
+        <span className="text-[13px] text-[#8B8FA3]">Score {check.score}/100 across {check.pages.length} page{check.pages.length === 1 ? "" : "s"} · checked {friendlyTime(check.checkedAt)}</span>
       </div>
       {check.error && <p role="alert" className="text-[14px] text-[#F59E0B]">{check.error}</p>}
       {issues.length === 0 ? <p className={BODY}>No problems found on the pages checked.</p> :
         <ul className="space-y-2 text-[14px]">{issues.map((i, n) => <li key={n} className="flex gap-2">
-          <span className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${i.severity === "critical" ? "bg-red-500/10 text-red-400" : "bg-[#F59E0B]/10 text-[#F59E0B]"}`}>{i.severity === "critical" ? "Fix now" : "Improve"}</span>
+          <span className={`mt-0.5 shrink-0 self-start whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 ${i.severity === "critical" ? "bg-red-500/10 text-red-400" : "bg-[#F59E0B]/10 text-[#F59E0B]"}`}>{i.severity === "critical" ? "Fix now" : "Improve"}</span>
           <span className="text-[#EDEEF1]">{i.message} <span className="text-[12px] text-[#8B8FA3]">({new URL(i.url).pathname})</span></span></li>)}</ul>}
     </>}
     {message && <p className="text-[13px] text-[#8B8FA3]" role="status">{message}</p>}

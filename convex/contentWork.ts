@@ -1086,19 +1086,27 @@ export const advance = internalMutation({
     // provider-free worker lane and the publisher's destination lease.
     const ready = waiting.filter(j => j.status === "done" && j.contentWork!.stage === "ready");
     let active = schedule.active;
-    if (!active && ready.length >= 2 && liveAutopilotReadiness(site, true).ready) {
-      const funding = await contentFunding(ctx, site, (await pricingConfiguration(ctx, site))?.budgetMicroUsd);
-      // Exhausting/stopping/removing scoped model execution cannot strand two
-      // already-reviewed deliveries, even before the first window activates.
-      // Validate their retained run/receipt lineage, but require no new money.
-      const preparedRun = (await Promise.all(ready.slice(0, 2).map(async job => {
-        try { return Boolean(job.contentWork!.pricing.validationAuthorizationId &&
-          job.contentWork!.pricing.validationAuthorizationId === (await contentValidationBinding(ctx, site, Date.now(), job))?.id); }
-        catch { return false; }
-      }))).every(Boolean);
-      if (funding.status !== "available" && !preparedRun) return { scheduled: 0, mode: "content_budget_exhausted" };
-      if (new Set(ready.slice(0, 2).map(j => j.articleId)).size !== 2) return { scheduled: 0, mode: "content_artifact_changed" };
-      for (const item of ready.slice(0, 2)) {
+    // Autopilot-setup sites go live with their first reviewed article (a Free
+    // plan may only ever have one a month); the next is prepared ahead of its
+    // own slot. Publishing prepared work spends nothing, so it never waits for
+    // new funding. Older contracts keep the funded two-article buffer.
+    const activationSize = schedule.autopilotSelectedAt ? 1 : 2;
+    if (!active && ready.length >= activationSize && liveAutopilotReadiness(site, true).ready) {
+      const batch = ready.slice(0, activationSize);
+      if (!schedule.autopilotSelectedAt) {
+        const funding = await contentFunding(ctx, site, (await pricingConfiguration(ctx, site))?.budgetMicroUsd);
+        // Exhausting/stopping/removing scoped model execution cannot strand two
+        // already-reviewed deliveries, even before the first window activates.
+        // Validate their retained run/receipt lineage, but require no new money.
+        const preparedRun = (await Promise.all(batch.map(async job => {
+          try { return Boolean(job.contentWork!.pricing.validationAuthorizationId &&
+            job.contentWork!.pricing.validationAuthorizationId === (await contentValidationBinding(ctx, site, Date.now(), job))?.id); }
+          catch { return false; }
+        }))).every(Boolean);
+        if (funding.status !== "available" && !preparedRun) return { scheduled: 0, mode: "content_budget_exhausted" };
+      }
+      if (new Set(batch.map(j => j.articleId)).size !== batch.length) return { scheduled: 0, mode: "content_artifact_changed" };
+      for (const item of batch) {
         const artifact = item.articleId ? await ctx.db.get(item.articleId) : null;
         if (!artifact || !isSealedReady(artifact) || publicationArtifactHash(artifact) !== item.contentWork!.approvedArtifactHash) return { scheduled: 0, mode: "content_artifact_changed" };
       }

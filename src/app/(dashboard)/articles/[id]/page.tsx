@@ -863,9 +863,9 @@ export default function ArticleDetailPage() {
       {/* Meta bar */}
       <div className="flex flex-wrap items-center gap-2">
         {article.status === "revision" ? (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#0EA5E9]/[0.08] px-2 py-0.5 text-[11px] font-medium text-[#38BDF8]">
-            <span className="h-1.5 w-1.5 rounded-full bg-[#0EA5E9]" />
-            Being revised
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-[#8B8FA3]" title="An earlier or retired version kept for your records. It is never published.">
+            <span className="h-1.5 w-1.5 rounded-full bg-[#565A6E]" />
+            Earlier version
           </span>
         ) : (
           <StatusBadge status={article.status} />

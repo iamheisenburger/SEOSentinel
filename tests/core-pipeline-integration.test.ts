@@ -1090,6 +1090,7 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_fill");
     const firstJob = f.tables.jobs.find(j => j.contentWork)!;
     Object.assign(firstJob, { status: "done" }); firstJob.contentWork.stage = "ready"; // prepared, waiting for its slot
+    f.get(site.id)!.contentSchedule.active = true; // already live; this synthetic draft has no sealed artifact to activate on
     const second = await f.invoke("contentWork:advance", { siteId: site.id });
     assert.equal(second.mode, "quota_reached", "the free plan's one article this month is already started");
     assert.equal(f.tables.jobs.filter(j => j.contentWork).length, 1);
@@ -1184,6 +1185,25 @@ test("SLC65 Autopilot follows the customer's cadence, starts right away, and nev
   assert.equal(g.get(other.id)!.contentSchedule.nextDeadlineAt, overdue);
   sched = f.get(site.id)!.contentSchedule; assert.ok(sched.autopilotSelectedAt);
   f.assertOffline(); g.assertOffline();
+});
+
+test("SLC66 an Autopilot site goes live with its first reviewed article, even when the plan allows only one", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.siteId === site.id && j.contentWork?.stage === "ready"), 200, START + 6 * 3_600_000);
+  const first = f.tables.jobs.find(j => j.siteId === site.id && j.contentWork?.stage === "ready")!;
+  // Only one prepared article (e.g. a Free plan's single article this month).
+  for (const j of f.tables.jobs) if (j.siteId === site.id && j._id !== first._id && j.contentWork) { j.status = "failed"; j.contentWork.stage = "failed"; j.contentWork.retiredAt = f.now(); }
+  f.setTime(Math.max(f.now(), first.contentWork.windowStartAt));
+  const delivered = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(delivered.mode, "buffer_delivery", JSON.stringify(delivered));
+  assert.equal(f.get(site.id)!.contentSchedule.active, true);
+  assert.equal(f.get(first._id)!.contentWork.stage, "publish");
+  f.assertOffline();
 });
 
 test("SLC63 other platforms: Pentra researches and writes, the owner pastes; nothing is published by Pentra", async () => {

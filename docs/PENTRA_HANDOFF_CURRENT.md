@@ -16,9 +16,15 @@ is per customer and changeable any time from the dashboard switch:
 - WordPress and GitHub can use both.
 - Other platforms get Review first only.
 
-Autopilot runs on the plan's pace: interval = max(12h, 30d / plan articles). The first article
-lands 24h after switching on, or about 2h later when the owner clicks "Publish the next one in
-about 2 hours" (contentWork.startAutopilotNow; it only moves an unprepared upcoming slot earlier).
+Autopilot follows the customer's cadence: site.cadencePerWeek, 1–21 a week, set with the dashboard "Pace" picker
+(contentWork.setAutopilotCadence). New sites default to a pace their plan sustains; when no cadence is set, the older
+plan-derived rhythm applies. The plan's monthly article allowance caps the total (quota_reached). With nothing
+prepared, the next slot is now + min(interval, 2h), so Autopilot starts writing immediately. That slot is written
+only once the work is funded and admitted; overdue slots never move. A pace change applies from the next unprepared
+slot. An Autopilot-setup site goes live with its FIRST reviewed article (older contracts keep the funded two-article
+buffer), so a Free plan's single monthly article publishes too. leadpilot.chat runs at 21 a week (one every 8 hours);
+pentra.dev's own setting is 7 a week (owner can change it with the Pace picker). Plain-mode dates show the viewer's
+time zone with its name.
 
 Pentra's work loop:
 1. Research, write, fact-check and publish, with a CTA to the owner's next-step page and FAQ/JSON-LD.
