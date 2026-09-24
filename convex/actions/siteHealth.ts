@@ -48,7 +48,7 @@ async function runCheck(ctx: ActionCtx, siteId: Id<"sites">, userId?: string) {
   const results: PageHealthResult[] = [];
   for (const url of urls.slice(0, MAX_PAGES)) {
     const page = await fetchPage(url);
-    results.push(analyzePageHealth({ url, status: page.status, finalUrl: page.finalUrl, html: page.html, robotsHeader: page.robots }));
+    results.push(analyzePageHealth({ url, status: page.status, finalUrl: page.finalUrl, html: page.html, robotsHeader: page.robots, ctaUrl: site.ctaUrl }));
   }
   if (results[0] && results[0].status === 200) results[0].issues.push(...speedFindings(await pageSpeed(home)));
   if (results[0] && results[0].status > 0) {

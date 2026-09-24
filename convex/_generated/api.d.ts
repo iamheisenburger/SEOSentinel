@@ -17,6 +17,7 @@ import type * as actions_expectedClickBackfillFleet from "../actions/expectedCli
 import type * as actions_expectedClickDemandBackfill from "../actions/expectedClickDemandBackfill.js";
 import type * as actions_expectedClickEvidenceBackfill from "../actions/expectedClickEvidenceBackfill.js";
 import type * as actions_expectedClickMigration from "../actions/expectedClickMigration.js";
+import type * as actions_growthTopics from "../actions/growthTopics.js";
 import type * as actions_gscSync from "../actions/gscSync.js";
 import type * as actions_managedOutreachMailbox from "../actions/managedOutreachMailbox.js";
 import type * as actions_onboardingPrefill from "../actions/onboardingPrefill.js";
@@ -208,6 +209,7 @@ declare const fullApi: ApiFromModules<{
   "actions/expectedClickDemandBackfill": typeof actions_expectedClickDemandBackfill;
   "actions/expectedClickEvidenceBackfill": typeof actions_expectedClickEvidenceBackfill;
   "actions/expectedClickMigration": typeof actions_expectedClickMigration;
+  "actions/growthTopics": typeof actions_growthTopics;
   "actions/gscSync": typeof actions_gscSync;
   "actions/managedOutreachMailbox": typeof actions_managedOutreachMailbox;
   "actions/onboardingPrefill": typeof actions_onboardingPrefill;

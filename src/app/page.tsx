@@ -72,7 +72,7 @@ const steps = [
   {
     icon: ShieldCheck,
     title: "Choose Autopilot or Review first",
-    desc: "On Autopilot, Pentra publishes on your plan's schedule and holds back any draft with a factual concern for you. On Review first, every article waits for your approval.",
+    desc: "On Autopilot, Pentra publishes on your plan's schedule and never publishes a draft that fails the fact check. On Review first, every article waits for your approval.",
   },
   {
     icon: Search,
@@ -92,7 +92,7 @@ function HowItWorks() {
       <div className="mx-auto max-w-6xl px-6">
         <div className="mb-12 text-center">
           <h2 className="text-2xl font-bold tracking-[-0.02em] md:text-4xl">How it works</h2>
-          <p className="mt-3 text-[15px] text-[#8B8FA3]">Five steps. You stay in control of every article.</p>
+          <p className="mt-3 text-[15px] text-[#8B8FA3]">Five steps. Set it up once and Pentra keeps going. You choose how much control you keep.</p>
         </div>
         <ol className="grid gap-4 md:grid-cols-5">
           {steps.map((step, index) => (
@@ -145,7 +145,7 @@ function Features() {
           <h3 className="text-[15px] font-semibold">What Pentra does not do (yet)</h3>
           <ul className="mt-3 space-y-2 text-[14px] text-[#8B8FA3]">
             {[
-              "Publish a draft that failed its fact check: it waits for you.",
+              "Publish a draft that failed its fact check. It is held back.",
               "Guarantee rankings or traffic. Search results take time and depend on many factors.",
               "Build backlinks or send outreach emails.",
               "Publish to Shopify or Webflow yet (coming soon). WordPress and GitHub-based sites are supported today.",

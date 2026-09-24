@@ -14,6 +14,7 @@ import { formatDistanceToNow } from "date-fns";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { ArticleProgress } from "@/components/ui/article-progress";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
+import { stageLabel } from "@/components/content-work-overview";
 import { useActiveSite } from "@/contexts/site-context";
 import { Zap } from "lucide-react";
 import { manualPublicationBlocker } from "../../../../convex/lib/manualPublication";
@@ -42,7 +43,7 @@ export default function ArticlesPage() {
   const [selectedTopic, setSelectedTopic] = useState<
     Id<"topic_clusters"> | undefined
   >(undefined);
-  const { maxArticles: legacyMaxArticles } = usePlanLimits();
+  const { maxArticles: legacyMaxArticles, isPlanLoaded } = usePlanLimits();
   const { userId } = useAuth();
   const usageCount = useQuery(
     api.articles.countThisMonth,
@@ -55,7 +56,9 @@ export default function ArticlesPage() {
   const allowance = readiness?.ownerDraft.allowance ?? null;
   const articlesThisMonth = allowance ? allowance.used : usageCount ?? 0;
   const maxArticles = allowance ? allowance.limit : legacyMaxArticles;
-  const atArticleLimit = articlesThisMonth >= maxArticles;
+  // Never flash "limit reached" while the plan or usage is still loading.
+  const usageKnown = allowance ? true : Boolean(isPlanLoaded && usageCount !== undefined);
+  const atArticleLimit = usageKnown && articlesThisMonth >= maxArticles;
 
   const availableTopics = useMemo(
     () =>
@@ -137,7 +140,7 @@ export default function ArticlesPage() {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Articles"
-        subtitle={`${articlesThisMonth} / ${maxArticles} articles this month`}
+        subtitle={usageKnown ? `${articlesThisMonth} / ${maxArticles} articles this month` : "Checking this month's allowance…"}
         actions={
           <div className="flex items-center gap-2">
             <select
@@ -181,7 +184,7 @@ export default function ArticlesPage() {
           <p>Generate a researched draft for your review. Nothing publishes until you approve it.</p>
           {allowance ? <p>Each new draft uses 1 of your {allowance.limit} articles this month ({allowance.used} used). Editing a draft and requesting review again is free.</p>
             : readiness.ownerDraft.maximumMicroUsd != null && <p>Counts toward your monthly article allowance.</p>}
-          {readiness.ownerDraft.latest && <p role="status">Draft: {readiness.ownerDraft.latest.stage.replaceAll("_", " ")}. {readiness.ownerDraft.latest.issue}
+          {readiness.ownerDraft.latest && <p role="status">Latest draft: {stageLabel(readiness.ownerDraft.latest.stage).toLowerCase()}. {readiness.ownerDraft.latest.issue}
             {readiness.ownerDraft.latest.articleId && <> <Link className="underline" href={`/articles/${readiness.ownerDraft.latest.articleId}`}>Open draft</Link></>}
           </p>}
         </section>
@@ -204,13 +207,13 @@ export default function ArticlesPage() {
       <div className="rounded-lg border border-white/[0.06] bg-[#0F1117] px-4 py-3">
         <div className="flex items-center justify-between mb-2">
           <span className="text-[12px] text-[#8B8FA3]">Monthly article usage</span>
-          <span className="text-[12px] font-medium text-[#EDEEF1] tabular-nums">{articlesThisMonth} / {maxArticles}</span>
+          <span className="text-[12px] font-medium text-[#EDEEF1] tabular-nums">{usageKnown ? `${articlesThisMonth} / ${maxArticles}` : "…"}</span>
         </div>
         <div className="h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
           <div
             className="h-full rounded-full transition-all"
             style={{
-              width: `${Math.min(100, (articlesThisMonth / maxArticles) * 100)}%`,
+              width: usageKnown ? `${Math.min(100, (articlesThisMonth / maxArticles) * 100)}%` : "0%",
               backgroundColor: articlesThisMonth >= maxArticles ? '#EF4444' : articlesThisMonth >= maxArticles * 0.8 ? '#F59E0B' : '#0EA5E9',
             }}
           />

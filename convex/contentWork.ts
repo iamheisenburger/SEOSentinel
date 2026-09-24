@@ -1,4 +1,4 @@
-import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ConvexError, v } from "convex/values";
@@ -61,6 +61,7 @@ async function ownerDraftAllowance(ctx: QueryCtx | MutationCtx, site: Doc<"sites
   return { tier, used, limit: OWNER_DRAFTS_PER_MONTH[tier] as number };
 }
 const LIMIT = 1000;
+const TOPIC_REPLENISH_INTERVAL_MS = 3 * 86_400_000, TOPIC_REPLENISH_BUDGET_MICRO_USD = 1_000_000;
 /** New articles started this UTC month across the account's sites: automatic
  * creations plus new owner drafts (edits of an existing draft do not count). */
 async function accountArticlesThisMonth(ctx: QueryCtx | MutationCtx, site: Doc<"sites">) {
@@ -965,6 +966,46 @@ export const advanceOwnerDraft = internalMutation({ args: { jobId: v.id("jobs") 
   if (result.scheduled) await ctx.scheduler.runAfter(0, internal.actions.pipeline.processNextJob, { siteId: site._id, jobId });
 } });
 
+/** Seeds and locale for Autopilot keyword research (no secrets). */
+export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return null;
+  const seeds = tenantDiscoveryAnchors([...(site.anchorKeywords ?? []), ...(site.keyFeatures ?? []), ...(site.painPoints ?? []),
+    site.productUsage, site.niche, site.blogTheme], 12);
+  return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds };
+} });
+
+/** Add researched keywords as planned topics: business-fit only, never a
+ * duplicate of an existing topic, page or article intent. */
+export const addResearchedTopics = internalMutation({ args: { siteId: v.id("sites"),
+  keywords: v.array(v.object({ keyword: v.string(), searchVolume: v.number(), difficulty: v.number(), difficultyMeasured: v.boolean() })) },
+  handler: async (ctx, { siteId, keywords }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return { added: 0 };
+    const topics = await takeCurrentDomainTopics(ctx, site, LIMIT + 1);
+    if (topics.length > LIMIT) return { added: 0 };
+    const signals = tenantTopicBusinessSignals(site);
+    const taken: { primaryKeyword: string }[] = [...topics];
+    let added = 0;
+    for (const k of [...keywords].sort((a, b) => b.searchVolume - a.searchVolume)) {
+      if (added >= 15) break;
+      const keyword = k.keyword.trim().toLowerCase().replace(/\s+/g, " ");
+      if (keyword.split(" ").length < 2 || keyword.length > 80) continue;
+      const proposal = { primaryKeyword: keyword, label: keyword.replace(/^./, c => c.toUpperCase()) };
+      if (!evaluateTopicBusinessFit({ keyword, label: proposal.label, ...signals }).eligible) continue;
+      if (taken.some(t => contentIntentConflicts(proposal, t))) continue;
+      await ctx.db.insert("topic_clusters", { siteId, ...proposal, planningCanonicalDomain: siteCanonicalDomain(site)!,
+        planningDomainRevision: siteCanonicalDomainRevision(site), secondaryKeywords: [], intent: "informational",
+        priority: Math.max(1, Math.min(90, Math.round(Math.log10(1 + k.searchVolume) * 20 - k.difficulty / 5))), status: "planned",
+        searchVolume: k.searchVolume, keywordDifficulty: k.difficulty, keywordDifficultyMeasured: k.difficultyMeasured,
+        notes: "Researched keyword (search demand from DataForSEO) for the confirmed business. Use only supported business facts.",
+        createdAt: Date.now(), updatedAt: Date.now() });
+      taken.push(proposal); added++;
+    }
+    if (added > 0) await wake(ctx, siteId);
+    return { added };
+  } });
+
 /** One scheduler, same jobs and workers. A done/ready job is a checkpoint, not
  * another queue. Delivery reclaims that identical execution record. */
 export const advance = internalMutation({
@@ -1085,7 +1126,18 @@ export const advance = internalMutation({
       primaryKeyword: improvement.question, label: improvement.page.editable!.title, secondaryKeywords: [], intent: "informational",
       priority: 1, status: "planned", notes: improvement.reason, createdAt: Date.now(), updatedAt: Date.now(),
     })) : await chooseTopic(ctx, site);
-    if (!topic) return { scheduled: 0, mode: "content_inputs_exhausted" };
+    if (!topic) {
+      // Autopilot never runs dry: research new keywords for the confirmed
+      // business at most every three days, within the ordinary spend limits.
+      if (schedule.autopilotSelectedAt && site.userId && Date.now() - (schedule.topicsReplenishedAt ?? 0) >= TOPIC_REPLENISH_INTERVAL_MS) {
+        const request = { siteId, userId: site.userId, purpose: "topic_plan" as const, trigger: `autopilot_topics:${Math.floor(Date.now() / TOPIC_REPLENISH_INTERVAL_MS)}`,
+          reservedMicroUsd: TOPIC_REPLENISH_BUDGET_MICRO_USD, timestamp: Date.now() };
+        const reserved = await reserveSharedProviderBudget(ctx, request);
+        await ctx.db.patch(siteId, { contentSchedule: { ...schedule, topicsReplenishedAt: Date.now() }, updatedAt: Date.now() });
+        if (reserved.ok) await ctx.scheduler.runAfter(0, internal.actions.growthTopics.replenish, { siteId, reservationId: reserved.reservationId });
+      }
+      return { scheduled: 0, mode: "content_inputs_exhausted" };
+    }
     // Autopilot honours the plan's monthly article allowance across the whole
     // account. When it is used up, the next article waits for the new month.
     if (schedule.autopilotSelectedAt && !improvement && site.userId) {

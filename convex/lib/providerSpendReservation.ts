@@ -409,7 +409,10 @@ export async function inspectSharedProviderBudget(
   // same serializable transaction that will append the reservation receipt.
   const site = await ctx.db.get(args.siteId);
   if (
-    (site?.serviceMode === "growth_first" && args.purpose !== "content_work") ||
+    // The content engine owns growth-first spend; the one exception is keyword
+    // research for a site the owner put on Autopilot whose topics ran out.
+    (site?.serviceMode === "growth_first" && args.purpose !== "content_work" &&
+      !(args.purpose === "topic_plan" && site.contentSchedule?.autopilotSelectedAt)) ||
     !siteExecutionActive(site) ||
     !(await siteExecutionAuthorized(ctx, site)) ||
     !site.userId ||

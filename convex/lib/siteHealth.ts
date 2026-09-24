@@ -8,6 +8,8 @@ export type PageHealthInput = {
   finalUrl?: string;
   html: string;
   robotsHeader?: string | null;
+  /** The site's next-step page (signup, booking, quote), if the owner set one. */
+  ctaUrl?: string | null;
 };
 
 export type PageHealthIssue = { code: string; severity: "critical" | "warning"; message: string };
@@ -93,6 +95,25 @@ export function analyzePageHealth(page: PageHealthInput): PageHealthResult {
       }
     }
     if (internalLinkCount === 0) add("no_internal_links", "warning", "No links to other pages on your site; visitors and Google hit a dead end.");
+    // AI-answer readability: structured data tells Google and AI assistants what the page is.
+    if (!/<script\b[^>]*type\s*=\s*["']application\/ld\+json["']/i.test(html)) {
+      add("schema_missing", "warning", "No structured data (schema.org) on this page. Google rich results and AI answers rely on it.");
+    }
+    // Conversion path: every page should offer the next step to becoming a customer.
+    if (page.ctaUrl) {
+      let target: URL | null = null;
+      try { target = new URL(page.ctaUrl); } catch { target = null; }
+      const here = normalized(page.finalUrl ?? page.url);
+      if (target && normalized(target.toString()) !== here) {
+        const path = target.pathname.replace(/\/+$/, "") || "/";
+        const linksToCta = (html.match(/<a\b[^>]*href\s*=\s*["']([^"'#]+)["']/gi) ?? []).some(tag => {
+          const href = /href\s*=\s*["']([^"'#]+)["']/i.exec(tag)?.[1] ?? "";
+          try { const u = new URL(href, page.finalUrl ?? page.url); return u.host.replace(/^www\./, "") === target!.host.replace(/^www\./, "") && (u.pathname.replace(/\/+$/, "") || "/") === path; }
+          catch { return false; }
+        });
+        if (!linksToCta) add("no_next_step", "warning", `No link to your next-step page (${target.pathname}), so readers have no clear way to become customers.`);
+      }
+    }
   }
   return { url: page.url, status: page.status, title: cleanTitle, metaDescription: description, h1Count, wordCount, internalLinkCount, issues };
 }

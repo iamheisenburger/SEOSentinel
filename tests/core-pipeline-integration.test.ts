@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { confirmedContentProfileHash } from "../convex/lib/contentSelection.ts";
 import test, { type TestContext } from "node:test";
 import { createHash } from "node:crypto";
 import { corePipelineFixture, START, type Fields } from "./helpers/core-pipeline-fixture.ts";
@@ -1049,6 +1050,33 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     await assert.rejects(f.invoke("contentWork:adoptAutopilot", { siteId: site.id, reviewToken: r.reviewToken, confirm: true }), /can't be moved/);
     f.setIdentity(null);
     assert.notEqual((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "content_failed_slot");
+    f.assertOffline();
+  });
+  await t.test("topics_are_researched_when_they_run_out", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    f.setIdentity(saved.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+    f.setIdentity(null);
+    Object.assign(f.get(site.id)!, { anchorKeywords: [], painPoints: [], keyFeatures: [], productUsage: "" });
+    // The owner re-confirmed these facts (same as reconfirming in Service settings).
+    f.get(site.id)!.contentSchedule.profileHash = confirmedContentProfileHash(f.get(site.id)! as never);
+    for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+    const first = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal(first.mode, "content_inputs_exhausted");
+    const stamped = f.get(site.id)!.contentSchedule.topicsReplenishedAt;
+    assert.ok(stamped, "keyword research is scheduled");
+    assert.equal(f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan").length, 1, "research spend is reserved within the limits");
+    await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal(f.get(site.id)!.contentSchedule.topicsReplenishedAt, stamped, "research runs at most every three days");
+    const keyword = slcBusinesses[0].keywords[0];
+    const added = await f.invoke("contentWork:addResearchedTopics", { siteId: site.id, keywords: [
+      { keyword: `${keyword} checklist`, searchVolume: 320, difficulty: 12, difficultyMeasured: true },
+      { keyword: "celebrity gossip news today", searchVolume: 90000, difficulty: 5, difficultyMeasured: true },
+      { keyword: "x", searchVolume: 10, difficulty: 1, difficultyMeasured: true } ] });
+    assert.equal(added.added, 1, "only a business-fit, multi-word keyword becomes a topic");
+    assert.ok(f.tables.topic_clusters.some(t => t.siteId === site.id && t.status === "planned" && t.primaryKeyword === `${keyword} checklist`.toLowerCase()));
     f.assertOffline();
   });
   await t.test("monthly_allowance", async () => {

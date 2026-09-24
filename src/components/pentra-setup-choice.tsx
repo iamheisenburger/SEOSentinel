@@ -45,9 +45,9 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
   const step = (done: boolean, label: string, action?: React.ReactNode) =>
     <li className="flex items-center gap-2"><span aria-hidden className={done ? "text-[#22C55E]" : "text-[#F59E0B]"}>{done ? "✓" : "•"}</span>
       <span>{label}</span>{!done && action}</li>;
-  return <section aria-labelledby="pentra-setup-heading" className="space-y-5 rounded-xl border border-white/10 p-5">
+  return <section aria-labelledby="pentra-setup-heading" className="space-y-5 rounded-xl border border-white/[0.06] bg-[#0F1117] p-6">
     <div>
-      <h2 id="pentra-setup-heading" className="text-lg font-semibold">Turn on Pentra</h2>
+      <h2 id="pentra-setup-heading" className="text-lg font-semibold text-[#EDEEF1]">Turn on Pentra</h2>
       <p className="text-sm text-[#8B8FA3]">Your plan includes {state.plan.articlesPerMonth} new article{state.plan.articlesPerMonth === 1 ? "" : "s"} a month for {state.destination.domain}.</p>
     </div>
     <ul className="space-y-1 text-sm">
@@ -58,14 +58,14 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
     </ul>
     <fieldset className="grid gap-3 md:grid-cols-2">
       <legend className="sr-only">How should Pentra work?</legend>
-      <label className={`cursor-pointer rounded-lg border p-4 ${choice === "autopilot" ? "border-[#0EA5E9]" : "border-white/10"}`}>
+      <label className={`cursor-pointer rounded-xl border p-4 transition ${choice === "autopilot" ? "border-[#0EA5E9] bg-[#0EA5E9]/[0.06]" : "border-white/10 hover:border-white/20"}`}>
         <input type="radio" name="pentra-mode" className="mr-2" checked={choice === "autopilot"} onChange={() => setChoice("autopilot")} />
-        <span className="font-medium">Autopilot (recommended)</span>
+        <span className="font-medium text-[#EDEEF1]">Autopilot (recommended)</span>
         <p className="mt-1 text-sm text-[#8B8FA3]">Pentra researches, writes and publishes on its own, {rhythm(state.plan.autopilotIntervalMs)}. Drafts it isn&apos;t confident about are held back, never published; everything else goes live automatically.</p>
       </label>
-      <label className={`rounded-lg border p-4 ${reviewAvailable ? "cursor-pointer" : "opacity-50"} ${choice === "review" ? "border-[#0EA5E9]" : "border-white/10"}`}>
+      <label className={`rounded-xl border p-4 transition ${reviewAvailable ? "cursor-pointer hover:border-white/20" : "opacity-50"} ${choice === "review" ? "border-[#0EA5E9] bg-[#0EA5E9]/[0.06]" : "border-white/10"}`}>
         <input type="radio" name="pentra-mode" className="mr-2" disabled={!reviewAvailable} checked={choice === "review"} onChange={() => setChoice("review")} />
-        <span className="font-medium">Review first</span>
+        <span className="font-medium text-[#EDEEF1]">Review first</span>
         <p className="mt-1 text-sm text-[#8B8FA3]">{reviewAvailable ? "Pentra drafts; you read, edit and approve every article before it goes live." : "Connect GitHub or WordPress to choose this."}</p>
       </label>
     </fieldset>
@@ -83,9 +83,10 @@ export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAva
   { siteId: Id<"sites">; reviewToken: string; on: boolean; intervalMs: number; reviewAvailable?: boolean; paused?: boolean }) {
   const setAutopilot = useMutation(api.contentWork.setAutopilot);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
-  return <div className="flex flex-wrap items-center gap-3 rounded-lg border border-white/10 p-4">
+  return <div className="flex flex-wrap items-center gap-3 rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
+    <span aria-hidden className={`h-2.5 w-2.5 rounded-full ${on && !paused ? "bg-[#22C55E] shadow-[0_0_8px_#22C55E]" : on ? "bg-[#F59E0B]" : "bg-[#8B8FA3]"}`} />
     <div className="flex-1">
-      <p className="font-medium">Autopilot is {on ? (paused ? "paused" : "on") : "off"}</p>
+      <p className="font-medium text-[#EDEEF1]">Autopilot is {on ? (paused ? "paused" : "on") : "off"}</p>
       <p className="text-sm text-[#8B8FA3]">{on ? paused ? "No new articles start while paused. Resume from Service settings."
         : `Pentra publishes ${rhythm(intervalMs)}. Drafts it isn't confident about are held back and never published.`
         : "Every article waits for your approval in Articles."}</p>
@@ -104,8 +105,8 @@ export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAva
 export function AdoptAutopilot({ siteId, reviewToken, intervalMs, articlesPerMonth }: { siteId: Id<"sites">; reviewToken: string; intervalMs: number; articlesPerMonth: number }) {
   const adopt = useMutation(api.contentWork.adoptAutopilot);
   const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
-  return <section aria-labelledby="adopt-autopilot-heading" className="space-y-3 rounded-xl border border-[#0EA5E9]/40 p-5">
-    <h2 id="adopt-autopilot-heading" className="font-semibold">Move this site to Autopilot</h2>
+  return <section aria-labelledby="adopt-autopilot-heading" className="space-y-3 rounded-xl border border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.04] p-5">
+    <h2 id="adopt-autopilot-heading" className="font-semibold text-[#EDEEF1]">Move this site to Autopilot</h2>
     <p className="text-sm text-[#8B8FA3]">Pentra researches, writes and publishes {rhythm(intervalMs)} ({articlesPerMonth} a month on your plan), starting
       24 hours from now. Drafts that don&apos;t pass the fact check are held back and never published. Your past history, missed dates and costs stay on record.</p>
     <p className="text-xs text-[#8B8FA3]">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>

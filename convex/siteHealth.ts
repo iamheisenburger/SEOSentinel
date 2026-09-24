@@ -10,7 +10,8 @@ export const siteForCheck = internalQuery({ args: { siteId: v.id("sites"), userI
     if (!site || (userId !== undefined && site.userId !== userId)) return null;
     const latest = await ctx.db.query("site_health_checks").withIndex("by_site_checked", q => q.eq("siteId", siteId)).order("desc").first();
     const pages = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId)).take(50);
-    return { domain: site.domain, lastCheckedAt: latest?.checkedAt ?? null, knownUrls: pages.map(p => p.url).filter(Boolean) as string[] };
+    return { domain: site.domain, lastCheckedAt: latest?.checkedAt ?? null, knownUrls: pages.map(p => p.url).filter(Boolean) as string[],
+      ctaUrl: site.ctaUrl?.startsWith("https://") ? site.ctaUrl : null };
   } });
 
 export const record = internalMutation({ args: { siteId: v.id("sites"), score: v.number(), error: v.optional(v.string()),

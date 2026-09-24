@@ -4,7 +4,7 @@ import { analyzePageHealth, healthScore, sitemapUrls } from "../convex/lib/siteH
 
 const good = `<!doctype html><html><head><title>Acme Plumbing | Emergency plumbers in Leeds</title>
 <meta name="description" content="Acme Plumbing fixes leaks, boilers and blocked drains across Leeds with same-day emergency visits and upfront fixed prices.">
-<link rel="canonical" href="https://acme.example/"></head><body><h1>Emergency plumbers in Leeds</h1>
+<link rel="canonical" href="https://acme.example/"><script type="application/ld+json">{"@type":"Plumber"}</script></head><body><h1>Emergency plumbers in Leeds</h1>
 <p>${"We repair leaks and boilers across Leeds. ".repeat(30)}</p><a href="/services">Services</a></body></html>`;
 
 test("a healthy page has no findings", () => {
@@ -19,7 +19,7 @@ test("common on-page problems are reported in plain language", () => {
 <body><h1>A</h1><h1>B</h1><p>Short.</p></body></html>`;
   const result = analyzePageHealth({ url: "https://acme.example/page", status: 200, html });
   const codes = result.issues.map(i => i.code).sort();
-  assert.deepEqual(codes, ["canonical_other", "description_missing", "h1_multiple", "no_internal_links", "noindex", "thin_text", "title_missing"].sort());
+  assert.deepEqual(codes, ["canonical_other", "description_missing", "h1_multiple", "no_internal_links", "noindex", "schema_missing", "thin_text", "title_missing"].sort());
   assert.ok(result.issues.find(i => i.code === "noindex")!.severity === "critical");
   assert.ok(healthScore([result]) < 50);
 });
@@ -72,4 +72,12 @@ test("a Googlebot group overrides a blocking * group, and bad entities never cra
   assert.equal(robotsTxtFindings("User-agent: Googlebot\nUser-agent: Bingbot\nDisallow: /\n").blocksAll, true);
   const odd = analyzePageHealth({ url: "https://acme.example/", status: 200, html: "<title>A &#1114112; B &#x110000; title here</title>" });
   assert.equal(odd.title, "A B title here");
+});
+
+test("pages without a link to the next-step page are flagged; the next-step page itself is not", () => {
+  const cta = "https://acme.example/book";
+  assert.ok(analyzePageHealth({ url: "https://acme.example/", status: 200, html: good, ctaUrl: cta }).issues.some(i => i.code === "no_next_step"));
+  const linked = good.replace('<a href="/services">', '<a href="/book/">Book</a><a href="/services">');
+  assert.deepEqual(analyzePageHealth({ url: "https://acme.example/", status: 200, html: linked, ctaUrl: cta }).issues, []);
+  assert.ok(!analyzePageHealth({ url: "https://acme.example/book", status: 200, html: good, ctaUrl: cta }).issues.some(i => i.code === "no_next_step"));
 });

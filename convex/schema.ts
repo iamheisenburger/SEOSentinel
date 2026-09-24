@@ -16,6 +16,8 @@ export default defineSchema({
       autopublishConsentAt: v.optional(v.number()),
       ownerReviewedOnly: v.optional(v.boolean()),
       autopilotSelectedAt: v.optional(v.number()),
+      // Last automatic keyword research for an Autopilot site whose topics ran out.
+      topicsReplenishedAt: v.optional(v.number()),
     })),
     userId: v.optional(v.string()), // Clerk user ID
     domain: v.string(),
