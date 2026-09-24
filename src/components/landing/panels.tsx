@@ -1,5 +1,7 @@
 /* Product artifacts for the landing page's feature sections. Each is a compact,
- * code-native crop of what Pentra shows or produces, with example content. */
+ * code-native crop of what Pentra shows or produces, with example content.
+ * Keep them true to the product: e.g. Autopilot articles are written from confirmed
+ * business facts (no live web citations in that mode), so no panel shows citations. */
 
 const PANEL = "overflow-hidden rounded-xl border border-white/[0.08] bg-[#0B0C0E] shadow-[0_4px_12px_rgba(0,0,0,0.25),0_1px_3px_rgba(0,0,0,0.15),inset_0_1px_0_rgba(255,255,255,0.04)]";
 const HEAD = "flex items-center justify-between border-b border-white/[0.06] px-4 py-2.5 text-[11px] text-[#62666D]";
@@ -18,13 +20,12 @@ export function SourcesPanel() {
       <div className={PANEL}>
         <div className={HEAD}><span>Pentra</span><span className="flex items-center gap-1.5 text-[#4CB782]"><span className="h-1.5 w-1.5 rounded-full bg-[#4CB782]" />fact check passed</span></div>
         <p className="px-4 py-4 text-[14px] leading-relaxed text-[#D0D6E0]">
-          Professional whitening results usually last from several months to a few years, depending on diet and
-          aftercare<sup className="ml-0.5 text-[10px] text-[#0EA5E9]">[1]</sup>. Coffee, tea and red wine are the most
-          common causes of new staining<sup className="ml-0.5 text-[10px] text-[#0EA5E9]">[2]</sup>.
+          Northside Dental offers in-chair whitening and take-home trays. How long results last depends on what you eat
+          and drink, so your dentist will tell you what to expect at your first visit.
         </p>
-        <div className="space-y-1 border-t border-white/[0.06] px-4 py-3 text-[12px] text-[#8A8F98]">
-          <p><span className="text-[#0EA5E9]">[1]</span> Dental association guidance on tooth whitening</p>
-          <p><span className="text-[#0EA5E9]">[2]</span> Peer-reviewed review of extrinsic tooth staining</p>
+        <div className="space-y-1.5 border-t border-white/[0.06] px-4 py-3 text-[12px] text-[#8A8F98]">
+          <p className="flex items-center gap-2"><span className="text-[#4CB782]">✓</span> Services match your confirmed business facts</p>
+          <p className="flex items-center gap-2"><span className="text-[#4CB782]">✓</span> No statistics, quotes or results that can&apos;t be supported</p>
         </div>
       </div>
     </div>
@@ -118,14 +119,16 @@ export function AnswerPanel() {
         </div>
       </div>
       <div className={PANEL}>
-        <div className={HEAD}><span className="font-mono">structured data · FAQPage</span><span>added to every article</span></div>
-        <pre className="overflow-x-auto px-4 py-3 font-mono text-[11.5px] leading-[1.7] text-[#8A8F98]"><code>{`{`}
-{"\n  "}<span className="text-[#9CDCFE]">&quot;@type&quot;</span>: <span className="text-[#CE9178]">&quot;FAQPage&quot;</span>,
-{"\n  "}<span className="text-[#9CDCFE]">&quot;mainEntity&quot;</span>: [{`{`}
-{"\n    "}<span className="text-[#9CDCFE]">&quot;name&quot;</span>: <span className="text-[#CE9178]">&quot;How long does teeth whitening last?&quot;</span>,
-{"\n    "}<span className="text-[#9CDCFE]">&quot;acceptedAnswer&quot;</span>: {`{ … }`}
-{"\n  "}{`}]`}
-{"\n"}{`}`}</code></pre>
+        <div className={HEAD}><span>End of every article</span><span>FAQ and next step</span></div>
+        <dl className="divide-y divide-white/[0.05] px-4 text-[13px]">
+          {[["Do you see emergency patients on Saturdays?", "Yes. Call before 10 AM for a same-day slot…"], ["How much does whitening cost here?", "In-chair whitening is $295, including a check-up…"]].map(([q, a]) => (
+            <div key={q} className="py-2.5"><dt className="font-medium text-[#D0D6E0]">{q}</dt><dd className="mt-0.5 text-[#8A8F98]">{a}</dd></div>
+          ))}
+        </dl>
+        <div className="flex items-center justify-between gap-3 border-t border-white/[0.06] px-4 py-3">
+          <span className="text-[12px] text-[#8A8F98]">Ready for a brighter smile?</span>
+          <span className="rounded-md bg-[#F7F8F8] px-3 py-1.5 text-[12px] font-medium text-[#08090A]">Book a visit</span>
+        </div>
       </div>
     </div>
   );

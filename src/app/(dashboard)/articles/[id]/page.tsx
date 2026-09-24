@@ -197,13 +197,17 @@ const markdownComponents: Components = {
   ),
 };
 
-// ── Client-side schema markup generation (mirrors publisher.ts logic) ──
+// ── Client-side structured data for the owner to copy. Publishing does not add it: GitHub
+// and WordPress sites render structured data from their own templates. ──
 function generateSchemaMarkup(
-  article: { title: string; markdown: string; metaDescription?: string; featuredImage?: string; createdAt: number },
+  article: { title: string; slug?: string; markdown: string; metaDescription?: string; featuredImage?: string; createdAt: number },
   domain: string,
+  urlStructure?: string,
 ): Record<string, unknown>[] {
   const schemas: Record<string, unknown>[] = [];
-  const slug = "blog/" + (article.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""));
+  const articleSlug = (article.slug ?? article.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")).replace(/^\/+/, "");
+  const base = (urlStructure || "/blog").replace(/\[[^\]]+\].*$/, "").replace(/^\/+|\/+$/g, "");
+  const slug = base ? `${base}/${articleSlug}` : articleSlug;
 
   schemas.push({
     "@context": "https://schema.org",
@@ -395,7 +399,7 @@ export default function ArticleDetailPage() {
   const brandFont = site?.brandFontFamily;
 
   const schemas = useMemo(
-    () => article ? generateSchemaMarkup(article, site?.domain ?? "example.com") : [],
+    () => article ? generateSchemaMarkup(article, site?.domain ?? "example.com", site?.urlStructure) : [],
     [article, site?.domain],
   );
 
@@ -1343,7 +1347,7 @@ export default function ArticleDetailPage() {
             <div className="border-t border-white/[0.04] px-5 py-4">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-[11px] text-[#62666D]">
-                  JSON-LD schema markup generated for this article. Included automatically when published.
+                  Structured data for this article. Your site&apos;s blog template decides which structured data appears on the page; if yours doesn&apos;t add it, copy this into the article&apos;s page.
                 </p>
                 <button
                   onClick={async () => {

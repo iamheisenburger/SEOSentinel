@@ -32,7 +32,10 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  /* next/font sets --font-geist-sans on <body>. (`@theme inline` bakes --font-sans into utilities and
+   * never emits it as a variable, so var(--font-sans) here was invalid and the site fell back to
+   * the system font.) */
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

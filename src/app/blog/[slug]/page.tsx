@@ -11,6 +11,7 @@ import { api } from "../../../../convex/_generated/api";
 import { LandingNav } from "@/components/layout/landing-nav";
 import { convexHttp } from "@/lib/convexHttpClient";
 import "./article-content.css";
+import { articleFaq } from "@/lib/article-faq";
 
 export const dynamic = "force-dynamic";
 
@@ -252,6 +253,17 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
       : undefined,
   };
 
+  const faqs = articleFaq(article.markdown);
+  const faqSchema = faqs.length >= 2 ? {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: faqs.map((faq) => ({
+      "@type": "Question",
+      name: faq.question,
+      acceptedAnswer: { "@type": "Answer", text: faq.answer },
+    })),
+  } : null;
+
   const breadcrumbSchema = {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
@@ -286,6 +298,12 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: jsonLd(breadcrumbSchema) }}
       />
+      {faqSchema && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: jsonLd(faqSchema) }}
+        />
+      )}
       <LandingNav />
 
       <main className="mx-auto max-w-[46rem] px-6 pt-32 pb-24 md:pt-40">

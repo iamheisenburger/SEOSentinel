@@ -72,7 +72,7 @@ function Proof() {
 /* ─── Statement + pillars ──────────────────────── */
 
 const PILLARS = [
-  { title: "Researched, never invented", desc: "Every article is researched on the live web, and every factual claim points to its source. A separate review checks each one." },
+  { title: "Fact-checked, never invented", desc: "Every article is written from the business facts you confirmed, and a separate review blocks any claim it can't support before it goes live." },
   { title: "Published, then confirmed live", desc: "Pentra publishes to WordPress or your GitHub site, then opens the real page to confirm the exact article is live." },
   { title: "Measured in your own data", desc: "Clicks and positions come from your Google Search Console, before and after every article and every improvement." },
 ];
@@ -154,12 +154,12 @@ function HowItWorks() {
 /* ─── Feature rows ─────────────────────────────── */
 
 const ROWS = [
-  { label: "01 · Research", title: "Every claim has a source.", body: "Most AI writers make up statistics. Pentra researches each article on the live web, cites what it uses, and a separate fact check matches every claim to its source. A draft that doesn't pass is never published.",
-    points: ["Live web research for every article", "Sources cited where they're used", "Written only from business facts you confirmed"], panel: <SourcesPanel /> },
+  { label: "01 · Accuracy", title: "No invented facts.", body: "Most AI writers make up statistics. Pentra writes from the business facts you confirm and the searches your customers make, and a separate fact check blocks any claim it can't support. A draft that doesn't pass is never published.",
+    points: ["Written only from business facts you confirmed", "No invented statistics, quotes or case studies", "Independent fact check before anything goes live"], panel: <SourcesPanel /> },
   { label: "02 · Improve", title: "Pages close to page one come first.", body: "The fastest traffic is on pages Google already shows at positions 4 to 20. Pentra finds them in your Search Console, answers the searches they appear for, and measures what changed.",
     points: ["Uses your own Search Console data", "Answers the exact searches a page appears for", "Before and after clicks for every change"], panel: <RankingsPanel /> },
-  { label: "03 · Answers", title: "Written for Google and for AI answers.", body: "Each section answers its question in the first line and stands on its own, the way Google and AI assistants quote pages. Every article ships with FAQ and article structured data and one clear next step to your booking or signup page.",
-    points: ["Direct answers, short sections", "FAQ and article structured data", "One natural link to your next-step page"], panel: <AnswerPanel /> },
+  { label: "03 · Answers", title: "Written for Google and for AI answers.", body: "Each section answers its question in the first line and stands on its own, the way Google and AI assistants quote pages. Every article ends with a short FAQ built from the questions your customers really ask, and one clear next step to your booking or signup page.",
+    points: ["Direct answers, short sections", "A FAQ in your customers' own words", "One natural link to your next-step page"], panel: <AnswerPanel /> },
   { label: "04 · Health", title: "A weekly health check in plain English.", body: "Every week Pentra checks your important pages the way search engines and AI crawlers see them: can they reach the page, is it fast, does it have titles and structured data, and does it lead visitors to your next step.",
     points: ["Access, speed, AI answers and next-step checks", "Findings written in plain English", "Score and history on your dashboard"], panel: <HealthPanel /> },
   { label: "05 · Control", title: "You choose how much control you keep.", body: "Put Pentra on Autopilot and pick a pace, or choose Review first and approve every article. Switch any time. Your plan's monthly allowance always caps the total, so there are no surprise charges.",
@@ -267,7 +267,7 @@ const faqs = [
   },
   {
     q: "Will Pentra make things up about my business?",
-    a: "No. Pentra writes from the business facts you confirm and from sources it can cite. It is instructed never to invent product features, statistics, testimonials or case studies, and a separate review checks for unsupported claims.",
+    a: "No. Pentra writes from the business facts you confirm. It is instructed never to invent product features, statistics, testimonials or case studies, and a separate review blocks unsupported claims before anything is published.",
   },
   {
     q: "Does Pentra guarantee rankings?",
@@ -374,7 +374,7 @@ const organizationSchema = {
     "Autopilot SEO: Pentra researches, writes, fact-checks and publishes articles to your WordPress or GitHub-based site on a schedule, improves pages near page one, and reports Search Console results.",
   offers: { "@type": "AggregateOffer", lowPrice: "0", highPrice: "199", priceCurrency: "USD", offerCount: "4" },
   featureList: [
-    "Live web research with cited sources",
+    "Articles written only from confirmed business facts",
     "Independent fact-check review",
     "Autopilot or review-first publishing",
     "WordPress and GitHub publishing with receipts",

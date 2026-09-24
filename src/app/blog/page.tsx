@@ -52,7 +52,7 @@ export default async function BlogIndex() {
         </h1>
         <p className="mt-5 max-w-[38rem] text-[17px] leading-relaxed text-[#8A8F98]">
           Practical guides on SEO, content and getting customers from Google and AI answers. Every article is
-          researched on the live web, fact-checked and published by Pentra on Autopilot.
+          written, fact-checked and published by Pentra.
         </p>
 
         {articles === null && (

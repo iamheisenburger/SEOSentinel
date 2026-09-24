@@ -96,7 +96,59 @@ Working model:
 - The local Code session runs gates, commits, deploys Convex and pushes (never force).
 - They communicate through the queue ../COWORK-NEXT.md → ../COWORK-STATUS.md.
 
+
+### Autopilot proof (Sep 24, 23:00Z slots, both sites, nobody clicked anything)
+- LeadPilot (21/week): "A Practical Guide to Evaluating a Qualified Lead Generation Platform" published 22:55Z,
+  live and verified at https://leadpilot.chat/blog/qualified-lead-generation-platform-guide (HTTP 200, 1 H1,
+  canonical, BlogPosting + Breadcrumb JSON-LD from LeadPilot's template). Next slots every 8h (07:00Z, 15:00Z…).
+- pentra.dev (7/week): "Niche Detection: A Practical Guide to Defining and Verifying Your Business Niche" published
+  23:02Z (GitHub commit b875227 on main), live at https://pentra.dev/blog/niche-detection-practical-guide. Next
+  about 23:07Z Sep 25.
+- Account usage after these: 14 of 150 monthly articles (all sites). Health: pentra.dev 100/100, LeadPilot 96/100.
+
+### What Autopilot articles do NOT have (found Sep 24 night; public copy corrected in P26)
+- No live web research and no citations. pipeline.ts skips SERP analysis and webResearch whenever
+  contentProviderActive() (the audited content provider allows no optional paid service). Articles are written
+  only from the confirmed business facts, and the strict fact check strips/blocks anything unsupported, so they
+  read cautious ("a hypothesis worth testing…"). Landing, pricing, upgrade, blog intro and JSON-LD no longer claim
+  "live web research with sources". TOP FOLLOW-UP: bounded web research inside the provider (e.g. Anthropic web
+  search on the writer call) with evidence capture for the claim audit and the search fee in cost receipts.
+- No structured data added to customer sites. buildMdx (GitHub) and the WordPress plugin emit no JSON-LD; the
+  customer's template decides. The landing no longer promises FAQ/Article schema; the article page's schema panel
+  is a copy-it-yourself preview. Pentra's own blog renderer now emits FAQPage JSON-LD (src/lib/article-faq.ts).
+- MDX frontmatter carries sources/internalLinks, but only templates that render them show them.
+- Minor: the writer's "Related reading" block plus LeadPilot's own template "Related reading" = two blocks on
+  LeadPilot pages; anchors are capped at 8 title words, so some read truncated ("…Criteria for").
+- Owner-edited drafts publish at "<slug>-edited" URLs (chained suffixes were fixed earlier; existing ones remain).
+### Design system and UI (Sep 24 night: P19–P25)
+
+Direction chosen from Refero research (Linear, Checkly, Depot, Metaview): a calm near-black product UI where the
+product itself is the imagery. Tokens used everywhere:
+- canvas #08090A · raised #0B0C0E / #0E0F11 · hairlines white/6–8% · text #F7F8F8 / #D0D6E0 / #8A8F98 / #62666D
+- accent #0EA5E9 (links, live data, focus); status green #4CB782, amber #F2994A, red #EB5757
+- primary buttons are white pills/rects with dark text (#F7F8F8 on #08090A); secondary is a hairline outline
+- mono eyebrows (uppercase, tracked) for section labels; 12px radius cards with inset top highlight
+
+Surfaces rebuilt or restyled:
+- Landing (P20/P21): hero with a code-native dashboard replica (labelled "Example workspace, illustrative data"),
+  proof band ("We run our own marketing on Pentra"), how-it-works with a replaying Autopilot run log, five feature
+  rows with product panels (sources, pages close to page one, AI answers, weekly health, control), platforms,
+  pricing, honesty section, FAQ, final CTA.
+- Blog: index as a hairline list; article typography lives in src/app/blog/[slug]/article-content.css (P23).
+- Auth (P23): sign-in/up shell in the same language; Clerk appearance uses the white primary button.
+- App (P21–P24): sidebar, dashboard (results strip → Organic clicks with a daily 28-vs-28-day chart → upcoming /
+  published / topics / site health), topics list, articles table, article review toolbar, analytics keywords
+  table, websites cards with the real service status, site overview strip, settings service card, upgrade plans.
+- Phone widths checked at 390px for every app page (no horizontal overflow).
+
+Build-cache gotcha (P23/P25): Vercel restores .next/cache and Turbopack kept serving a stale copy of
+src/app/globals.css (new rules at its end were dropped, old Clerk button rules survived edits). Fix: global CSS
+now lives in src/app/pentra.css (renamed) and article typography in its own route CSS. If a CSS change does not
+show up live, suspect the cache first: rename the file or redeploy without the build cache.
+
 Next (not done):
+- Bounded live web research + citations inside the audited content provider (see above; owner cost decision)
+- Structured data on customer sites (MDX frontmatter faq/schema field or WordPress plugin JSON-LD)
 - Direct Shopify/Webflow publishers (paste covers them today)
 - customer email notifications (no transactional email provider configured)
 - AI-answer citation monitoring

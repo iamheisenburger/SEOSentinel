@@ -85,7 +85,7 @@ const TIERS: Tier[] = [
 
 const FEATURES = [
   "Autopilot or review-first publishing",
-  "Live web research with sources",
+  "Written from your confirmed facts",
   "Independent fact-check review",
   "Improves pages near page one",
   "WordPress and GitHub publishing",
