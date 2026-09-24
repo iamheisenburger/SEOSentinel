@@ -1,6 +1,7 @@
 "use client";
 
 import { useAction, useMutation, useQuery } from "convex/react";
+import { ConvexError } from "convex/values";
 import { api } from "../../../../../convex/_generated/api";
 import { manualPublicationBlocker } from "../../../../../convex/lib/manualPublication";
 import { publicationArtifactHash } from "../../../../../convex/lib/publicationArtifact";
@@ -352,7 +353,7 @@ export default function ArticleDetailPage() {
   const [ambiguityConfirmation, setAmbiguityConfirmation] = useState("");
   const [ambiguityBusy, setAmbiguityBusy] = useState(false);
   const [reviewNow, setReviewNow] = useState(() => Date.now());
-  const [editing, setEditing] = useState<{ markdown: string; artifactHash: string; requestKey: string } | null>(null);
+  const [editing, setEditing] = useState<{ markdown: string; title: string; metaTitle: string; metaDescription: string; artifactHash: string; requestKey: string } | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [editBusy, setEditBusy] = useState(false);
 
@@ -1111,27 +1112,36 @@ export default function ArticleDetailPage() {
           <h2 className="text-sm font-semibold text-[#EDEEF1]">Edit this draft</h2>
           <p className="text-sm text-[#8B8FA3]">Edits create a new version for review; the original stays in your history. Review may correct unsupported claims. Nothing publishes without your approval.</p>
           {editing ? <>
+            {([['title', 'Article title', 200], ['metaTitle', 'Search title', 60], ['metaDescription', 'Search description', 155]] as const).map(([field, label, limit]) => <label key={field} className="block text-sm text-[#EDEEF1]">{label}
+              <input aria-label={label} value={editing[field]} maxLength={limit} disabled={editBusy}
+                onChange={event => { setEditing({ ...editing, [field]: event.target.value, requestKey: crypto.randomUUID() }); setEditError(null); }}
+                className="mt-1 block w-full rounded-lg border border-white/10 bg-[#08090E] p-3" />
+            </label>)}
+            <p className="text-xs text-[#8B8FA3]">Use an accurate search description of 100–155 characters. Title and description changes are reviewed together with the article.</p>
             <label htmlFor="draft-markdown" className="block text-sm text-[#EDEEF1]">Article Markdown</label>
             <textarea id="draft-markdown" value={editing.markdown} disabled={editBusy} maxLength={100000}
               onChange={event => { setEditing({ ...editing, markdown: event.target.value, requestKey: crypto.randomUUID() }); setEditError(null); }}
               className="min-h-96 w-full rounded-lg border border-white/10 bg-[#08090E] p-4 font-mono text-sm text-[#EDEEF1]" />
             <p className="text-sm text-[#8B8FA3]">Review costs up to {contentReadiness.ownerDraft.maximumMicroUsd === null ? "an unavailable amount" : `$${(contentReadiness.ownerDraft.maximumMicroUsd / 1_000_000).toFixed(2)}`} including bounded corrections. The original URL is retained in history; this version receives a distinct unpublished URL.</p>
             <div className="flex gap-2">
-              <Button disabled={editBusy || !editing.markdown.trim() || editing.markdown === article.markdown || contentReadiness.ownerDraft.maximumMicroUsd === null}
+              <Button disabled={editBusy || !editing.markdown.trim() || !editing.title.trim() || !editing.metaTitle.trim() || editing.metaDescription.trim().length < 100 ||
+                (editing.markdown === article.markdown && editing.title === article.title && editing.metaTitle === (article.metaTitle ?? article.title) && editing.metaDescription === (article.metaDescription ?? '')) || contentReadiness.ownerDraft.maximumMicroUsd === null}
                 onClick={async () => {
                   if (!editing || contentReadiness.ownerDraft.maximumMicroUsd === null) return;
                   setEditBusy(true); setEditError(null);
                   try {
                     await requestDraft({ siteId: article.siteId, reviewToken: contentReadiness.reviewToken,
                       requestKey: editing.requestKey, maximumMicroUsd: contentReadiness.ownerDraft.maximumMicroUsd,
-                      edit: { articleId, artifactHash: editing.artifactHash, markdown: editing.markdown } });
+                      edit: { articleId, artifactHash: editing.artifactHash, markdown: editing.markdown,
+                        metadata: { title: editing.title, metaTitle: editing.metaTitle, metaDescription: editing.metaDescription } } });
                     router.push("/articles");
-                  } catch (error) { setEditError(error instanceof Error ? error.message : "Could not save edits. Try again with this same request."); }
+                  } catch (error) { setEditError(error instanceof ConvexError && typeof error.data === "string" ? error.data
+                    : "Could not save edits. Try again with this same request."); }
                   finally { setEditBusy(false); }
                 }}>{editBusy ? "Submitting review…" : "Save and request review"}</Button>
               <Button disabled={editBusy} variant="secondary" onClick={() => { setEditing(null); setEditError(null); }}>Cancel</Button>
             </div>
-          </> : <Button onClick={() => setEditing({ markdown: article.markdown,
+          </> : <Button onClick={() => setEditing({ markdown: article.markdown, title: article.title, metaTitle: article.metaTitle ?? article.title, metaDescription: article.metaDescription ?? '',
             artifactHash: publicationArtifactHash(article), requestKey: crypto.randomUUID() })}>Edit Markdown</Button>}
           {editError && <p role="alert" className="text-sm text-red-400">{editError}</p>}
         </section>

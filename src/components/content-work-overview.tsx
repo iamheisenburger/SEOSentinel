@@ -23,13 +23,13 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
     <header><h1 className="text-xl font-semibold">Your content service</h1><p>{state.profile.name} · {state.destination.domain}</p><Link className="underline text-sm" href="/settings#content-service-heading">Setup, funding, schedule and page permissions</Link></header>
     <div className="grid gap-4 md:grid-cols-2">
       <section className="rounded-xl border border-white/10 p-5 space-y-2"><h2 className="font-medium">Upcoming work</h2>
-        <p>{delivery.label}. Ready buffer: {state.complete ? `${state.ready}/2` : "Unknown: incomplete inventory"}.</p>
-        {s && <p>Fixed window: {shownTime(s.nextDeadlineAt - 300_000, zone)}–{shownTime(s.nextDeadlineAt, zone)} ({zone}). {s.nextDeadlineAt < state.funding.checkedAt && <span role="alert">Overdue. The original deadline is retained.</span>}</p>}
-        {!upcoming.length && <p>No upcoming item is prepared yet.</p>}
+        {s?.ownerReviewedOnly ? <p>Request, review and publish from <Link className="underline" href="/articles">Articles</Link>. Nothing publishes automatically.</p> : <p>{delivery.label}. Ready buffer: {state.complete ? `${state.ready}/2` : "Unknown: incomplete inventory"}.</p>}
+        {s && !s.ownerReviewedOnly && <p>Fixed window: {shownTime(s.nextDeadlineAt - 300_000, zone)}–{shownTime(s.nextDeadlineAt, zone)} ({zone}). {s.nextDeadlineAt < state.funding.checkedAt && <span role="alert">Overdue. The original deadline is retained.</span>}</p>}
+        {!upcoming.length && !s?.ownerReviewedOnly && <p>No upcoming item is prepared yet.</p>}
         <ul className="space-y-2 text-sm">{upcoming.map(w => <li key={w.jobId}>{workLabel(w)} · {stageLabel(w.stage)} · due {shownTime(w.deadlineAt, zone)}</li>)}</ul>
       </section>
       <section className="rounded-xl border border-white/10 p-5 space-y-2"><h2 className="font-medium">Verified changes</h2>
-        {!verified.length && <p>No live changes verified yet. Preparation and monitoring are not publications.</p>}
+        {s?.ownerReviewedOnly ? <p><Link className="underline" href="/articles">View reviewed drafts and publication status</Link>. A page counts as delivered only after live verification.</p> : !verified.length && <p>No live changes verified yet. Preparation and monitoring are not publications.</p>}
         <ul className="space-y-2 text-sm">{verified.map(w => <li key={w.jobId}>{workLabel(w)}{w.articleId && <> · <Link className="underline" href={`/articles/${w.articleId}`}>View artifact</Link></>}{w.publishedAt && <p>Published {shownTime(w.publishedAt, zone)}</p>}{w.verifiedAt && <p>Verified {shownTime(w.verifiedAt, zone)}</p>}</li>)}</ul>
       </section>
     </div>
@@ -38,7 +38,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
       {!state.entitlement && <p role="alert">Verify your existing plan in <Link href="/settings/billing" className="underline">Billing</Link>.</p>}
       {!state.destination.verified && <p role="alert">Publishing destination verification required.</p>}
       {!state.bindingCurrent && <p role="alert">Business or destination changed. <Link className="underline" href="/settings#changed-content-setup">Review changed setup</Link> to replace stale unstarted work safely. Existing costs and deadlines remain.</p>}
-      {state.approvalRequired && <p role="alert">Automatic publication consent is not active.</p>}
+      {state.approvalRequired && !s?.ownerReviewedOnly && <p role="alert">Automatic publication consent is not active.</p>}
       {state.funding.status !== "available" && !delivery.systemFailure && <p role="alert">{state.funding.reason ?? fundingCopy[state.funding.status]}</p>}
       {!state.complete && <p role="alert">Work history is incomplete. No clean-health claim is possible.</p>}
       {state.work.filter(w => w.failure && !w.retiredAt).map(w => <div role="alert" key={w.jobId}>{workLabel(w)}: {w.failure} <details><summary>Technical details</summary>{w.jobId}{w.technicalReason && <p>{w.technicalReason}</p>}</details></div>)}

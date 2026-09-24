@@ -14,6 +14,7 @@ export default defineSchema({
       paused: v.boolean(),
       timezone: v.optional(v.string()),
       autopublishConsentAt: v.optional(v.number()),
+      ownerReviewedOnly: v.optional(v.boolean()),
     })),
     userId: v.optional(v.string()), // Clerk user ID
     domain: v.string(),

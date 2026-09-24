@@ -366,9 +366,9 @@ export const reconfirm = mutation({ args: { siteId: v.id("sites"), reviewToken: 
       await closePristineSetupLease(ctx, site);
     }
     await ctx.db.patch(site._id, { contentSchedule: { ...schedule, profileHash: confirmedContentProfileHash(site), connectionHash: contentConnectionHash(site),
-      active: false, paused: false, autopublishConsentAt: Date.now() }, autopilotEnabled: true, autopilotRolloutMode: "warm", approvalRequired: false,
+      active: false, paused: Boolean(schedule.ownerReviewedOnly), autopublishConsentAt: schedule.ownerReviewedOnly ? undefined : Date.now() }, autopilotEnabled: !schedule.ownerReviewedOnly, autopilotRolloutMode: "warm", approvalRequired: Boolean(schedule.ownerReviewedOnly),
       ...(review.pristineLease ? { publicationLeaseOwner: undefined, publicationLeaseExpiresAt: undefined } : {}), updatedAt: Date.now() });
-    await wake(ctx, site._id);
+    if (!schedule.ownerReviewedOnly) await wake(ctx, site._id);
     return { status: "preparing" as const, retired: review.stale.length, issues: [] as SetupIssue[] };
   } });
 
@@ -376,10 +376,14 @@ export const reconfirm = mutation({ args: { siteId: v.id("sites"), reviewToken: 
  * deadline by toggling mode. Migration and rollback drain unresolved work. */
 export const selectServiceMode = mutation({
   args: { siteId: v.id("sites"), mode: v.union(v.literal("legacy_articles"), v.literal("growth_first")),
-    confirmBusinessProfile: v.boolean(), authorizeAutomaticPublication: v.optional(v.boolean()), reviewToken: v.optional(v.string()), timezone: v.optional(v.string()), firstDeadlineAt: v.optional(v.number()), intervalMs: v.optional(v.number()) },
+    confirmBusinessProfile: v.boolean(), ownerReviewedOnly: v.optional(v.boolean()), authorizeAutomaticPublication: v.optional(v.boolean()), reviewToken: v.optional(v.string()), timezone: v.optional(v.string()), firstDeadlineAt: v.optional(v.number()), intervalMs: v.optional(v.number()) },
   handler: async (ctx, args) => {
     let site = await requireOwner(ctx, args.siteId);
     if ((site.serviceMode ?? "legacy_articles") === args.mode) return { changed: false, status: "completed" as const };
+    if (args.ownerReviewedOnly && (args.mode !== "growth_first" || args.authorizeAutomaticPublication ||
+      !site.contentSetupRequestedAt || site.contentSchedule || site.publishMethod !== "github")) {
+      throw new Error("Owner-reviewed setup is for a new GitHub connection; existing contracts remain unchanged");
+    }
     const rollback = args.mode === "legacy_articles";
     if (rollback && args.reviewToken !== undefined && args.reviewToken !== contentConsentToken(site)) throw new Error("Review the current saved setup before switching service");
     // The explicit owner switch is retirement consent, unlike ordinary Pause.
@@ -469,18 +473,22 @@ export const selectServiceMode = mutation({
       throw new Error("Connect a supported GitHub or conditional WordPress destination first");
     }
     selectionConnection(site);
-    if (!Number.isSafeInteger(args.intervalMs) || args.intervalMs! < CONTENT_DELIVERY_WINDOW_MS ||
-      !Number.isSafeInteger(args.firstDeadlineAt) || args.firstDeadlineAt! < Date.now() + CONTENT_DELIVERY_WINDOW_MS) throw new Error("Choose a future fixed delivery window and interval");
+    if (args.ownerReviewedOnly && !publisherDestinationReceiptVerified({ site })) throw new Error("Verify the exact GitHub destination first");
+    if (!args.ownerReviewedOnly && (!Number.isSafeInteger(args.intervalMs) || args.intervalMs! < CONTENT_DELIVERY_WINDOW_MS ||
+      !Number.isSafeInteger(args.firstDeadlineAt) || args.firstDeadlineAt! < Date.now() + CONTENT_DELIVERY_WINDOW_MS)) throw new Error("Choose a future fixed delivery window and interval");
     if (!(await contentEntitlementAuthorized(ctx, site))) throw new Error("Current plan entitlement is required");
-    await ctx.db.patch(site._id, { serviceMode: "growth_first", ...(args.authorizeAutomaticPublication === true ? {
+    await ctx.db.patch(site._id, { serviceMode: "growth_first", ...(args.ownerReviewedOnly ? { approvalRequired: true, autopilotEnabled: false } : args.authorizeAutomaticPublication === true ? {
       approvalRequired: false, autopilotEnabled: true, autopilotRolloutMode: "warm",
     } : {}), contentSchedule: {
       validationAuthorizationId: site.contentSchedule?.validationAuthorizationId,
+      ...(args.ownerReviewedOnly ? { ownerReviewedOnly: true } : {}),
       selectedAt: Date.now(), profileHash: confirmedContentProfileHash(site), connectionHash: contentConnectionHash(site),
       ...(args.authorizeAutomaticPublication === true ? { autopublishConsentAt: Date.now() } : {}),
-      intervalMs: site.contentSchedule?.intervalMs ?? args.intervalMs!, nextDeadlineAt: site.contentSchedule?.nextDeadlineAt ?? args.firstDeadlineAt!, timezone: site.contentSchedule?.timezone ?? timezone, active: false, paused: false,
+      // Owner-reviewed work has no promised slot; these inert schedule fields
+      // retain the existing job contract and are never exposed as a deadline.
+      intervalMs: site.contentSchedule?.intervalMs ?? args.intervalMs ?? 86_400_000, nextDeadlineAt: site.contentSchedule?.nextDeadlineAt ?? args.firstDeadlineAt ?? Date.now(), timezone: site.contentSchedule?.timezone ?? timezone, active: false, paused: Boolean(args.ownerReviewedOnly),
     }, updatedAt: Date.now() });
-    await wake(ctx, site._id);
+    if (!args.ownerReviewedOnly) await wake(ctx, site._id);
     return { changed: true };
   },
 });
@@ -507,7 +515,7 @@ export const readiness = query({
       entitlement: await contentEntitlementAuthorized(ctx, site), enabled: Boolean(site.autopilotEnabled), approvalRequired: Boolean(site.approvalRequired),
       bindingCurrent,
       reconciliation: { needed: reconciliation.needed, staleItems: reconciliation.stale.length, issues: reconciliation.issues },
-      schedule: s ? { active: s.active, paused: s.paused, nextDeadlineAt: s.nextDeadlineAt, intervalMs: s.intervalMs, timezone: s.timezone ?? "UTC" } : null,
+      schedule: s ? { ownerReviewedOnly: Boolean(s.ownerReviewedOnly), active: s.active, paused: s.paused, nextDeadlineAt: s.nextDeadlineAt, intervalMs: s.intervalMs, timezone: s.timezone ?? "UTC" } : null,
       funding: { ...await contentFunding(ctx, site, pricing?.budgetMicroUsd),
         pricingScope: !pricing ? "unavailable" as const : pricing.validationAuthorizationId ? "validation_run" as const : "ordinary" as const },
       ownerDraft: { maximumMicroUsd: pricing?.budgetMicroUsd ?? null,
@@ -574,6 +582,7 @@ export const control = mutation({ args: { siteId: v.id("sites"), action: v.union
   handler: async (ctx, args) => {
     const site = await requireOwner(ctx, args.siteId), s = site.contentSchedule;
     if (site.serviceMode !== "growth_first" || !s) throw new Error("Choose growth-first service first");
+    if (s.ownerReviewedOnly) throw new Error("Owner-reviewed drafts have no automatic schedule to activate");
     if (args.action === "pause") {
       await ctx.db.patch(site._id, { contentSchedule: { ...s, paused: true }, updatedAt: Date.now() });
       await wake(ctx, site._id); return;
@@ -663,7 +672,8 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
 export const requestDraft = mutation({
   args: { siteId: v.id("sites"), reviewToken: v.string(), requestKey: v.string(),
     maximumMicroUsd: v.number(), topicId: v.optional(v.id("topic_clusters")),
-    edit: v.optional(v.object({ articleId: v.id("articles"), artifactHash: v.string(), markdown: v.string() })) },
+    edit: v.optional(v.object({ articleId: v.id("articles"), artifactHash: v.string(), markdown: v.string(),
+      metadata: v.optional(v.object({ title: v.string(), metaTitle: v.string(), metaDescription: v.string() })) })) },
   handler: async (ctx, args) => {
     const site = await requireOwner(ctx, args.siteId), schedule = site.contentSchedule;
     if (site.serviceMode !== "growth_first" || !schedule || site.publishMethod !== "github" ||
@@ -679,6 +689,14 @@ export const requestDraft = mutation({
     const sourceJobs = source ? jobs.filter(j => j.articleId === source._id && j.contentWork?.ownerRequest &&
       j.contentWork.retiredAt === undefined) : [];
     const sourceJob = sourceJobs[0];
+    const rawMetadata = args.edit?.metadata;
+    const metadata = rawMetadata && { title: rawMetadata.title.trim(), metaTitle: rawMetadata.metaTitle.trim(),
+      metaDescription: rawMetadata.metaDescription.trim() };
+    if (metadata && (!metadata.title || metadata.title.length > 200 || !metadata.metaTitle ||
+      metadata.metaTitle.length > 60 || metadata.metaDescription.length < 100 || metadata.metaDescription.length > 155 ||
+      /[\r\n]/.test(metadata.title + metadata.metaTitle + metadata.metaDescription))) {
+      throw new ConvexError("Provide a title, a search title up to 60 characters and a search description of 100–155 characters.");
+    }
     if (args.edit && (!source || source.siteId !== site._id || !articleMatchesCurrentDomain(site, source) ||
       !source.topicId || sourceJobs.length !== 1 || !sourceJob || !["done", "failed"].includes(sourceJob.status) ||
       sourceJob.contentWork?.ownerRequest?.userId !== site.userId ||
@@ -686,7 +704,8 @@ export const requestDraft = mutation({
       sourceJob.contentWork!.profileHash !== schedule.profileHash || sourceJob.contentWork!.connectionHash !== schedule.connectionHash ||
       source.status === "published" || source.publicationAttemptedAt || source.publicationReceipt || source.publicationLeaseOwner ||
       publicationArtifactHash(source) !== args.edit.artifactHash || args.topicId ||
-      !args.edit.markdown.trim() || args.edit.markdown.length > 100_000 || args.edit.markdown === source.markdown)) {
+      !args.edit.markdown.trim() || args.edit.markdown.length > 100_000 || (args.edit.markdown === source.markdown &&
+        (!metadata || (metadata.title === source.title && metadata.metaTitle === source.metaTitle && metadata.metaDescription === source.metaDescription))))) {
       throw new ConvexError("This draft changed, is still processing, or cannot be edited safely. Refresh before saving.");
     }
     const outstanding = jobs.find(j => j.contentWork?.ownerRequest && j.contentWork.retiredAt === undefined &&
@@ -703,7 +722,7 @@ export const requestDraft = mutation({
       trigger: `content_slot:${requestedAt}`, reservedMicroUsd: budgetMicroUsd, timestamp: requestedAt };
     const funding = await inspectSharedProviderBudget(ctx, request);
     if (!funding.ok) throw new ConvexError(contentIssue(funding.reason) ?? "Draft funding is unavailable");
-    const editedId = source && args.edit ? await createOwnerEditedCheckpoint(ctx, source, args.edit.markdown) : undefined;
+    const editedId = source && args.edit ? await createOwnerEditedCheckpoint(ctx, source, args.edit.markdown, metadata) : undefined;
     const jobId = await ctx.db.insert("jobs", { siteId: site._id, canonicalDomain: siteCanonicalDomain(site)!,
       domainRevision: siteCanonicalDomainRevision(site), rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
       type: "article", status: "pending", workerAttempts: 0, publicationAttempts: 0,
@@ -787,7 +806,7 @@ export const advance = internalMutation({
     for (const job of verifying) if (job.contentWork?.intent === "improve" && (job.contentWork.verificationNextAt ?? 0) <= Date.now()) {
       await ctx.scheduler.runAfter(0, internal.publisher.verifyContentImprovement, { siteId, jobId: job._id });
     }
-    if (!site.autopilotEnabled || schedule.paused || !["warm", "live"].includes(site.autopilotRolloutMode ?? "") ||
+    if (schedule.ownerReviewedOnly || !site.autopilotEnabled || schedule.paused || !["warm", "live"].includes(site.autopilotRolloutMode ?? "") ||
       !(await contentEntitlementAuthorized(ctx, site))) return { scheduled: 0, mode: "content_paused" };
     if (!contentConnectionComplete(site) || schedule.profileHash !== confirmedContentProfileHash(site) ||
       schedule.connectionHash !== contentConnectionHash(site)) return { scheduled: 0, mode: "content_binding_changed" };
@@ -1042,7 +1061,7 @@ export const beginProviderCall = internalMutation({
     if (cw?.operation) throw new Error("Owner correction/restoration is provider-free; no paid work is authorized");
     if (!job || !cw || !site || job.workerToken !== args.workerToken || job.status !== "running" ||
       (job.leaseExpiresAt ?? 0) <= Date.now() || !jobAuthorizedForExecution(site, job) ||
-      (site.approvalRequired === true && !cw.ownerRequest) || !(await contentEntitlementAuthorized(ctx, site)) || !contentConnectionComplete(site) || confirmedContentProfileHash(site) !== cw.profileHash ||
+      ((site.approvalRequired === true || site.contentSchedule?.ownerReviewedOnly) && !cw.ownerRequest) || !(await contentEntitlementAuthorized(ctx, site)) || !contentConnectionComplete(site) || confirmedContentProfileHash(site) !== cw.profileHash ||
       contentConnectionHash(site) !== cw.connectionHash) throw new Error("Content provider authority changed");
     await authorizedWorkPage(ctx, site, job);
     const previousCalls = cw.providerCalls.filter(c => (c.logicalKey ?? c.key) === args.key);

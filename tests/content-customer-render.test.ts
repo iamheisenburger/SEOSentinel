@@ -48,6 +48,21 @@ function render(component: string, queryState: unknown = state, outcome: unknown
   return { html: renderToStaticMarkup(createElement(runtime.exports[exported], { siteId: "sites:synthetic" })), calls };
 }
 
+test("Owner-reviewed setup has no automatic consent or artificial overdue deadline in its UI", () => {
+  const setup = render("content-work-service", { ...state, setupPending: true, serviceMode: "legacy_articles", schedule: null });
+  assert.match(setup.html, /Enable owner-reviewed drafts/);
+  assert.doesNotMatch(setup.html, /First deadline|Hours between deadlines|scheduled creation\/improvement service/);
+  const ready = { ...state, approvalRequired: true, enabled: false, schedule: { ...state.schedule, ownerReviewedOnly: true } };
+  for (const component of ["content-work-service", "content-work-overview"]) {
+    const result = render(component, ready);
+    assert.match(result.html, /Articles/);
+    assert.doesNotMatch(result.html, /Overdue|Fixed window|Next fixed deadline|Resume preparation|Automatic publication consent is not active/);
+  }
+  const changed = render("content-work-service", { ...ready, bindingCurrent: false }).html;
+  assert.match(changed, /Drafts still require your explicit publication approval/);
+  assert.doesNotMatch(changed, /authorize automatic publication|Confirm changed setup and prepare fresh work/);
+});
+
 function renderSidebar(queryState: unknown, siteOverrides: Record<string, unknown> = {}) {
   const code = buildSync({ entryPoints: ["src/components/layout/sidebar.tsx"], bundle: true, platform: "node", format: "cjs",
     packages: "external", external: ["@/hooks/usePlanLimits", "@/contexts/site-context"], write: false }).outputFiles[0].text;

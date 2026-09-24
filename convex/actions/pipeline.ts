@@ -18,7 +18,7 @@ import {
   withArticleExecutionBudget,
 } from "../lib/articleExecutionBudget";
 import { z } from "zod";
-import { ArticleSchema } from "../lib/articleToolResult";
+import { ArticleSchema, recoverLeakedArticleEnvelope } from "../lib/articleToolResult";
 import { contradictoryContentAudit, inconsistentAuditFeedback } from "../lib/contentAudit";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
@@ -1209,9 +1209,11 @@ async function callClaudeStructured<T>(args: {
     // Change-note shape is presentation, not editorial evidence. Preserve a
     // provider's single note verbatim instead of replaying a completed rewrite.
     // Article text, audit scores, defects and claim ledgers are never coerced.
-    const normalizedResult = args.toolName === "remediate_final_article" && originalResult && typeof originalResult === "object" &&
+    const notesNormalized = args.toolName === "remediate_final_article" && originalResult && typeof originalResult === "object" &&
       "notes" in originalResult && typeof originalResult.notes === "string"
       ? { ...originalResult, notes: [originalResult.notes] } : originalResult;
+    // A leaked XML-style field envelope is never article prose.
+    const normalizedResult = args.toolName === "remediate_final_article" ? recoverLeakedArticleEnvelope(notesNormalized) : notesNormalized;
     const parsed = args.outputSchema.safeParse(normalizedResult);
     if (parsed.success) return parsed.data;
     if (args.toolName !== "audit_final_article") throw new Error("content_model_response_invalid");

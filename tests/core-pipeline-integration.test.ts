@@ -848,6 +848,42 @@ test("SLC51 invalid content envelopes cannot remove old deferrals or override mo
   });
 });
 
+test("SLC56 new GitHub customers complete owner-reviewed drafts without granting an automatic schedule", async t => {
+  for (const business of slcBusinesses) await t.test(business.name, async () => {
+    const f = setup({ growthFirst: true, businesses: [business] });
+    const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    f.setIdentity(saved.userId);
+    let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    const selection = { siteId: site.id, mode: "growth_first", ownerReviewedOnly: true,
+      confirmBusinessProfile: true, reviewToken: r.reviewToken };
+    await assert.rejects(f.invoke("contentWork:selectServiceMode", { ...selection, authorizeAutomaticPublication: true }), /existing contracts/);
+    await f.invoke("contentWork:selectServiceMode", selection);
+    assert.equal((await f.invoke("contentWork:selectServiceMode", selection)).changed, false);
+    r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    assert.equal(r.schedule.ownerReviewedOnly, true); assert.equal(r.enabled, false); assert.equal(r.approvalRequired, true);
+    assert.equal(f.get(site.id)!.contentSchedule.autopublishConsentAt, undefined);
+    assert.equal(f.modelCalls.length, 0); assert.equal(f.tables.jobs?.length ?? 0, 0);
+    await assert.rejects(f.invoke("contentWork:control", { siteId: site.id, action: "resume", reviewToken: r.reviewToken }), /no automatic schedule/);
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "content_paused");
+    const requested = await f.invoke("contentWork:requestDraft", { siteId: site.id, reviewToken: r.reviewToken,
+      requestKey: "fresh-owner-reviewed-new-customer", maximumMicroUsd: r.ownerDraft.maximumMicroUsd });
+    await pumpUntil(f, () => ["ready", "failed"].includes(f.get(requested.jobId)!.contentWork.stage));
+    const job = f.get(requested.jobId)!;
+    assert.equal(job.contentWork.stage, "ready", diagnostic(f));
+    assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 0);
+    await f.invoke("actions/pipeline:publishApproved", { siteId: site.id, articleId: job.articleId });
+    await pumpUntil(f, () => f.get(job.articleId)!.publicUrlStatus === "verified");
+    assert.equal(f.get(requested.jobId)!.contentWork.stage, "verified");
+    f.get(site.id)!.siteSummary += " Owner confirmed an updated business description.";
+    r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:reconfirm", { siteId: site.id, reviewToken: r.reviewToken, confirm: true });
+    assert.equal(f.get(site.id)!.autopilotEnabled, false); assert.equal(f.get(site.id)!.approvalRequired, true);
+    assert.equal(f.get(site.id)!.contentSchedule.paused, true);
+    assert.equal(f.get(site.id)!.contentSchedule.autopublishConsentAt, undefined);
+    f.assertOffline();
+  });
+});
+
 test("SLC54 owner draft completes two fresh approved publication cycles without changing the paused cadence", async () => {
   const f = await scopedPricingFixture();
   for (const s of f.sites.slice(0, 2)) f.get(s.id)!.contentSchedule.paused = true;
@@ -908,6 +944,35 @@ test("SLC55 owner edits retain the source and costs, require a new review and ex
   await f.invoke("actions/pipeline:publishApproved", { siteId: site._id, articleId: editedJob.articleId });
   await pumpUntil(f, () => f.get(editedJob.articleId)!.publicUrlStatus === "verified");
   assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 1);
+  f.assertOffline();
+});
+
+test("Owner metadata-only corrections create a new exact reviewed artifact and preserve the original", async () => {
+  const f = await scopedPricingFixture(), site = f.get(f.sites[0].id)!;
+  for (const s of f.sites.slice(0, 2)) f.get(s.id)!.contentSchedule.paused = true;
+  f.setIdentity(site.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site._id });
+  const base = { siteId: site._id, reviewToken: r.reviewToken, maximumMicroUsd: r.ownerDraft.maximumMicroUsd };
+  const original = await f.invoke("contentWork:requestDraft", { ...base, requestKey: "owner-metadata-original" });
+  await pumpUntil(f, () => f.get(original.jobId)!.contentWork.stage === "ready");
+  const source = structuredClone(f.get(f.get(original.jobId)!.articleId)!);
+  const metadata = { title: source.title, metaTitle: "Review your content workflow",
+    metaDescription: "Use this practical review checklist to confirm your business information, evaluate content choices and decide what to publish next." };
+  const edit = { articleId: source._id, artifactHash: publicationArtifactHash(source as never), markdown: source.markdown, metadata };
+  for (const invalid of [{ ...metadata, title: " " }, { ...metadata, metaTitle: "x".repeat(61) }, { ...metadata, metaDescription: "no." }]) {
+    const jobs = f.tables.jobs.length, reservations = f.tables.provider_spend_reservations.length;
+    await assert.rejects(f.invoke("contentWork:requestDraft", { ...base, requestKey: "owner-metadata-invalid", edit: { ...edit, metadata: invalid } }));
+    assert.equal(f.tables.jobs.length, jobs); assert.equal(f.tables.provider_spend_reservations.length, reservations);
+  }
+  const edited = await f.invoke("contentWork:requestDraft", { ...base, requestKey: "owner-metadata-corrected", edit });
+  const article = f.get(f.get(edited.jobId)!.articleId)!;
+  assert.equal(article.markdown, source.markdown); assert.equal(article.metaTitle, metadata.metaTitle);
+  assert.equal(article.metaDescription, metadata.metaDescription); assert.equal(article.auditedContentHash, undefined);
+  assert.notEqual(publicationArtifactHash(article as never), publicationArtifactHash(source as never));
+  assert.equal(f.get(source._id)!.metaDescription, source.metaDescription);
+  await pumpUntil(f, () => ["ready", "failed"].includes(f.get(edited.jobId)!.contentWork.stage));
+  assert.equal(f.get(edited.jobId)!.contentWork.stage, "ready", diagnostic(f));
+  assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0);
   f.assertOffline();
 });
 

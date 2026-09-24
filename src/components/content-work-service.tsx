@@ -18,6 +18,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
   const reconfirm = useMutation(api.contentWork.reconfirm);
   const [chosenMode, setMode] = useState<"legacy_articles" | "growth_first" | null>(null);
   const mode = chosenMode ?? (state?.setupPending ? "growth_first" : state?.serviceMode ?? "legacy_articles");
+  const ownerSetup = Boolean(state?.setupPending && state.destination.kind === "github");
   const [confirmed, setConfirmed] = useState(false), [deadline, setDeadline] = useState("");
   const [confirmedReview, setConfirmedReview] = useState("");
   const [hours, setHours] = useState("24"), [saving, setSaving] = useState(false), [error, setError] = useState("");
@@ -26,8 +27,8 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     if (mode === "growth_first" && confirmedReview !== state?.reviewToken) return;
     setSaving(true); setError("");
     try {
-      const result = await select({ siteId, mode, confirmBusinessProfile: confirmed, authorizeAutomaticPublication: mode === "growth_first" && confirmed, reviewToken: state!.reviewToken, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        ...(mode === "growth_first" ? { firstDeadlineAt: new Date(deadline).getTime(), intervalMs: Number(hours) * 3_600_000 } : {}) });
+      const result = await select({ siteId, mode, confirmBusinessProfile: confirmed, ownerReviewedOnly: ownerSetup && mode === "growth_first", authorizeAutomaticPublication: !ownerSetup && mode === "growth_first" && confirmed, reviewToken: state!.reviewToken, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        ...(mode === "growth_first" && !ownerSetup ? { firstDeadlineAt: new Date(deadline).getTime(), intervalMs: Number(hours) * 3_600_000 } : {}) });
       setSwitchResult(result.status ? { status: result.status, issues: "issues" in result ? result.issues ?? [] : [] } : null);
       if (result.changed) setMode(null);
     } catch { setError("Service selection could not be accepted. Review the saved business, destination, billing and unresolved work. No existing deadline or spending commitment was reset."); }
@@ -57,8 +58,9 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
   return <section className="rounded-xl border border-white/10 p-5 space-y-4" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
     <h2 id="content-service-heading" className="font-semibold">Content delivery service</h2>
     <p>Website: <Link className="underline" href={`/sites/${state.siteId}?tab=settings`}>{state.destination.domain}</Link></p>
-    <p>Current contract: {state.setupPending ? "Not selected — setup is stopped" : state.serviceMode === "growth_first" ? "Growth-first content work" : "Existing fixed-article delivery"}.</p>
-    {state.serviceMode === "growth_first" && <div className="space-y-2 text-sm" aria-label="Preparation and next action">
+    <p>Current contract: {state.setupPending ? "Not selected — setup is stopped" : state.schedule?.ownerReviewedOnly ? "Owner-reviewed GitHub drafts" : state.serviceMode === "growth_first" ? "Growth-first content work" : "Existing fixed-article delivery"}.</p>
+    {state.schedule?.ownerReviewedOnly && <p>Request a draft in <Link className="underline" href="/articles">Articles</Link>, review it, then explicitly publish. No automatic schedule or publication is enabled.</p>}
+    {state.serviceMode === "growth_first" && !state.schedule?.ownerReviewedOnly && <div className="space-y-2 text-sm" aria-label="Preparation and next action">
       <p>Preparation: {state.complete ? `${state.ready}/2 ready` : "Inventory incomplete"}.</p>
       <p>Schedule: {delivery.label}.</p>
       <p>Next fixed deadline: {state.schedule ? shownTime(state.schedule.nextDeadlineAt, state.schedule.timezone) : "Not selected"}. {state.schedule && state.schedule.nextDeadlineAt < state.funding.checkedAt && <span role="alert">Overdue; the original deadline remains.</span>}</p>
@@ -71,7 +73,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     {state.funding.status !== "available" && !delivery.systemFailure && <p role="alert" className="text-sm">{fundingCopy[state.funding.status]} Available internal headroom: {money(state.funding.accountAvailableMicroUsd)}. {state.funding.independentAllowance && "Ordinary capacity cannot extend this separate validation allowance. "}This is not provider credit. <a href="#content-funding-details" className="underline">Review funding details</a>.</p>}
     {!state.entitlement && <p role="alert">Verify your existing plan in <Link href="/settings/billing" className="underline">Billing</Link>.</p>}
     {!state.destination.verified && <p role="alert">Verify the exact publisher in <Link href={`/sites/${siteId}?tab=settings`} className="underline">website settings</Link>.</p>}
-    <p className="text-sm">Two reviewed, distinct items prepare ahead of fixed five-minute delivery windows and replenish after delivery. Pricing, checkout, legal text and unselected pages stay protected. Publication is not evidence of SEO growth.</p>
+    {!ownerSetup && !state.schedule?.ownerReviewedOnly && <p className="text-sm">Two reviewed, distinct items prepare ahead of fixed five-minute delivery windows and replenish after delivery. Pricing, checkout, legal text and unselected pages stay protected. Publication is not evidence of SEO growth.</p>}
     <details id="changed-content-setup" open={!state.bindingCurrent || state.serviceMode !== "growth_first"} key={state.reviewToken} className="space-y-2 text-sm">
       <summary className="cursor-pointer font-medium">{state.bindingCurrent ? "Saved business and exact destination" : "Review changed setup"}</summary>
       <h3 className="font-medium">Review your saved setup</h3>
@@ -85,10 +87,10 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
         <ul>{state.reconciliation?.issues.map((issue, index) => <li key={index} role="alert">{issue.action} {issue.until && <>Check after {shownTime(issue.until)}. </>}{issue.articleId && <Link href={`/articles/${issue.articleId}`} className="underline">Open retained delivery and owner review</Link>}</li>)}</ul>
         <p>Confirming safely retires stale unstarted work and prepares newly reviewed content under the existing remaining budget. Prior costs, uncertain charges and missed deadlines remain. Existing page permissions are not renewed; inspect and authorize changed pages separately.</p>
         <label className="block"><input type="checkbox" checked={confirmed && confirmedReview === state.reviewToken} onChange={e => { setConfirmed(e.target.checked); setConfirmedReview(state.reviewToken); }} /> I confirm the changed facts, audience and exact destination above, and authorize newly reviewed work within the existing spending limits.</label>
-        <p>{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>
-        <Button disabled={saving || !confirmed || confirmedReview !== state.reviewToken} onClick={confirmChangedSetup}>Confirm changed setup and prepare fresh work</Button>
+        <p>{state.schedule?.ownerReviewedOnly ? "Drafts still require your explicit publication approval. This does not enable an automatic schedule." : PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>
+        <Button disabled={saving || !confirmed || confirmedReview !== state.reviewToken} onClick={confirmChangedSetup}>{state.schedule?.ownerReviewedOnly ? "Confirm changed setup" : "Confirm changed setup and prepare fresh work"}</Button>
       </>}
-      {state.approvalRequired && <p role="alert">Automatic publication consent is not active. Review the saved publishing setup before activation.</p>}
+      {state.approvalRequired && !state.schedule?.ownerReviewedOnly && <p role="alert">Automatic publication consent is not active. Review the saved publishing setup before activation.</p>}
     </details>
     <details id="content-funding-details" className="space-y-2 text-sm"><summary className="cursor-pointer font-medium">Funding readiness and retained spending</summary><p>{fundingCopy[state.funding.status]}</p>
       {state.funding.pricingScope === "validation_run" && <p>Model execution is enabled only for this saved validation run, not other sites. Each work item retains its original pricing and spending ceiling.</p>}
@@ -103,25 +105,27 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     <details open={state.serviceMode !== "growth_first"} className="space-y-3"><summary className="cursor-pointer font-medium">Service mode and publication consent</summary>
     <label className="block">Choose service mode
       <select aria-label="Service mode" value={mode} onChange={e => { setMode(e.target.value as typeof mode); setConfirmed(false); setSwitchResult(null); }} className="block bg-[#0F1117] border rounded p-2">
-        <option value="legacy_articles">Keep fixed-article delivery</option><option value="growth_first">Explicitly switch to growth-first</option>
+        <option value="legacy_articles">Keep fixed-article delivery</option><option value="growth_first">{ownerSetup || state.schedule?.ownerReviewedOnly ? "Owner-reviewed GitHub drafts" : "Explicitly switch to growth-first"}</option>
       </select>
     </label>
     {mode === "legacy_articles" && state.serviceMode === "growth_first" && <p className="text-sm">Switching back pauses new work and retires safe, unstarted work. Reviewed drafts, published content, original deadlines and spending history stay recorded. Active workers and uncertain deliveries must reconcile first. If pending, keep the service paused and check this switch again; resuming keeps growth-first selected.</p>}
     {mode === "growth_first" && state.serviceMode !== "growth_first" && <>
       <label className="block"><input type="checkbox" checked={confirmed && confirmedReview === state.reviewToken} onChange={e => { setConfirmed(e.target.checked); setConfirmedReview(state.reviewToken); }} /> I confirm these saved business facts, offerings, audience and exact publishing destination.</label>
+      {ownerSetup ? <p className="text-sm">Enable drafts for your review. Each publication requires your explicit approval. This does not enable a schedule, backlinks, a purchase or an increase in spending.</p> : <>
       <p className="text-sm">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT} Selecting growth-first authorizes this scheduled creation/improvement service, not backlinks or a spending increase.</p>
       <label className="block">First deadline ({Intl.DateTimeFormat().resolvedOptions().timeZone})<input aria-label="First delivery deadline" type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} className="block bg-[#0F1117] border rounded p-2" /></label>
       <label className="block">Hours between deadlines<input aria-label="Delivery interval hours" type="number" min="1" value={hours} onChange={e => setHours(e.target.value)} className="block bg-[#0F1117] border rounded p-2" /></label>
       <p className="text-sm">Selection does not purchase credits or increase spending limits. Preparation must be funded and two items ready before automatic schedule activation. Switching engines requires reconciliation of in-flight work.</p>
+      </>}
     </>}
-    {mode !== state.serviceMode && <Button onClick={save} disabled={saving || (mode === "growth_first" && (!confirmed || confirmedReview !== state.reviewToken || !deadline || !state.entitlement || !state.destination.verified))}>{saving ? "Saving…" : mode === "legacy_articles" ? switchResult ? "Check service switch again" : "Switch back safely" : "Confirm service selection"}</Button>}
+    {mode !== state.serviceMode && <Button onClick={save} disabled={saving || (mode === "growth_first" && (!confirmed || confirmedReview !== state.reviewToken || (!ownerSetup && !deadline) || !state.entitlement || !state.destination.verified))}>{saving ? "Saving…" : mode === "legacy_articles" ? switchResult ? "Check service switch again" : "Switch back safely" : ownerSetup ? "Enable owner-reviewed drafts" : "Confirm service selection"}</Button>}
     {switchResult && <div role="status"><p>{switchResult.status === "completed" ? "Service selection completed. Retained delivery and spending history is unchanged." : switchResult.status === "pending" ? "Switch pending — new work is paused while existing work reconciles." : "Switch needs action — new work remains paused."}</p><ul>{switchResult.issues.map((issue, index) => <li key={index}>{issue.action} {issue.until && <>Check after {shownTime(issue.until)}. </>}{issue.articleId && <Link href={`/articles/${issue.articleId}`} className="underline">Open retained delivery and owner review</Link>}</li>)}</ul></div>}
     </details>
     {error && <p role="alert">{error}</p>}
     {state.work.length > 0 && <details className="space-y-2 text-sm"><summary className="cursor-pointer font-medium">Work history and technical references</summary>
       <ul>{state.work.slice(-10).map(work => <li key={work.jobId}>{workLabel(work)} · {work.retiredAt ? "Retired after owner request; retained for history" : stageLabel(work.stage)} · {shownTime(work.windowStartAt)}–{shownTime(work.deadlineAt)}{work.publishedAt ? ` · published ${shownTime(work.publishedAt)}` : ""}{work.verifiedAt ? ` · verified ${shownTime(work.verifiedAt)}` : ""}{work.failure ? ` · ${work.failure}` : ""}{work.technicalReason ? ` · Technical reason: ${work.technicalReason}` : ""}<span> · Reference: {work.jobId}</span></li>)}</ul>
     </details>}
-    <EditablePageSelection key={siteId} siteId={siteId} />
+    {!ownerSetup && !state.schedule?.ownerReviewedOnly && <EditablePageSelection key={siteId} siteId={siteId} />}
   </section>;
 }
 

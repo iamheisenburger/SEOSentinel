@@ -2481,7 +2481,8 @@ export const releaseExpiredPristinePublication = internalMutation({
 
 /** Customer editing creates an unapproved checkpoint, never overwrites the
  * reviewed source or carries its seal into a different artifact. */
-export async function createOwnerEditedCheckpoint(ctx: MutationCtx, source: Doc<"articles">, markdown: string) {
+export async function createOwnerEditedCheckpoint(ctx: MutationCtx, source: Doc<"articles">, markdown: string,
+  metadata?: { title: string; metaTitle: string; metaDescription: string }) {
   const timestamp = now();
   let slug = `${source.slug}-edited`, suffix = 2;
   while (await ctx.db.query("articles").withIndex("by_site_slug", q => q.eq("siteId", source.siteId).eq("slug", slug)).first()) {
@@ -2491,7 +2492,7 @@ export async function createOwnerEditedCheckpoint(ctx: MutationCtx, source: Doc<
   const articleId = await ctx.db.insert("articles", {
     siteId: source.siteId, canonicalDomain: source.canonicalDomain, domainRevision: source.domainRevision,
     topicId: source.topicId, articleType: source.articleType, status: "draft",
-    title: source.title, slug, markdown, metaTitle: source.metaTitle, metaDescription: source.metaDescription,
+    title: metadata?.title ?? source.title, slug, markdown, metaTitle: metadata?.metaTitle ?? source.metaTitle, metaDescription: metadata?.metaDescription ?? source.metaDescription,
     metaKeywords: source.metaKeywords, language: source.language, sources: source.sources,
     researchEvidenceSummary: source.researchEvidenceSummary, productEvidenceSnapshot: source.productEvidenceSnapshot,
     productEvidenceHash: source.productEvidenceHash, featuredImage: source.featuredImage,

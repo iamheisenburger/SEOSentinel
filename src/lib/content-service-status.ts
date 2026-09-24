@@ -1,6 +1,6 @@
 type ServiceState = {
   serviceMode?: string; enabled?: boolean; bindingCurrent?: boolean; entitlement?: boolean; approvalRequired?: boolean;
-  schedule?: { paused: boolean; active: boolean } | null; ready?: number; complete?: boolean;
+  schedule?: { paused: boolean; active: boolean; ownerReviewedOnly?: boolean } | null; ready?: number; complete?: boolean;
   work?: ReadonlyArray<{ stage: string; retiredAt?: number; systemFailure?: boolean; creditRetry?: unknown }>;
 };
 
@@ -11,15 +11,15 @@ export function contentServiceStatus(state: ServiceState | null | undefined) {
   const systemFailure = work.some(w => w.systemFailure);
   const paused = Boolean(state?.schedule?.paused);
   const status = !state ? "loading" : state.serviceMode !== "growth_first" ? "legacy"
-    : state.bindingCurrent === false ? "changed" : systemFailure ? "failed" : paused ? "paused"
+    : state.bindingCurrent === false ? "changed" : state.schedule?.ownerReviewedOnly ? "owner_reviewed" : systemFailure ? "failed" : paused ? "paused"
     : work.some(w => w.stage === "failed" && !w.creditRetry) ? "failed"
     : state.schedule?.active ? "active" : (state.ready ?? 0) >= 2 ? "ready" : "preparing";
   const label = { loading: "Checking delivery status", legacy: state?.enabled !== false ? "Autopilot on" : "Manual",
     changed: "Stopped — review changed setup", failed: paused ? "Delivery paused" : "Delivery needs attention", paused: "Paused",
-    active: "Schedule active", ready: "Ready — schedule not active", preparing: "Preparing — not active" }[status];
-  const operable = !!state && state.bindingCurrent !== false && !!state.entitlement && !state.approvalRequired && status !== "failed";
+    owner_reviewed: "Owner-reviewed drafts", active: "Schedule active", ready: "Ready — schedule not active", preparing: "Preparing — not active" }[status];
+  const operable = !!state && !state.schedule?.ownerReviewedOnly && state.bindingCurrent !== false && !!state.entitlement && !state.approvalRequired && status !== "failed";
   return { status, label, systemFailure,
-    canPause: !!state?.schedule && !paused,
+    canPause: !!state?.schedule && !paused && !state.schedule.ownerReviewedOnly,
     canResume: operable && paused,
     canRetry: operable && !paused && (work.some(w => w.creditRetry) ||
       (!state.schedule?.active && !work.some(w => ["prepare", "review", "publish", "verify", "failed"].includes(w.stage)))),

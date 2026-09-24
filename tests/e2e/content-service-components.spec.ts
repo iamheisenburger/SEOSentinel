@@ -40,6 +40,27 @@ const state = { siteId: "sites:synthetic", setupPending: false, serviceMode: "gr
   funding: { status: "blocked", checkedAt: Date.UTC(2026, 8, 14, 13), monthlyLimitMicroUsd: 20_000_000, settledActualMicroUsd: 9_000_000, heldCeilingMicroUsd: 11_000_000, accountAvailableMicroUsd: 0, requestedMicroUsd: 500_000, dailyResetAt: Date.UTC(2026,8,15), monthlyResetAt: Date.UTC(2026,9,1), incrementalLimitMicroUsd: null },
   work: [{ jobId: "jobs:synthetic", intent: "create", stage: "ready", windowStartAt: Date.UTC(2026,8,14,11,55), deadlineAt: Date.UTC(2026,8,14,12) }] };
 
+test("SLC56 new owner-reviewed consent does not submit automatic-publication authority", async ({ page }) => {
+  await page.route("**/*", route => {
+    expect(new URL(route.request().url()).origin).toBe("http://pentra.test");
+    return route.fulfill({ contentType: "text/html", body: '<!doctype html><html><body><div id="root"></div></body></html>' });
+  });
+  await page.goto("http://pentra.test/owner-setup");
+  await page.evaluate(f => Object.assign(window, { contentFixture: f }), { screen: "controls",
+    state: { ...state, serviceMode: "legacy_articles", setupPending: true, schedule: null, work: [] }, calls: [] });
+  await page.addScriptTag({ content: await bundle });
+  const confirm = page.getByRole("button", { name: "Enable owner-reviewed drafts" });
+  await expect(confirm).toBeDisabled();
+  await expect(page.getByLabel("First delivery deadline")).toHaveCount(0);
+  await page.getByRole("checkbox", { name: /I confirm these saved business facts/ }).check();
+  await expect(confirm).toBeEnabled(); await confirm.click();
+  const calls = await page.evaluate(() => (window as unknown as { contentFixture: { calls: { name: string; args: Record<string, unknown> }[] } }).contentFixture.calls);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].name).toBe("contentWork:selectServiceMode");
+  expect(calls[0].args).toMatchObject({ mode: "growth_first", ownerReviewedOnly: true, authorizeAutomaticPublication: false, confirmBusinessProfile: true });
+  expect(calls[0].args.firstDeadlineAt).toBeUndefined(); expect(calls[0].args.intervalMs).toBeUndefined();
+});
+
 for (const screen of ["overview", "controls", "start", "changed", "independent", "pricing_off", "credit_interrupted", "credit_restored", "audit_failed", "rollback"]) test(`${screen === "audit_failed" ? "SLC47" : screen === "rollback" ? "SLC41" : screen.startsWith("credit_") ? "SLC38" : ["independent", "pricing_off"].includes(screen) ? "SLC35" : "SLC30"} synthetic component browser: ${screen} (not authenticated acceptance)`, async ({ page }, info) => {
   const css = readdirSync(".next/static/chunks").filter(f => f.endsWith(".css")).map(f => readFileSync(`.next/static/chunks/${f}`, "utf8")).join("\n");
   await page.route("**/*", route => {
@@ -166,9 +187,9 @@ for (const screen of ["overview", "controls", "start", "changed", "independent",
   } else if (screen === "start") {
     await expect(page.getByRole("heading", { name: "Start your content service" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Verify existing plan and save profile" })).toBeDisabled();
-    await page.getByLabel("Content publishing destination").selectOption("wordpress");
-    await expect(page.getByLabel("Content publishing destination")).toHaveValue("wordpress");
-    await expect(page.getByRole("link", { name: "Install the WordPress connector" })).toHaveAttribute("href", "https://github.com/iamheisenburger/SEOSentinel/blob/main/connectors/wordpress/README.md");
+    await expect(page.getByLabel("Content publishing destination")).toHaveValue("github");
+    await expect(page.getByRole("option", { name: /WordPress/ })).toHaveAttribute("disabled", "");
+    await expect(page.getByText(/No automatic schedule or outreach setup is required/)).toBeVisible();
   }
   await expect(page.locator("body")).not.toContainText("synthetic-reviewed-binding");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

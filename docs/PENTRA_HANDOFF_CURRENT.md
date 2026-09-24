@@ -1,5 +1,77 @@
 # Pentra — fresh-task handoff
 
+## RUN-SHEET — September 24 (Claude Cowork review, 04:10–05:30 PT)
+
+Written for the next session running natively on the owner's Mac (Claude Code
+tab, cwd = this checkout). The Cowork session could read/edit files and run the
+suite on a Linux copy, but could NOT reach Convex/pentra.dev, push, or deploy.
+Nothing was committed, pushed, deployed, spent or published by that session.
+
+### What changed in the working tree (on top of the 12-file candidate)
+1. `convex/lib/articleToolResult.ts` + `convex/actions/pipeline.ts`: generic fix for
+   the LeadPilot defect class. When a structured response closes the Markdown
+   field with `</markdown>` and repeats fields as XML tags, the tail is stripped
+   from the body; `metaTitle`/`metaDescription` are recovered from it ONLY when
+   the real field is unusable and the leaked value fits 10–60 / 100–155 chars.
+   Unknown tags => no change. Raw provider receipt untouched; every quality and
+   exact-artifact review gate still runs. Applied to `submit_article` (via
+   `ArticleSchema`) and `remediate_final_article`. Tests in
+   `tests/article-tool-result.test.ts`.
+2. `convex/contentWork.ts` `requestDraft`: owner metadata is trimmed before
+   validation/saving; line breaks rejected.
+3. `src/app/(dashboard)/articles/[id]/page.tsx`: editor shows the server's
+   actionable `ConvexError` text instead of the raw exception string.
+
+Independent review of the 12-file candidate: logic matches the handoff
+(owner-reviewed mode only for a brand-new GitHub setup; no autopublish consent;
+no wake; `advance`/`control` refuse it; metadata is inside the artifact hash so
+edited metadata cannot inherit a seal). No blocking defects found.
+
+### Gates to run here (Cowork Linux copy results in brackets)
+```
+cd /Users/madmanhakim/Desktop/SEOSentinel-managed-integrated/.claude/assignment24
+git status --short && git diff --stat
+npm test                      # [1,853 tests: 1,852 pass, 0 fail, 1 existing skip]
+npm run typecheck             # [passed]
+npm run lint                  # expect 0 errors
+npm run check:schema && npm run scan:secrets && npm audit --omit=dev --audit-level=high
+NEXT_PUBLIC_CONVEX_URL=https://example.convex.cloud NEXT_PUBLIC_SITE_URL=https://pentra.dev \
+  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk npm run build
+npm run test:e2e
+node --env-file=../../.codex-convex-prod.env node_modules/convex/bin/main.js deploy --dry-run --yes
+```
+
+### Ship
+```
+git add convex src tests docs && git commit -m "Owner-reviewed GitHub onboarding, metadata recovery, leaked-envelope repair"
+git fetch origin main && git log --oneline HEAD..origin/main   # only Pentra article commits expected
+git rebase origin/main                                         # our single commit on top; never force-push
+git push origin HEAD:main                                      # triggers CI + Vercel production
+node --env-file=../../.codex-convex-prod.env node_modules/convex/bin/main.js deploy --yes
+gh run list --repo iamheisenburger/SEOSentinel --limit 3
+node --env-file=../../.codex-convex-prod.env scripts/release-preflight.mjs --released
+```
+
+### Live acceptance (Chrome, signed in as owner). Paid review + publish need the owner's OK in chat.
+1. LeadPilot draft `j57bjcpjy36pw11wt70dq90t0s8f0xtc`: Edit → delete the trailing
+   `</markdown>…<sources></sources>` block → Search title
+   `Sales Automation Chat Widget: A Practical Buyer's Guide` (55) → description
+   `Learn how sales automation chat widgets work, how to vet one before buying, and a content audit to run before you install one on your site.`
+   (139) → check body claims → Save and request review → read the reviewed
+   version → Publish → confirm HTTP 200, canonical, H1.
+2. Pentra draft `j57d0kz8scvapmty2a50ra23hs8f090s`: remove unsupported numbers,
+   generalized operational claims and outdated product promises; keep it as
+   clearly framed guidance → same review/publish/verify.
+3. Record measured charges vs ceilings; remaining validation allowance.
+
+### Owner decisions still open (not covered by current authorization)
+- Public pricing: ordinary pricing is disabled outside the validation grant, so
+  no new customer can generate. The landing page still sells Free (3 articles,
+  no card) through Enterprise with autopilot, images and backlinks — none of
+  which this release delivers. Proposal pending in chat.
+- Product direction: finish this release first, then the weekly
+  "find the page that makes money → one change → approve → measure" loop.
+
 ## September 24: smallest complete owner-reviewed GitHub v1
 
 Current work remains in `.claude/assignment24`. The owner approved a narrow
@@ -16,6 +88,31 @@ Acceptance checklist (unchecked means incomplete, not absent code):
 - [ ] New-customer onboarding, billing and GitHub connection acceptance.
 - [ ] Truthful simple reporting and claims.
 - [ ] Final regression, deployment and authenticated production acceptance.
+
+### Current September24 continuation (after f12d16d)
+
+First-cycle publications below are verified. The second fresh requests failed
+without publishing: Pentra `j974hn0p3rdmpjhjc7mm6cjye98f1rcc` used $0.692242;
+LeadPilot `j9741a83cza01snsj8ntmjg3ts8f0w3m` used $0.608216. Their bounded
+two revisions and one replacement remain exhausted, not reset. Pentra's last
+replacement needs substantive claim qualification; LeadPilot's last replacement
+contains XML metadata in the Markdown body and invalid saved metadata. Review
+and safe-rendering checks correctly prevent publication. Do not claim recovery
+or two successful cycles yet.
+
+Six September24 requests have measured receipts totaling $3.313850. Exact-site
+audits at1790245848803/1790245851611 show cumulative independent validation
+consumption $4.339124 + $4.656802 = $8.995926 of $20, including historical
+retained ceilings, not all measured cash. No additional allowance or resets.
+
+Current candidate adds new-GitHub owner-reviewed onboarding without automatic
+publication consent, schedule activation or engine changes for existing tenants.
+It reuses the existing content-work contract and has no new queue/table.
+Customer body/title/search-metadata edits create a new checkpoint with no
+inherited approval; exact artifact, owner, destination and budget checks remain.
+This repairs the inability to correct malformed generated metadata through the
+customer editor. Ordinary customer pricing remains disabled outside the scoped
+validation grant. Public launch/new-customer checkout is not accepted.
 
 Deployed `c541cc5` adds `contentWork.requestDraft` to the existing durable
 jobs/worker/budget path. No new engine or table. Explicit owner drafting never
