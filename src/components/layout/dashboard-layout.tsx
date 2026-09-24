@@ -19,15 +19,15 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const { isLoading, isAuthenticated } = useConvexAuth();
   if (isLoading || !isAuthenticated) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#08090E] px-6 text-[#EDEEF1]">
+      <main className="flex min-h-screen items-center justify-center bg-[#08090A] px-6 text-[#F7F8F8]">
         <div className="max-w-md text-center">
           <p className="mb-4 text-xs font-semibold tracking-widest text-[#0EA5E9]">PENTRA</p>
           {isLoading ? (
-            <p role="status" className="text-sm text-[#8B8FA3]">Connecting your workspace…</p>
+            <p role="status" className="text-sm text-[#8A8F98]">Connecting your workspace…</p>
           ) : (
             <>
               <h1 className="text-lg font-semibold">Your workspace session is not ready</h1>
-              <p className="mt-2 text-sm text-[#8B8FA3]">
+              <p className="mt-2 text-sm text-[#8A8F98]">
                 We could not verify your session. Try again, or sign in to continue. Your work is saved.
               </p>
               <div className="mt-5 flex justify-center gap-4 text-sm">
@@ -44,7 +44,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   }
   return (
     <SiteProvider>
-      <div className="min-h-screen bg-[#08090E]">
+      <div className="min-h-screen bg-[#08090A]">
         <Sidebar />
         <main className="lg:pl-60">
           <div className="mx-auto max-w-6xl px-6 py-6 pt-16 lg:pt-6">

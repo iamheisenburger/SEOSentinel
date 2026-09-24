@@ -97,14 +97,14 @@ function simpleMarkdownToHtml(md: string): string {
 
 const markdownComponents: Components = {
   h1: ({ children }) => (
-    <h1 className="mt-10 mb-4 text-2xl font-bold tracking-tight text-[#EDEEF1]">
+    <h1 className="mt-10 mb-4 text-2xl font-bold tracking-tight text-[#F7F8F8]">
       {children}
     </h1>
   ),
   h2: ({ children, id }) => (
     <h2
       id={id}
-      className="mt-8 mb-3 text-xl font-bold tracking-tight text-[#EDEEF1]"
+      className="mt-8 mb-3 text-xl font-bold tracking-tight text-[#F7F8F8]"
     >
       {children}
     </h2>
@@ -112,13 +112,13 @@ const markdownComponents: Components = {
   h3: ({ children, id }) => (
     <h3
       id={id}
-      className="mt-6 mb-2 text-lg font-semibold text-[#EDEEF1]"
+      className="mt-6 mb-2 text-lg font-semibold text-[#F7F8F8]"
     >
       {children}
     </h3>
   ),
   p: ({ children }) => (
-    <p className="mb-4 text-[#8B8FA3] leading-relaxed text-[14px]">{children}</p>
+    <p className="mb-4 text-[#8A8F98] leading-relaxed text-[14px]">{children}</p>
   ),
   a: ({ href, children }) => (
     <a
@@ -131,23 +131,23 @@ const markdownComponents: Components = {
     </a>
   ),
   ul: ({ children }) => (
-    <ul className="mb-4 list-disc space-y-1.5 pl-6 text-[14px] text-[#8B8FA3]">
+    <ul className="mb-4 list-disc space-y-1.5 pl-6 text-[14px] text-[#8A8F98]">
       {children}
     </ul>
   ),
   ol: ({ children }) => (
-    <ol className="mb-4 list-decimal space-y-1.5 pl-6 text-[14px] text-[#8B8FA3]">
+    <ol className="mb-4 list-decimal space-y-1.5 pl-6 text-[14px] text-[#8A8F98]">
       {children}
     </ol>
   ),
   li: ({ children }) => <li className="leading-relaxed">{children}</li>,
   blockquote: ({ children }) => (
-    <blockquote className="my-5 border-l-2 border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.04] py-3 pl-4 pr-4 text-[14px] text-[#8B8FA3] italic">
+    <blockquote className="my-5 border-l-2 border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.04] py-3 pl-4 pr-4 text-[14px] text-[#8A8F98] italic">
       {children}
     </blockquote>
   ),
   strong: ({ children }) => (
-    <strong className="font-semibold text-[#EDEEF1]">{children}</strong>
+    <strong className="font-semibold text-[#F7F8F8]">{children}</strong>
   ),
   table: ({ children }) => (
     <div className="my-5 overflow-x-auto rounded-lg border border-white/[0.06]">
@@ -160,12 +160,12 @@ const markdownComponents: Components = {
     </thead>
   ),
   th: ({ children }) => (
-    <th className="px-4 py-2 text-left font-semibold text-[#EDEEF1]">
+    <th className="px-4 py-2 text-left font-semibold text-[#F7F8F8]">
       {children}
     </th>
   ),
   td: ({ children }) => (
-    <td className="border-t border-white/[0.04] px-4 py-2 text-[#8B8FA3]">
+    <td className="border-t border-white/[0.04] px-4 py-2 text-[#8A8F98]">
       {children}
     </td>
   ),
@@ -173,13 +173,13 @@ const markdownComponents: Components = {
     const isBlock = className?.includes("language-");
     if (isBlock) {
       return (
-        <code className="block overflow-x-auto rounded-lg bg-[#08090E] px-4 py-3 text-[13px] text-[#8B8FA3] font-mono border border-white/[0.06]">
+        <code className="block overflow-x-auto rounded-lg bg-[#08090A] px-4 py-3 text-[13px] text-[#8A8F98] font-mono border border-white/[0.06]">
           {children}
         </code>
       );
     }
     return (
-      <code className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[13px] font-mono text-[#EDEEF1]">
+      <code className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[13px] font-mono text-[#F7F8F8]">
         {children}
       </code>
     );
@@ -415,7 +415,7 @@ export default function ArticleDetailPage() {
   if (article === null) {
     return (
       <div className="py-20 text-center">
-        <p className="text-[#565A6E] text-[13px]">Article not found.</p>
+        <p className="text-[#62666D] text-[13px]">Article not found.</p>
         <Button
           variant="secondary"
           size="sm"
@@ -604,7 +604,7 @@ export default function ArticleDetailPage() {
       <div>
         <Link
           href="/articles"
-          className="mb-3 inline-flex items-center gap-1.5 text-[12px] text-[#565A6E] transition hover:text-[#EDEEF1]"
+          className="mb-3 inline-flex items-center gap-1.5 text-[12px] text-[#62666D] transition hover:text-[#F7F8F8]"
         >
           <ArrowLeft className="h-3 w-3" />
           Back to Articles
@@ -637,12 +637,12 @@ export default function ArticleDetailPage() {
                     Reject
                   </Button>
                   {approveHint && (
-                    <p className="basis-full text-xs text-[#8B8FA3]">{approveHint}</p>
+                    <p className="basis-full text-xs text-[#8A8F98]">{approveHint}</p>
                   )}
                 </>
               )}
               {article.status === "ready" && site?.publishMethod === "manual" && (
-                <p className="basis-full text-xs text-[#8B8FA3]">Approved and ready. Use Copy HTML (or Copy MD) and paste it into a new post in your site&apos;s blog editor, with the title and search description shown on this page.</p>
+                <p className="basis-full text-xs text-[#8A8F98]">Approved and ready. Use Copy HTML (or Copy MD) and paste it into a new post in your site&apos;s blog editor, with the title and search description shown on this page.</p>
               )}
               {article.status === "ready" && site?.publishMethod === "manual" && site.contentSetupRequestedAt && (
                 <PastedLiveCheck articleId={article._id} domain={site.domain} />
@@ -658,8 +658,8 @@ export default function ArticleDetailPage() {
                 >
                   Publish Now
                 </Button>
-                {manualPublicationBlocker(site) && <p className="text-xs text-[#8B8FA3]">{manualPublicationBlocker(site)} <a href="/settings" className="underline">Open Settings</a></p>}
-                {editing && <p className="text-xs text-[#8B8FA3]">Save your edits for review or cancel editing before publishing.</p>}
+                {manualPublicationBlocker(site) && <p className="text-xs text-[#8A8F98]">{manualPublicationBlocker(site)} <a href="/settings" className="underline">Open Settings</a></p>}
+                {editing && <p className="text-xs text-[#8A8F98]">Save your edits for review or cancel editing before publishing.</p>}
                 </div>
               )}
               <Button
@@ -804,7 +804,7 @@ export default function ArticleDetailPage() {
               <input
                 value={ambiguityConfirmation}
                 onChange={(event) => setAmbiguityConfirmation(event.target.value)}
-                className="mt-2 w-full rounded-lg border border-[#F59E0B]/20 bg-[#090A0F] px-3 py-2 text-[12px] text-[#EDEEF1] outline-none focus:border-[#F59E0B]/50"
+                className="mt-2 w-full rounded-lg border border-[#F59E0B]/20 bg-[#090A0F] px-3 py-2 text-[12px] text-[#F7F8F8] outline-none focus:border-[#F59E0B]/50"
                 autoComplete="off"
                 spellCheck={false}
               />
@@ -863,28 +863,28 @@ export default function ArticleDetailPage() {
       {/* Meta bar */}
       <div className="flex flex-wrap items-center gap-2">
         {article.status === "revision" ? (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-[#8B8FA3]" title="An earlier or retired version kept for your records. It is never published.">
-            <span className="h-1.5 w-1.5 rounded-full bg-[#565A6E]" />
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-[#8A8F98]" title="An earlier or retired version kept for your records. It is never published.">
+            <span className="h-1.5 w-1.5 rounded-full bg-[#62666D]" />
             Earlier version
           </span>
         ) : (
           <StatusBadge status={article.status} />
         )}
-        <span className="inline-flex items-center gap-1 text-[11px] text-[#565A6E]">
+        <span className="inline-flex items-center gap-1 text-[11px] text-[#62666D]">
           <FileText className="h-3 w-3" />
           {wc.toLocaleString()} words
         </span>
         <span className="text-[11px] text-white/[0.1]">·</span>
-        <span className="inline-flex items-center gap-1 text-[11px] text-[#565A6E]">
+        <span className="inline-flex items-center gap-1 text-[11px] text-[#62666D]">
           <Clock className="h-3 w-3" />
           {rt} min read
         </span>
         <span className="text-[11px] text-white/[0.1]">·</span>
-        <span className="text-[11px] text-[#565A6E]">
+        <span className="text-[11px] text-[#62666D]">
           {formatDistanceToNow(article.createdAt, { addSuffix: true })}
         </span>
         <span className="text-[11px] text-white/[0.1]">·</span>
-        <span className="text-[11px] text-[#565A6E] font-mono">
+        <span className="text-[11px] text-[#62666D] font-mono">
           {displayPath(article.slug)}
         </span>
         {article.featuredImage && (
@@ -959,41 +959,41 @@ export default function ArticleDetailPage() {
           .find((window) => window.topQueries.length > 0);
         const topKeywords = queryWindow?.topQueries.slice(0, 5) ?? [];
         return (
-          <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+          <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
             <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between mb-4">
               <div className="flex items-center gap-2">
                 <BarChart3 className="h-4 w-4 text-[#0EA5E9]" />
-                <h3 className="text-[13px] font-semibold text-[#EDEEF1]">SEO Outcome Scorecard</h3>
+                <h3 className="text-[13px] font-semibold text-[#F7F8F8]">SEO Outcome Scorecard</h3>
               </div>
-              <p className="text-[10px] text-[#565A6E]">
+              <p className="text-[10px] text-[#62666D]">
                 GSC data through {articleSeoScorecard.dataThrough ?? "not yet available"}
               </p>
             </div>
-            <p className="text-[11px] text-[#565A6E] mb-4">
+            <p className="text-[11px] text-[#62666D] mb-4">
               Page totals are authoritative. Known non-brand metrics come only from visible query rows; hidden or anonymized query impressions remain unattributed and never drive autonomous ranking actions.
             </p>
             <div className="mb-4 grid gap-3 sm:grid-cols-3">
               <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
-                <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Google index</p>
+                <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Google index</p>
                 <p className={`mt-1 text-sm font-semibold ${
                   articleSeoScorecard.indexInspection.verdict === "PASS"
                     ? "text-[#4ADE80]"
                     : articleSeoScorecard.indexInspection.verdict
                       ? "text-[#FBBF24]"
-                      : "text-[#8B8FA3]"
+                      : "text-[#8A8F98]"
                 }`}>
                   {articleSeoScorecard.indexInspection.verdict ?? "Awaiting inspection"}
                 </p>
               </div>
               <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
-                <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Coverage</p>
-                <p className="mt-1 text-sm font-semibold text-[#EDEEF1]">
+                <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Coverage</p>
+                <p className="mt-1 text-sm font-semibold text-[#F7F8F8]">
                   {articleSeoScorecard.indexInspection.coverageState ?? "Not reported"}
                 </p>
               </div>
               <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
-                <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Page fetch</p>
-                <p className="mt-1 text-sm font-semibold text-[#EDEEF1]">
+                <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Page fetch</p>
+                <p className="mt-1 text-sm font-semibold text-[#F7F8F8]">
                   {articleSeoScorecard.indexInspection.pageFetchState ?? "Not reported"}
                 </p>
               </div>
@@ -1007,7 +1007,7 @@ export default function ArticleDetailPage() {
               {articleSeoScorecard.windows.map((window) => (
                 <div key={window.days} className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <span className="text-[11px] font-semibold text-[#EDEEF1]">Day {window.days}</span>
+                    <span className="text-[11px] font-semibold text-[#F7F8F8]">Day {window.days}</span>
                     <span className={`rounded-full px-2 py-0.5 text-[9px] font-medium ${
                       window.status === "measured"
                         ? "bg-[#22C55E]/10 text-[#4ADE80]"
@@ -1024,31 +1024,31 @@ export default function ArticleDetailPage() {
                             : "Awaiting data"}
                     </span>
                   </div>
-                  <p className="text-[10px] text-[#565A6E] mb-2">Due {window.expectedEndDate}</p>
+                  <p className="text-[10px] text-[#62666D] mb-2">Due {window.expectedEndDate}</p>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Total page imp.</p>
-                      <p className="text-base font-bold text-[#EDEEF1]">{window.impressions.toLocaleString()}</p>
+                      <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Total page imp.</p>
+                      <p className="text-base font-bold text-[#F7F8F8]">{window.impressions.toLocaleString()}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Known non-brand imp.</p>
-                      <p className="text-base font-bold text-[#EDEEF1]">{window.nonBrandedImpressions.toLocaleString()}</p>
+                      <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Known non-brand imp.</p>
+                      <p className="text-base font-bold text-[#F7F8F8]">{window.nonBrandedImpressions.toLocaleString()}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Hidden-query imp.</p>
-                      <p className="text-sm font-semibold text-[#EDEEF1]">{window.unattributedImpressions.toLocaleString()}</p>
+                      <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Hidden-query imp.</p>
+                      <p className="text-sm font-semibold text-[#F7F8F8]">{window.unattributedImpressions.toLocaleString()}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Total clicks</p>
-                      <p className="text-sm font-semibold text-[#EDEEF1]">{window.clicks}</p>
+                      <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Total clicks</p>
+                      <p className="text-sm font-semibold text-[#F7F8F8]">{window.clicks}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Total avg position</p>
-                      <p className="text-sm font-semibold text-[#EDEEF1]">{window.position ?? "—"}</p>
+                      <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Total avg position</p>
+                      <p className="text-sm font-semibold text-[#F7F8F8]">{window.position ?? "—"}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#565A6E]">Known non-brand pos.</p>
-                      <p className="text-sm font-semibold text-[#EDEEF1]">{window.nonBrandedPosition ?? "—"}</p>
+                      <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Known non-brand pos.</p>
+                      <p className="text-sm font-semibold text-[#F7F8F8]">{window.nonBrandedPosition ?? "—"}</p>
                     </div>
                   </div>
                   <p className={`mt-3 border-t border-white/[0.04] pt-2 text-[9px] ${
@@ -1063,15 +1063,15 @@ export default function ArticleDetailPage() {
             </div>
             {topKeywords.length > 0 && (
               <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E] mb-2">Known query detail</p>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-[#62666D] mb-2">Known query detail</p>
                 <div className="flex flex-col gap-1">
                   {topKeywords.map((q, i) => (
                     <div key={i} className="flex items-center justify-between rounded-md bg-white/[0.02] px-3 py-1.5">
-                      <span className="text-[12px] text-[#EDEEF1] truncate">{q.query}</span>
-                      <div className="flex items-center gap-3 shrink-0 text-[10px] text-[#565A6E]">
+                      <span className="text-[12px] text-[#F7F8F8] truncate">{q.query}</span>
+                      <div className="flex items-center gap-3 shrink-0 text-[10px] text-[#62666D]">
                         <span>{q.clicks} clicks</span>
                         <span>{q.impressions} imp</span>
-                        <span className={`font-mono ${q.position <= 3 ? "text-[#22C55E]" : q.position <= 10 ? "text-[#0EA5E9]" : q.position <= 20 ? "text-[#F59E0B]" : "text-[#565A6E]"}`}>
+                        <span className={`font-mono ${q.position <= 3 ? "text-[#22C55E]" : q.position <= 10 ? "text-[#0EA5E9]" : q.position <= 20 ? "text-[#F59E0B]" : "text-[#62666D]"}`}>
                           pos {q.position}
                         </span>
                       </div>
@@ -1081,7 +1081,7 @@ export default function ArticleDetailPage() {
               </div>
             )}
             {topKeywords.length === 0 && (
-              <p className="rounded-lg bg-white/[0.02] px-3 py-2 text-[11px] text-[#565A6E]">
+              <p className="rounded-lg bg-white/[0.02] px-3 py-2 text-[11px] text-[#62666D]">
                 {evidenceWindow && evidenceWindow.impressions > 0
                   ? `Google reports ${evidenceWindow.impressions.toLocaleString()} total page impressions${evidenceWindow.position !== null ? ` at an overall average position of ${evidenceWindow.position}` : ""}. ${evidenceWindow.unattributedImpressions.toLocaleString()} impressions have no visible query attribution, so Pentra cannot label them branded or non-branded and will not use the overall position for an autonomous ranking action.`
                   : "No page-level Search Console impressions have been recorded in the most mature available window. Pentra will only treat this as no visibility after the window and its daily page totals are complete."}
@@ -1109,17 +1109,17 @@ export default function ArticleDetailPage() {
                 {(article as any).decayStatus === "declining" ? "Rankings Declining" : "Rankings Warning"}
               </p>
               {(article as any).decayReason && (
-                <p className="text-[12px] text-[#8B8FA3] mt-1">{(article as any).decayReason}</p>
+                <p className="text-[12px] text-[#8A8F98] mt-1">{(article as any).decayReason}</p>
               )}
               {(article as any).positionHistory && (article as any).positionHistory.length >= 2 && (
-                <div className="flex items-center gap-3 mt-2 text-[11px] text-[#565A6E]">
+                <div className="flex items-center gap-3 mt-2 text-[11px] text-[#62666D]">
                   <span>Position: {(article as any).positionHistory[0].position} → {(article as any).positionHistory[(article as any).positionHistory.length - 1].position}</span>
                   <span>·</span>
                   <span>Clicks: {(article as any).positionHistory[0].clicks} → {(article as any).positionHistory[(article as any).positionHistory.length - 1].clicks}</span>
                 </div>
               )}
             </div>
-            <div className="max-w-[240px] rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[11px] leading-relaxed text-[#8B8FA3]">
+            <div className="max-w-[240px] rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[11px] leading-relaxed text-[#8A8F98]">
               {article.status === "published"
                 ? "Published content is protected. Pentra records the recovery action, but will not overwrite the live page without a newly audited revision."
                 : "Direct model refresh is disabled. Edit the draft, then use the audited review and publication workflow so quota, evidence, and delivery gates remain intact."}
@@ -1135,7 +1135,7 @@ export default function ArticleDetailPage() {
             <RefreshCw className="h-5 w-5 text-[#0EA5E9] animate-spin" />
             <div>
               <p className="text-[13px] font-semibold text-[#38BDF8]">Refreshing Article</p>
-              <p className="text-[12px] text-[#8B8FA3] mt-0.5">Re-researching and rewriting with latest data. This may take a few minutes.</p>
+              <p className="text-[12px] text-[#8A8F98] mt-0.5">Re-researching and rewriting with latest data. This may take a few minutes.</p>
             </div>
           </div>
         </div>
@@ -1143,14 +1143,14 @@ export default function ArticleDetailPage() {
 
       {/* Fact-check notes */}
       {reviewNotes && (
-        <div className="rounded-lg border border-white/[0.06] bg-[#0F1117] px-4 py-3">
+        <div className="rounded-lg border border-white/[0.06] bg-[#0E0F11] px-4 py-3">
           <div className="flex items-center gap-2 mb-1.5">
             <ShieldCheck className="h-3.5 w-3.5 text-[#0EA5E9]" />
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-[#565A6E]">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-[#62666D]">
               Fact-Check Notes
             </span>
           </div>
-          <p className="text-[13px] text-[#8B8FA3] leading-relaxed">
+          <p className="text-[13px] text-[#8A8F98] leading-relaxed">
             {reviewNotes}
           </p>
         </div>
@@ -1159,9 +1159,9 @@ export default function ArticleDetailPage() {
       {/* View mode toggle */}
       {contentReadiness?.ownerDraft.latest?.articleId === articleId &&
         ["ready", "failed"].includes(contentReadiness.ownerDraft.latest.stage) && article.status !== "published" && (
-        <section aria-label="Edit draft" className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-[#EDEEF1]">Edit this draft</h2>
-          <p className="text-sm text-[#8B8FA3]">Edits create a new version for review; the original stays in your history. Review may correct unsupported claims. Nothing publishes without your approval.</p>
+        <section aria-label="Edit draft" className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5 space-y-3">
+          <h2 className="text-sm font-semibold text-[#F7F8F8]">Edit this draft</h2>
+          <p className="text-sm text-[#8A8F98]">Edits create a new version for review; the original stays in your history. Review may correct unsupported claims. Nothing publishes without your approval.</p>
           {contentReadiness.ownerDraft.latest.stage === "failed" && (article.publicationGateIssues?.length ?? 0) > 0 && (() => {
             const issues = article.publicationGateIssues!;
             const mustFix = issues.filter(issue => !ownerWaivableIssue(issue, article, "owner"));
@@ -1169,11 +1169,11 @@ export default function ArticleDetailPage() {
             return <div role="note" aria-label="Reviewer notes" className="rounded-lg border border-[#F59E0B]/20 bg-[#F59E0B]/[0.05] p-3 space-y-2">
               {mustFix.length > 0 && <>
                 <p className="text-sm font-medium text-[#F59E0B]">Fix these before requesting review</p>
-                <ul className="list-disc space-y-1 pl-5 text-sm text-[#EDEEF1]">{mustFix.slice(0, 12).map((issue, index) => <li key={index}>{issue}</li>)}</ul>
+                <ul className="list-disc space-y-1 pl-5 text-sm text-[#F7F8F8]">{mustFix.slice(0, 12).map((issue, index) => <li key={index}>{issue}</li>)}</ul>
               </>}
               {styleNotes.length > 0 && <>
                 <p className="text-sm font-medium text-[#F59E0B]">{mustFix.length ? "Notes you can accept" : article.claimEvidenceStatus === "failed" ? "You can accept these reviewer notes after checking the draft:" : "No specific errors are listed. You can accept these reviewer notes after reading the draft:"}</p>
-                <ul className="list-disc space-y-1 pl-5 text-sm text-[#EDEEF1]">{styleNotes.map((issue, index) => <li key={index}>{issue}</li>)}</ul>
+                <ul className="list-disc space-y-1 pl-5 text-sm text-[#F7F8F8]">{styleNotes.map((issue, index) => <li key={index}>{issue}</li>)}</ul>
                 {article.claimEvidenceStatus === "failed" && styleNotes.includes("Strict publication requires a completed claim-to-evidence audit.") &&
                   <p className="text-sm text-[#F59E0B]">The reviewer could not match every claim to a source. Check each number and specific claim against its source before accepting.</p>}
               </>}
@@ -1187,22 +1187,22 @@ export default function ArticleDetailPage() {
                     setLinkStatus(error instanceof ConvexError && typeof error.data === "string" ? error.data : "Could not accept these notes. Refresh and try again.");
                   } finally { setActionBusy(false); }
                 }}>Accept notes and approve for publishing</Button>
-                <p className="text-xs text-[#8B8FA3]">Approves this exact version as it is. You can still edit instead. Nothing publishes until you press Publish Now.</p>
+                <p className="text-xs text-[#8A8F98]">Approves this exact version as it is. You can still edit instead. Nothing publishes until you press Publish Now.</p>
               </div>}
             </div>;
           })()}
           {editing ? <>
-            {([['title', 'Article title', 200], ['metaTitle', 'Search title', 60], ['metaDescription', 'Search description', 155]] as const).map(([field, label, limit]) => <label key={field} className="block text-sm text-[#EDEEF1]">{label}
+            {([['title', 'Article title', 200], ['metaTitle', 'Search title', 60], ['metaDescription', 'Search description', 155]] as const).map(([field, label, limit]) => <label key={field} className="block text-sm text-[#F7F8F8]">{label}
               <input aria-label={label} value={editing[field]} maxLength={limit} disabled={editBusy}
                 onChange={event => { setEditing({ ...editing, [field]: event.target.value, requestKey: crypto.randomUUID() }); setEditError(null); }}
-                className="mt-1 block w-full rounded-lg border border-white/10 bg-[#08090E] p-3" />
+                className="mt-1 block w-full rounded-lg border border-white/10 bg-[#08090A] p-3" />
             </label>)}
-            <p className="text-xs text-[#8B8FA3]">Use an accurate search description of 100–155 characters. Title and description changes are reviewed together with the article.</p>
-            <label htmlFor="draft-markdown" className="block text-sm text-[#EDEEF1]">Article Markdown</label>
+            <p className="text-xs text-[#8A8F98]">Use an accurate search description of 100–155 characters. Title and description changes are reviewed together with the article.</p>
+            <label htmlFor="draft-markdown" className="block text-sm text-[#F7F8F8]">Article Markdown</label>
             <textarea id="draft-markdown" value={editing.markdown} disabled={editBusy} maxLength={100000}
               onChange={event => { setEditing({ ...editing, markdown: event.target.value, requestKey: crypto.randomUUID() }); setEditError(null); }}
-              className="min-h-96 w-full rounded-lg border border-white/10 bg-[#08090E] p-4 font-mono text-sm text-[#EDEEF1]" />
-            <p className="text-sm text-[#8B8FA3]">{contentReadiness.ownerDraft.maximumMicroUsd === null ? "Review is not available right now. Try again later. "
+              className="min-h-96 w-full rounded-lg border border-white/10 bg-[#08090A] p-4 font-mono text-sm text-[#F7F8F8]" />
+            <p className="text-sm text-[#8A8F98]">{contentReadiness.ownerDraft.maximumMicroUsd === null ? "Review is not available right now. Try again later. "
               : contentReadiness.ownerDraft.allowance ? "Reviewing your edits is free and does not use an article from your monthly allowance. " : ""}Your edited version is saved as a new draft with its own web address; the original stays in your history.</p>
             <div className="flex gap-2">
               <Button disabled={editBusy || !editing.markdown.trim() || !editing.title.trim() || !editing.metaTitle.trim() || editing.metaDescription.trim().length < 100 ||
@@ -1232,8 +1232,8 @@ export default function ArticleDetailPage() {
           onClick={() => setViewMode("editor")}
           className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition ${
             viewMode === "editor"
-              ? "bg-white/[0.08] text-[#EDEEF1]"
-              : "text-[#565A6E] hover:text-[#8B8FA3]"
+              ? "bg-white/[0.08] text-[#F7F8F8]"
+              : "text-[#62666D] hover:text-[#8A8F98]"
           }`}
         >
           <Code className="h-3 w-3" />
@@ -1243,8 +1243,8 @@ export default function ArticleDetailPage() {
           onClick={() => setViewMode("preview")}
           className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition ${
             viewMode === "preview"
-              ? "bg-white/[0.08] text-[#EDEEF1]"
-              : "text-[#565A6E] hover:text-[#8B8FA3]"
+              ? "bg-white/[0.08] text-[#F7F8F8]"
+              : "text-[#62666D] hover:text-[#8A8F98]"
           }`}
         >
           <Eye className="h-3 w-3" />
@@ -1254,7 +1254,7 @@ export default function ArticleDetailPage() {
 
       {/* Article Content */}
       {viewMode === "editor" ? (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-6 sm:p-8">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-6 sm:p-8">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={[rehypeSlug, rehypeRaw]}
@@ -1309,18 +1309,18 @@ export default function ArticleDetailPage() {
 
       {/* Schema Markup Preview */}
       {schemas.length > 0 && (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11]">
           <button
             onClick={() => setSchemaOpen(!schemaOpen)}
             className="flex items-center gap-2 w-full px-5 py-3.5 text-left hover:bg-white/[0.02] transition"
           >
             {schemaOpen ? (
-              <ChevronDown className="h-3.5 w-3.5 text-[#565A6E]" />
+              <ChevronDown className="h-3.5 w-3.5 text-[#62666D]" />
             ) : (
-              <ChevronRight className="h-3.5 w-3.5 text-[#565A6E]" />
+              <ChevronRight className="h-3.5 w-3.5 text-[#62666D]" />
             )}
             <Code2 className="h-3.5 w-3.5 text-[#0EA5E9]" />
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-[#565A6E]">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-[#62666D]">
               Schema Markup
             </span>
             <div className="ml-auto flex items-center gap-1.5">
@@ -1342,7 +1342,7 @@ export default function ArticleDetailPage() {
           {schemaOpen && (
             <div className="border-t border-white/[0.04] px-5 py-4">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-[11px] text-[#565A6E]">
+                <p className="text-[11px] text-[#62666D]">
                   JSON-LD schema markup generated for this article. Included automatically when published.
                 </p>
                 <button
@@ -1354,13 +1354,13 @@ export default function ArticleDetailPage() {
                     setLinkStatus("Schema markup copied.");
                     setTimeout(() => setLinkStatus(null), 2000);
                   }}
-                  className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] px-2 py-1 text-[10px] text-[#8B8FA3] hover:bg-white/[0.08] transition"
+                  className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] px-2 py-1 text-[10px] text-[#8A8F98] hover:bg-white/[0.08] transition"
                 >
                   <Copy className="h-2.5 w-2.5" />
                   Copy
                 </button>
               </div>
-              <pre className="overflow-x-auto rounded-lg bg-[#08090E] border border-white/[0.06] p-4 text-[12px] text-[#8B8FA3] font-mono leading-relaxed max-h-[400px] overflow-y-auto">
+              <pre className="overflow-x-auto rounded-lg bg-[#08090A] border border-white/[0.06] p-4 text-[12px] text-[#8A8F98] font-mono leading-relaxed max-h-[400px] overflow-y-auto">
                 {schemas.map((s) => JSON.stringify(s, null, 2)).join("\n\n")}
               </pre>
             </div>
@@ -1370,8 +1370,8 @@ export default function ArticleDetailPage() {
 
       {/* Sources */}
       {article.sources && article.sources.length > 0 && (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
-          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#565A6E]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
+          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#62666D]">
             Sources
           </h3>
           <ul className="space-y-1.5">
@@ -1394,16 +1394,16 @@ export default function ArticleDetailPage() {
 
       {/* Internal Links */}
       {article.internalLinks && article.internalLinks.length > 0 && (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
-          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#565A6E]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
+          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#62666D]">
             Internal Links
           </h3>
           <ul className="space-y-1.5">
             {article.internalLinks.map((link, i) => (
               <li key={i} className="flex items-center gap-2 text-[13px]">
-                <Link2 className="h-3 w-3 text-[#565A6E]" />
-                <span className="text-[#EDEEF1]">{link.anchor}</span>
-                <span className="text-[#565A6E]">→</span>
+                <Link2 className="h-3 w-3 text-[#62666D]" />
+                <span className="text-[#F7F8F8]">{link.anchor}</span>
+                <span className="text-[#62666D]">→</span>
                 <span className="font-mono text-[#0EA5E9]">{link.href}</span>
               </li>
             ))}

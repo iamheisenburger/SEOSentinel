@@ -16,7 +16,7 @@ const platforms = [
     id: "github",
     name: "GitHub (Next.js, Astro, Hugo, Jekyll)",
     icon: GitBranch,
-    color: "#EDEEF1",
+    color: "#F7F8F8",
     steps: [
       "Articles are committed as MDX files to your GitHub repository",
       "Set your repo owner and name in the onboarding wizard",
@@ -68,7 +68,7 @@ const platforms = [
     id: "squarespace",
     name: "Squarespace",
     icon: Palette,
-    color: "#EDEEF1",
+    color: "#F7F8F8",
     steps: [
       "Select \"Copy & Paste\" as your publish method during onboarding",
       "Go to your Squarespace dashboard → Pages → Blog",
@@ -122,7 +122,7 @@ export function PlatformInstructions({ filter }: { filter?: string }) {
               className="h-4 w-4 shrink-0"
               style={{ color: platform.color }}
             />
-            <span className="text-[13px] font-medium text-[#EDEEF1]">
+            <span className="text-[13px] font-medium text-[#F7F8F8]">
               {platform.name}
             </span>
           </div>
@@ -130,9 +130,9 @@ export function PlatformInstructions({ filter }: { filter?: string }) {
             {platform.steps.map((step, i) => (
               <li
                 key={i}
-                className="flex items-start gap-2 text-[12px] text-[#8B8FA3]"
+                className="flex items-start gap-2 text-[12px] text-[#8A8F98]"
               >
-                <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-white/[0.04] text-[10px] font-medium text-[#565A6E]">
+                <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-white/[0.04] text-[10px] font-medium text-[#62666D]">
                   {i + 1}
                 </span>
                 <span>{step}</span>

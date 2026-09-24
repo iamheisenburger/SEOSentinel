@@ -140,7 +140,7 @@ export function SetupReadiness({
 
   if (readiness === undefined) {
     return (
-      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
         <div className="h-4 w-48 animate-pulse rounded bg-white/[0.05]" />
         <div className="mt-4 h-2 animate-pulse rounded-full bg-white/[0.04]" />
       </div>
@@ -166,7 +166,7 @@ export function SetupReadiness({
   ].includes(planningWait.blockerCode!);
 
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+    <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
@@ -174,17 +174,17 @@ export function SetupReadiness({
               className="h-2 w-2 rounded-full"
               style={{ backgroundColor: summary.color }}
             />
-            <h2 className="text-[14px] font-semibold text-[#EDEEF1]">
+            <h2 className="text-[14px] font-semibold text-[#F7F8F8]">
               {summary.title}
             </h2>
           </div>
           {!compact && (
-            <p className="mt-1 max-w-xl text-[11px] leading-relaxed text-[#565A6E]">
+            <p className="mt-1 max-w-xl text-[11px] leading-relaxed text-[#62666D]">
               {summary.detail}
             </p>
           )}
         </div>
-        <span className="shrink-0 text-[12px] font-semibold text-[#8B8FA3]">
+        <span className="shrink-0 text-[12px] font-semibold text-[#8A8F98]">
           {readiness.aggregate.readyCount}/{readiness.aggregate.totalCount}
         </span>
       </div>
@@ -247,7 +247,7 @@ export function SetupReadiness({
               >
                 <div className="flex items-center gap-2">
                   <Icon className={`h-3.5 w-3.5 shrink-0 ${stageCopy.className}`} />
-                  <span className="flex-1 text-[11px] text-[#8B8FA3]">
+                  <span className="flex-1 text-[11px] text-[#8A8F98]">
                     {stage.label}
                   </span>
                   <span className={`text-[10px] font-medium ${stageCopy.className}`}>
@@ -288,7 +288,7 @@ export function SetupReadiness({
       )}
 
       {planningWait && (
-        <div role="status" className="mt-3 rounded-lg border border-[#38BDF8]/15 bg-[#38BDF8]/[0.04] px-3 py-2.5 text-[10px] leading-relaxed text-[#8B8FA3]">
+        <div role="status" className="mt-3 rounded-lg border border-[#38BDF8]/15 bg-[#38BDF8]/[0.04] px-3 py-2.5 text-[10px] leading-relaxed text-[#8A8F98]">
           <p className="font-medium text-[#38BDF8]">Planning is waiting—not currently generating</p>
           <p className="mt-1">
             {waitingForBudget
@@ -325,7 +325,7 @@ export function SetupReadiness({
                     stage.state === "in_progress" ? "animate-spin" : ""
                   }`}
                 />
-                <span className="flex-1 text-[11px] text-[#8B8FA3]">
+                <span className="flex-1 text-[11px] text-[#8A8F98]">
                   {stage.label}
                 </span>
                 <span
@@ -348,7 +348,7 @@ export function SetupReadiness({
         </div>
       </details>
 
-      <p className="mt-3 text-[10px] leading-relaxed text-[#565A6E]">
+      <p className="mt-3 text-[10px] leading-relaxed text-[#62666D]">
         Setup progress is separate from outcome reporting. Articles, deliveries,
         acquired links, and ranking changes appear only after Pentra verifies
         their production receipts.

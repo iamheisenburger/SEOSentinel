@@ -53,6 +53,22 @@ function Hero() {
   );
 }
 
+/* ─── Proof ─────────────────────────────────────── */
+
+function Proof() {
+  return (
+    <section className="border-t border-white/[0.06]">
+      <div className={`${WRAP} flex flex-col gap-4 py-8 md:flex-row md:items-center md:justify-between`}>
+        <p className="text-[15px] text-[#8A8F98]">
+          <span className="text-[#F7F8F8]">We run our own marketing on Pentra.</span> The guides on this site are researched,
+          fact-checked and published by Pentra on Autopilot.
+        </p>
+        <Link href="/blog" className="shrink-0 text-[14px] font-medium text-[#D0D6E0] transition hover:text-white">Read them <span aria-hidden>→</span></Link>
+      </div>
+    </section>
+  );
+}
+
 /* ─── Statement + pillars ──────────────────────── */
 
 const PILLARS = [
@@ -382,6 +398,7 @@ export default function LandingPage() {
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }} />
       <LandingNav />
       <Hero />
+      <Proof />
       <Statement />
       <HowItWorks />
       <FeatureRows />

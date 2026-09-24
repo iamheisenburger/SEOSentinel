@@ -9,9 +9,9 @@ export const metadata: Metadata = {
 
 export default function TermsOfServicePage() {
   return (
-    <div className="min-h-screen bg-[#08090E] text-[#F1F5F9]">
+    <div className="min-h-screen bg-[#08090A] text-[#F7F8F8]">
       {/* Nav */}
-      <header className="border-b border-white/[0.06] bg-[#08090E]/80 backdrop-blur-xl">
+      <header className="border-b border-white/[0.06] bg-[#08090A]/80 backdrop-blur-xl">
         <div className="mx-auto flex h-16 max-w-4xl items-center justify-between px-6">
           <Link href="/" className="flex items-center gap-2.5">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#0EA5E9]/[0.1]">
@@ -19,7 +19,7 @@ export default function TermsOfServicePage() {
             </div>
             <span className="text-[16px] font-bold tracking-tight">Pentra</span>
           </Link>
-          <Link href="/" className="flex items-center gap-1.5 text-[14px] font-medium text-[#8B8FA3] transition-colors hover:text-white">
+          <Link href="/" className="flex items-center gap-1.5 text-[14px] font-medium text-[#8A8F98] transition-colors hover:text-white">
             <ArrowLeft className="h-3.5 w-3.5" /> Back
           </Link>
         </div>
@@ -27,9 +27,9 @@ export default function TermsOfServicePage() {
 
       <main className="mx-auto max-w-4xl px-6 py-16">
         <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Terms of Service</h1>
-        <p className="mt-2 text-sm text-[#8B8FA3]">Last updated: August 24, 2026</p>
+        <p className="mt-2 text-sm text-[#8A8F98]">Last updated: August 24, 2026</p>
 
-        <div className="mt-10 space-y-8 text-[#94A3B8] leading-relaxed [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-[#F1F5F9] [&_h2]:mt-10 [&_h2]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:space-y-1">
+        <div className="mt-10 space-y-8 text-[#94A3B8] leading-relaxed [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-[#F7F8F8] [&_h2]:mt-10 [&_h2]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:space-y-1">
           <p>
             These Terms of Service (&quot;Terms&quot;) govern your use of the Pentra platform operated by Pentra (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;) at pentra.dev. By using our service, you agree to these Terms.
           </p>
@@ -93,11 +93,11 @@ export default function TermsOfServicePage() {
 
           <h2>14. Contact Information</h2>
           <p>If you have any questions about these Terms of Service, please contact us:</p>
-          <div className="rounded-lg border border-white/[0.06] bg-[#0F1117] p-5 mt-3 text-[14px] space-y-1">
-            <p><strong className="text-[#F1F5F9]">Email:</strong> pentrahelp@gmail.com</p>
-            <p><strong className="text-[#F1F5F9]">Support:</strong> pentrahelp@gmail.com</p>
-            <p><strong className="text-[#F1F5F9]">Phone:</strong> +49 1520 9530880</p>
-            <p><strong className="text-[#F1F5F9]">Address:</strong> Pentra Legal Team</p>
+          <div className="rounded-lg border border-white/[0.06] bg-[#0E0F11] p-5 mt-3 text-[14px] space-y-1">
+            <p><strong className="text-[#F7F8F8]">Email:</strong> pentrahelp@gmail.com</p>
+            <p><strong className="text-[#F7F8F8]">Support:</strong> pentrahelp@gmail.com</p>
+            <p><strong className="text-[#F7F8F8]">Phone:</strong> +49 1520 9530880</p>
+            <p><strong className="text-[#F7F8F8]">Address:</strong> Pentra Legal Team</p>
             <p>Kerpener Straße 6, 50170 Kerpen, Germany</p>
           </div>
         </div>

@@ -86,30 +86,30 @@ const config: Record<
   },
   pending: {
     label: "Pending",
-    dot: "bg-[#565A6E]",
+    dot: "bg-[#62666D]",
     bg: "bg-white/[0.04]",
-    text: "text-[#8B8FA3]",
+    text: "text-[#8A8F98]",
   },
   planned: {
     label: "Planned",
-    dot: "bg-[#565A6E]",
+    dot: "bg-[#62666D]",
     bg: "bg-white/[0.04]",
-    text: "text-[#8B8FA3]",
+    text: "text-[#8A8F98]",
   },
   used: {
     label: "Used",
-    dot: "bg-[#565A6E]",
+    dot: "bg-[#62666D]",
     bg: "bg-white/[0.03]",
-    text: "text-[#565A6E]",
+    text: "text-[#62666D]",
   },
 };
 
 export function StatusBadge({ status, className = "" }: StatusBadgeProps) {
   const s = config[status as Status] ?? {
     label: status,
-    dot: "bg-[#565A6E]",
+    dot: "bg-[#62666D]",
     bg: "bg-white/[0.04]",
-    text: "text-[#8B8FA3]",
+    text: "text-[#8A8F98]",
   };
 
   return (

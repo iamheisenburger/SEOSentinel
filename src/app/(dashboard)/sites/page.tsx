@@ -42,7 +42,7 @@ export default function WebsitesPage() {
           {[...Array(2)].map((_, i) => (
             <div
               key={i}
-              className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5"
+              className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5"
             >
               <div className="h-5 w-40 animate-pulse rounded bg-white/[0.04]" />
               <div className="mt-3 h-10 animate-pulse rounded-lg bg-white/[0.03]" />
@@ -81,9 +81,9 @@ export default function WebsitesPage() {
       />
 
       {sites.length === 0 ? (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-12 text-center">
-          <Globe className="mx-auto h-10 w-10 text-[#565A6E]/30" />
-          <p className="mt-3 text-[13px] text-[#565A6E]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-12 text-center">
+          <Globe className="mx-auto h-10 w-10 text-[#62666D]/30" />
+          <p className="mt-3 text-[13px] text-[#62666D]">
             No websites configured yet. Add one to get started.
           </p>
           <Button
@@ -170,7 +170,7 @@ function SiteCard({
   const brandColor = site.brandPrimaryColor || "#0EA5E9";
 
   return (
-    <div className="group relative rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden transition-all hover:-translate-y-0.5 hover:border-white/[0.1] hover:shadow-lg hover:shadow-black/20">
+    <div className="group relative rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden transition-all hover:-translate-y-0.5 hover:border-white/[0.1] hover:shadow-lg hover:shadow-black/20">
       {/* Color accent bar */}
       <div className="h-1" style={{ backgroundColor: brandColor }} />
 
@@ -185,7 +185,7 @@ function SiteCard({
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <p className="text-[14px] font-semibold text-[#EDEEF1] truncate">
+              <p className="text-[14px] font-semibold text-[#F7F8F8] truncate">
                 {site.siteName || site.domain}
               </p>
               {growthFirst ? null : isPaused ? (
@@ -200,39 +200,39 @@ function SiteCard({
                 </span>
               )}
             </div>
-            <p className="text-[11px] text-[#565A6E] mt-0.5 truncate">
+            <p className="text-[11px] text-[#62666D] mt-0.5 truncate">
               {site.domain}
               {site.siteType ? ` · ${site.siteType}` : ""}
               {site.niche ? ` · ${site.niche}` : ""}
             </p>
           </div>
-          <ArrowRight className="h-4 w-4 text-[#565A6E] opacity-0 group-hover:opacity-100 transition shrink-0 mt-1" />
+          <ArrowRight className="h-4 w-4 text-[#62666D] opacity-0 group-hover:opacity-100 transition shrink-0 mt-1" />
         </div>
 
         {/* Stats */}
         <div className="mt-4 grid grid-cols-3 gap-2">
           <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2 text-center">
-            <p className="text-[15px] font-bold text-[#EDEEF1]">
+            <p className="text-[15px] font-bold text-[#F7F8F8]">
               {publishedCount}
             </p>
-            <p className="text-[10px] text-[#565A6E]">Published</p>
+            <p className="text-[10px] text-[#62666D]">Published</p>
           </div>
           <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2 text-center">
-            <p className="text-[15px] font-bold text-[#EDEEF1]">
+            <p className="text-[15px] font-bold text-[#F7F8F8]">
               {articleCount - publishedCount}
             </p>
-            <p className="text-[10px] text-[#565A6E]">Drafts</p>
+            <p className="text-[10px] text-[#62666D]">Drafts</p>
           </div>
           <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2 text-center">
-            <p className="text-[15px] font-bold text-[#EDEEF1]">
+            <p className="text-[15px] font-bold text-[#F7F8F8]">
               {topicCount}
             </p>
-            <p className="text-[10px] text-[#565A6E]">Topics</p>
+            <p className="text-[10px] text-[#62666D]">Topics</p>
           </div>
         </div>
 
         {/* Footer info */}
-        <div className="mt-3 flex items-center gap-3 text-[10px] text-[#565A6E]">
+        <div className="mt-3 flex items-center gap-3 text-[10px] text-[#62666D]">
           {growthFirst ? (
             <span>Pentra service</span>
           ) : (
@@ -282,7 +282,7 @@ function SiteCard({
           )}
           <Link
             href={`/sites/${site._id}`}
-            className="inline-flex items-center gap-1.5 text-[11px] text-[#8B8FA3] hover:text-[#0EA5E9] transition"
+            className="inline-flex items-center gap-1.5 text-[11px] text-[#8A8F98] hover:text-[#0EA5E9] transition"
           >
             <Settings className="h-3 w-3" />
             Manage
@@ -293,7 +293,7 @@ function SiteCard({
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowDeleteConfirm(false)}
-              className="text-[11px] text-[#8B8FA3] hover:text-[#EDEEF1] transition"
+              className="text-[11px] text-[#8A8F98] hover:text-[#F7F8F8] transition"
             >
               Cancel
             </button>
@@ -310,7 +310,7 @@ function SiteCard({
         ) : (
           <button
             onClick={() => setShowDeleteConfirm(true)}
-            className="inline-flex items-center gap-1 text-[11px] text-[#565A6E] hover:text-[#EF4444] transition"
+            className="inline-flex items-center gap-1 text-[11px] text-[#62666D] hover:text-[#EF4444] transition"
           >
             <Trash2 className="h-3 w-3" />
             Delete

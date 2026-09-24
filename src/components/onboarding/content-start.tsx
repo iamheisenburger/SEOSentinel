@@ -55,22 +55,22 @@ export function ContentStart() {
   }
   const steps = (active: number) => <ol className="flex flex-wrap gap-2 text-[12px]" aria-label="Setup steps">
     {["Your business", "Connect your website", "Autopilot or Review first"].map((step, n) => <li key={step}
-      className={`flex items-center gap-2 rounded-full border px-3 py-1 ${n === active ? "border-[#0EA5E9]/40 bg-[#0EA5E9]/10 text-[#EDEEF1]" : n < active ? "border-[#22C55E]/30 text-[#22C55E]" : "border-white/[0.08] text-[#8B8FA3]"}`}>
+      className={`flex items-center gap-2 rounded-full border px-3 py-1 ${n === active ? "border-[#0EA5E9]/40 bg-[#0EA5E9]/10 text-[#F7F8F8]" : n < active ? "border-[#22C55E]/30 text-[#22C55E]" : "border-white/[0.08] text-[#8A8F98]"}`}>
       <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold ${n === active ? "bg-[#0EA5E9] text-white" : n < active ? "bg-[#22C55E]/20" : "bg-white/[0.06]"}`}>{n < active ? "✓" : n + 1}</span>{step}</li>)}
   </ol>;
   if (siteId) return <div className="mx-auto max-w-3xl space-y-5">
-    <header className="space-y-3"><h1 className="text-2xl font-semibold tracking-tight text-[#EDEEF1]">Finish setting up Pentra</h1>{steps(adapter === "manual" ? 2 : 1)}</header>
-    {adapter === "manual" ? <p className="text-[14px] text-[#8B8FA3]">Your profile is saved. Start Pentra below: it researches and writes each article, and you paste it into your site.</p> : <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#0EA5E9]/30 bg-[#0EA5E9]/[0.04] p-4">
-      <p className="flex-1 text-[14px] text-[#EDEEF1]">Your profile is saved. Connect and verify your website, then choose Autopilot or Review first.</p>
+    <header className="space-y-3"><h1 className="text-2xl font-semibold tracking-tight text-[#F7F8F8]">Finish setting up Pentra</h1>{steps(adapter === "manual" ? 2 : 1)}</header>
+    {adapter === "manual" ? <p className="text-[14px] text-[#8A8F98]">Your profile is saved. Start Pentra below: it researches and writes each article, and you paste it into your site.</p> : <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#0EA5E9]/30 bg-[#0EA5E9]/[0.04] p-4">
+      <p className="flex-1 text-[14px] text-[#F7F8F8]">Your profile is saved. Connect and verify your website, then choose Autopilot or Review first.</p>
       <Link className="rounded-lg bg-[#0EA5E9] px-4 py-2 text-[13px] font-medium text-white hover:bg-[#0284C7]" href={`/sites/${siteId}?tab=settings`}>Connect your website in settings</Link></div>}
     <ContentWorkService key={siteId} siteId={siteId} />
   </div>;
-  const PANEL = "space-y-4 rounded-xl border border-white/[0.06] bg-[#0F1117] p-5", H2 = "text-[15px] font-semibold text-[#EDEEF1]", HELP = "text-[13px] leading-relaxed text-[#8B8FA3]";
+  const PANEL = "space-y-4 rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5", H2 = "text-[15px] font-semibold text-[#F7F8F8]", HELP = "text-[13px] leading-relaxed text-[#8A8F98]";
   const edit = (set: (value: string) => void) => (e: { target: { value: string } }) => { set(e.target.value); setConfirmed(false); };
   return <div className="mx-auto max-w-2xl space-y-5">
     <header className="space-y-3">
-      <h1 className="text-2xl font-semibold tracking-tight text-[#EDEEF1]">Set up Pentra for your website</h1>
-      <p className="text-[14px] leading-relaxed text-[#8B8FA3]">Tell Pentra about your business, connect your website, and choose Autopilot or Review first. Then Pentra researches, writes, publishes and checks every article for you.</p>
+      <h1 className="text-2xl font-semibold tracking-tight text-[#F7F8F8]">Set up Pentra for your website</h1>
+      <p className="text-[14px] leading-relaxed text-[#8A8F98]">Tell Pentra about your business, connect your website, and choose Autopilot or Review first. Then Pentra researches, writes, publishes and checks every article for you.</p>
       {steps(0)}
     </header>
     <section className={PANEL} aria-labelledby="setup-website">
@@ -99,8 +99,8 @@ export function ContentStart() {
     </section>
     <section className={PANEL} aria-labelledby="setup-destination">
       <h2 id="setup-destination" className={H2}>Where Pentra publishes</h2>
-      <label className="block space-y-1.5"><span className="text-[13px] font-medium text-[#8B8FA3]">Publishing destination</span>
-        <select className="block w-full rounded-lg border border-white/[0.1] bg-[#08090E] px-3 py-2.5 text-[14px] text-[#EDEEF1] focus:border-[#0EA5E9] focus:outline-none"
+      <label className="block space-y-1.5"><span className="text-[13px] font-medium text-[#8A8F98]">Publishing destination</span>
+        <select className="block w-full rounded-lg border border-white/[0.1] bg-[#08090A] px-3 py-2.5 text-[14px] text-[#F7F8F8] focus:border-[#0EA5E9] focus:outline-none"
           aria-label="Content publishing destination" value={adapter} onChange={e => { setAdapter(e.target.value); setConfirmed(false); }}>
           <option value="github">GitHub · plain Markdown/MDX</option>
           <option value="wordpress">WordPress · install the Pentra publisher plugin</option>
@@ -111,7 +111,7 @@ export function ContentStart() {
       {adapter === "wordpress" && <p className={HELP}><a className="font-medium text-[#0EA5E9] hover:underline" href="/pentra-wordpress-plugin.zip" download>Download the Pentra WordPress plugin (ZIP)</a>. In WordPress go to Plugins → Add New → Upload Plugin, choose the ZIP and activate it. You&apos;ll connect it in the next step.</p>}
     </section>
     <section className={PANEL}>
-      <label className="flex items-start gap-3 text-[14px] text-[#EDEEF1]"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#0EA5E9]" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+      <label className="flex items-start gap-3 text-[14px] text-[#F7F8F8]"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#0EA5E9]" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
         <span>These facts are accurate. Pentra writes only from them and from sources it cites.</span></label>
       <div className="flex flex-wrap items-center gap-4">
         <Button disabled={busy || !isLoaded || !userId || !confirmed || !ctaValid || !domain.trim() || !summary.trim() || !audience.trim() || !product.trim()} onClick={save}>{busy ? "Saving…" : "Save and continue"}</Button>

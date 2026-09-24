@@ -48,10 +48,10 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
   const step = (done: boolean, label: string, action?: React.ReactNode) =>
     <li className="flex items-center gap-2"><span aria-hidden className={done ? "text-[#22C55E]" : "text-[#F59E0B]"}>{done ? "✓" : "•"}</span>
       <span>{label}</span>{!done && action}</li>;
-  return <section aria-labelledby="pentra-setup-heading" className="space-y-5 rounded-xl border border-white/[0.06] bg-[#0F1117] p-6">
+  return <section aria-labelledby="pentra-setup-heading" className="space-y-5 rounded-xl border border-white/[0.06] bg-[#0E0F11] p-6">
     <div>
-      <h2 id="pentra-setup-heading" className="text-lg font-semibold text-[#EDEEF1]">Turn on Pentra</h2>
-      <p className="text-sm text-[#8B8FA3]">Your plan includes {state.plan.articlesPerMonth} new article{state.plan.articlesPerMonth === 1 ? "" : "s"} a month for {state.destination.domain}.</p>
+      <h2 id="pentra-setup-heading" className="text-lg font-semibold text-[#F7F8F8]">Turn on Pentra</h2>
+      <p className="text-sm text-[#8A8F98]">Your plan includes {state.plan.articlesPerMonth} new article{state.plan.articlesPerMonth === 1 ? "" : "s"} a month for {state.destination.domain}.</p>
     </div>
     <ul className="space-y-1 text-sm">
       {step(true, "Business profile saved")}
@@ -63,20 +63,20 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
       <legend className="sr-only">How should Pentra work?</legend>
       <label className={`cursor-pointer rounded-xl border p-4 transition ${choice === "autopilot" ? "border-[#0EA5E9] bg-[#0EA5E9]/[0.06]" : "border-white/10 hover:border-white/20"}`}>
         <input type="radio" name="pentra-mode" className="mr-2" disabled={paste} checked={choice === "autopilot"} onChange={() => setChoice("autopilot")} />
-        <span className="font-medium text-[#EDEEF1]">Autopilot (recommended)</span>
-        <p className="mt-1 text-sm text-[#8B8FA3]">{paste ? "Needs a WordPress or GitHub connection, so Pentra can publish for you. " : ""}Pentra researches, writes and publishes on its own, {rhythm(state.plan.autopilotIntervalMs)}. Drafts it isn&apos;t confident about are held back, never published; everything else goes live automatically.</p>
+        <span className="font-medium text-[#F7F8F8]">Autopilot (recommended)</span>
+        <p className="mt-1 text-sm text-[#8A8F98]">{paste ? "Needs a WordPress or GitHub connection, so Pentra can publish for you. " : ""}Pentra researches, writes and publishes on its own, {rhythm(state.plan.autopilotIntervalMs)}. Drafts it isn&apos;t confident about are held back, never published; everything else goes live automatically.</p>
       </label>
       <label className={`rounded-xl border p-4 transition ${reviewAvailable ? "cursor-pointer hover:border-white/20" : "opacity-50"} ${choice === "review" ? "border-[#0EA5E9] bg-[#0EA5E9]/[0.06]" : "border-white/10"}`}>
         <input type="radio" name="pentra-mode" className="mr-2" disabled={!reviewAvailable} checked={choice === "review"} onChange={() => setChoice("review")} />
-        <span className="font-medium text-[#EDEEF1]">Review first</span>
-        <p className="mt-1 text-sm text-[#8B8FA3]">{paste ? "Pentra researches and writes each article; you read it, then paste it into your site's blog." : reviewAvailable ? "Pentra drafts; you read, edit and approve every article before it goes live." : "Connect GitHub or WordPress to choose this."}</p>
+        <span className="font-medium text-[#F7F8F8]">Review first</span>
+        <p className="mt-1 text-sm text-[#8A8F98]">{paste ? "Pentra researches and writes each article; you read it, then paste it into your site's blog." : reviewAvailable ? "Pentra drafts; you read, edit and approve every article before it goes live." : "Connect GitHub or WordPress to choose this."}</p>
       </label>
     </fieldset>
-    {(choice === "autopilot" || !reviewAvailable) && <p className="text-xs text-[#8B8FA3]">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>}
+    {(choice === "autopilot" || !reviewAvailable) && <p className="text-xs text-[#8A8F98]">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>}
     <label className="block text-sm"><input type="checkbox" className="mr-2" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
       My business details are accurate. Pentra writes only from these facts and its cited research.</label>
     <Button disabled={!ready || !confirmed || busy} loading={busy} onClick={start}>Start Pentra</Button>
-    {!ready && <p className="text-sm text-[#8B8FA3]">Finish the steps above to start.</p>}
+    {!ready && <p className="text-sm text-[#8A8F98]">Finish the steps above to start.</p>}
     {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
   </section>;
 }
@@ -91,11 +91,11 @@ export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAva
   const setCadence = useMutation(api.contentWork.setAutopilotCadence);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const pace = cadencePerWeek ? `${cadencePerWeek} article${cadencePerWeek === 1 ? "" : "s"} a week (${rhythm(intervalMs)})` : rhythm(intervalMs);
-  return <div className="flex flex-wrap items-center gap-3 rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
-    <span aria-hidden className={`h-2.5 w-2.5 rounded-full ${on && !paused ? "bg-[#22C55E] shadow-[0_0_8px_#22C55E]" : on ? "bg-[#F59E0B]" : "bg-[#8B8FA3]"}`} />
+  return <div className="flex flex-wrap items-center gap-3 rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
+    <span aria-hidden className={`h-2.5 w-2.5 rounded-full ${on && !paused ? "bg-[#22C55E] shadow-[0_0_8px_#22C55E]" : on ? "bg-[#F59E0B]" : "bg-[#8A8F98]"}`} />
     <div className="flex-1">
-      <p className="font-medium text-[#EDEEF1]">Autopilot is {on ? (paused ? "paused" : "on") : "off"}</p>
-      <p className="text-sm text-[#8B8FA3]">{on ? paused ? "No new articles start while paused. Resume from Service settings."
+      <p className="font-medium text-[#F7F8F8]">Autopilot is {on ? (paused ? "paused" : "on") : "off"}</p>
+      <p className="text-sm text-[#8A8F98]">{on ? paused ? "No new articles start while paused. Resume from Service settings."
         : `Pentra publishes ${pace}${articlesPerMonth ? `, up to ${articlesPerMonth} a month on your plan` : ""}. Drafts it isn't confident about are held back and never published.`
         : "Every article waits for your approval in Articles."}</p>
     </div>
@@ -105,8 +105,8 @@ export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAva
       catch (err) { setError(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Couldn't change Autopilot. Refresh and try again."); }
       finally { setBusy(false); }
     }}>{on ? "Switch to review first" : "Turn on Autopilot"}</Button>}
-    {on && !paused && <label className="flex w-full items-center gap-2 text-sm text-[#8B8FA3]">Pace
-      <select aria-label="Articles per week" className="rounded-md border border-white/[0.1] bg-[#08090E] px-2 py-1 text-[#EDEEF1]"
+    {on && !paused && <label className="flex w-full items-center gap-2 text-sm text-[#8A8F98]">Pace
+      <select aria-label="Articles per week" className="rounded-md border border-white/[0.1] bg-[#08090A] px-2 py-1 text-[#F7F8F8]"
         value={cadencePerWeek ?? ""} disabled={busy} onChange={async e => {
           setBusy(true); setError("");
           try { await setCadence({ siteId, reviewToken, cadencePerWeek: Number(e.target.value) }); }
@@ -127,10 +127,10 @@ export function AdoptAutopilot({ siteId, reviewToken, intervalMs, articlesPerMon
   const adopt = useMutation(api.contentWork.adoptAutopilot);
   const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
   return <section aria-labelledby="adopt-autopilot-heading" className="space-y-3 rounded-xl border border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.04] p-5">
-    <h2 id="adopt-autopilot-heading" className="font-semibold text-[#EDEEF1]">Move this site to Autopilot</h2>
-    <p className="text-sm text-[#8B8FA3]">Pentra researches, writes and publishes {rhythm(intervalMs)} ({articlesPerMonth} a month on your plan), starting
+    <h2 id="adopt-autopilot-heading" className="font-semibold text-[#F7F8F8]">Move this site to Autopilot</h2>
+    <p className="text-sm text-[#8A8F98]">Pentra researches, writes and publishes {rhythm(intervalMs)} ({articlesPerMonth} a month on your plan), starting
       24 hours from now. Drafts that don&apos;t pass the fact check are held back and never published. Your past history, missed dates and costs stay on record.</p>
-    <p className="text-xs text-[#8B8FA3]">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>
+    <p className="text-xs text-[#8A8F98]">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>
     <label className="block text-sm"><input type="checkbox" className="mr-2" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
       Publish to my website automatically on this schedule.</label>
     <Button disabled={!confirmed || busy} loading={busy} onClick={async () => {

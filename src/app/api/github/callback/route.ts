@@ -113,17 +113,17 @@ export async function GET(req: NextRequest) {
 function renderPage(message: string, success: boolean, username?: string, autoSaved?: boolean): string {
   const icon = success ? "&#10003;" : "&#10007;";
   const color = success ? "#22C55E" : "#EF4444";
-  const userLine = username ? `<p class="msg">Signed in as <strong style="color:#EDEEF1">@${username}</strong></p>` : "";
+  const userLine = username ? `<p class="msg">Signed in as <strong style="color:#F7F8F8">@${username}</strong></p>` : "";
   const subMsg = success && autoSaved ? "This window will close automatically..." : success ? "Close this window and refresh the page." : "You can close this window.";
   const closeScript = success && autoSaved ? `<script>setTimeout(function() { window.close(); }, 1500);</script>` : "";
 
   return `<!DOCTYPE html>
 <html><head><title>Pentra - GitHub</title>
 <style>
-body{background:#08090E;color:#EDEEF1;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
-.card{text-align:center;padding:2rem;border-radius:1rem;border:1px solid rgba(255,255,255,0.06);background:#0F1117;max-width:360px}
+body{background:#08090A;color:#F7F8F8;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+.card{text-align:center;padding:2rem;border-radius:1rem;border:1px solid rgba(255,255,255,0.06);background:#0E0F11;max-width:360px}
 .icon{font-size:2rem;margin-bottom:0.75rem}
-.msg{font-size:0.9rem;color:#8B8FA3;margin-top:0.5rem}
+.msg{font-size:0.9rem;color:#8A8F98;margin-top:0.5rem}
 h2{font-size:1.1rem;margin:0}
 </style></head>
 <body><div class="card">

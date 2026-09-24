@@ -9,9 +9,9 @@ export const metadata: Metadata = {
 
 export default function PrivacyPolicyPage() {
   return (
-    <div className="min-h-screen bg-[#08090E] text-[#F1F5F9]">
+    <div className="min-h-screen bg-[#08090A] text-[#F7F8F8]">
       {/* Nav */}
-      <header className="border-b border-white/[0.06] bg-[#08090E]/80 backdrop-blur-xl">
+      <header className="border-b border-white/[0.06] bg-[#08090A]/80 backdrop-blur-xl">
         <div className="mx-auto flex h-16 max-w-4xl items-center justify-between px-6">
           <Link href="/" className="flex items-center gap-2.5">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#0EA5E9]/[0.1]">
@@ -19,7 +19,7 @@ export default function PrivacyPolicyPage() {
             </div>
             <span className="text-[16px] font-bold tracking-tight">Pentra</span>
           </Link>
-          <Link href="/" className="flex items-center gap-1.5 text-[14px] font-medium text-[#8B8FA3] transition-colors hover:text-white">
+          <Link href="/" className="flex items-center gap-1.5 text-[14px] font-medium text-[#8A8F98] transition-colors hover:text-white">
             <ArrowLeft className="h-3.5 w-3.5" /> Back
           </Link>
         </div>
@@ -27,9 +27,9 @@ export default function PrivacyPolicyPage() {
 
       <main className="mx-auto max-w-4xl px-6 py-16">
         <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Privacy Policy</h1>
-        <p className="mt-2 text-sm text-[#8B8FA3]">Last updated: August 24, 2026</p>
+        <p className="mt-2 text-sm text-[#8A8F98]">Last updated: August 24, 2026</p>
 
-        <div className="mt-10 space-y-8 text-[#94A3B8] leading-relaxed [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-[#F1F5F9] [&_h2]:mt-10 [&_h2]:mb-3 [&_h3]:font-semibold [&_h3]:text-[#F1F5F9] [&_h3]:mt-6 [&_h3]:mb-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:space-y-1">
+        <div className="mt-10 space-y-8 text-[#94A3B8] leading-relaxed [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-[#F7F8F8] [&_h2]:mt-10 [&_h2]:mb-3 [&_h3]:font-semibold [&_h3]:text-[#F7F8F8] [&_h3]:mt-6 [&_h3]:mb-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:space-y-1">
           <p>
             Pentra (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;) operates the pentra.dev website and platform. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our service.
           </p>
@@ -73,14 +73,14 @@ export default function PrivacyPolicyPage() {
           <h2>3. Data Sharing</h2>
           <p>We share your data with the following third-party services, strictly for providing our service:</p>
           <ul>
-            <li><strong className="text-[#F1F5F9]">Anthropic (Claude)</strong> — AI content generation and fact-checking</li>
-            <li><strong className="text-[#F1F5F9]">OpenAI</strong> — web research, image generation, YouTube search</li>
-            <li><strong className="text-[#F1F5F9]">Clerk</strong> — authentication and billing</li>
-            <li><strong className="text-[#F1F5F9]">Convex</strong> — database and backend infrastructure</li>
-            <li><strong className="text-[#F1F5F9]">Vercel</strong> — website hosting</li>
-            <li><strong className="text-[#F1F5F9]">Stripe</strong> — payment processing (via Clerk)</li>
-            <li><strong className="text-[#F1F5F9]">Google Workspace and Gmail APIs</strong> — only to provide mailbox features that you connect and explicitly request</li>
-            <li><strong className="text-[#F1F5F9]">Inbound email relay provider</strong> — only to receive message-specific outreach replies and routed delivery-status notices, discard attachments/content under the audited retention configuration, and deliver signed receiving-only events to Pentra</li>
+            <li><strong className="text-[#F7F8F8]">Anthropic (Claude)</strong> — AI content generation and fact-checking</li>
+            <li><strong className="text-[#F7F8F8]">OpenAI</strong> — web research, image generation, YouTube search</li>
+            <li><strong className="text-[#F7F8F8]">Clerk</strong> — authentication and billing</li>
+            <li><strong className="text-[#F7F8F8]">Convex</strong> — database and backend infrastructure</li>
+            <li><strong className="text-[#F7F8F8]">Vercel</strong> — website hosting</li>
+            <li><strong className="text-[#F7F8F8]">Stripe</strong> — payment processing (via Clerk)</li>
+            <li><strong className="text-[#F7F8F8]">Google Workspace and Gmail APIs</strong> — only to provide mailbox features that you connect and explicitly request</li>
+            <li><strong className="text-[#F7F8F8]">Inbound email relay provider</strong> — only to receive message-specific outreach replies and routed delivery-status notices, discard attachments/content under the audited retention configuration, and deliver signed receiving-only events to Pentra</li>
           </ul>
           <p>We do not sell your personal data to third parties.</p>
 
@@ -121,11 +121,11 @@ export default function PrivacyPolicyPage() {
 
           <h2>12. Contact Us</h2>
           <p>If you have questions about this Privacy Policy, contact us:</p>
-          <div className="rounded-lg border border-white/[0.06] bg-[#0F1117] p-5 mt-3 text-[14px] space-y-1">
-            <p><strong className="text-[#F1F5F9]">Email:</strong> pentrahelp@gmail.com</p>
-            <p><strong className="text-[#F1F5F9]">Support:</strong> pentrahelp@gmail.com</p>
-            <p><strong className="text-[#F1F5F9]">Phone:</strong> +49 1520 9530880</p>
-            <p><strong className="text-[#F1F5F9]">Address:</strong> Pentra Legal Team</p>
+          <div className="rounded-lg border border-white/[0.06] bg-[#0E0F11] p-5 mt-3 text-[14px] space-y-1">
+            <p><strong className="text-[#F7F8F8]">Email:</strong> pentrahelp@gmail.com</p>
+            <p><strong className="text-[#F7F8F8]">Support:</strong> pentrahelp@gmail.com</p>
+            <p><strong className="text-[#F7F8F8]">Phone:</strong> +49 1520 9530880</p>
+            <p><strong className="text-[#F7F8F8]">Address:</strong> Pentra Legal Team</p>
             <p>Kerpener Straße 6, 50170 Kerpen, Germany</p>
           </div>
         </div>

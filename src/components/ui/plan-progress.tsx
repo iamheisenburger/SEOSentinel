@@ -40,7 +40,7 @@ export function PlanProgress({ siteId }: { siteId: Id<"sites"> }) {
         <p className="text-[13px] font-medium text-[#38BDF8]">
           Building your content strategy...
         </p>
-        <span className="ml-auto text-[11px] text-[#565A6E] tabular-nums">
+        <span className="ml-auto text-[11px] text-[#62666D] tabular-nums">
           {current}/{total}
         </span>
       </div>
@@ -82,7 +82,7 @@ export function PlanProgress({ siteId }: { siteId: Id<"sites"> }) {
                 ) : (
                   <Icon
                     className={`h-3 w-3 ${
-                      isActive ? "text-[#0EA5E9]" : "text-[#565A6E]"
+                      isActive ? "text-[#0EA5E9]" : "text-[#62666D]"
                     }`}
                   />
                 )}
@@ -94,13 +94,13 @@ export function PlanProgress({ siteId }: { siteId: Id<"sites"> }) {
                       ? "text-[#22C55E]/80"
                       : isActive
                         ? "text-[#38BDF8] font-medium"
-                        : "text-[#565A6E]"
+                        : "text-[#62666D]"
                   }`}
                 >
                   {isActive ? runningJob.stepProgress!.stepLabel : step.label}
                 </span>
                 {(isActive || isCompleted) && (
-                  <span className="text-[10px] text-[#565A6E]">{step.description}</span>
+                  <span className="text-[10px] text-[#62666D]">{step.description}</span>
                 )}
               </div>
               {isActive && (

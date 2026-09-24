@@ -58,7 +58,7 @@ export function ArticleProgress({ siteId }: { siteId: Id<"sites"> }) {
             ? `Generating: ${runningJob.stepProgress!.topicLabel}`
             : "Generating article..."}
         </p>
-        <span className="ml-auto text-[11px] text-[#565A6E] tabular-nums">
+        <span className="ml-auto text-[11px] text-[#62666D] tabular-nums">
           {current}/{total}
         </span>
       </div>
@@ -104,7 +104,7 @@ export function ArticleProgress({ siteId }: { siteId: Id<"sites"> }) {
                 ) : (
                   <Icon
                     className={`h-3 w-3 ${
-                      isActive ? "text-[#0EA5E9]" : "text-[#565A6E]"
+                      isActive ? "text-[#0EA5E9]" : "text-[#62666D]"
                     }`}
                   />
                 )}
@@ -115,7 +115,7 @@ export function ArticleProgress({ siteId }: { siteId: Id<"sites"> }) {
                     ? "text-[#22C55E]/80"
                     : isActive
                       ? "text-[#38BDF8] font-medium"
-                      : "text-[#565A6E]"
+                      : "text-[#62666D]"
                 }`}
               >
                 {isActive

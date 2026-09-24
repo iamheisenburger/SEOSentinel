@@ -165,7 +165,7 @@ function PlansSkeleton() {
         {TIERS.map((tier) => (
           <div
             key={tier.key}
-            className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-6"
+            className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-6"
           >
             <Skeleton className="h-3 w-16" />
             <Skeleton className="mt-3 h-8 w-24" />
@@ -181,7 +181,7 @@ function PlansSkeleton() {
 
 function ClerkPricingFallback() {
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden p-6">
+    <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden p-6">
       <PricingTable for="user" newSubscriptionRedirectUrl="/dashboard" />
     </div>
   );
@@ -260,10 +260,10 @@ export default function UpgradePage() {
       {header}
 
       {/* Current plan */}
-      <div className="flex flex-col gap-3 rounded-xl border border-white/[0.06] bg-[#0F1117] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0 text-[13px] text-[#8B8FA3]">
+      <div className="flex flex-col gap-3 rounded-xl border border-white/[0.06] bg-[#0E0F11] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0 text-[13px] text-[#8A8F98]">
           {managedByPentra ? (
-            <p>You&apos;re on a <span className="font-semibold text-[#EDEEF1]">custom plan</span> set up by Pentra. Email us to change it.</p>
+            <p>You&apos;re on a <span className="font-semibold text-[#F7F8F8]">custom plan</span> set up by Pentra. Email us to change it.</p>
           ) : current.kind === "unknown" ? (
             subscriptionLoading ? (
               <Skeleton className="h-4 w-64" />
@@ -272,7 +272,7 @@ export default function UpgradePage() {
             )
           ) : current.kind === "free" ? (
             <p>
-              You&apos;re on the <span className="font-semibold text-[#EDEEF1]">Free</span> plan:
+              You&apos;re on the <span className="font-semibold text-[#F7F8F8]">Free</span> plan:
               1 article a month on 1 site.
             </p>
           ) : (
@@ -281,10 +281,10 @@ export default function UpgradePage() {
                 You&apos;re on{" "}
                 {current.kind === "paid" ? (
                   <>
-                    the <span className="font-semibold text-[#EDEEF1]">{current.tier.name}</span> plan
+                    the <span className="font-semibold text-[#F7F8F8]">{current.tier.name}</span> plan
                   </>
                 ) : (
-                  <span className="font-semibold text-[#EDEEF1]">a custom plan</span>
+                  <span className="font-semibold text-[#F7F8F8]">a custom plan</span>
                 )}
                 , {periodLabel(current.item.planPeriod)}.
               </p>
@@ -323,7 +323,7 @@ export default function UpgradePage() {
         <div
           role="group"
           aria-label="Billing period"
-          className="inline-flex items-center gap-1 rounded-full border border-white/[0.06] bg-[#0A0B10] p-1"
+          className="inline-flex items-center gap-1 rounded-full border border-white/[0.06] bg-[#0B0C0E] p-1"
         >
           <button
             type="button"
@@ -332,7 +332,7 @@ export default function UpgradePage() {
             className={`rounded-full px-5 py-2 text-[13px] font-medium transition cursor-pointer ${
               period === "month"
                 ? "bg-[#0EA5E9] text-white"
-                : "text-[#8B8FA3] hover:text-white"
+                : "text-[#8A8F98] hover:text-white"
             }`}
           >
             Monthly
@@ -344,7 +344,7 @@ export default function UpgradePage() {
             className={`flex items-center gap-2 rounded-full px-5 py-2 text-[13px] font-medium transition cursor-pointer ${
               period === "annual"
                 ? "bg-[#0EA5E9] text-white"
-                : "text-[#8B8FA3] hover:text-white"
+                : "text-[#8A8F98] hover:text-white"
             }`}
           >
             Annual
@@ -389,7 +389,7 @@ export default function UpgradePage() {
               );
             } else if (onPaidPlan) {
               action = (
-                <p className="text-center text-[12px] leading-relaxed text-[#8B8FA3]">
+                <p className="text-center text-[12px] leading-relaxed text-[#8A8F98]">
                   To move to Free, cancel from Manage subscription.
                 </p>
               );
@@ -437,10 +437,10 @@ export default function UpgradePage() {
               key={tier.key}
               className={`relative flex flex-col overflow-hidden rounded-xl ${
                 isCurrent
-                  ? "border border-[#22C55E]/30 bg-[#0F1117]"
+                  ? "border border-[#22C55E]/30 bg-[#0E0F11]"
                   : tier.featured
                     ? "border border-[#0EA5E9]/20 bg-[#0EA5E9]/[0.02]"
-                    : "border border-white/[0.06] bg-[#0F1117]"
+                    : "border border-white/[0.06] bg-[#0E0F11]"
               }`}
             >
               {tier.featured && (
@@ -450,7 +450,7 @@ export default function UpgradePage() {
               )}
               <div className="flex flex-1 flex-col p-6">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-[12px] font-medium uppercase tracking-[0.1em] text-[#8B8FA3]">
+                  <p className="text-[12px] font-medium uppercase tracking-[0.1em] text-[#8A8F98]">
                     {tier.name}
                   </p>
                   {isCurrent && (
@@ -460,12 +460,12 @@ export default function UpgradePage() {
                   )}
                 </div>
                 <div className="mt-2 flex items-baseline gap-0.5">
-                  <span className="text-3xl font-bold tracking-tight text-[#EDEEF1]">
+                  <span className="text-3xl font-bold tracking-tight text-[#F7F8F8]">
                     ${price}
                   </span>
-                  <span className="text-[13px] text-[#8B8FA3]">/mo</span>
+                  <span className="text-[13px] text-[#8A8F98]">/mo</span>
                 </div>
-                <p className="mt-0.5 min-h-[16px] text-[11px] text-[#8B8FA3]">
+                <p className="mt-0.5 min-h-[16px] text-[11px] text-[#8A8F98]">
                   {isFree
                     ? "No charge"
                     : showAnnual
@@ -474,13 +474,13 @@ export default function UpgradePage() {
                         ? "Billed monthly. Annual billing isn't offered on this plan."
                         : "Billed monthly"}
                 </p>
-                <p className="mt-2 text-[13px] text-[#8B8FA3]">{tier.desc}</p>
+                <p className="mt-2 text-[13px] text-[#8A8F98]">{tier.desc}</p>
 
                 <div className="mt-4 space-y-1.5">
                   {[tier.sites, tier.articles].map((line) => (
                     <div
                       key={line}
-                      className="flex items-center gap-2 text-[13px] font-semibold text-[#EDEEF1]"
+                      className="flex items-center gap-2 text-[13px] font-semibold text-[#F7F8F8]"
                     >
                       <CheckCircle2
                         className={`h-3.5 w-3.5 shrink-0 ${tier.featured ? "text-[#0EA5E9]" : "text-[#22C55E]"}`}
@@ -493,17 +493,17 @@ export default function UpgradePage() {
                 <div className="mt-5">{action}</div>
 
                 <div className="mt-4 border-t border-white/[0.04] pt-4">
-                  <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.08em] text-[#565A6E]">
+                  <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.08em] text-[#62666D]">
                     Everything included
                   </p>
                   <ul className="space-y-1.5">
                     {FEATURES.map((feature) => (
                       <li
                         key={feature}
-                        className="flex items-center gap-2 text-[12px] text-[#8B8FA3]"
+                        className="flex items-center gap-2 text-[12px] text-[#8A8F98]"
                       >
                         <CheckCircle2
-                          className={`h-3 w-3 shrink-0 ${tier.featured ? "text-[#0EA5E9]" : "text-[#565A6E]"}`}
+                          className={`h-3 w-3 shrink-0 ${tier.featured ? "text-[#0EA5E9]" : "text-[#62666D]"}`}
                         />
                         {feature}
                       </li>
@@ -516,12 +516,12 @@ export default function UpgradePage() {
         })}
       </div>
 
-      <div className="text-center text-[12px] text-[#8B8FA3]">
+      <div className="text-center text-[12px] text-[#8A8F98]">
         <p>
           Prices are in US dollars. No usage charges. If you cancel, your plan
           stays active until the end of the period you&apos;ve paid for.
         </p>
-        <p className="mt-1 text-[#565A6E]">
+        <p className="mt-1 text-[#62666D]">
           Questions about billing?{" "}
           <a
             href="mailto:pentrahelp@gmail.com"

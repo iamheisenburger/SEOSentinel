@@ -60,7 +60,7 @@ export default function JobsPage() {
           <div className="h-6 w-28 animate-pulse rounded bg-white/[0.04]" />
           <div className="mt-1.5 h-4 w-48 animate-pulse rounded bg-white/[0.03]" />
         </div>
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11]">
           {[...Array(8)].map((_, i) => (
             <div key={i} className="flex items-center gap-3 px-5 py-3.5 border-b border-white/[0.04] last:border-0">
               <div className="h-8 w-8 animate-pulse rounded-lg bg-white/[0.04]" />
@@ -140,7 +140,7 @@ export default function JobsPage() {
                             ? "text-[#0EA5E9]"
                             : job.status === "failed"
                               ? "text-[#EF4444]"
-                              : "text-[#565A6E]"
+                              : "text-[#62666D]"
                       }`}
                     />
                   </div>
@@ -148,7 +148,7 @@ export default function JobsPage() {
                   {/* Content */}
                   <div className="min-w-0 flex-1 pt-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-[13px] font-medium text-[#EDEEF1]">
+                      <p className="text-[13px] font-medium text-[#F7F8F8]">
                         {jobLabel(job)}
                       </p>
                       {job.status === "done" && (
@@ -193,12 +193,12 @@ export default function JobsPage() {
                         <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-[#F87171]" />
                         <div className="min-w-0 text-[11px] leading-relaxed">
                           <p className="text-[#F87171]">{problem.message}</p>
-                          <p className="text-[#8B8FA3]">
+                          <p className="text-[#8A8F98]">
                             {problem.next}
                             {problem.action && (
                               <>
                                 {" "}
-                                <Link href={problem.action.href} className="underline hover:text-[#EDEEF1]">
+                                <Link href={problem.action.href} className="underline hover:text-[#F7F8F8]">
                                   {problem.action.label}
                                 </Link>
                               </>
@@ -208,7 +208,7 @@ export default function JobsPage() {
                       </div>
                     )}
 
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-[#565A6E]">
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-[#62666D]">
                       <span>
                         {formatDistanceToNow(job.createdAt, { addSuffix: true })}
                       </span>
@@ -242,9 +242,9 @@ export default function JobsPage() {
           </div>
         </div>
       ) : (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-12 text-center">
-          <Zap className="mx-auto h-10 w-10 text-[#565A6E]/30" />
-          <p className="mt-3 text-[13px] text-[#565A6E]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-12 text-center">
+          <Zap className="mx-auto h-10 w-10 text-[#62666D]/30" />
+          <p className="mt-3 text-[13px] text-[#62666D]">
             {activeTab !== "all"
               ? "Nothing to show here."
               : "No activity yet. Pentra will list its work here as it happens."}

@@ -56,7 +56,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#0B1120] text-[#F1F5F9]`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#08090A] text-[#F7F8F8]`}
       >
         <ClerkProvider
           signInUrl="/sign-in"
@@ -70,8 +70,8 @@ export default function RootLayout({
               colorPrimary: "#0EA5E9",
               colorBackground: "#111318",
               colorInput: "#1E2130",
-              colorInputForeground: "#F1F5F9",
-              colorForeground: "#F1F5F9",
+              colorInputForeground: "#F7F8F8",
+              colorForeground: "#F7F8F8",
               colorMutedForeground: "#94A3B8",
               borderRadius: "0.75rem",
             },
@@ -86,7 +86,7 @@ export default function RootLayout({
                 boxShadow: "0 25px 50px -12px rgba(0,0,0,0.5)",
               },
               headerTitle: {
-                color: "#F1F5F9",
+                color: "#F7F8F8",
               },
               headerSubtitle: {
                 color: "#94A3B8",
@@ -97,7 +97,7 @@ export default function RootLayout({
               formFieldInput: {
                 backgroundColor: "#1E2130",
                 borderColor: "rgba(255,255,255,0.1)",
-                color: "#F1F5F9",
+                color: "#F7F8F8",
               },
               footerActionLink: {
                 color: "#0EA5E9",
@@ -111,7 +111,7 @@ export default function RootLayout({
               socialButtonsBlockButton: {
                 backgroundColor: "#1E2130",
                 borderColor: "rgba(255,255,255,0.1)",
-                color: "#F1F5F9",
+                color: "#F7F8F8",
               },
               formButtonPrimary: {
                 backgroundColor: "#0EA5E9",

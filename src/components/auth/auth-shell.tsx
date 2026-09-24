@@ -27,7 +27,7 @@ export function AuthShell({
   const isSignIn = mode === "sign-in";
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[#08090E] text-[#EDEEF1]">
+    <main className="relative min-h-screen overflow-hidden bg-[#08090A] text-[#F7F8F8]">
       <div className="pointer-events-none absolute inset-0" aria-hidden="true">
         <div className="absolute -left-48 top-[-18rem] h-[44rem] w-[44rem] rounded-full bg-[#0EA5E9]/[0.07] blur-[140px]" />
         <div className="absolute -bottom-72 right-[-16rem] h-[42rem] w-[42rem] rounded-full bg-[#22D3EE]/[0.045] blur-[150px]" />
@@ -48,7 +48,7 @@ export function AuthShell({
 
         <Link
           href="/"
-          className="group flex items-center gap-2 text-[13px] font-medium text-[#8B8FA3] transition-colors hover:text-white"
+          className="group flex items-center gap-2 text-[13px] font-medium text-[#8A8F98] transition-colors hover:text-white"
         >
           <ArrowLeft className="h-3.5 w-3.5 transition-transform group-hover:-translate-x-0.5" />
           Product home
@@ -73,30 +73,30 @@ export function AuthShell({
               {isSignIn ? (
                 <>
                   Your next article is
-                  <span className="block text-[#565A6E]">ready when you are.</span>
+                  <span className="block text-[#62666D]">ready when you are.</span>
                 </>
               ) : (
                 <>
                   More customers from Google,
-                  <span className="block text-[#565A6E]">on autopilot.</span>
+                  <span className="block text-[#62666D]">on autopilot.</span>
                 </>
               )}
             </p>
 
-            <p className="mt-5 max-w-lg text-[15px] leading-7 text-[#8B8FA3] sm:text-[16px]">
+            <p className="mt-5 max-w-lg text-[15px] leading-7 text-[#8A8F98] sm:text-[16px]">
               {isSignIn
                 ? "Review your drafts, approve what is ready, and see how published pages perform."
                 : "Add your website, connect it once, and Pentra researches, writes and publishes on your plan's schedule. Your first article is free."}
             </p>
 
-            <div className="mt-10 overflow-hidden rounded-2xl border border-white/[0.07] bg-[#0A0B10]/85 shadow-2xl shadow-black/30 backdrop-blur-xl">
+            <div className="mt-10 overflow-hidden rounded-2xl border border-white/[0.07] bg-[#0B0C0E]/85 shadow-2xl shadow-black/30 backdrop-blur-xl">
               <div className="flex items-center justify-between border-b border-white/[0.05] px-5 py-3.5">
                 <div className="flex items-center gap-2">
                   <span className="h-2 w-2 rounded-full bg-[#EF4444]/50" />
                   <span className="h-2 w-2 rounded-full bg-[#F59E0B]/50" />
                   <span className="h-2 w-2 rounded-full bg-[#22C55E]/60" />
                 </div>
-                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#565A6E]">
+                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#62666D]">
                   How Pentra works
                 </span>
               </div>
@@ -105,16 +105,16 @@ export function AuthShell({
                 {workflow.map(({ label, detail, icon: Icon }) => (
                   <div
                     key={label}
-                    className="flex items-center gap-3 bg-[#0A0B10] px-5 py-4"
+                    className="flex items-center gap-3 bg-[#0B0C0E] px-5 py-4"
                   >
                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#0EA5E9]/[0.08]">
                       <Icon className="h-4 w-4 text-[#38BDF8]" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[13px] font-semibold text-[#EDEEF1]">
+                      <span className="block text-[13px] font-semibold text-[#F7F8F8]">
                         {label}
                       </span>
-                      <span className="block truncate text-[11px] text-[#565A6E]">
+                      <span className="block truncate text-[11px] text-[#62666D]">
                         {detail}
                       </span>
                     </span>
@@ -125,7 +125,7 @@ export function AuthShell({
                 ))}
               </div>
 
-              <div className="flex items-center gap-2 border-t border-white/[0.05] px-5 py-3 text-[11px] text-[#8B8FA3]">
+              <div className="flex items-center gap-2 border-t border-white/[0.05] px-5 py-3 text-[11px] text-[#8A8F98]">
                 <ShieldCheck className="h-3.5 w-3.5 text-[#22C55E]" />
                 Drafts that don&apos;t pass the fact check never go live.
               </div>
@@ -147,13 +147,13 @@ export function AuthShell({
 
             {children}
 
-            <p className="mt-7 text-center text-[11px] leading-5 text-[#565A6E]">
+            <p className="mt-7 text-center text-[11px] leading-5 text-[#62666D]">
               By continuing, you agree to Pentra&apos;s{" "}
-              <Link href="/legal/terms" className="transition-colors hover:text-[#8B8FA3]">
+              <Link href="/legal/terms" className="transition-colors hover:text-[#8A8F98]">
                 Terms
               </Link>{" "}
               and acknowledge the{" "}
-              <Link href="/legal/privacy" className="transition-colors hover:text-[#8B8FA3]">
+              <Link href="/legal/privacy" className="transition-colors hover:text-[#8A8F98]">
                 Privacy Policy
               </Link>
               .
@@ -189,7 +189,7 @@ export function AuthFormLoading({ label }: { label: string }) {
         </div>
         <div className="h-10 animate-pulse rounded-lg bg-[#0EA5E9]/20" />
       </div>
-      <div className="border-t border-white/[0.05] px-8 py-5 text-center text-[11px] text-[#565A6E]">
+      <div className="border-t border-white/[0.05] px-8 py-5 text-center text-[11px] text-[#62666D]">
         {label}
       </div>
     </div>

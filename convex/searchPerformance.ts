@@ -70,7 +70,14 @@ export const contentOutcome = query({ args: { siteId: v.id("sites") }, handler: 
       return { articleId: p._id, title: p.title, url, publishedAt: p.publishedAt!, start,
         clicks: start > through ? null : rows.rows.filter(r => r.page === url && r.date >= start && r.date <= through).reduce((s, r) => s + r.clicks, 0) };
     });
-  return { status: "available" as const, through, property: site.gscProperty ?? null,
+  // Daily clicks for the chart: previous and current windows, null where Google has no finalized day.
+  const byDay = new Map<string, number>();
+  for (const r of rows.rows) byDay.set(r.date, (byDay.get(r.date) ?? 0) + r.clicks);
+  const daily: { date: string; clicks: number | null }[] = [];
+  for (let day = previousStart; day <= through && daily.length < 60; day = addSearchConsoleDays(day, 1)) {
+    daily.push({ date: day, clicks: days.has(day) ? byDay.get(day) ?? 0 : null });
+  }
+  return { status: "available" as const, through, property: site.gscProperty ?? null, daily,
     delayed: through < addSearchConsoleDays(searchConsoleDate(Date.now()), -3),
     current: { start: currentStart, end: through, clicks: sum(currentStart, through) },
     previous: complete(previousStart, previousEnd) ? { start: previousStart, end: previousEnd, clicks: sum(previousStart, previousEnd) } : null, cohorts };

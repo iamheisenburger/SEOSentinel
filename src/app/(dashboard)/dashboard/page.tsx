@@ -178,18 +178,18 @@ export default function DashboardPage() {
       {/* ─── Header ───────────────────────────────── */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight text-[#EDEEF1]">
+          <h1 className="text-xl font-semibold tracking-tight text-[#F7F8F8]">
             Overview
           </h1>
           <div className="mt-1 flex items-center gap-2">
-            <span className="text-[13px] text-[#565A6E]">
+            <span className="text-[13px] text-[#62666D]">
               {site.domain}
             </span>
             <span role="status" title={activity.detail} className={`inline-flex items-center gap-1 text-[11px] font-medium ${
-              activity.state === "running" ? "text-[#0EA5E9]" : "text-[#8B8FA3]"
+              activity.state === "running" ? "text-[#0EA5E9]" : "text-[#8A8F98]"
             }`}>
               <span className={`h-1.5 w-1.5 rounded-full ${
-                activity.state === "running" ? "bg-[#0EA5E9] animate-pulse" : "bg-[#565A6E]"
+                activity.state === "running" ? "bg-[#0EA5E9] animate-pulse" : "bg-[#62666D]"
               }`} />
               {activity.label}
             </span>
@@ -304,17 +304,17 @@ export default function DashboardPage() {
 
       {/* ─── Search Performance (GSC) ────────────── */}
       {hasGSC && (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <BarChart3 className="h-4 w-4 text-[#0EA5E9]" />
-              <h2 className="text-[13px] font-semibold text-[#EDEEF1]">
+              <h2 className="text-[13px] font-semibold text-[#F7F8F8]">
                 Search Performance
               </h2>
             </div>
             <Link
               href="/analytics"
-              className="text-[11px] text-[#565A6E] hover:text-[#8B8FA3] transition flex items-center gap-1"
+              className="text-[11px] text-[#62666D] hover:text-[#8A8F98] transition flex items-center gap-1"
             >
               Full analytics <ArrowRight className="h-2.5 w-2.5" />
             </Link>
@@ -323,47 +323,47 @@ export default function DashboardPage() {
             <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
               <div className="flex items-center gap-1.5 mb-1">
                 <MousePointerClick className="h-3 w-3 text-[#0EA5E9]" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Clicks (28d)</span>
+                <span className="text-[10px] font-medium uppercase tracking-wider text-[#62666D]">Clicks (28d)</span>
               </div>
-              <p className="text-lg font-bold text-[#EDEEF1]">{gscSummary.totalClicks.toLocaleString()}</p>
+              <p className="text-lg font-bold text-[#F7F8F8]">{gscSummary.totalClicks.toLocaleString()}</p>
             </div>
             <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
               <div className="flex items-center gap-1.5 mb-1">
                 <Eye className="h-3 w-3 text-[#22D3EE]" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Impressions (28d)</span>
+                <span className="text-[10px] font-medium uppercase tracking-wider text-[#62666D]">Impressions (28d)</span>
               </div>
-              <p className="text-lg font-bold text-[#EDEEF1]">{gscSummary.totalImpressions.toLocaleString()}</p>
+              <p className="text-lg font-bold text-[#F7F8F8]">{gscSummary.totalImpressions.toLocaleString()}</p>
             </div>
             <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
               <div className="flex items-center gap-1.5 mb-1">
                 <TrendingUp className="h-3 w-3 text-[#22C55E]" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">CTR</span>
+                <span className="text-[10px] font-medium uppercase tracking-wider text-[#62666D]">CTR</span>
               </div>
-              <p className="text-lg font-bold text-[#EDEEF1]">{gscSummary.avgCtr}%</p>
+              <p className="text-lg font-bold text-[#F7F8F8]">{gscSummary.avgCtr}%</p>
             </div>
             <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
               <div className="flex items-center gap-1.5 mb-1">
                 <Search className="h-3 w-3 text-[#F59E0B]" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Avg Position</span>
+                <span className="text-[10px] font-medium uppercase tracking-wider text-[#62666D]">Avg Position</span>
               </div>
-              <p className="text-lg font-bold text-[#EDEEF1]">{gscSummary.avgPosition}</p>
+              <p className="text-lg font-bold text-[#F7F8F8]">{gscSummary.avgPosition}</p>
             </div>
           </div>
 
           {/* Top Keywords */}
           {topQueries && topQueries.length > 0 && (
             <div className="mt-4">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-[#565A6E] mb-2">Top Keywords</p>
+              <p className="text-[11px] font-medium uppercase tracking-wider text-[#62666D] mb-2">Top Keywords</p>
               <div className="flex flex-col gap-1.5">
                 {topQueries.map((q, i) => {
                   const maxClicks = topQueries[0].clicks || 1;
                   return (
                     <div key={i} className="group flex items-center gap-3">
-                      <span className="text-[10px] font-mono text-[#565A6E] w-4 text-right shrink-0">{i + 1}</span>
+                      <span className="text-[10px] font-mono text-[#62666D] w-4 text-right shrink-0">{i + 1}</span>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-2 mb-0.5">
-                          <span className="text-[12px] text-[#EDEEF1] truncate">{q.query}</span>
-                          <div className="flex items-center gap-3 shrink-0 text-[10px] text-[#565A6E]">
+                          <span className="text-[12px] text-[#F7F8F8] truncate">{q.query}</span>
+                          <div className="flex items-center gap-3 shrink-0 text-[10px] text-[#62666D]">
                             <span>{q.clicks} clicks</span>
                             <span>pos {q.position}</span>
                           </div>
@@ -387,18 +387,18 @@ export default function DashboardPage() {
       {/* ─── Stats Row ────────────────────────────── */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         {/* Published */}
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
           <div className="flex items-center justify-between">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-[#565A6E]">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-[#62666D]">
               Published
             </p>
-            <FileText className="h-3.5 w-3.5 text-[#565A6E]" />
+            <FileText className="h-3.5 w-3.5 text-[#62666D]" />
           </div>
-          <p className="mt-2 text-2xl font-bold tracking-tight text-[#EDEEF1]">
+          <p className="mt-2 text-2xl font-bold tracking-tight text-[#F7F8F8]">
             {publishedCount}
           </p>
           <div className="mt-2">
-            <div className="flex items-center justify-between text-[10px] text-[#565A6E] mb-1">
+            <div className="flex items-center justify-between text-[10px] text-[#62666D] mb-1">
               <span>{publishedCount} of {totalArticles}</span>
               <span>{totalArticles > 0 ? Math.round((publishedCount / totalArticles) * 100) : 0}%</span>
             </div>
@@ -412,18 +412,18 @@ export default function DashboardPage() {
         </div>
 
         {/* Topics Remaining */}
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
           <div className="flex items-center justify-between">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-[#565A6E]">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-[#62666D]">
               Topics
             </p>
-            <Target className="h-3.5 w-3.5 text-[#565A6E]" />
+            <Target className="h-3.5 w-3.5 text-[#62666D]" />
           </div>
-          <p className="mt-2 text-2xl font-bold tracking-tight text-[#EDEEF1]">
+          <p className="mt-2 text-2xl font-bold tracking-tight text-[#F7F8F8]">
             {availableTopics}
           </p>
           <div className="mt-2">
-            <div className="flex items-center justify-between text-[10px] text-[#565A6E] mb-1">
+            <div className="flex items-center justify-between text-[10px] text-[#62666D] mb-1">
               <span>{availableTopics} available</span>
               <span>{totalTopics - availableTopics} used</span>
             </div>
@@ -437,17 +437,17 @@ export default function DashboardPage() {
         </div>
 
         {/* Cadence */}
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
           <div className="flex items-center justify-between">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-[#565A6E]">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-[#62666D]">
               Cadence
             </p>
-            <Clock className="h-3.5 w-3.5 text-[#565A6E]" />
+            <Clock className="h-3.5 w-3.5 text-[#62666D]" />
           </div>
-          <p className="mt-2 text-2xl font-bold tracking-tight text-[#EDEEF1]">
+          <p className="mt-2 text-2xl font-bold tracking-tight text-[#F7F8F8]">
             {cadenceLabel(site.cadencePerWeek ?? 4)}
           </p>
-          <p className="mt-2 text-[10px] text-[#565A6E]">
+          <p className="mt-2 text-[10px] text-[#62666D]">
             {site.approvalRequired ? "Approval required" : "Auto-publish"}
           </p>
         </div>
@@ -458,10 +458,10 @@ export default function DashboardPage() {
             ? "border-[#EF4444]/[0.2] bg-[#EF4444]/[0.03]"
             : reviewCount > 0
               ? "border-[#F59E0B]/[0.2] bg-[#F59E0B]/[0.03]"
-              : "border-white/[0.06] bg-[#0F1117]"
+              : "border-white/[0.06] bg-[#0E0F11]"
         }`}>
           <div className="flex items-center justify-between">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-[#565A6E]">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-[#62666D]">
               {autopilotBlocked || decayCount > 0 ? "Attention" : reviewCount > 0 ? "Needs Review" : "Health"}
             </p>
             {autopilotBlocked || decayCount > 0 ? (
@@ -497,7 +497,7 @@ export default function DashboardPage() {
               <p className="mt-2 text-2xl font-bold tracking-tight text-[#22C55E]">
                 Good
               </p>
-              <p className="mt-2 text-[10px] text-[#565A6E]">All content healthy</p>
+              <p className="mt-2 text-[10px] text-[#62666D]">All content healthy</p>
             </>
           )}
         </div>
@@ -505,37 +505,37 @@ export default function DashboardPage() {
 
       {/* ─── Quick Nav ────────────────────────────── */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
-        <Link href="/plan" className="group rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
+        <Link href="/plan" className="group rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
           <Target className="h-4 w-4 text-[#0EA5E9] mb-2" />
-          <p className="text-[13px] font-medium text-[#EDEEF1]">Topics</p>
-          <p className="text-[11px] text-[#565A6E]">{availableTopics} available · {totalTopics - availableTopics} used</p>
+          <p className="text-[13px] font-medium text-[#F7F8F8]">Topics</p>
+          <p className="text-[11px] text-[#62666D]">{availableTopics} available · {totalTopics - availableTopics} used</p>
         </Link>
-        <Link href="/articles" className="group rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
+        <Link href="/articles" className="group rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
           <FileText className="h-4 w-4 text-[#22C55E] mb-2" />
-          <p className="text-[13px] font-medium text-[#EDEEF1]">Articles</p>
-          <p className="text-[11px] text-[#565A6E]">{publishedCount} published · {totalArticles - publishedCount} drafts</p>
+          <p className="text-[13px] font-medium text-[#F7F8F8]">Articles</p>
+          <p className="text-[11px] text-[#62666D]">{publishedCount} published · {totalArticles - publishedCount} drafts</p>
         </Link>
-        <Link href="/analytics" className="group rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
+        <Link href="/analytics" className="group rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
           <BarChart3 className="h-4 w-4 text-[#22D3EE] mb-2" />
-          <p className="text-[13px] font-medium text-[#EDEEF1]">Analytics</p>
-          <p className="text-[11px] text-[#565A6E]">{hasGSC ? `${gscSummary.queryCount} keywords tracked` : "Connect GSC"}</p>
+          <p className="text-[13px] font-medium text-[#F7F8F8]">Analytics</p>
+          <p className="text-[11px] text-[#62666D]">{hasGSC ? `${gscSummary.queryCount} keywords tracked` : "Connect GSC"}</p>
         </Link>
-        <Link href="/backlinks" className="group rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
+        <Link href="/backlinks" className="group rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
           <Link2 className="h-4 w-4 text-[#F59E0B] mb-2" />
-          <p className="text-[13px] font-medium text-[#EDEEF1]">Backlinks</p>
-          <p className="text-[11px] text-[#565A6E]">Analyze & outreach</p>
+          <p className="text-[13px] font-medium text-[#F7F8F8]">Backlinks</p>
+          <p className="text-[11px] text-[#62666D]">Analyze & outreach</p>
         </Link>
       </div>
 
       {/* ─── Recent Articles ─────────────────────── */}
-      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-[13px] font-semibold text-[#EDEEF1]">
+            <h2 className="text-[13px] font-semibold text-[#F7F8F8]">
               Latest Articles
             </h2>
             <Link
               href="/articles"
-              className="text-[11px] text-[#565A6E] hover:text-[#8B8FA3] transition"
+              className="text-[11px] text-[#62666D] hover:text-[#8A8F98] transition"
             >
               View all
             </Link>
@@ -553,10 +553,10 @@ export default function DashboardPage() {
                     <StatusBadge status={article.status} />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-[13px] font-medium text-[#EDEEF1] leading-snug line-clamp-1 group-hover:text-white transition">
+                    <p className="text-[13px] font-medium text-[#F7F8F8] leading-snug line-clamp-1 group-hover:text-white transition">
                       {article.title}
                     </p>
-                    <div className="mt-1 flex items-center gap-2 text-[11px] text-[#565A6E]">
+                    <div className="mt-1 flex items-center gap-2 text-[11px] text-[#62666D]">
                       <span>{(article.wordCount ?? 0).toLocaleString()} words</span>
                       <span className="text-white/[0.08]">·</span>
                       <span>{formatDistanceToNow(article.createdAt, { addSuffix: true })}</span>
@@ -573,14 +573,14 @@ export default function DashboardPage() {
                       )}
                     </div>
                   </div>
-                  <ExternalLink className="h-3 w-3 mt-1 text-[#565A6E] opacity-0 group-hover:opacity-100 transition shrink-0" />
+                  <ExternalLink className="h-3 w-3 mt-1 text-[#62666D] opacity-0 group-hover:opacity-100 transition shrink-0" />
                 </Link>
               ))}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-8 text-center">
-              <FileText className="h-8 w-8 text-[#565A6E]/30" />
-              <p className="mt-2 text-[12px] text-[#565A6E]">
+              <FileText className="h-8 w-8 text-[#62666D]/30" />
+              <p className="mt-2 text-[12px] text-[#62666D]">
                 No articles yet. Click &ldquo;Generate Now&rdquo; to create your first.
               </p>
             </div>
@@ -588,21 +588,21 @@ export default function DashboardPage() {
         </div>
 
       {/* ─── Activity Timeline ────────────────────── */}
-      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-[13px] font-semibold text-[#EDEEF1]">
+          <h2 className="text-[13px] font-semibold text-[#F7F8F8]">
             Activity
           </h2>
           <Link
             href="/jobs"
-            className="text-[11px] text-[#565A6E] hover:text-[#8B8FA3] transition"
+            className="text-[11px] text-[#62666D] hover:text-[#8A8F98] transition"
           >
             View all
           </Link>
         </div>
 
         {activity.state === "loading" ? (
-          <p role="status" className="text-center py-6 text-[12px] text-[#565A6E]">{activity.detail}</p>
+          <p role="status" className="text-center py-6 text-[12px] text-[#62666D]">{activity.detail}</p>
         ) : recentJobs.length > 0 ? (
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {recentJobs.map((job) => (
@@ -628,15 +628,15 @@ export default function DashboardPage() {
                           ? "text-[#0EA5E9]"
                           : job.status === "failed"
                             ? "text-[#EF4444]"
-                            : "text-[#565A6E]"
+                            : "text-[#62666D]"
                     }`}
                   />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-[11px] font-medium text-[#EDEEF1] truncate">
+                  <p className="text-[11px] font-medium text-[#F7F8F8] truncate">
                     {jobLabel(job.type)}
                   </p>
-                  <p className="text-[10px] text-[#565A6E]">
+                  <p className="text-[10px] text-[#62666D]">
                     {job.updatedAt === undefined ? "Update time unavailable" : formatDistanceToNow(job.updatedAt, { addSuffix: true })}
                   </p>
                 </div>
@@ -647,18 +647,18 @@ export default function DashboardPage() {
                       ? "bg-[#0EA5E9] animate-pulse"
                       : job.status === "failed"
                         ? "bg-[#EF4444]"
-                        : "bg-[#565A6E]"
+                        : "bg-[#62666D]"
                 }`} />
               </div>
             ))}
           </div>
         ) : (
-          <p className="text-center py-6 text-[12px] text-[#565A6E]">
+          <p className="text-center py-6 text-[12px] text-[#62666D]">
             No pipeline activity yet.
           </p>
         )}
         {activity.recent?.status === "truncated" && (
-          <p className="mt-3 text-[11px] text-[#565A6E]">Showing the 8 newest jobs for this site; older activity is not shown.</p>
+          <p className="mt-3 text-[11px] text-[#62666D]">Showing the 8 newest jobs for this site; older activity is not shown.</p>
         )}
       </div>
     </div>
@@ -676,7 +676,7 @@ function DashboardSkeleton() {
       </div>
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         {[...Array(4)].map((_, i) => (
-          <div key={i} className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
+          <div key={i} className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
             <div className="h-3 w-16 animate-pulse rounded bg-white/[0.04]" />
             <div className="mt-3 h-7 w-12 animate-pulse rounded bg-white/[0.04]" />
             <div className="mt-3 h-1 w-full animate-pulse rounded bg-white/[0.04]" />
@@ -685,14 +685,14 @@ function DashboardSkeleton() {
       </div>
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         {[...Array(4)].map((_, i) => (
-          <div key={i} className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
+          <div key={i} className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
             <div className="h-4 w-4 animate-pulse rounded bg-white/[0.04] mb-2" />
             <div className="h-3.5 w-20 animate-pulse rounded bg-white/[0.04]" />
             <div className="mt-1 h-3 w-28 animate-pulse rounded bg-white/[0.03]" />
           </div>
         ))}
       </div>
-      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
+      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
         {[...Array(5)].map((_, i) => (
           <div key={i} className="flex items-center gap-3 py-3 border-b border-white/[0.03] last:border-0">
             <div className="h-4 w-14 animate-pulse rounded-full bg-white/[0.04]" />

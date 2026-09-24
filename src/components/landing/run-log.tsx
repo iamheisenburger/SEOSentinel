@@ -37,7 +37,7 @@ export function RunLog() {
   }, []);
   const shown = phase === "shown";
   return (
-    <div ref={ref} className="overflow-hidden rounded-xl border border-white/[0.08] bg-[#0B0C0E]">
+    <div ref={ref} className="overflow-hidden rounded-xl border border-white/[0.08] bg-[#0B0C0E] shadow-[0_25px_50px_-12px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.04)]">
       <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-2.5">
         <span className="font-mono text-[11px] text-[#62666D]">autopilot · northside-dental.com</span>
         <span className="flex items-center gap-1.5 text-[11px] text-[#4CB782]"><span className="h-1.5 w-1.5 rounded-full bg-[#4CB782]" />running</span>

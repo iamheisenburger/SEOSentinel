@@ -59,7 +59,7 @@ export function Dialog({
       >
         {title && (
           <div className="mb-5">
-            <h2 className="text-lg font-semibold text-[#F1F5F9]">{title}</h2>
+            <h2 className="text-lg font-semibold text-[#F7F8F8]">{title}</h2>
             {description && (
               <p className="mt-1 text-sm text-[#94A3B8]">{description}</p>
             )}

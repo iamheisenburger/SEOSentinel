@@ -2883,8 +2883,10 @@ test("SLC29 Search Console requires complete current epochs and distinguishes ze
   f.add("article_summaries", { siteId: site.id, slug: "new-page", title: "New synthetic page", status: "published", publicUrlStatus: "verified", publishedAt: end - day, createdAt: end - day });
   r = await f.invoke("searchPerformance:contentOutcome", { siteId: site.id });
   assert.equal(r.current.clicks, 3); assert.equal(r.cohorts[0].clicks, 3);
+  assert.equal(r.daily.length, 56); assert.deepEqual(r.daily.at(-1), { date: "2026-09-07", clicks: 3 }); assert.deepEqual(r.daily[0], { date: "2026-07-14", clicks: 0 });
   stored.gscDateEpochs.pop(); r = await f.invoke("searchPerformance:contentOutcome", { siteId: site.id });
   assert.equal(r.current.clicks, 3); assert.equal(r.previous, null);
+  assert.deepEqual(r.daily[0], { date: "2026-07-14", clicks: null }, "a day Google has not finalized is unknown in the chart, never zero");
   stored.gscDateEpochs.shift(); assert.equal((await f.invoke("searchPerformance:contentOutcome", { siteId: site.id })).status, "incomplete");
   stored.gscProperty = "sc-domain:unrelated.example";
   assert.equal((await f.invoke("searchPerformance:contentOutcome", { siteId: site.id })).status, "not_connected");

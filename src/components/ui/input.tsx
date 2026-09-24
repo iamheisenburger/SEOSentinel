@@ -8,7 +8,7 @@ import {
 } from "react";
 
 const baseStyles =
-  "w-full rounded-lg border border-white/[0.06] bg-[#0F1117] px-3 py-2 text-[13px] text-[#EDEEF1] placeholder-[#565A6E] outline-none transition-all duration-150 focus:border-[#0EA5E9]/50 focus:ring-1 focus:ring-[#0EA5E9]/20 hover:border-white/[0.1] disabled:opacity-40 disabled:cursor-not-allowed";
+  "w-full rounded-lg border border-white/[0.06] bg-[#0E0F11] px-3 py-2 text-[13px] text-[#F7F8F8] placeholder-[#62666D] outline-none transition-all duration-150 focus:border-[#0EA5E9]/50 focus:ring-1 focus:ring-[#0EA5E9]/20 hover:border-white/[0.1] disabled:opacity-40 disabled:cursor-not-allowed";
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
@@ -24,7 +24,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
     return (
       <div className="flex flex-col gap-1.5">
         {label && (
-          <label htmlFor={inputId} className="text-[12px] font-medium text-[#8B8FA3]">{label}</label>
+          <label htmlFor={inputId} className="text-[12px] font-medium text-[#8A8F98]">{label}</label>
         )}
         <input ref={ref} id={inputId} className={`${baseStyles} ${className}`}
           aria-describedby={[describedBy, error ? errorId : undefined].filter(Boolean).join(" ") || undefined}
@@ -50,7 +50,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
     return (
       <div className="flex flex-col gap-1.5">
         {label && (
-          <label htmlFor={inputId} className="text-[12px] font-medium text-[#8B8FA3]">{label}</label>
+          <label htmlFor={inputId} className="text-[12px] font-medium text-[#8A8F98]">{label}</label>
         )}
         <textarea
           ref={ref}

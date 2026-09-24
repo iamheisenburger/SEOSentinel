@@ -31,7 +31,7 @@ function ChoiceGroup<T extends string>({
 }) {
   return (
     <div className="mt-5">
-      <label className="mb-2 block text-[11px] font-medium text-[#8B8FA3]">
+      <label className="mb-2 block text-[11px] font-medium text-[#8A8F98]">
         {label}
       </label>
       <div className="grid gap-2 sm:grid-cols-3">
@@ -52,10 +52,10 @@ function ChoiceGroup<T extends string>({
                   : "border-white/[0.06] bg-white/[0.02] hover:border-white/[0.12]"
             }`}
           >
-            <span className="block text-[11px] font-medium text-[#EDEEF1]">
+            <span className="block text-[11px] font-medium text-[#F7F8F8]">
               {title}{disabled ? " · coming later" : ""}
             </span>
-            <span className="mt-1 block text-[9px] leading-relaxed text-[#565A6E]">{detail}</span>
+            <span className="mt-1 block text-[9px] leading-relaxed text-[#62666D]">{detail}</span>
           </button>
           );
         })}
@@ -89,7 +89,7 @@ export function OneSetupAdapterChoices({
         value={outreachTransport}
         onChange={onOutreachTransportChange}
       />
-      <p className="mt-2 text-[9px] leading-relaxed text-[#565A6E]">
+      <p className="mt-2 text-[9px] leading-relaxed text-[#62666D]">
         Bootstrap v1 supports GitHub plus customer-managed SMTP/IMAP in
         mandatory approval mode. Beta adapters cannot be selected or advertised as GA.
       </p>

@@ -87,7 +87,7 @@ export function Sidebar() {
       {navSections.map((section, si) => (
         <div key={si}>
           {section.label && (
-            <p className="mb-2 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-[#565A6E]">
+            <p className="mb-2 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-[#62666D]">
               {section.label}
             </p>
           )}
@@ -105,13 +105,13 @@ export function Sidebar() {
                     ${
                       active
                         ? "bg-white/[0.06] text-white"
-                        : "text-[#8B8FA3] hover:bg-white/[0.03] hover:text-white"
+                        : "text-[#8A8F98] hover:bg-white/[0.03] hover:text-white"
                     }
                   `}
                 >
                   <Icon
                     className={`h-[18px] w-[18px] shrink-0 transition-colors ${
-                      active ? "text-[#0EA5E9]" : "text-[#565A6E] group-hover:text-[#8B8FA3]"
+                      active ? "text-[#0EA5E9]" : "text-[#62666D] group-hover:text-[#8A8F98]"
                     }`}
                   />
                   <span>{item.label}</span>
@@ -132,7 +132,7 @@ export function Sidebar() {
       {/* Mobile toggle */}
       <button
         onClick={() => setMobileOpen(!mobileOpen)}
-        className="fixed left-4 top-4 z-50 flex h-10 w-10 items-center justify-center rounded-lg border border-white/[0.06] bg-[#0F1117] text-[#8B8FA3] transition hover:text-white lg:hidden"
+        className="fixed left-4 top-4 z-50 flex h-10 w-10 items-center justify-center rounded-lg border border-white/[0.06] bg-[#0E0F11] text-[#8A8F98] transition hover:text-white lg:hidden"
       >
         {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
       </button>
@@ -148,7 +148,7 @@ export function Sidebar() {
       {/* Sidebar */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-white/[0.04] bg-[#0A0B10]
+          fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-white/[0.04] bg-[#0B0C0E]
           transition-transform duration-200 ease-out
           lg:translate-x-0
           ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
@@ -176,7 +176,7 @@ export function Sidebar() {
             >
               <div>
                 <p className="text-[13px] font-bold text-[#0EA5E9]">Upgrade Plan</p>
-                <p className="text-[11px] text-[#8B8FA3] mt-0.5">Unlock more articles & sites</p>
+                <p className="text-[11px] text-[#8A8F98] mt-0.5">Unlock more articles & sites</p>
               </div>
               <ArrowUpRight className="h-4 w-4 text-[#0EA5E9]" />
             </Link>
@@ -198,23 +198,23 @@ export function Sidebar() {
                   <Globe className="h-3.5 w-3.5" style={{ color: brandColor }} />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] font-medium text-[#EDEEF1]">
+                  <p className="truncate text-[13px] font-medium text-[#F7F8F8]">
                     {activeSite.siteName || activeSite.domain}
                   </p>
-                  <p className="text-[11px] text-[#565A6E]">
+                  <p className="text-[11px] text-[#62666D]">
                     {activeSite.planAccessStatus === "parked"
                       ? "Parked by plan"
                       : deliveryLabel}
                   </p>
                 </div>
                 {hasMultipleSites && (
-                  <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-[#565A6E] transition-transform ${siteDropdownOpen ? "rotate-180" : ""}`} />
+                  <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-[#62666D] transition-transform ${siteDropdownOpen ? "rotate-180" : ""}`} />
                 )}
               </button>
 
               {/* Dropdown */}
               {siteDropdownOpen && sites && (
-                <div className="absolute bottom-full left-0 right-0 mb-1.5 rounded-lg border border-white/[0.08] bg-[#0F1117] py-1.5 shadow-xl shadow-black/40">
+                <div className="absolute bottom-full left-0 right-0 mb-1.5 rounded-lg border border-white/[0.08] bg-[#0E0F11] py-1.5 shadow-xl shadow-black/40">
                   {sites.map((s) => {
                     const isSelected = s._id === activeSite._id;
                     const sColor = s.brandPrimaryColor || "#0EA5E9";
@@ -234,7 +234,7 @@ export function Sidebar() {
                           <Globe className="h-3 w-3" style={{ color: sColor }} />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <span className="block truncate text-[12px] font-medium text-[#EDEEF1]">
+                          <span className="block truncate text-[12px] font-medium text-[#F7F8F8]">
                             {s.siteName || s.domain}
                           </span>
                           {s.planAccessStatus === "parked" && (
@@ -253,7 +253,7 @@ export function Sidebar() {
               )}
             </div>
           ) : (
-            <p className="text-[12px] text-[#565A6E]">No site configured</p>
+            <p className="text-[12px] text-[#62666D]">No site configured</p>
           )}
         </div>
 
@@ -268,7 +268,7 @@ export function Sidebar() {
                 },
               }}
             />
-            <span className="text-[13px] font-medium text-[#8B8FA3]">Account</span>
+            <span className="text-[13px] font-medium text-[#8A8F98]">Account</span>
           </div>
         </div>
       </aside>

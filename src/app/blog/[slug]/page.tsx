@@ -143,7 +143,7 @@ function toIsoDate(timestamp: number | undefined): string | undefined {
 
 function MarkdownRenderer({ markdown }: { markdown: string }) {
   return (
-    <div className="article-content prose prose-invert max-w-none text-[#c9cdd8]">
+    <div className="article-content">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -276,7 +276,7 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
   };
 
   return (
-    <div className="min-h-screen bg-[#08090E]">
+    <div className="min-h-screen bg-[#08090A]">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: jsonLd(articleSchema) }}
@@ -287,13 +287,13 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
       />
       <LandingNav />
 
-      <main className="mx-auto max-w-3xl px-6 pt-32 pb-20">
+      <main className="mx-auto max-w-[46rem] px-6 pt-32 pb-24 md:pt-40">
         <Link
           href="/blog"
-          className="inline-flex items-center gap-1.5 text-[12px] font-medium text-[#565A6E] hover:text-[#0EA5E9] transition mb-8"
+          className="mb-10 inline-flex items-center gap-1.5 text-[13px] font-medium text-[#8A8F98] transition hover:text-white"
         >
-          <ArrowLeft className="h-3 w-3" />
-          Back to blog
+          <ArrowLeft className="h-3.5 w-3.5" />
+          All guides
         </Link>
 
         {featuredImage && (
@@ -306,11 +306,11 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
           </div>
         )}
 
-        <h1 className="text-3xl font-bold text-[#EDEEF1] tracking-tight leading-tight">
+        <h1 className="text-[clamp(2rem,4.6vw,3rem)] font-semibold leading-[1.08] tracking-[-0.035em] text-[#F7F8F8] [text-wrap:balance]">
           {article.title}
         </h1>
 
-        <div className="mt-4 flex items-center gap-4 text-[13px] text-[#565A6E]">
+        <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-white/[0.06] pb-8 text-[13px] text-[#62666D]">
           <span className="flex items-center gap-1.5">
             <Calendar className="h-3.5 w-3.5" />
             {format(new Date(article.createdAt), "MMMM d, yyyy")}
@@ -322,7 +322,7 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
             </span>
           )}
           {article.factCheckScore && article.factCheckScore > 80 && (
-            <span className="flex items-center gap-1 text-[#22C55E]">
+            <span className="flex items-center gap-1.5 text-[#4CB782]">
               <CheckCircle2 className="h-3.5 w-3.5" />
               Fact-checked
             </span>
@@ -335,7 +335,7 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
 
         {article.sources && article.sources.length > 0 && (
           <div className="mt-12 pt-8 border-t border-white/[0.06]">
-            <h3 className="text-[14px] font-semibold text-[#EDEEF1] mb-4">
+            <h3 className="text-[14px] font-semibold text-[#F7F8F8] mb-4">
               Sources
             </h3>
             <ul className="flex flex-col gap-2">

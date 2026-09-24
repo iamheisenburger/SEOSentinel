@@ -102,14 +102,14 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
     }
   };
 
-  const inputCls = "w-full rounded-lg border border-white/[0.06] bg-[#0F1117] px-3 py-2 text-[13px] text-[#EDEEF1] placeholder-[#565A6E] outline-none focus:border-[#0EA5E9]/50";
+  const inputCls = "w-full rounded-lg border border-white/[0.06] bg-[#0E0F11] px-3 py-2 text-[13px] text-[#F7F8F8] placeholder-[#62666D] outline-none focus:border-[#0EA5E9]/50";
 
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+    <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
       <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
         <Upload className="h-4 w-4 text-[#0EA5E9]" />
-        <p className="text-[13px] font-semibold text-[#EDEEF1]">Publishing</p>
-        <span className="ml-auto text-[11px] text-[#565A6E]">{pubSite.domain}</span>
+        <p className="text-[13px] font-semibold text-[#F7F8F8]">Publishing</p>
+        <span className="ml-auto text-[11px] text-[#62666D]">{pubSite.domain}</span>
       </div>
       <div className="px-5 py-5">
         <div className="flex flex-col gap-4">
@@ -119,24 +119,24 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
               <MethodIcon className="h-5 w-5 text-[#0EA5E9]" />
             </div>
             <div className="flex-1">
-              <p className="text-[14px] font-medium text-[#EDEEF1]">{labels[method] || method}</p>
+              <p className="text-[14px] font-medium text-[#F7F8F8]">{labels[method] || method}</p>
               {isGithub && pubSite.repoOwner && !editing && (
-                <p className="text-[12px] text-[#565A6E] font-mono">{pubSite.repoOwner}/{pubSite.repoName}</p>
+                <p className="text-[12px] text-[#62666D] font-mono">{pubSite.repoOwner}/{pubSite.repoName}</p>
               )}
               {isWp && pubSite.wpUrl && !editing && (
-                <p className="text-[12px] text-[#565A6E]">{pubSite.wpUrl}</p>
+                <p className="text-[12px] text-[#62666D]">{pubSite.wpUrl}</p>
               )}
               {isWebhook && pubSite.webhookUrl && !editing && (
-                <p className="text-[12px] text-[#565A6E] truncate max-w-[300px]">{pubSite.webhookUrl}</p>
+                <p className="text-[12px] text-[#62666D] truncate max-w-[300px]">{pubSite.webhookUrl}</p>
               )}
               {isManual && (
-                <p className="text-[12px] text-[#565A6E]">Copy markdown or HTML from article pages</p>
+                <p className="text-[12px] text-[#62666D]">Copy markdown or HTML from article pages</p>
               )}
             </div>
             {!isManual && !editing && (
               <button
                 onClick={() => setEditing(true)}
-                className="text-[11px] font-medium text-[#8B8FA3] hover:text-[#0EA5E9] transition"
+                className="text-[11px] font-medium text-[#8A8F98] hover:text-[#0EA5E9] transition"
               >
                 Edit
               </button>
@@ -149,29 +149,29 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
               {isGithub && (
                 <div className="grid grid-cols-2 gap-3">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8B8FA3]">Owner</label>
+                    <label className="text-[12px] font-medium text-[#8A8F98]">Owner</label>
                     <input value={repoOwner} onChange={(e) => setRepoOwner(e.target.value)} placeholder="acme" className={inputCls} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8B8FA3]">Repository</label>
+                    <label className="text-[12px] font-medium text-[#8A8F98]">Repository</label>
                     <input value={repoName} onChange={(e) => setRepoName(e.target.value)} placeholder="my-blog" className={inputCls} />
                   </div>
                 </div>
               )}
               {isWp && (
                 <>
-                  <p className="text-[12px] text-[#8B8FA3]">WordPress publishing needs the Pentra plugin on your site. <a className="underline" href="/pentra-wordpress-plugin.zip" download>Download the plugin (ZIP)</a>, install it in WordPress (Plugins → Add New → Upload Plugin → Activate), then enter your site details below and save.</p>
+                  <p className="text-[12px] text-[#8A8F98]">WordPress publishing needs the Pentra plugin on your site. <a className="underline" href="/pentra-wordpress-plugin.zip" download>Download the plugin (ZIP)</a>, install it in WordPress (Plugins → Add New → Upload Plugin → Activate), then enter your site details below and save.</p>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8B8FA3]">WordPress URL</label>
+                    <label className="text-[12px] font-medium text-[#8A8F98]">WordPress URL</label>
                     <input value={wpUrl} onChange={(e) => setWpUrl(e.target.value)} placeholder="https://yoursite.com" className={inputCls} />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-[12px] font-medium text-[#8B8FA3]">Username</label>
+                      <label className="text-[12px] font-medium text-[#8A8F98]">Username</label>
                       <input value={wpUsername} onChange={(e) => setWpUsername(e.target.value)} placeholder="admin" className={inputCls} />
                     </div>
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-[12px] font-medium text-[#8B8FA3]">App Password</label>
+                      <label className="text-[12px] font-medium text-[#8A8F98]">App Password</label>
                       <input type="password" value={wpAppPassword} onChange={(e) => setWpAppPassword(e.target.value)} placeholder={pubSite.wordpressConfigured ? "Leave blank to keep current password" : "xxxx xxxx xxxx"} className={inputCls} />
                     </div>
                   </div>
@@ -180,11 +180,11 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
               {isWebhook && (
                 <>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8B8FA3]">Webhook URL</label>
+                    <label className="text-[12px] font-medium text-[#8A8F98]">Webhook URL</label>
                     <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://api.yoursite.com/articles" className={inputCls} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8B8FA3]">Secret (optional)</label>
+                    <label className="text-[12px] font-medium text-[#8A8F98]">Secret (optional)</label>
                     <input type="password" value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} placeholder={pubSite.webhookSecretConfigured ? "Leave blank to keep current secret" : "your-webhook-secret"} className={inputCls} />
                   </div>
                 </>
@@ -194,7 +194,7 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
                   {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                   {saving ? "Saving..." : "Save"}
                 </button>
-                <button onClick={() => setEditing(false)} className="text-[12px] text-[#8B8FA3] hover:text-[#EDEEF1] transition px-3 py-2">
+                <button onClick={() => setEditing(false)} className="text-[12px] text-[#8A8F98] hover:text-[#F7F8F8] transition px-3 py-2">
                   Cancel
                 </button>
               </div>
@@ -210,7 +210,7 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
                   <span className="flex-1 text-[12px] text-[#4ADE80]">GitHub connected</span>
                   <button
                     onClick={() => window.open("/api/github/auth?siteId=" + pubSite._id, "github-oauth", "width=600,height=700,popup=yes")}
-                    className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition"
+                    className="text-[11px] text-[#62666D] hover:text-[#0EA5E9] transition"
                   >
                     Reconnect
                   </button>
@@ -275,15 +275,15 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
             </div>
           )}
 
-          <p className="text-[11px] text-[#565A6E] text-left">
+          <p className="text-[11px] text-[#62666D] text-left">
             To change your publishing method, re-run onboarding from the Websites page.
           </p>
 
           {!isManual && (
             <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2">
               <Shield className="h-3 w-3 shrink-0 text-[#22C55E]" />
-              <p className="text-[10px] text-[#565A6E]">
-                Credentials are <span className="text-[#8B8FA3]">encrypted at rest</span> and transmitted over <span className="text-[#8B8FA3]">HTTPS</span>.
+              <p className="text-[10px] text-[#62666D]">
+                Credentials are <span className="text-[#8A8F98]">encrypted at rest</span> and transmitted over <span className="text-[#8A8F98]">HTTPS</span>.
               </p>
             </div>
           )}
@@ -358,10 +358,10 @@ export default function SettingsPage() {
       />
 
       {/* Plan & Billing */}
-      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
         <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
           <CreditCard className="h-4 w-4 text-[#0EA5E9]" />
-          <p className="text-[13px] font-semibold text-[#EDEEF1]">
+          <p className="text-[13px] font-semibold text-[#F7F8F8]">
             Plan & billing
           </p>
           <Link
@@ -376,20 +376,20 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <div className="flex items-center gap-2">
-                <p className="text-[15px] font-semibold text-[#EDEEF1]">
+                <p className="text-[15px] font-semibold text-[#F7F8F8]">
                   {planName} Plan
                 </p>
                 <span
                   className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
                     isFreePlan
-                      ? "bg-white/[0.06] text-[#8B8FA3]"
+                      ? "bg-white/[0.06] text-[#8A8F98]"
                       : "bg-[#0EA5E9]/[0.08] text-[#38BDF8]"
                   }`}
                 >
                   {isFreePlan ? "Free" : "Active"}
                 </span>
               </div>
-              <p className="mt-1 text-[12px] text-[#565A6E]">
+              <p className="mt-1 text-[12px] text-[#62666D]">
                 {siteCount} / {maxSites === 9999 ? "∞" : maxSites} site
                 {maxSites !== 1 ? "s" : ""} · {articlesThisMonth} /{" "}
                 {maxArticles} article{maxArticles !== 1 ? "s" : ""} this month
@@ -409,7 +409,7 @@ export default function SettingsPage() {
           {/* Usage bars */}
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <div>
-              <div className="flex items-center justify-between text-[11px] text-[#565A6E] mb-1.5">
+              <div className="flex items-center justify-between text-[11px] text-[#62666D] mb-1.5">
                 <span>Sites</span>
                 <span>
                   {siteCount} / {maxSites === 9999 ? "∞" : maxSites}
@@ -425,7 +425,7 @@ export default function SettingsPage() {
               </div>
             </div>
             <div>
-              <div className="flex items-center justify-between text-[11px] text-[#565A6E] mb-1.5">
+              <div className="flex items-center justify-between text-[11px] text-[#62666D] mb-1.5">
                 <span>Articles this month</span>
                 <span>
                   {articlesThisMonth} / {maxArticles}
@@ -449,7 +449,7 @@ export default function SettingsPage() {
           </div>
 
           {/* Change plan, billing period, payment method or cancel */}
-          <p className="mt-4 text-[12px] text-[#8B8FA3]">
+          <p className="mt-4 text-[12px] text-[#8A8F98]">
             To change or cancel your plan, or update your card, go to{" "}
             <Link
               href="/upgrade"
@@ -463,10 +463,10 @@ export default function SettingsPage() {
       </div>
 
       {/* Account */}
-      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
         <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
           <User className="h-4 w-4 text-[#0EA5E9]" />
-          <p className="text-[13px] font-semibold text-[#EDEEF1]">
+          <p className="text-[13px] font-semibold text-[#F7F8F8]">
             Account
           </p>
         </div>
@@ -484,13 +484,13 @@ export default function SettingsPage() {
                     </div>
                   )}
                   <div>
-                    <p className="text-[14px] font-semibold text-[#EDEEF1]">{user.fullName || "User"}</p>
-                    <p className="text-[12px] text-[#565A6E]">{user.primaryEmailAddress?.emailAddress}</p>
+                    <p className="text-[14px] font-semibold text-[#F7F8F8]">{user.fullName || "User"}</p>
+                    <p className="text-[12px] text-[#62666D]">{user.primaryEmailAddress?.emailAddress}</p>
                   </div>
                 </div>
                 <button
                   onClick={() => clerk.openUserProfile()}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-1.5 text-[12px] font-medium text-[#8B8FA3] transition hover:bg-white/[0.05] hover:text-white"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-1.5 text-[12px] font-medium text-[#8A8F98] transition hover:bg-white/[0.05] hover:text-white"
                 >
                   Edit profile
                   <ExternalLink className="h-3 w-3" />
@@ -502,23 +502,23 @@ export default function SettingsPage() {
               {/* Info rows */}
               <div className="grid gap-3">
                 <div className="flex items-center gap-3 rounded-lg bg-white/[0.02] px-4 py-3">
-                  <Mail className="h-4 w-4 text-[#565A6E]" />
+                  <Mail className="h-4 w-4 text-[#62666D]" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-[11px] text-[#565A6E]">Email</p>
-                    <p className="text-[13px] text-[#EDEEF1] truncate">{user.primaryEmailAddress?.emailAddress}</p>
+                    <p className="text-[11px] text-[#62666D]">Email</p>
+                    <p className="text-[13px] text-[#F7F8F8] truncate">{user.primaryEmailAddress?.emailAddress}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 rounded-lg bg-white/[0.02] px-4 py-3">
-                  <Shield className="h-4 w-4 text-[#565A6E]" />
+                  <Shield className="h-4 w-4 text-[#62666D]" />
                   <div className="flex-1">
-                    <p className="text-[11px] text-[#565A6E]">Security</p>
-                    <p className="text-[13px] text-[#EDEEF1]">
+                    <p className="text-[11px] text-[#62666D]">Security</p>
+                    <p className="text-[13px] text-[#F7F8F8]">
                       {user.twoFactorEnabled ? "2FA enabled" : "Password authentication"}
                     </p>
                   </div>
                   <button
                     onClick={() => clerk.openUserProfile()}
-                    className="text-[11px] font-medium text-[#8B8FA3] hover:text-[#0EA5E9] transition"
+                    className="text-[11px] font-medium text-[#8A8F98] hover:text-[#0EA5E9] transition"
                   >
                     Manage
                   </button>
@@ -536,22 +536,22 @@ export default function SettingsPage() {
       )}
 
       {/* Notifications */}
-      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
         <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
           <Bell className="h-4 w-4 text-[#0EA5E9]" />
-          <p className="text-[13px] font-semibold text-[#EDEEF1]">
+          <p className="text-[13px] font-semibold text-[#F7F8F8]">
             Notifications
           </p>
         </div>
         <div className="px-5 py-5">
-          <p className="text-[12px] text-[#565A6E]">
+          <p className="text-[12px] text-[#62666D]">
             Email notification preferences coming soon.
           </p>
         </div>
       </div>
 
       {/* Danger Zone */}
-      <div className="rounded-xl border border-[#EF4444]/20 bg-[#0F1117] overflow-hidden">
+      <div className="rounded-xl border border-[#EF4444]/20 bg-[#0E0F11] overflow-hidden">
         <div className="flex items-center gap-3 px-5 py-4 border-b border-[#EF4444]/10">
           <Trash2 className="h-4 w-4 text-[#EF4444]" />
           <p className="text-[13px] font-semibold text-[#EF4444]">
@@ -559,7 +559,7 @@ export default function SettingsPage() {
           </p>
         </div>
         <div className="px-5 py-5">
-          <p className="text-[12px] text-[#8B8FA3]">
+          <p className="text-[12px] text-[#8A8F98]">
             Delete all your websites from Pentra, along with their topics,
             articles and saved publishing connections. Pentra stops all work
             for them right away. Pages already published on your website are
@@ -575,7 +575,7 @@ export default function SettingsPage() {
             <div className="mt-4 flex items-center gap-2">
               <button
                 onClick={() => setShowReset(false)}
-                className="text-[12px] text-[#8B8FA3] hover:text-[#EDEEF1] transition"
+                className="text-[12px] text-[#8A8F98] hover:text-[#F7F8F8] transition"
               >
                 Cancel
               </button>

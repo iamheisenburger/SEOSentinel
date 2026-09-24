@@ -134,7 +134,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     </details>
     <details open={state.serviceMode !== "growth_first"} className="space-y-3"><summary className="cursor-pointer font-medium">Service mode and publication consent</summary>
     <label className="block">Choose service mode
-      <select aria-label="Service mode" value={mode} onChange={e => { setMode(e.target.value as typeof mode); setConfirmed(false); setSwitchResult(null); }} className="block bg-[#0F1117] border rounded p-2">
+      <select aria-label="Service mode" value={mode} onChange={e => { setMode(e.target.value as typeof mode); setConfirmed(false); setSwitchResult(null); }} className="block bg-[#0E0F11] border rounded p-2">
         <option value="legacy_articles">Keep fixed-article delivery</option><option value="growth_first">{ownerSetup || state.schedule?.ownerReviewedOnly ? "Review first: you approve every article" : "Explicitly switch to growth-first"}</option>
       </select>
     </label>
@@ -143,8 +143,8 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
       <label className="block"><input type="checkbox" checked={confirmed && confirmedReview === state.reviewToken} onChange={e => { setConfirmed(e.target.checked); setConfirmedReview(state.reviewToken); }} /> I confirm these saved business facts, offerings, audience and exact publishing destination.</label>
       {ownerSetup ? <p className="text-sm">Enable drafts for your review. Each publication requires your explicit approval. This does not enable a schedule, backlinks, a purchase or an increase in spending.</p> : <>
       <p className="text-sm">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT} Selecting growth-first authorizes this scheduled creation/improvement service, not backlinks or a spending increase.</p>
-      <label className="block">First deadline ({Intl.DateTimeFormat().resolvedOptions().timeZone})<input aria-label="First delivery deadline" type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} className="block bg-[#0F1117] border rounded p-2" /></label>
-      <label className="block">Hours between deadlines<input aria-label="Delivery interval hours" type="number" min="1" value={hours} onChange={e => setHours(e.target.value)} className="block bg-[#0F1117] border rounded p-2" /></label>
+      <label className="block">First deadline ({Intl.DateTimeFormat().resolvedOptions().timeZone})<input aria-label="First delivery deadline" type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} className="block bg-[#0E0F11] border rounded p-2" /></label>
+      <label className="block">Hours between deadlines<input aria-label="Delivery interval hours" type="number" min="1" value={hours} onChange={e => setHours(e.target.value)} className="block bg-[#0E0F11] border rounded p-2" /></label>
       <p className="text-sm">Selection does not purchase credits or increase spending limits. Preparation must be funded and two items ready before automatic schedule activation. Switching engines requires reconciliation of in-flight work.</p>
       </>}
     </>}
@@ -176,10 +176,10 @@ function EditablePageSelection({ siteId }: { siteId: Id<"sites"> }) {
   return <div className="border-t border-white/10 pt-4 space-y-3">
     <h3 className="font-medium">Pages Pentra may improve</h3>
     <p className="text-sm">Pentra’s verified creations appear automatically. You may also authorize supported plain Markdown/MDX and classic WordPress pages. Reviewed guidance can be added or a bounded instructional paragraph improved; unrelated facts, links and formatting remain unchanged. Pricing, checkout, legal pages, unsupported layouts and executable blocks are excluded. Discretionary revisions are at least fourteen days apart.</p>
-    <select aria-label="Selected page adapter" value={kind} onChange={e => { setKind(e.target.value); setPreview(null); setConsent(false); }} className="bg-[#0F1117] border rounded p-2">
+    <select aria-label="Selected page adapter" value={kind} onChange={e => { setKind(e.target.value); setPreview(null); setConsent(false); }} className="bg-[#0E0F11] border rounded p-2">
       <option value="github">GitHub Markdown/MDX path</option><option value="wordpress">WordPress post/page ID</option>
     </select>
-    <input aria-label="Exact page to improve" value={target} onChange={e => { setTarget(e.target.value); setPreview(null); setConsent(false); }} placeholder={kind === "github" ? "content/blog/your-page.md" : "Post or page ID"} className="block bg-[#0F1117] border rounded p-2 w-full" />
+    <input aria-label="Exact page to improve" value={target} onChange={e => { setTarget(e.target.value); setPreview(null); setConsent(false); }} placeholder={kind === "github" ? "content/blog/your-page.md" : "Post or page ID"} className="block bg-[#0E0F11] border rounded p-2 w-full" />
     <Button disabled={busy || !target} onClick={() => run(async () => { const p = await inspect({ siteId, ...binding }); setPreview({ ...p, target, kind }); })}>Inspect exact source</Button>
     {preview && preview.target === target && preview.kind === kind && <div className="space-y-2">
       <p>{preview.title} · {preview.url}</p>

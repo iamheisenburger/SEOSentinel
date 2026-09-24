@@ -699,6 +699,16 @@ export const readiness = query({
       const draft = await ctx.db.get(j.articleId!);
       if (draft && draft.status !== "published" && draft.topicId && publishedTopics.has(draft.topicId)) supersededJobs.add(j._id);
     }
+    // Titles for work still on its way, so the owner sees what is coming, not "New article".
+    const upcomingTitles = new Map<string, string>();
+    for (const j of jobs.filter(j => j.contentWork && !j.contentWork.ownerRequest && j.contentWork.retiredAt === undefined &&
+      !["verified", "failed"].includes(j.contentWork.stage)).slice(0, 10)) {
+      const article = j.articleId ? await ctx.db.get(j.articleId) : null;
+      const topicId = (j.payload as { topicId?: Id<"topic_clusters"> } | undefined)?.topicId;
+      const topic = !article?.title && topicId ? await ctx.db.get(topicId) : null;
+      const title = article?.siteId === siteId ? article.title : topic?.siteId === siteId ? topic.label : undefined;
+      if (title) upcomingTitles.set(j._id, title);
+    }
     return { siteId, setupPending: Boolean(site.contentSetupRequestedAt && !site.serviceMode), serviceMode: site.serviceMode ?? "legacy_articles", reviewToken: contentConsentToken(site),
       profile: { name: site.siteName ?? site.domain, summary: site.siteSummary ?? "", audience: site.targetAudienceSummary ?? "", productUsage: site.productUsage ?? "", offerings: site.keyFeatures ?? [] },
       destination: { kind: site.publishMethod ?? "manual", domain: site.domain, repository: site.publishMethod === "github" ? `${site.repoOwner ?? ""}/${site.repoName ?? ""}` : null,
@@ -737,7 +747,7 @@ export const readiness = query({
         const call = j.contentWork!.providerCalls.find(c => interruptedCreditCall(c) && c.creditRecovery);
         const creditRetry = j.status === "failed" && j.contentWork!.stage === "failed" && call && j.contentWork!.retiredAt === undefined
           ? { jobId: j._id, callKey: call.key, token: creditRetryToken(j, call) } : null;
-        return { jobId: j._id, articleId: j.articleId,
+        return { jobId: j._id, articleId: j.articleId, title: upcomingTitles.get(j._id) ?? null,
         intent: j.contentWork!.intent, operation: j.contentWork!.operation,
         stage: j.contentWork!.stage, deadlineAt: j.contentWork!.deadlineAt, windowStartAt: j.contentWork!.windowStartAt,
         systemFailure: !rejectedReview && internalContentProcessingError(j.contentWork!.failure ?? j.error),

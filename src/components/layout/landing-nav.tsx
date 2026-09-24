@@ -84,7 +84,7 @@ export function LandingNav() {
 
             {/* Mobile menu button */}
             <button
-              className="md:hidden ml-1 p-1.5 text-[#8B8FA3] hover:text-white transition cursor-pointer"
+              className="md:hidden ml-1 p-1.5 text-[#8A8F98] hover:text-white transition cursor-pointer"
               onClick={() => setMobileOpen(!mobileOpen)}
             >
               {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}

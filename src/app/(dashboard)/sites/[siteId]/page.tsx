@@ -63,7 +63,7 @@ function formatTone(tone: string): string {
 /** Growth-first sites manage Autopilot/Review first and pace on the dashboard. */
 function DashboardPointer({ className = "" }: { className?: string }) {
   return (
-    <p className={`text-[12px] text-[#8B8FA3] ${className}`}>
+    <p className={`text-[12px] text-[#8A8F98] ${className}`}>
       Autopilot and publishing pace are set on your{" "}
       <Link href="/dashboard" className="font-medium text-[#0EA5E9] hover:text-[#38BDF8] transition">
         Dashboard
@@ -152,7 +152,7 @@ export default function SiteDetailPage() {
       <div className="flex flex-col gap-5">
         <div className="h-6 w-48 animate-pulse rounded bg-white/[0.04]" />
         <div className="h-4 w-32 animate-pulse rounded bg-white/[0.03]" />
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-8">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-8">
           <div className="h-40 animate-pulse rounded-lg bg-white/[0.03]" />
         </div>
       </div>
@@ -162,8 +162,8 @@ export default function SiteDetailPage() {
   if (site === null) {
     return (
       <div className="flex flex-col items-center gap-4 py-20">
-        <Globe className="h-10 w-10 text-[#565A6E]/30" />
-        <p className="text-[13px] text-[#565A6E]">Website not found.</p>
+        <Globe className="h-10 w-10 text-[#62666D]/30" />
+        <p className="text-[13px] text-[#62666D]">Website not found.</p>
         <Button size="sm" onClick={() => router.push("/sites")}>
           Back to Websites
         </Button>
@@ -248,7 +248,7 @@ export default function SiteDetailPage() {
       <div className="flex items-start gap-4">
         <button
           onClick={() => router.push("/sites")}
-          className="mt-1 flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.06] bg-white/[0.02] text-[#565A6E] hover:text-[#EDEEF1] transition shrink-0"
+          className="mt-1 flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.06] bg-white/[0.02] text-[#62666D] hover:text-[#F7F8F8] transition shrink-0"
         >
           <ArrowLeft className="h-4 w-4" />
         </button>
@@ -262,7 +262,7 @@ export default function SiteDetailPage() {
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="text-[16px] font-semibold text-[#EDEEF1] truncate">
+                <h1 className="text-[16px] font-semibold text-[#F7F8F8] truncate">
                   {site.siteName || site.domain}
                 </h1>
                 <span className="inline-flex items-center gap-1 rounded-full bg-[#22C55E]/[0.08] px-2 py-0.5 text-[10px] font-medium text-[#4ADE80] shrink-0">
@@ -270,7 +270,7 @@ export default function SiteDetailPage() {
                   Active
                 </span>
               </div>
-              <p className="text-[11px] text-[#565A6E] truncate">
+              <p className="text-[11px] text-[#62666D] truncate">
                 {site.domain}
                 {site.siteType ? ` · ${site.siteType}` : ""}
               </p>
@@ -283,7 +283,7 @@ export default function SiteDetailPage() {
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => setShowDeleteConfirm(false)}
-              className="text-[11px] text-[#8B8FA3] hover:text-[#EDEEF1] transition"
+              className="text-[11px] text-[#8A8F98] hover:text-[#F7F8F8] transition"
             >
               Cancel
             </button>
@@ -300,7 +300,7 @@ export default function SiteDetailPage() {
         ) : (
           <button
             onClick={() => setShowDeleteConfirm(true)}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.06] bg-white/[0.02] text-[#565A6E] hover:text-[#EF4444] hover:border-[#EF4444]/20 transition shrink-0"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.06] bg-white/[0.02] text-[#62666D] hover:text-[#EF4444] hover:border-[#EF4444]/20 transition shrink-0"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
@@ -318,7 +318,7 @@ export default function SiteDetailPage() {
               onClick={() => setActiveTab(tab.id)}
               className={`
                 relative flex items-center gap-2 px-4 pb-2.5 pt-1 text-[13px] font-medium transition-colors
-                ${active ? "text-[#EDEEF1]" : "text-[#565A6E] hover:text-[#8B8FA3]"}
+                ${active ? "text-[#F7F8F8]" : "text-[#62666D] hover:text-[#8A8F98]"}
               `}
             >
               <Icon className={`h-3.5 w-3.5 ${active ? "text-[#0EA5E9]" : ""}`} />
@@ -354,8 +354,8 @@ export default function SiteDetailPage() {
       )}
       {activeTab === "settings" && site.contentSetupRequestedAt && !site.serviceMode && site.publishMethod !== "manual" && (
         <div className="rounded-xl border border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.06] p-4 text-sm" role="status">
-          <p className="font-medium text-[#EDEEF1]">Almost there</p>
-          <p className="mt-1 text-[#8B8FA3]">Connect your website in the Connection section below and save. Once it&apos;s verified, go to your <Link className="underline text-[#0EA5E9]" href="/dashboard">Dashboard</Link> and choose Autopilot or Review first to turn Pentra on.</p>
+          <p className="font-medium text-[#F7F8F8]">Almost there</p>
+          <p className="mt-1 text-[#8A8F98]">Connect your website in the Connection section below and save. Once it&apos;s verified, go to your <Link className="underline text-[#0EA5E9]" href="/dashboard">Dashboard</Link> and choose Autopilot or Review first to turn Pentra on.</p>
         </div>
       )}
       {activeTab === "settings" && (
@@ -473,10 +473,10 @@ function OverviewTab({
       {/* The One Setup checklist (cadence, outreach mailbox…) belongs to the
           legacy service; growth-first progress lives on the dashboard. */}
       {growthFirst ? (
-        <div className="flex flex-col gap-3 rounded-xl border border-white/[0.06] bg-[#0F1117] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 rounded-xl border border-white/[0.06] bg-[#0E0F11] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-[13px] font-semibold text-[#EDEEF1]">Pentra service</p>
-            <p className="mt-1 text-[12px] text-[#8B8FA3]">
+            <p className="text-[13px] font-semibold text-[#F7F8F8]">Pentra service</p>
+            <p className="mt-1 text-[12px] text-[#8A8F98]">
               Your Dashboard shows what Pentra is working on and which
               articles are confirmed live on your site.
             </p>
@@ -499,7 +499,7 @@ function OverviewTab({
           const Icon = item.icon;
           const content = (
             <div
-              className="group relative rounded-xl border border-white/[0.06] bg-[#0F1117] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1] cursor-pointer"
+              className="group relative rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1] cursor-pointer"
             >
               <div className="flex items-center justify-between">
                 <div
@@ -508,12 +508,12 @@ function OverviewTab({
                 >
                   <Icon className="h-4 w-4" style={{ color: item.color }} />
                 </div>
-                <ArrowRight className="h-3.5 w-3.5 text-[#565A6E] opacity-0 group-hover:opacity-100 transition" />
+                <ArrowRight className="h-3.5 w-3.5 text-[#62666D] opacity-0 group-hover:opacity-100 transition" />
               </div>
-              <p className="mt-3 text-[22px] font-bold text-[#EDEEF1]">
+              <p className="mt-3 text-[22px] font-bold text-[#F7F8F8]">
                 {item.count}
               </p>
-              <p className="text-[11px] text-[#565A6E]">
+              <p className="text-[11px] text-[#62666D]">
                 {item.label}
               </p>
             </div>
@@ -533,8 +533,8 @@ function OverviewTab({
       </div>
 
       {/* Site details */}
-      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
-        <div className="px-5 py-3 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#565A6E]">
+      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
+        <div className="px-5 py-3 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#62666D]">
           Site Details
         </div>
         <div className="grid gap-px bg-white/[0.02]">
@@ -545,7 +545,7 @@ function OverviewTab({
           {site.tone ? <DetailRow label="Tone" value={formatTone(site.tone)} /> : null}
           {site.language ? <DetailRow label="Language" value={site.language} /> : null}
           {growthFirst ? (
-            <div className="px-5 py-2.5 bg-[#0F1117]">
+            <div className="px-5 py-2.5 bg-[#0E0F11]">
               <DashboardPointer />
             </div>
           ) : (
@@ -623,9 +623,9 @@ function OverviewTab({
 
 function StatMini({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-lg bg-[#0F1117] border border-white/[0.06] p-3 text-center">
-      <p className="text-[18px] font-bold text-[#EDEEF1]">{value}</p>
-      <p className="text-[10px] text-[#565A6E]">{label}</p>
+    <div className="rounded-lg bg-[#0E0F11] border border-white/[0.06] p-3 text-center">
+      <p className="text-[18px] font-bold text-[#F7F8F8]">{value}</p>
+      <p className="text-[10px] text-[#62666D]">{label}</p>
     </div>
   );
 }
@@ -640,11 +640,11 @@ function DetailRow({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between px-5 py-2.5 bg-[#0F1117]">
-      <span className="text-[12px] text-[#565A6E]">{label}</span>
+    <div className="flex items-center justify-between px-5 py-2.5 bg-[#0E0F11]">
+      <span className="text-[12px] text-[#62666D]">{label}</span>
       <div className="flex items-center gap-2">
         {children}
-        <span className="text-[12px] text-[#EDEEF1]">{value}</span>
+        <span className="text-[12px] text-[#F7F8F8]">{value}</span>
       </div>
     </div>
   );
@@ -674,7 +674,7 @@ function ArticlesTab({
 
   if (articles === undefined) {
     return (
-      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117]">
+      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11]">
         {[...Array(5)].map((_, i) => (
           <div key={i} className="flex items-center gap-4 px-5 py-3.5 border-b border-white/[0.04] last:border-0">
             <div className="h-4 w-16 animate-pulse rounded-full bg-white/[0.04]" />
@@ -687,9 +687,9 @@ function ArticlesTab({
 
   if (articles.length === 0) {
     return (
-      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-12 text-center">
-        <FileText className="mx-auto h-10 w-10 text-[#565A6E]/30" />
-        <p className="mt-3 text-[13px] text-[#565A6E]">
+      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-12 text-center">
+        <FileText className="mx-auto h-10 w-10 text-[#62666D]/30" />
+        <p className="mt-3 text-[13px] text-[#62666D]">
           {growthFirst
             ? "No articles yet. Pentra adds them here as it writes them."
             : "No articles yet. Generate one to get started."}
@@ -706,7 +706,7 @@ function ArticlesTab({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <p className="text-[12px] text-[#565A6E]">
+        <p className="text-[12px] text-[#62666D]">
           {articles.length} article{articles.length !== 1 ? "s" : ""}
         </p>
         {!growthFirst && (
@@ -718,9 +718,9 @@ function ArticlesTab({
         )}
       </div>
 
-      <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
         {/* Header */}
-        <div className="hidden sm:grid sm:grid-cols-[1fr_100px_80px_100px_40px] gap-4 px-5 py-2.5 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#565A6E]">
+        <div className="hidden sm:grid sm:grid-cols-[1fr_100px_80px_100px_40px] gap-4 px-5 py-2.5 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#62666D]">
           <span>Title</span>
           <span>Status</span>
           <span>Words</span>
@@ -746,19 +746,19 @@ function ArticlesTab({
                   />
                 )}
                 <div className="min-w-0">
-                  <p className="text-[13px] font-medium text-[#EDEEF1] leading-snug truncate group-hover:text-white transition">
+                  <p className="text-[13px] font-medium text-[#F7F8F8] leading-snug truncate group-hover:text-white transition">
                     {article.title}
                   </p>
-                  <p className="mt-0.5 text-[11px] text-[#565A6E] font-mono truncate sm:hidden">
+                  <p className="mt-0.5 text-[11px] text-[#62666D] font-mono truncate sm:hidden">
                     /{article.slug}
                   </p>
                 </div>
               </Link>
               <StatusBadge status={article.status} />
-              <span className="text-[12px] text-[#8B8FA3] tabular-nums hidden sm:block">
+              <span className="text-[12px] text-[#8A8F98] tabular-nums hidden sm:block">
                 {wc.toLocaleString()}
               </span>
-              <span className="text-[11px] text-[#565A6E] sm:text-right">
+              <span className="text-[11px] text-[#62666D] sm:text-right">
                 {formatDistanceToNow(article.createdAt, { addSuffix: true })}
               </span>
               <div className="flex items-center justify-end">
@@ -766,7 +766,7 @@ function ArticlesTab({
                   <div className="flex items-center gap-1">
                     <button
                       onClick={() => setDeletingId(null)}
-                      className="text-[10px] text-[#8B8FA3] hover:text-[#EDEEF1] transition"
+                      className="text-[10px] text-[#8A8F98] hover:text-[#F7F8F8] transition"
                     >
                       No
                     </button>
@@ -783,7 +783,7 @@ function ArticlesTab({
                 ) : (
                   <button
                     onClick={() => setDeletingId(article._id)}
-                    className="text-[#565A6E] hover:text-[#EF4444] transition opacity-0 group-hover:opacity-100"
+                    className="text-[#62666D] hover:text-[#EF4444] transition opacity-0 group-hover:opacity-100"
                   >
                     <Trash2 className="h-3 w-3" />
                   </button>
@@ -880,8 +880,8 @@ function SettingsTab({
   return (
     <div className="flex flex-col gap-5">
       {/* Save bar */}
-      <div className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-[#0F1117] px-5 py-3">
-        <p className="text-[12px] text-[#565A6E]">
+      <div className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-[#0E0F11] px-5 py-3">
+        <p className="text-[12px] text-[#62666D]">
           Changes are saved when you click Save.
         </p>
         <Button
@@ -911,7 +911,7 @@ function SettingsTab({
       {showSyndicationNotice && (
         <SettingsSection title="Medium and LinkedIn" icon={Share2}>
           <div className="px-5 py-4">
-            <p className="text-[11px] leading-relaxed text-[#8B8FA3]">
+            <p className="text-[11px] leading-relaxed text-[#8A8F98]">
               Automatic Medium and LinkedIn syndication is not available yet. Your saved Medium or LinkedIn connection is kept but not used.
             </p>
           </div>
@@ -928,7 +928,7 @@ function SettingsTab({
         </FieldRow>
         <FieldRow label="Tone" description="Writing style for generated articles">
           <select
-            className="w-full rounded-lg border border-white/[0.06] bg-[#0F1117] px-3 py-2 text-[13px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+            className="w-full rounded-lg border border-white/[0.06] bg-[#0E0F11] px-3 py-2 text-[13px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
             value={tone}
             onChange={(e) => setTone(e.target.value)}
           >
@@ -970,7 +970,7 @@ function SettingsTab({
                   className={`rounded-lg px-3 py-2 text-[11px] font-medium transition ${
                     cadence === option.value
                       ? "bg-[#0EA5E9] text-white"
-                      : "bg-white/[0.04] text-[#8B8FA3] hover:bg-white/[0.07]"
+                      : "bg-white/[0.04] text-[#8A8F98] hover:bg-white/[0.07]"
                   }`}
                 >
                   {option.label}
@@ -984,15 +984,15 @@ function SettingsTab({
                 max={MAX_AUTOPILOT_CADENCE_PER_WEEK}
                 step={1}
                 aria-label="Articles per week"
-                className="w-full rounded-lg border border-white/[0.06] bg-[#0F1117] px-3 py-2 text-[13px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+                className="w-full rounded-lg border border-white/[0.06] bg-[#0E0F11] px-3 py-2 text-[13px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
                 value={Number.isInteger(cadence) ? cadence : ""}
                 disabled={cadenceCapacity === undefined || !cadenceCapacity.ready}
                 onChange={(event) => setCadence(Number(event.target.value))}
               />
-            <p className="text-[10px] leading-relaxed text-[#565A6E]">
+            <p className="text-[10px] leading-relaxed text-[#62666D]">
               Enter 1–{MAX_AUTOPILOT_CADENCE_PER_WEEK} articles per week.
             </p>
-            <p className={`text-[10px] leading-relaxed ${cadenceValid ? "text-[#565A6E]" : "text-[#F87171]"}`}>
+            <p className={`text-[10px] leading-relaxed ${cadenceValid ? "text-[#62666D]" : "text-[#F87171]"}`}>
               {cadenceCapacity === undefined || !cadenceCapacity.ready
                 ? "Checking the current account-wide article allowance."
                 : cadenceValid
@@ -1171,7 +1171,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
   const isManual = method === "manual";
   const hasGithubToken = !!site.githubConnected;
 
-  const inputCls = "w-full rounded-lg border border-white/[0.06] bg-[#0F1117] px-3 py-2 text-[13px] text-[#EDEEF1] placeholder-[#565A6E] outline-none focus:border-[#0EA5E9]/50";
+  const inputCls = "w-full rounded-lg border border-white/[0.06] bg-[#0E0F11] px-3 py-2 text-[13px] text-[#F7F8F8] placeholder-[#62666D] outline-none focus:border-[#0EA5E9]/50";
 
   const handleSave = async () => {
     setSaving(true);
@@ -1214,10 +1214,10 @@ function ConnectionSection({ site }: { site: SiteView }) {
   };
 
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+    <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
       <div className="flex items-center gap-2.5 px-5 py-3 border-b border-white/[0.04]">
         <Upload className="h-4 w-4 text-[#0EA5E9]" />
-        <p className="text-[13px] font-semibold text-[#EDEEF1]">Connection</p>
+        <p className="text-[13px] font-semibold text-[#F7F8F8]">Connection</p>
       </div>
       <div className="px-5 py-5">
         <div className="flex flex-col gap-4">
@@ -1226,29 +1226,29 @@ function ConnectionSection({ site }: { site: SiteView }) {
               <MethodIcon className="h-5 w-5 text-[#0EA5E9]" />
             </div>
             <div className="flex-1">
-              <p className="text-[14px] font-medium text-[#EDEEF1]">{labels[method] || method}</p>
+              <p className="text-[14px] font-medium text-[#F7F8F8]">{labels[method] || method}</p>
               {isGithub && site.repoOwner && !editing && (
-                <p className="text-[12px] text-[#565A6E] font-mono">{site.repoOwner}/{site.repoName}</p>
+                <p className="text-[12px] text-[#62666D] font-mono">{site.repoOwner}/{site.repoName}</p>
               )}
               {isWp && site.wpUrl && !editing && (
-                <p className="text-[12px] text-[#565A6E]">{site.wpUrl}</p>
+                <p className="text-[12px] text-[#62666D]">{site.wpUrl}</p>
               )}
               {isWebhook && site.webhookUrl && !editing && (
-                <p className="text-[12px] text-[#565A6E] truncate max-w-[300px]">{site.webhookUrl}</p>
+                <p className="text-[12px] text-[#62666D] truncate max-w-[300px]">{site.webhookUrl}</p>
               )}
               {isManual && (
-                <p className="text-[12px] text-[#565A6E]">Copy markdown or HTML from article pages</p>
+                <p className="text-[12px] text-[#62666D]">Copy markdown or HTML from article pages</p>
               )}
             </div>
             {!editing && (
-              <button onClick={() => { setConnectionVerified(false); setEditing(true); }} className="text-[11px] font-medium text-[#8B8FA3] hover:text-[#0EA5E9] transition">Edit</button>
+              <button onClick={() => { setConnectionVerified(false); setEditing(true); }} className="text-[11px] font-medium text-[#8A8F98] hover:text-[#0EA5E9] transition">Edit</button>
             )}
           </div>
 
           {editing && (
             <div className="flex flex-col gap-3 rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
               <div className="flex flex-col gap-1.5">
-                <label className="text-[12px] font-medium text-[#8B8FA3]">Publishing method</label>
+                <label className="text-[12px] font-medium text-[#8A8F98]">Publishing method</label>
                 <select
                   value={method}
                   onChange={(event) => setMethod(event.target.value)}
@@ -1263,29 +1263,29 @@ function ConnectionSection({ site }: { site: SiteView }) {
               {isGithub && (
                 <div className="grid grid-cols-2 gap-3">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8B8FA3]">Owner</label>
+                    <label className="text-[12px] font-medium text-[#8A8F98]">Owner</label>
                     <input value={repoOwner} onChange={(e) => setRepoOwner(e.target.value)} placeholder="acme" className={inputCls} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8B8FA3]">Repository</label>
+                    <label className="text-[12px] font-medium text-[#8A8F98]">Repository</label>
                     <input value={repoName} onChange={(e) => setRepoName(e.target.value)} placeholder="my-blog" className={inputCls} />
                   </div>
                 </div>
               )}
               {isWp && (
                 <>
-                  <p className="text-[12px] text-[#8B8FA3]">Pentra publishes to WordPress through a small plugin. <a className="underline" href="/pentra-wordpress-plugin.zip" download>Download the plugin (ZIP)</a> and install it in WordPress (Plugins → Add New → Upload Plugin → Activate). Then create an Application Password under Users → Profile, enter your details below and click Save to check the connection.</p>
+                  <p className="text-[12px] text-[#8A8F98]">Pentra publishes to WordPress through a small plugin. <a className="underline" href="/pentra-wordpress-plugin.zip" download>Download the plugin (ZIP)</a> and install it in WordPress (Plugins → Add New → Upload Plugin → Activate). Then create an Application Password under Users → Profile, enter your details below and click Save to check the connection.</p>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8B8FA3]">WordPress URL</label>
+                    <label className="text-[12px] font-medium text-[#8A8F98]">WordPress URL</label>
                     <input value={wpUrl} onChange={(e) => setWpUrl(e.target.value)} placeholder="https://yoursite.com" className={inputCls} />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-[12px] font-medium text-[#8B8FA3]">Username</label>
+                      <label className="text-[12px] font-medium text-[#8A8F98]">Username</label>
                       <input value={wpUsername} onChange={(e) => setWpUsername(e.target.value)} placeholder="admin" className={inputCls} />
                     </div>
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-[12px] font-medium text-[#8B8FA3]">App Password</label>
+                      <label className="text-[12px] font-medium text-[#8A8F98]">App Password</label>
                       <input type="password" value={wpAppPassword} onChange={(e) => setWpAppPassword(e.target.value)} placeholder={site.wordpressConfigured ? "Leave blank to keep current password" : "xxxx xxxx xxxx"} className={inputCls} />
                     </div>
                   </div>
@@ -1294,11 +1294,11 @@ function ConnectionSection({ site }: { site: SiteView }) {
               {isWebhook && (
                 <>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8B8FA3]">Webhook URL</label>
+                    <label className="text-[12px] font-medium text-[#8A8F98]">Webhook URL</label>
                     <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://api.yoursite.com/articles" className={inputCls} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8B8FA3]">Signing secret (32+ characters)</label>
+                    <label className="text-[12px] font-medium text-[#8A8F98]">Signing secret (32+ characters)</label>
                     <input type="password" value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} placeholder={site.webhookSecretConfigured ? "Leave blank to keep current secret" : "your-webhook-secret"} className={inputCls} />
                   </div>
                 </>
@@ -1308,7 +1308,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
                   <Check className="h-3 w-3" />
                   {saving ? "Saving..." : "Save"}
                 </button>
-                <button onClick={() => setEditing(false)} className="text-[12px] text-[#8B8FA3] hover:text-[#EDEEF1] transition px-3 py-2">Cancel</button>
+                <button onClick={() => setEditing(false)} className="text-[12px] text-[#8A8F98] hover:text-[#F7F8F8] transition px-3 py-2">Cancel</button>
               </div>
               {connectionError && (
                 <p className="text-[11px] text-[#F87171]">{connectionError}</p>
@@ -1323,7 +1323,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
                   <Check className="h-4 w-4 text-[#22C55E]" />
                   <span className="flex-1 text-[12px] text-[#4ADE80]">GitHub connected</span>
                   {!editing && <button onClick={handleVerify} disabled={saving} className="text-[11px] font-medium text-[#0EA5E9] disabled:opacity-50">{saving ? "Checking…" : "Verify repository"}</button>}
-                  <button onClick={() => window.open("/api/github/auth?siteId=" + site._id, "github-oauth", "width=600,height=700,popup=yes")} className="text-[11px] text-[#565A6E] hover:text-[#0EA5E9] transition">Reconnect</button>
+                  <button onClick={() => window.open("/api/github/auth?siteId=" + site._id, "github-oauth", "width=600,height=700,popup=yes")} className="text-[11px] text-[#62666D] hover:text-[#0EA5E9] transition">Reconnect</button>
                 </>
               ) : (
                 <>
@@ -1366,7 +1366,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
           {!isManual && (
             <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2">
               <Shield className="h-3 w-3 shrink-0 text-[#22C55E]" />
-              <p className="text-[10px] text-[#565A6E]">Credentials are <span className="text-[#8B8FA3]">encrypted at rest</span> and transmitted over <span className="text-[#8B8FA3]">HTTPS</span>.</p>
+              <p className="text-[10px] text-[#62666D]">Credentials are <span className="text-[#8A8F98]">encrypted at rest</span> and transmitted over <span className="text-[#8A8F98]">HTTPS</span>.</p>
             </div>
           )}
         </div>
@@ -1406,10 +1406,10 @@ function GSCSection({ site }: { site: SiteView }) {
   };
 
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+    <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
       <div className="flex items-center gap-2.5 px-5 py-3 border-b border-white/[0.04]">
         <BarChart3 className="h-4 w-4 text-[#0EA5E9]" />
-        <p className="text-[13px] font-semibold text-[#EDEEF1]">Google Search Console</p>
+        <p className="text-[13px] font-semibold text-[#F7F8F8]">Google Search Console</p>
       </div>
       <div className="px-5 py-5">
         <div className="flex flex-col gap-4">
@@ -1420,9 +1420,9 @@ function GSCSection({ site }: { site: SiteView }) {
                   <BarChart3 className="h-5 w-5 text-[#22C55E]" />
                 </div>
                 <div className="flex-1">
-                  <p className="text-[14px] font-medium text-[#EDEEF1]">Connected</p>
+                  <p className="text-[14px] font-medium text-[#F7F8F8]">Connected</p>
                   {site.gscEmail && (
-                    <p className="text-[12px] text-[#565A6E]">{site.gscEmail}</p>
+                    <p className="text-[12px] text-[#62666D]">{site.gscEmail}</p>
                   )}
                 </div>
               </div>
@@ -1430,12 +1430,12 @@ function GSCSection({ site }: { site: SiteView }) {
               {site.gscProperty && (
                 <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2.5">
                   <ExternalLink className="h-3 w-3 shrink-0 text-[#0EA5E9]" />
-                  <p className="text-[12px] text-[#8B8FA3] font-mono">{site.gscProperty}</p>
+                  <p className="text-[12px] text-[#8A8F98] font-mono">{site.gscProperty}</p>
                 </div>
               )}
 
               {site.gscConnectedAt && (
-                <p className="text-[11px] text-[#565A6E]">
+                <p className="text-[11px] text-[#62666D]">
                   Connected {formatDistanceToNow(new Date(site.gscConnectedAt), { addSuffix: true })}
                 </p>
               )}
@@ -1452,16 +1452,16 @@ function GSCSection({ site }: { site: SiteView }) {
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleConnect}
-                  className="text-[11px] text-[#8B8FA3] hover:text-[#0EA5E9] transition flex items-center gap-1"
+                  className="text-[11px] text-[#8A8F98] hover:text-[#0EA5E9] transition flex items-center gap-1"
                 >
                   <RefreshCw className="h-3 w-3" />
                   Reconnect
                 </button>
-                <span className="text-[#565A6E]">·</span>
+                <span className="text-[#62666D]">·</span>
                 <button
                   onClick={handleDisconnect}
                   disabled={disconnecting}
-                  className="text-[11px] text-[#8B8FA3] hover:text-[#EF4444] transition disabled:opacity-50"
+                  className="text-[11px] text-[#8A8F98] hover:text-[#EF4444] transition disabled:opacity-50"
                 >
                   {disconnecting ? "Disconnecting..." : "Disconnect"}
                 </button>
@@ -1474,8 +1474,8 @@ function GSCSection({ site }: { site: SiteView }) {
                   <BarChart3 className="h-5 w-5 text-[#F59E0B]" />
                 </div>
                 <div className="flex-1">
-                  <p className="text-[14px] font-medium text-[#EDEEF1]">Not connected</p>
-                  <p className="text-[12px] text-[#565A6E]">Connect to see how your pages rank on Google and spot pages that are losing visitors</p>
+                  <p className="text-[14px] font-medium text-[#F7F8F8]">Not connected</p>
+                  <p className="text-[12px] text-[#62666D]">Connect to see how your pages rank on Google and spot pages that are losing visitors</p>
                 </div>
               </div>
 
@@ -1489,7 +1489,7 @@ function GSCSection({ site }: { site: SiteView }) {
 
               <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2">
                 <Shield className="h-3 w-3 shrink-0 text-[#22C55E]" />
-                <p className="text-[10px] text-[#565A6E]">Pentra reads performance/indexing data and can submit your sitemap. It cannot edit your website.</p>
+                <p className="text-[10px] text-[#62666D]">Pentra reads performance/indexing data and can submit your sitemap. It cannot edit your website.</p>
               </div>
             </>
           )}
@@ -1512,10 +1512,10 @@ function SettingsSection({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+    <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
       <div className="flex items-center gap-2.5 px-5 py-3 border-b border-white/[0.04]">
         <Icon className="h-4 w-4 text-[#0EA5E9]" />
-        <p className="text-[13px] font-semibold text-[#EDEEF1]">{title}</p>
+        <p className="text-[13px] font-semibold text-[#F7F8F8]">{title}</p>
       </div>
       <div className="divide-y divide-white/[0.04]">{children}</div>
     </div>
@@ -1534,8 +1534,8 @@ function FieldRow({
   return (
     <div className="px-5 py-4">
       <div className="mb-2">
-        <p className="text-[13px] font-medium text-[#EDEEF1]">{label}</p>
-        <p className="text-[11px] text-[#565A6E]">{description}</p>
+        <p className="text-[13px] font-medium text-[#F7F8F8]">{label}</p>
+        <p className="text-[11px] text-[#62666D]">{description}</p>
       </div>
       {children}
     </div>
@@ -1556,8 +1556,8 @@ function ToggleRow({
   return (
     <div className="flex items-center justify-between px-5 py-4">
       <div>
-        <p className="text-[13px] font-medium text-[#EDEEF1]">{label}</p>
-        <p className="text-[11px] text-[#565A6E]">{description}</p>
+        <p className="text-[13px] font-medium text-[#F7F8F8]">{label}</p>
+        <p className="text-[11px] text-[#62666D]">{description}</p>
       </div>
       <button
         onClick={() => onChange(!value)}
@@ -1602,19 +1602,19 @@ function TagEditor({
   return (
     <div className="px-5 py-4">
       <div className="mb-2">
-        <p className="text-[13px] font-medium text-[#EDEEF1]">{label}</p>
-        <p className="text-[11px] text-[#565A6E]">{description}</p>
+        <p className="text-[13px] font-medium text-[#F7F8F8]">{label}</p>
+        <p className="text-[11px] text-[#62666D]">{description}</p>
       </div>
       <div className="flex flex-wrap gap-1.5">
         {items.map((item, i) => (
           <span
             key={i}
-            className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] border border-white/[0.06] px-2 py-1 text-[12px] text-[#EDEEF1]"
+            className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] border border-white/[0.06] px-2 py-1 text-[12px] text-[#F7F8F8]"
           >
             {item}
             <button
               onClick={() => onChange(items.filter((_, j) => j !== i))}
-              className="text-[#565A6E] hover:text-[#EF4444] transition-colors"
+              className="text-[#62666D] hover:text-[#EF4444] transition-colors"
             >
               <X className="h-3 w-3" />
             </button>
@@ -1631,12 +1631,12 @@ function TagEditor({
             onBlur={addItem}
             placeholder={placeholder}
             autoFocus
-            className="w-36 rounded-md border border-white/[0.1] bg-[#0F1117] px-2 py-1 text-[12px] text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
+            className="w-36 rounded-md border border-white/[0.1] bg-[#0E0F11] px-2 py-1 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
           />
         ) : (
           <button
             onClick={() => setAdding(true)}
-            className="inline-flex items-center gap-1 rounded-md border border-dashed border-white/[0.08] px-2 py-1 text-[11px] text-[#565A6E] hover:border-[#0EA5E9]/30 hover:text-[#0EA5E9] transition-colors"
+            className="inline-flex items-center gap-1 rounded-md border border-dashed border-white/[0.08] px-2 py-1 text-[11px] text-[#62666D] hover:border-[#0EA5E9]/30 hover:text-[#0EA5E9] transition-colors"
           >
             <Plus className="h-3 w-3" />
             Add

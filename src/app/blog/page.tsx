@@ -41,79 +41,55 @@ export default async function BlogIndex() {
   };
 
   return (
-    <div className="min-h-screen bg-[#08090E]">
+    <div className="min-h-screen bg-[#08090A] text-[#F7F8F8]">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(blogSchema).replace(/</g, "\\u003c") }} />
       <LandingNav />
 
-      <main className="mx-auto max-w-4xl px-6 pt-32 pb-20">
-        <h1 className="text-3xl font-bold text-[#EDEEF1] tracking-tight">
-          Blog
+      <main className="mx-auto w-full max-w-[1200px] px-6 pt-32 pb-24 md:pt-40">
+        <p className="font-mono text-[12px] uppercase tracking-[0.12em] text-[#62666D]">Guides</p>
+        <h1 className="mt-4 max-w-[16ch] text-[clamp(2.4rem,5.5vw,4.25rem)] font-semibold leading-[1.02] tracking-[-0.04em] text-[#F7F8F8]">
+          SEO and content guides
         </h1>
-        <p className="mt-2 text-[15px] text-[#8B8FA3]">
+        <p className="mt-5 max-w-[38rem] text-[17px] leading-relaxed text-[#8A8F98]">
           Practical guides on SEO, content and getting customers from Google and AI answers. Every article is
-          researched on the live web and fact-checked before it is published.
+          researched on the live web, fact-checked and published by Pentra on Autopilot.
         </p>
 
         {articles === null && (
-          <p className="mt-16 text-center text-[15px] text-[#565A6E]">Articles could not be loaded. Please refresh.</p>
+          <p className="mt-16 text-[15px] text-[#62666D]">Articles could not be loaded. Please refresh.</p>
         )}
 
         {articles && articles.length === 0 && (
-          <div className="mt-16 text-center">
-            <p className="text-[15px] text-[#565A6E]">
-              No articles published yet. Check back soon.
-            </p>
-          </div>
+          <p className="mt-16 text-[15px] text-[#62666D]">No articles published yet. Check back soon.</p>
         )}
 
         {articles && articles.length > 0 && (
-          <div className="mt-10 flex flex-col gap-0 divide-y divide-white/[0.06]">
+          <ol className="mt-16 border-t border-white/[0.06]">
             {articles.map((article) => (
-              <Link
-                key={article._id}
-                href={`/blog/${article.slug}`}
-                className="group flex flex-col gap-3 py-8 first:pt-0 transition-colors"
-              >
-                {article.featuredImage && (
-                  <div className="overflow-hidden rounded-lg border border-white/[0.06]">
-                    <img
-                      src={article.featuredImage}
-                      alt={article.title}
-                      className="w-full h-48 object-cover transition-transform duration-300 group-hover:scale-[1.02]"
-                    />
-                  </div>
-                )}
-                <div>
-                  <div className="flex items-center gap-3 text-[12px] text-[#565A6E]">
-                    <span>
-                      {format(new Date(article.createdAt), "MMM d, yyyy")}
-                    </span>
-                    {article.readingTime && (
-                      <>
-                        <span className="text-white/[0.08]">&middot;</span>
-                        <span className="flex items-center gap-1">
-                          <Clock className="h-3 w-3" />
-                          {article.readingTime} min read
-                        </span>
-                      </>
-                    )}
-                  </div>
-                  <h2 className="mt-2 text-lg font-semibold text-[#EDEEF1] group-hover:text-[#0EA5E9] transition-colors">
-                    {article.title}
-                  </h2>
-                  {article.metaDescription && (
-                    <p className="mt-1.5 text-[14px] text-[#8B8FA3] line-clamp-2 leading-relaxed">
-                      {article.metaDescription}
-                    </p>
-                  )}
-                  <span className="mt-3 inline-flex items-center gap-1 text-[13px] font-medium text-[#0EA5E9]">
-                    Read article
-                    <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+              <li key={article._id} className="border-b border-white/[0.06]">
+                <Link href={`/blog/${article.slug}`} className="group grid gap-2 py-7 md:grid-cols-[10rem_1fr_auto] md:items-baseline md:gap-8">
+                  <span className="flex items-center gap-2 text-[13px] text-[#62666D]">
+                    {format(new Date(article.createdAt), "MMM d, yyyy")}
+                    {article.readingTime && <span className="flex items-center gap-1 md:hidden"><Clock className="h-3 w-3" />{article.readingTime} min</span>}
                   </span>
-                </div>
-              </Link>
+                  <span className="min-w-0">
+                    <span className="block text-[18px] font-medium leading-snug tracking-[-0.01em] text-[#F7F8F8] transition-colors group-hover:text-white md:text-[20px]">
+                      {article.title}
+                    </span>
+                    {article.metaDescription && (
+                      <span className="mt-2 block max-w-[46rem] text-[14.5px] leading-relaxed text-[#8A8F98] line-clamp-2">
+                        {article.metaDescription}
+                      </span>
+                    )}
+                  </span>
+                  <span className="hidden items-center gap-3 text-[13px] text-[#62666D] md:flex">
+                    {article.readingTime && <span>{article.readingTime} min read</span>}
+                    <ArrowRight className="h-4 w-4 text-[#62666D] transition-transform group-hover:translate-x-0.5 group-hover:text-white" />
+                  </span>
+                </Link>
+              </li>
             ))}
-          </div>
+          </ol>
         )}
       </main>
     </div>

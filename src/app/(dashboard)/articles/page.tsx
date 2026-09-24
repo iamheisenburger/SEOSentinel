@@ -98,7 +98,7 @@ export default function ArticlesPage() {
           <div className="h-6 w-28 animate-pulse rounded bg-white/[0.04]" />
           <div className="mt-1.5 h-4 w-56 animate-pulse rounded bg-white/[0.03]" />
         </div>
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11]">
           {[...Array(8)].map((_, i) => (
             <div key={i} className="flex items-center gap-4 px-5 py-3.5 border-b border-white/[0.04] last:border-0">
               <div className="h-4 w-16 animate-pulse rounded-full bg-white/[0.04]" />
@@ -144,7 +144,7 @@ export default function ArticlesPage() {
         actions={
           <div className="flex items-center gap-2">
             <select
-              className="rounded-lg border border-white/[0.06] bg-[#0F1117] px-2.5 py-1.5 text-[12px] text-[#EDEEF1] outline-none transition focus:border-[#0EA5E9]/50"
+              className="rounded-lg border border-white/[0.06] bg-[#0E0F11] px-2.5 py-1.5 text-[12px] text-[#F7F8F8] outline-none transition focus:border-[#0EA5E9]/50"
               value={selectedTopic ?? ""}
               onChange={(e) =>
                 setSelectedTopic(
@@ -204,10 +204,10 @@ export default function ArticlesPage() {
       )}
 
       {/* Article usage bar */}
-      <div className="rounded-lg border border-white/[0.06] bg-[#0F1117] px-4 py-3">
+      <div className="rounded-lg border border-white/[0.06] bg-[#0E0F11] px-4 py-3">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-[12px] text-[#8B8FA3]">Monthly article usage</span>
-          <span className="text-[12px] font-medium text-[#EDEEF1] tabular-nums">{usageKnown ? `${articlesThisMonth} / ${maxArticles}` : "…"}</span>
+          <span className="text-[12px] text-[#8A8F98]">Monthly article usage</span>
+          <span className="text-[12px] font-medium text-[#F7F8F8] tabular-nums">{usageKnown ? `${articlesThisMonth} / ${maxArticles}` : "…"}</span>
         </div>
         <div className="h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
           <div
@@ -226,9 +226,9 @@ export default function ArticlesPage() {
 
       {/* Article List */}
       {filtered.length > 0 ? (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
           {/* Table header */}
-          <div className="hidden sm:grid sm:grid-cols-[1fr_100px_80px_140px_100px] gap-4 px-5 py-2.5 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#565A6E]">
+          <div className="hidden sm:grid sm:grid-cols-[1fr_100px_80px_140px_100px] gap-4 px-5 py-2.5 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#62666D]">
             <span>Title</span>
             <span>Status</span>
             <span>Words</span>
@@ -253,18 +253,18 @@ export default function ArticlesPage() {
                     />
                   )}
                   <div className="min-w-0">
-                    <p className="text-[13px] font-medium text-[#EDEEF1] leading-snug truncate group-hover:text-white transition">
+                    <p className="text-[13px] font-medium text-[#F7F8F8] leading-snug truncate group-hover:text-white transition">
                       {article.title}
                     </p>
-                    <p className="mt-0.5 text-[11px] text-[#565A6E] font-mono truncate sm:hidden">
+                    <p className="mt-0.5 text-[11px] text-[#62666D] font-mono truncate sm:hidden">
                       /{article.slug.replace(/^\/+/, "")}
                     </p>
                   </div>
                 </Link>
                 <div className="flex items-center gap-1.5">
                   {article.status === "revision" ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-[#8B8FA3] whitespace-nowrap" title="An earlier or retired version kept for your records. It is never published.">
-                      <span className="h-1.5 w-1.5 rounded-full bg-[#565A6E]" />
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-[#8A8F98] whitespace-nowrap" title="An earlier or retired version kept for your records. It is never published.">
+                      <span className="h-1.5 w-1.5 rounded-full bg-[#62666D]" />
                       Earlier version
                     </span>
                   ) : (
@@ -283,7 +283,7 @@ export default function ArticlesPage() {
                     </span>
                   )}
                 </div>
-                <span className="text-[12px] text-[#8B8FA3] tabular-nums hidden sm:block">
+                <span className="text-[12px] text-[#8A8F98] tabular-nums hidden sm:block">
                   {wc.toLocaleString()}
                 </span>
                 <div className="flex items-center gap-1.5">
@@ -318,14 +318,14 @@ export default function ArticlesPage() {
                           deleteArticle({ articleId: article._id });
                         }
                       }}
-                      className="inline-flex items-center rounded-md p-1 text-[#565A6E] hover:bg-[#EF4444]/[0.08] hover:text-[#F87171] transition"
+                      className="inline-flex items-center rounded-md p-1 text-[#62666D] hover:bg-[#EF4444]/[0.08] hover:text-[#F87171] transition"
                       title="Delete"
                     >
                       <Trash2 className="h-3 w-3" />
                     </button>
                   )}
                 </div>
-                <Link href={`/articles/${article._id}`} className="text-[11px] text-[#565A6E] sm:text-right flex items-center gap-1 sm:justify-end">
+                <Link href={`/articles/${article._id}`} className="text-[11px] text-[#62666D] sm:text-right flex items-center gap-1 sm:justify-end">
                   {formatDistanceToNow(article.createdAt, { addSuffix: true })}
                   <ArrowRight className="h-3 w-3 opacity-0 group-hover:opacity-100 transition" />
                 </Link>
@@ -334,9 +334,9 @@ export default function ArticlesPage() {
           })}
         </div>
       ) : (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-12 text-center">
-          <FileText className="mx-auto h-10 w-10 text-[#565A6E]/30" />
-          <p className="mt-3 text-[13px] text-[#565A6E]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-12 text-center">
+          <FileText className="mx-auto h-10 w-10 text-[#62666D]/30" />
+          <p className="mt-3 text-[13px] text-[#62666D]">
             {articles === undefined
               ? "Loading..."
               : activeTab !== "all"

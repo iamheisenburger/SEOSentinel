@@ -13,7 +13,7 @@ export function BrandedErrorState({
   onRetry?: () => void;
 }) {
   return (
-    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#08090E] px-6 text-[#EDEEF1]">
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#08090A] px-6 text-[#F7F8F8]">
       <div className="pointer-events-none absolute inset-0" aria-hidden="true">
         <div className="absolute left-1/2 top-[-16rem] h-[38rem] w-[38rem] -translate-x-1/2 rounded-full bg-[#0EA5E9]/[0.07] blur-[140px]" />
         <div className="absolute inset-0 opacity-[0.025] [background-image:linear-gradient(rgba(255,255,255,.35)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.35)_1px,transparent_1px)] [background-size:64px_64px]" />
@@ -37,7 +37,7 @@ export function BrandedErrorState({
         <h1 className="mt-3 text-4xl font-bold tracking-[-0.035em] sm:text-5xl">
           {title}
         </h1>
-        <p className="mx-auto mt-5 max-w-md text-[15px] leading-7 text-[#8B8FA3]">
+        <p className="mx-auto mt-5 max-w-md text-[15px] leading-7 text-[#8A8F98]">
           {description}
         </p>
 

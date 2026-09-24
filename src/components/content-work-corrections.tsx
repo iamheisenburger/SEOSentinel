@@ -5,7 +5,7 @@ import type { FunctionReturnType } from "convex/server";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
-const input = "block w-full rounded-lg border border-white/15 bg-[#0F1117] p-2 text-sm";
+const input = "block w-full rounded-lg border border-white/15 bg-[#0E0F11] p-2 text-sm";
 export function ExactPageControls({ siteId, pageId, pages }: { siteId: Id<"sites">; pageId: Id<"pages">; pages: FunctionReturnType<typeof api.selectedPages.list>["pages"] }) {
   const detail = useQuery(api.selectedPages.detail, { siteId, pageId });
   const previewChange = useAction(api.actions.contentCorrections.preview), correct = useAction(api.actions.contentCorrections.correct), rollback = useMutation(api.contentImprovements.requestRollback);

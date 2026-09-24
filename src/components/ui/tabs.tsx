@@ -23,8 +23,8 @@ export function Tabs({ tabs, active, onChange }: TabsProps) {
             relative px-3 pb-2.5 pt-1 text-[13px] font-medium transition-colors
             ${
               active === tab.id
-                ? "text-[#EDEEF1]"
-                : "text-[#565A6E] hover:text-[#8B8FA3]"
+                ? "text-[#F7F8F8]"
+                : "text-[#62666D] hover:text-[#8A8F98]"
             }
           `}
         >
@@ -32,7 +32,7 @@ export function Tabs({ tabs, active, onChange }: TabsProps) {
           {tab.count !== undefined && (
             <span
               className={`ml-1.5 text-[11px] ${
-                active === tab.id ? "text-[#0EA5E9]" : "text-[#565A6E]"
+                active === tab.id ? "text-[#0EA5E9]" : "text-[#62666D]"
               }`}
             >
               {tab.count}

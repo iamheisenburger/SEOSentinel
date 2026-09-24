@@ -87,15 +87,15 @@ export default function AnalyticsPage() {
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight text-[#EDEEF1]">
+          <h1 className="text-xl font-semibold tracking-tight text-[#F7F8F8]">
             Analytics
           </h1>
-          <p className="mt-1 text-[13px] text-[#565A6E]">
+          <p className="mt-1 text-[13px] text-[#62666D]">
             Search performance from Google Search Console
           </p>
         </div>
         {hasGSC && (
-          <p className="text-[11px] text-[#565A6E]">
+          <p className="text-[11px] text-[#62666D]">
             Last sync: {gscSummary.lastSync}
           </p>
         )}
@@ -107,9 +107,9 @@ export default function AnalyticsPage() {
             <div>
               <div className="flex items-center gap-2">
                 <Target className="h-4 w-4 text-[#A78BFA]" />
-                <h2 className="text-[13px] font-semibold text-[#EDEEF1]">What Google visitors did next</h2>
+                <h2 className="text-[13px] font-semibold text-[#F7F8F8]">What Google visitors did next</h2>
               </div>
-              <p className="mt-1 text-[11px] text-[#565A6E]">
+              <p className="mt-1 text-[11px] text-[#62666D]">
                 People who arrived on your articles from Google in the last 90 days, and how many signed up, started using your product, or paid.
               </p>
             </div>
@@ -147,12 +147,12 @@ export default function AnalyticsPage() {
       )}
 
       {!gscConnected ? (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-white/[0.06] bg-[#0F1117] py-16 px-6">
+        <div className="flex flex-col items-center justify-center rounded-xl border border-white/[0.06] bg-[#0E0F11] py-16 px-6">
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#0EA5E9]/[0.08] mb-4">
             <BarChart3 className="h-7 w-7 text-[#0EA5E9]" />
           </div>
-          <h2 className="text-[15px] font-semibold text-[#EDEEF1] mb-2">Connect Google Search Console</h2>
-          <p className="text-[13px] text-[#565A6E] max-w-md text-center mb-3">
+          <h2 className="text-[15px] font-semibold text-[#F7F8F8] mb-2">Connect Google Search Console</h2>
+          <p className="text-[13px] text-[#62666D] max-w-md text-center mb-3">
             See which searches bring people to your site, which pages are close to page one of Google, and which pages are slipping.
           </p>
           <a
@@ -179,9 +179,9 @@ export default function AnalyticsPage() {
             <BarChart3 className="h-3.5 w-3.5" />
             Connect Search Console
           </a>
-          <p className="mt-3 text-[11px] text-[#565A6E] max-w-sm text-center">
+          <p className="mt-3 text-[11px] text-[#62666D] max-w-sm text-center">
             Sign in with the Google account that owns your site in{" "}
-            <span className="text-[#8B8FA3]">search.google.com/search-console</span>.
+            <span className="text-[#8A8F98]">search.google.com/search-console</span>.
             Pentra reads performance/indexing data and can submit your sitemap. It cannot edit your website.
           </p>
         </div>
@@ -190,13 +190,13 @@ export default function AnalyticsPage() {
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#22C55E]/[0.08] mb-4">
             <BarChart3 className="h-7 w-7 text-[#22C55E]" />
           </div>
-          <h2 className="text-[15px] font-semibold text-[#EDEEF1] mb-2">Google Search Console Connected</h2>
+          <h2 className="text-[15px] font-semibold text-[#F7F8F8] mb-2">Google Search Console Connected</h2>
           {site?.gscProperty && (
-            <p className="text-[12px] text-[#8B8FA3] mb-2">
-              Property: <span className="text-[#EDEEF1] font-medium">{site.gscProperty}</span>
+            <p className="text-[12px] text-[#8A8F98] mb-2">
+              Property: <span className="text-[#F7F8F8] font-medium">{site.gscProperty}</span>
             </p>
           )}
-          <p className="text-[13px] text-[#565A6E] max-w-md text-center mb-4">
+          <p className="text-[13px] text-[#62666D] max-w-md text-center mb-4">
             Your data will appear here after syncing. Search Console data also updates automatically every day.
           </p>
           <button
@@ -281,14 +281,14 @@ export default function AnalyticsPage() {
               <div>
                 <div className="flex items-center gap-2">
                   <Workflow className="h-4 w-4 text-[#0EA5E9]" />
-                  <h2 className="text-[13px] font-semibold text-[#EDEEF1]">Your articles in Google</h2>
+                  <h2 className="text-[13px] font-semibold text-[#F7F8F8]">Your articles in Google</h2>
                 </div>
-                <p className="mt-1 text-[11px] text-[#565A6E]">
+                <p className="mt-1 text-[11px] text-[#62666D]">
                   How your published articles are doing in Google search, updated after each Search Console sync.
                 </p>
               </div>
               {growthSummary?.health && savedClicksGoal !== null && (
-                <div className="flex items-center gap-2 text-[11px] text-[#8B8FA3]">
+                <div className="flex items-center gap-2 text-[11px] text-[#8A8F98]">
                   <Target className="h-3.5 w-3.5 text-[#22C55E]" />
                   {growthSummary.health.organicClicks.toLocaleString()} of your {growthSummary.health.monthlyOrganicClicksGoal.toLocaleString()} monthly clicks goal
                 </div>
@@ -312,20 +312,20 @@ export default function AnalyticsPage() {
                 </div>
               </>
             ) : (
-              <p className="text-[11px] text-[#565A6E]">
+              <p className="text-[11px] text-[#62666D]">
                 This will fill in after the next Search Console sync.
               </p>
             )}
           </div>
 
           {/* Position Distribution */}
-          <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
-            <h2 className="text-[13px] font-semibold text-[#EDEEF1] mb-4">Ranking Distribution</h2>
+          <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
+            <h2 className="text-[13px] font-semibold text-[#F7F8F8] mb-4">Ranking Distribution</h2>
             <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
               <PositionBucket label="Top 3" count={top3.length} color="#22C55E" pct={bucketShares[0]} />
               <PositionBucket label="Page one (4-10)" count={top10.length} color="#0EA5E9" pct={bucketShares[1]} />
               <PositionBucket label="Page two (11-20)" count={pageTwo.length} color="#F59E0B" pct={bucketShares[2]} />
-              <PositionBucket label="Beyond page two" count={beyond20.length} color="#565A6E" pct={bucketShares[3]} />
+              <PositionBucket label="Beyond page two" count={beyond20.length} color="#62666D" pct={bucketShares[3]} />
             </div>
           </div>
 
@@ -335,9 +335,9 @@ export default function AnalyticsPage() {
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <TrendingDown className="h-4 w-4 text-[#EF4444]" />
-                  <h2 className="text-[13px] font-semibold text-[#EDEEF1]">Declining Content</h2>
+                  <h2 className="text-[13px] font-semibold text-[#F7F8F8]">Declining Content</h2>
                 </div>
-                <Link href="/articles" className="text-[11px] text-[#565A6E] hover:text-[#8B8FA3] transition flex items-center gap-1">
+                <Link href="/articles" className="text-[11px] text-[#62666D] hover:text-[#8A8F98] transition flex items-center gap-1">
                   View all <ArrowRight className="h-2.5 w-2.5" />
                 </Link>
               </div>
@@ -356,9 +356,9 @@ export default function AnalyticsPage() {
                       <TrendingDown className="h-2.5 w-2.5" />
                       {article.decayStatus === "declining" ? "Declining" : "Warning"}
                     </span>
-                    <span className="text-[12px] text-[#EDEEF1] truncate flex-1">{article.title}</span>
+                    <span className="text-[12px] text-[#F7F8F8] truncate flex-1">{article.title}</span>
                     {article.decayReason && (
-                      <span className="text-[10px] text-[#565A6E] shrink-0 hidden sm:inline">{article.decayReason}</span>
+                      <span className="text-[10px] text-[#62666D] shrink-0 hidden sm:inline">{article.decayReason}</span>
                     )}
                   </Link>
                 ))}
@@ -370,9 +370,9 @@ export default function AnalyticsPage() {
           <div className="rounded-xl border border-[#F59E0B]/[0.15] bg-[#F59E0B]/[0.02] p-5">
             <div className="flex items-center gap-2 mb-1">
               <ArrowUpRight className="h-4 w-4 text-[#F59E0B]" />
-              <h2 className="text-[13px] font-semibold text-[#EDEEF1]">Pages close to page one (positions 4–20)</h2>
+              <h2 className="text-[13px] font-semibold text-[#F7F8F8]">Pages close to page one (positions 4–20)</h2>
             </div>
-            <p className="text-[11px] text-[#565A6E] mb-4">
+            <p className="text-[11px] text-[#62666D] mb-4">
               Google already shows these pages, just not near the top. A small improvement can bring them more clicks.
             </p>
             {closeToPageOne.length > 0 ? (
@@ -380,9 +380,9 @@ export default function AnalyticsPage() {
                 <table className="w-full text-left">
                   <thead>
                     <tr className="border-b border-white/[0.06]">
-                      <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Page and search</th>
-                      <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E] text-right">Position</th>
-                      <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E] text-right">Impressions</th>
+                      <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D]">Page and search</th>
+                      <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D] text-right">Position</th>
+                      <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D] text-right">Impressions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -394,56 +394,56 @@ export default function AnalyticsPage() {
                               href={q.page}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="inline-flex max-w-[260px] items-center gap-1 truncate text-[12px] text-[#EDEEF1] hover:text-white"
+                              className="inline-flex max-w-[260px] items-center gap-1 truncate text-[12px] text-[#F7F8F8] hover:text-white"
                             >
                               {pagePath(q.page)}
-                              <ExternalLink className="h-2.5 w-2.5 shrink-0 text-[#565A6E]" />
+                              <ExternalLink className="h-2.5 w-2.5 shrink-0 text-[#62666D]" />
                             </a>
                           ) : (
-                            <span className="text-[12px] text-[#8B8FA3]">Page not reported</span>
+                            <span className="text-[12px] text-[#8A8F98]">Page not reported</span>
                           )}
-                          <p className="text-[11px] text-[#565A6E]">“{q.query}”</p>
+                          <p className="text-[11px] text-[#62666D]">“{q.query}”</p>
                         </td>
                         <td className="py-2.5 text-[12px] text-[#F59E0B] text-right font-mono">{q.position}</td>
-                        <td className="py-2.5 text-[12px] text-[#8B8FA3] text-right">{q.impressions.toLocaleString()}</td>
+                        <td className="py-2.5 text-[12px] text-[#8A8F98] text-right">{q.impressions.toLocaleString()}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             ) : (
-              <p className="text-[12px] text-[#565A6E]">
+              <p className="text-[12px] text-[#62666D]">
                 No pages are in positions 4–20 yet. They will show here as Google starts ranking your pages.
               </p>
             )}
           </div>
 
           {/* All Keywords Table */}
-          <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
-            <h2 className="text-[13px] font-semibold text-[#EDEEF1] mb-4">
-              All Keywords <span className="font-normal text-[#565A6E]">({queries.length})</span>
+          <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
+            <h2 className="text-[13px] font-semibold text-[#F7F8F8] mb-4">
+              All Keywords <span className="font-normal text-[#62666D]">({queries.length})</span>
             </h2>
             <div className="overflow-x-auto">
               <table className="w-full text-left">
                 <thead>
                   <tr className="border-b border-white/[0.06]">
-                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">#</th>
-                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Keyword</th>
-                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E] text-right">Clicks</th>
-                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E] text-right">Impressions</th>
-                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E] text-right">CTR</th>
-                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E] text-right">Position</th>
-                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Page</th>
+                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D]">#</th>
+                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D]">Keyword</th>
+                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D] text-right">Clicks</th>
+                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D] text-right">Impressions</th>
+                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D] text-right">CTR</th>
+                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D] text-right">Position</th>
+                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D]">Page</th>
                   </tr>
                 </thead>
                 <tbody>
                   {queries.map((q, i) => (
                     <tr key={i} className="border-b border-white/[0.03] last:border-0 hover:bg-white/[0.02] transition">
-                      <td className="py-2.5 text-[11px] text-[#565A6E] font-mono">{i + 1}</td>
-                      <td className="py-2.5 text-[12px] text-[#EDEEF1] max-w-[200px] truncate">{q.query}</td>
-                      <td className="py-2.5 text-[12px] text-[#EDEEF1] text-right font-mono">{q.clicks}</td>
-                      <td className="py-2.5 text-[12px] text-[#565A6E] text-right">{q.impressions.toLocaleString()}</td>
-                      <td className="py-2.5 text-[12px] text-[#565A6E] text-right">{(q.ctr * 100).toFixed(1)}%</td>
+                      <td className="py-2.5 text-[11px] text-[#62666D] font-mono">{i + 1}</td>
+                      <td className="py-2.5 text-[12px] text-[#F7F8F8] max-w-[200px] truncate">{q.query}</td>
+                      <td className="py-2.5 text-[12px] text-[#F7F8F8] text-right font-mono">{q.clicks}</td>
+                      <td className="py-2.5 text-[12px] text-[#62666D] text-right">{q.impressions.toLocaleString()}</td>
+                      <td className="py-2.5 text-[12px] text-[#62666D] text-right">{(q.ctr * 100).toFixed(1)}%</td>
                       <td className="py-2.5 text-right">
                         <span className={`text-[12px] font-mono ${
                           q.position <= 3
@@ -452,7 +452,7 @@ export default function AnalyticsPage() {
                               ? "text-[#0EA5E9]"
                               : q.position <= 20
                                 ? "text-[#F59E0B]"
-                                : "text-[#565A6E]"
+                                : "text-[#62666D]"
                         }`}>
                           {q.position}
                         </span>
@@ -463,7 +463,7 @@ export default function AnalyticsPage() {
                             href={q.page}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-[10px] text-[#565A6E] hover:text-[#8B8FA3] transition max-w-[150px] truncate"
+                            className="inline-flex items-center gap-1 text-[10px] text-[#62666D] hover:text-[#8A8F98] transition max-w-[150px] truncate"
                           >
                             {pagePath(q.page)}
                             <ExternalLink className="h-2.5 w-2.5 shrink-0" />
@@ -476,7 +476,7 @@ export default function AnalyticsPage() {
               </table>
             </div>
             {queries.length === 0 && (
-              <p className="text-center py-8 text-[12px] text-[#565A6E]">No keyword data yet. Search Console data updates daily.</p>
+              <p className="text-center py-8 text-[12px] text-[#62666D]">No keyword data yet. Search Console data updates daily.</p>
             )}
           </div>
         </>
@@ -515,12 +515,12 @@ function pagePath(url: string): string {
 
 function SummaryCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
+    <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
       <div className="flex items-center gap-1.5 mb-1.5">
         {icon}
-        <span className="text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">{label}</span>
+        <span className="text-[10px] font-medium uppercase tracking-wider text-[#62666D]">{label}</span>
       </div>
-      <p className="text-xl font-bold text-[#EDEEF1]">{value}</p>
+      <p className="text-xl font-bold text-[#F7F8F8]">{value}</p>
     </div>
   );
 }
@@ -529,8 +529,8 @@ function PositionBucket({ label, count, color, pct }: { label: string; count: nu
   return (
     <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
       <div className="flex items-start justify-between gap-2 mb-2">
-        <span className="min-w-0 text-[11px] text-[#EDEEF1]">{label}</span>
-        <span className="shrink-0 text-[10px] text-[#565A6E]">{pct}%</span>
+        <span className="min-w-0 text-[11px] text-[#F7F8F8]">{label}</span>
+        <span className="shrink-0 text-[10px] text-[#62666D]">{pct}%</span>
       </div>
       <p className="text-lg font-bold mb-2" style={{ color }}>{count}</p>
       <div className="h-1 w-full rounded-full bg-white/[0.04]">
@@ -543,7 +543,7 @@ function PositionBucket({ label, count, color, pct }: { label: string; count: nu
 function GrowthMetric({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
-      <p className="text-[10px] uppercase tracking-wider text-[#565A6E]">{label}</p>
+      <p className="text-[10px] uppercase tracking-wider text-[#62666D]">{label}</p>
       <p className="mt-1 text-lg font-bold" style={{ color }}>{value}</p>
     </div>
   );
@@ -564,10 +564,10 @@ function OutcomeMetric({
     <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
       <div className="flex items-center gap-1.5">
         {icon}
-        <p className="text-[10px] uppercase tracking-wider text-[#565A6E]">{label}</p>
+        <p className="text-[10px] uppercase tracking-wider text-[#62666D]">{label}</p>
       </div>
-      <p className="mt-1 text-lg font-bold text-[#EDEEF1]">{value.toLocaleString()}</p>
-      <p className="mt-0.5 text-[10px] text-[#565A6E]">{rateLabel}</p>
+      <p className="mt-1 text-lg font-bold text-[#F7F8F8]">{value.toLocaleString()}</p>
+      <p className="mt-0.5 text-[10px] text-[#62666D]">{rateLabel}</p>
     </div>
   );
 }

@@ -43,7 +43,7 @@ export function ProductFrame() {
     <div className="relative">
       {/* Light falling on the product, as on a lit desk. Decorative only. */}
       <div aria-hidden className="pointer-events-none absolute left-1/2 -top-16 h-40 w-[70%] -translate-x-1/2 rounded-full bg-[#0EA5E9]/[0.13] blur-[90px]" />
-      <div className="relative overflow-hidden rounded-2xl border border-white/[0.1] bg-[#0B0C0E] shadow-[0_40px_120px_-20px_rgba(0,0,0,0.8)]">
+      <div className="relative overflow-hidden rounded-2xl border border-white/[0.1] bg-[#0B0C0E] shadow-[0_40px_120px_-20px_rgba(0,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.05)]">
         {/* Window chrome */}
         <div className="flex items-center gap-3 border-b border-white/[0.06] bg-[#0E0F11] px-4 py-2.5">
           <div className="flex gap-1.5" aria-hidden>

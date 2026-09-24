@@ -73,14 +73,14 @@ function getOpportunityColor(score: number): string {
   if (score >= 60) return "text-[#22C55E]";
   if (score >= 40) return "text-[#0EA5E9]";
   if (score >= 25) return "text-[#F59E0B]";
-  return "text-[#8B8FA3]";
+  return "text-[#8A8F98]";
 }
 
 function getOpportunityBg(score: number): string {
   if (score >= 60) return "bg-[#22C55E]";
   if (score >= 40) return "bg-[#0EA5E9]";
   if (score >= 25) return "bg-[#F59E0B]";
-  return "bg-[#565A6E]";
+  return "bg-[#62666D]";
 }
 
 function getOpportunityLabel(score: number): string {
@@ -110,7 +110,7 @@ function getArticleTypeInfo(type: string): { label: string; color: string; bg: s
     "comparison": { label: "Comparison", color: "text-[#F59E0B]", bg: "bg-[#F59E0B]/[0.08]" },
     "roundup": { label: "Roundup", color: "text-[#F97316]", bg: "bg-[#F97316]/[0.08]" },
     "ultimate-guide": { label: "Ultimate Guide", color: "text-[#EC4899]", bg: "bg-[#EC4899]/[0.08]" },
-    "standard": { label: "Deep Dive", color: "text-[#8B8FA3]", bg: "bg-white/[0.04]" },
+    "standard": { label: "Deep Dive", color: "text-[#8A8F98]", bg: "bg-white/[0.04]" },
   };
   return types[type] ?? types["standard"];
 }
@@ -283,7 +283,7 @@ export default function PlanPage() {
           <div className="h-6 w-28 animate-pulse rounded bg-white/[0.04]" />
           <div className="mt-1.5 h-4 w-48 animate-pulse rounded bg-white/[0.03]" />
         </div>
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11]">
           {[...Array(8)].map((_, i) => (
             <div key={i} className="flex items-center gap-4 px-5 py-3 border-b border-white/[0.04] last:border-0">
               <div className="h-3.5 w-40 animate-pulse rounded bg-white/[0.04]" />
@@ -301,7 +301,7 @@ export default function PlanPage() {
         title="Topics"
         subtitle={`${availableCount} ready to write · ${usedCount} already written`}
         actions={
-          growthFirst ? <p className="max-w-xs text-right text-[12px] text-[#8B8FA3]">Pentra researches new topics automatically when it needs them.</p> :
+          growthFirst ? <p className="max-w-xs text-right text-[12px] text-[#8A8F98]">Pentra researches new topics automatically when it needs them.</p> :
           <div className="flex items-center gap-2">
             {availableCount > 0 && (
               <Button
@@ -354,12 +354,12 @@ export default function PlanPage() {
 
       {/* SEO Intelligence Summary — shows after topics have metrics */}
       {seoStats && !isPlanGenerating && (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
           <div className="flex flex-wrap items-center gap-2 mb-3">
             <Shield className="h-4 w-4 text-[#0EA5E9]" />
-            <span className="text-[12px] font-semibold text-[#EDEEF1]">SEO Intelligence Summary</span>
+            <span className="text-[12px] font-semibold text-[#F7F8F8]">SEO Intelligence Summary</span>
             {/* Same count as the "All" tab; averages use topics with search data. */}
-            <span className="text-[10px] text-[#565A6E]">
+            <span className="text-[10px] text-[#62666D]">
               {sorted.length} topic{sorted.length !== 1 ? "s" : ""}
               {seoStats.analyzed < sorted.length
                 ? ` · ${sorted.length - seoStats.analyzed} without search data yet`
@@ -368,26 +368,26 @@ export default function PlanPage() {
           </div>
           <div className={`grid grid-cols-2 gap-3 ${seoStats.showOpportunitySplit ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}>
             <div className="rounded-lg bg-white/[0.02] p-3">
-              <p className="text-[10px] text-[#565A6E] uppercase tracking-wider">Total Search Volume</p>
-              <p className="mt-1 text-[18px] font-semibold text-[#EDEEF1]">{formatVolume(seoStats.totalVolume)}<span className="text-[11px] text-[#565A6E] font-normal">/mo</span></p>
+              <p className="text-[10px] text-[#62666D] uppercase tracking-wider">Total Search Volume</p>
+              <p className="mt-1 text-[18px] font-semibold text-[#F7F8F8]">{formatVolume(seoStats.totalVolume)}<span className="text-[11px] text-[#62666D] font-normal">/mo</span></p>
             </div>
             <div className="rounded-lg bg-white/[0.02] p-3">
-              <p className="text-[10px] text-[#565A6E] uppercase tracking-wider">Avg Difficulty</p>
+              <p className="text-[10px] text-[#62666D] uppercase tracking-wider">Avg Difficulty</p>
               <p className={`mt-1 text-[18px] font-semibold ${getDifficultyColor(seoStats.avgKD)}`}>{seoStats.avgKD}<span className="text-[11px] font-normal"> /100</span></p>
             </div>
             <div className="rounded-lg bg-white/[0.02] p-3">
-              <p className="text-[10px] text-[#565A6E] uppercase tracking-wider">Avg Opportunity</p>
+              <p className="text-[10px] text-[#62666D] uppercase tracking-wider">Avg Opportunity</p>
               <p className={`mt-1 text-[18px] font-semibold ${getOpportunityColor(seoStats.avgOpportunity)}`}>{seoStats.avgOpportunity}<span className="text-[11px] font-normal"> /100</span></p>
             </div>
             {/* Only informative when some, but not all, topics score 40+. */}
             {seoStats.showOpportunitySplit && (
               <div className="rounded-lg bg-white/[0.02] p-3" title="Topics with an opportunity score of 40 or more out of 100">
-                <p className="text-[10px] text-[#565A6E] uppercase tracking-wider">Good or better</p>
-                <p className="mt-1 text-[18px] font-semibold text-[#22C55E]">{seoStats.highOpp}<span className="text-[11px] text-[#565A6E] font-normal"> of {seoStats.analyzed} topics</span></p>
+                <p className="text-[10px] text-[#62666D] uppercase tracking-wider">Good or better</p>
+                <p className="mt-1 text-[18px] font-semibold text-[#22C55E]">{seoStats.highOpp}<span className="text-[11px] text-[#62666D] font-normal"> of {seoStats.analyzed} topics</span></p>
               </div>
             )}
           </div>
-          <p className="mt-3 text-[10px] text-[#565A6E] leading-relaxed">
+          <p className="mt-3 text-[10px] text-[#62666D] leading-relaxed">
             Each topic was evaluated against real search data. Low-potential keywords (zero volume + high difficulty) were automatically filtered out.
             Article formats were selected by analyzing what&apos;s currently ranking on Google for each keyword. Topics are ordered by opportunity score.
           </p>
@@ -403,11 +403,11 @@ export default function PlanPage() {
               style={{ width: `${(availableCount / sorted.length) * 100}%` }}
             />
             <div
-              className="h-full bg-[#565A6E]"
+              className="h-full bg-[#62666D]"
               style={{ width: `${(usedCount / sorted.length) * 100}%` }}
             />
           </div>
-          <span className="text-[11px] text-[#565A6E] shrink-0">
+          <span className="text-[11px] text-[#62666D] shrink-0">
             {availableCount}/{sorted.length}
           </span>
         </div>
@@ -415,7 +415,7 @@ export default function PlanPage() {
 
       {/* Cadence info */}
       {site && sorted.length > 0 && (growthFirst ? (
-        <div className="flex items-center gap-2 text-[11px] text-[#565A6E]">
+        <div className="flex items-center gap-2 text-[11px] text-[#62666D]">
           <Clock className="h-3 w-3" />
           <span>
             Autopilot and publishing pace are set on your{" "}
@@ -426,7 +426,7 @@ export default function PlanPage() {
           </span>
         </div>
       ) : (
-        <div className="flex items-center gap-2 text-[11px] text-[#565A6E]">
+        <div className="flex items-center gap-2 text-[11px] text-[#62666D]">
           <Clock className="h-3 w-3" />
           <span>
             {(site.cadencePerWeek ?? 0) <= 0
@@ -442,7 +442,7 @@ export default function PlanPage() {
       {currentTab === "schedule" && (
         <div className="flex flex-col gap-4">
           {site && (
-            <div className="flex items-center gap-2 text-[11px] text-[#8B8FA3]">
+            <div className="flex items-center gap-2 text-[11px] text-[#8A8F98]">
               <Calendar className="h-3 w-3 text-[#0EA5E9]" />
               <span>
                 {(site.cadencePerWeek ?? 0) <= 0
@@ -456,31 +456,31 @@ export default function PlanPage() {
               <div key={week.startDate.toISOString()}>
                 <div className="flex items-center gap-2 mb-2">
                   <span className={`text-[12px] font-semibold ${
-                    week.label === "This Week" ? "text-[#0EA5E9]" : "text-[#EDEEF1]"
+                    week.label === "This Week" ? "text-[#0EA5E9]" : "text-[#F7F8F8]"
                   }`}>
                     {week.label}
                   </span>
-                  <span className="text-[10px] text-[#565A6E]">
+                  <span className="text-[10px] text-[#62666D]">
                     {week.topics.length} article{week.topics.length !== 1 ? "s" : ""}
                   </span>
                   <div className="flex-1 h-px bg-white/[0.04]" />
                 </div>
-                <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
+                <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
                   {week.topics.map((topic) => (
                     <div
                       key={topic._id}
                       className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-5 py-3 border-b border-white/[0.04] last:border-0"
                     >
                       <div className="shrink-0 w-20 text-center">
-                        <p className="text-[11px] font-medium text-[#EDEEF1]">
+                        <p className="text-[11px] font-medium text-[#F7F8F8]">
                           {topic.projectedDate.toLocaleDateString("en-US", { weekday: "short" })}
                         </p>
-                        <p className="text-[10px] text-[#565A6E]">
+                        <p className="text-[10px] text-[#62666D]">
                           {topic.projectedDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                         </p>
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="text-[13px] font-medium text-[#EDEEF1] leading-snug">
+                        <p className="text-[13px] font-medium text-[#F7F8F8] leading-snug">
                           {topic.label}
                         </p>
                         <span className="text-[11px] text-[#0EA5E9]">
@@ -493,7 +493,7 @@ export default function PlanPage() {
                             ? "bg-[#F59E0B]/[0.08] text-[#FBBF24]"
                             : topic.intent === "transactional"
                               ? "bg-[#22C55E]/[0.08] text-[#4ADE80]"
-                              : "bg-white/[0.04] text-[#8B8FA3]"
+                              : "bg-white/[0.04] text-[#8A8F98]"
                         }`}>
                           {topic.intent}
                         </span>
@@ -504,9 +504,9 @@ export default function PlanPage() {
               </div>
             ))
           ) : (
-            <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-12 text-center">
-              <Calendar className="mx-auto h-10 w-10 text-[#565A6E]/30" />
-              <p className="mt-3 text-[13px] text-[#565A6E]">
+            <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-12 text-center">
+              <Calendar className="mx-auto h-10 w-10 text-[#62666D]/30" />
+              <p className="mt-3 text-[13px] text-[#62666D]">
                 No available topics to schedule. Generate topics first.
               </p>
             </div>
@@ -535,8 +535,8 @@ export default function PlanPage() {
                   isGenerating
                     ? "border-[#0EA5E9]/[0.2] bg-[#0EA5E9]/[0.03]"
                     : isUsed || isDisqualified
-                      ? "border-white/[0.04] bg-[#0F1117] opacity-50"
-                      : "border-white/[0.06] bg-[#0F1117] hover:border-white/[0.1]"
+                      ? "border-white/[0.04] bg-[#0E0F11] opacity-50"
+                      : "border-white/[0.06] bg-[#0E0F11] hover:border-white/[0.1]"
                 }`}
               >
                 {/* Main row */}
@@ -560,7 +560,7 @@ export default function PlanPage() {
 
                   {/* Content */}
                   <div className="min-w-0 flex-1">
-                    <p className="text-[13px] font-medium text-[#EDEEF1] leading-snug">
+                    <p className="text-[13px] font-medium text-[#F7F8F8] leading-snug">
                       {topic.label}
                     </p>
                     <div className="mt-1 flex items-center gap-2 flex-wrap">
@@ -569,7 +569,7 @@ export default function PlanPage() {
                       </span>
 
                       {(topic as any).searchVolume != null && (topic as any).searchVolume > 0 && (
-                        <span className="inline-flex items-center gap-1 rounded bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-[#8B8FA3]" title="Monthly search volume">
+                        <span className="inline-flex items-center gap-1 rounded bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-[#8A8F98]" title="Monthly search volume">
                           <Search className="h-2.5 w-2.5" />
                           {formatVolume((topic as any).searchVolume)}/mo
                         </span>
@@ -581,7 +581,7 @@ export default function PlanPage() {
                         </span>
                       )}
                       {(topic as any).cpc != null && (topic as any).cpc > 0 && (
-                        <span className="rounded bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-[#8B8FA3]" title="Cost per click: what advertisers pay per Google ad click for this keyword">
+                        <span className="rounded bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-[#8A8F98]" title="Cost per click: what advertisers pay per Google ad click for this keyword">
                           CPC ${(topic as any).cpc.toFixed(2)}
                         </span>
                       )}
@@ -600,7 +600,7 @@ export default function PlanPage() {
                         ? "bg-[#F59E0B]/[0.08] text-[#FBBF24]"
                         : topic.intent === "transactional"
                           ? "bg-[#22C55E]/[0.08] text-[#4ADE80]"
-                          : "bg-white/[0.04] text-[#8B8FA3]"
+                          : "bg-white/[0.04] text-[#8A8F98]"
                     }`}>
                       {topic.intent}
                     </span>
@@ -611,7 +611,7 @@ export default function PlanPage() {
                     {hasMetrics && !isUsed && (
                       <button
                         onClick={() => setExpandedTopicId(isExpanded ? null : topic._id)}
-                        className="inline-flex items-center rounded-md p-1 text-[#565A6E] hover:bg-white/[0.04] hover:text-[#8B8FA3] transition"
+                        className="inline-flex items-center rounded-md p-1 text-[#62666D] hover:bg-white/[0.04] hover:text-[#8A8F98] transition"
                         title="View SEO rationale"
                       >
                         <Info className="h-3 w-3" />
@@ -646,7 +646,7 @@ export default function PlanPage() {
                         )}
                       </div>
                     ) : isUsed ? (
-                      <span className="inline-flex items-center gap-1.5 text-[11px] text-[#565A6E]">
+                      <span className="inline-flex items-center gap-1.5 text-[11px] text-[#62666D]">
                         <CheckCircle2 className="h-3 w-3" />
                         Used
                       </span>
@@ -674,7 +674,7 @@ export default function PlanPage() {
                     {!isGenerating && !isQueued && (
                       <button
                         onClick={() => removeTopic({ topicId: topic._id })}
-                        className="inline-flex items-center rounded-md p-1 text-[#565A6E] hover:bg-[#EF4444]/[0.08] hover:text-[#F87171] transition"
+                        className="inline-flex items-center rounded-md p-1 text-[#62666D] hover:bg-[#EF4444]/[0.08] hover:text-[#F87171] transition"
                         title="Delete topic"
                       >
                         <Trash2 className="h-3 w-3" />
@@ -688,8 +688,8 @@ export default function PlanPage() {
                   <div className="border-t border-white/[0.04] px-5 py-3 bg-white/[0.01]">
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-[11px]">
                       <div>
-                        <p className="text-[#565A6E] uppercase tracking-wider text-[9px] mb-1">Why this topic</p>
-                        <p className="text-[#8B8FA3] leading-relaxed">
+                        <p className="text-[#62666D] uppercase tracking-wider text-[9px] mb-1">Why this topic</p>
+                        <p className="text-[#8A8F98] leading-relaxed">
                           {(topic as any).searchVolume > 0
                             ? `${formatVolume((topic as any).searchVolume)} monthly searches`
                             : "Niche keyword"
@@ -704,8 +704,8 @@ export default function PlanPage() {
                         </p>
                       </div>
                       <div>
-                        <p className="text-[#565A6E] uppercase tracking-wider text-[9px] mb-1">Format selected</p>
-                        <p className="text-[#8B8FA3] leading-relaxed">
+                        <p className="text-[#62666D] uppercase tracking-wider text-[9px] mb-1">Format selected</p>
+                        <p className="text-[#8A8F98] leading-relaxed">
                           {(topic as any).recommendedArticleType
                             ? `Top Google results for "${topic.primaryKeyword}" are mostly ${(topic as any).recommendedArticleType} articles, so Pentra matched that format for the best chance of ranking.`
                             : `${articleTypeInfo.label} format selected based on keyword intent and topic structure.`
@@ -713,19 +713,19 @@ export default function PlanPage() {
                         </p>
                       </div>
                       <div>
-                        <p className="text-[#565A6E] uppercase tracking-wider text-[9px] mb-1">Opportunity breakdown</p>
+                        <p className="text-[#62666D] uppercase tracking-wider text-[9px] mb-1">Opportunity breakdown</p>
                         <div className="flex flex-col gap-1">
                           <div className="flex items-center justify-between">
-                            <span className="text-[#8B8FA3]">Volume signal</span>
-                            <span className="text-[#EDEEF1] tabular-nums">{Math.round((topic as any).searchVolume > 0 ? Math.min(Math.log10((topic as any).searchVolume) * 13, 40) : 0)}/40</span>
+                            <span className="text-[#8A8F98]">Volume signal</span>
+                            <span className="text-[#F7F8F8] tabular-nums">{Math.round((topic as any).searchVolume > 0 ? Math.min(Math.log10((topic as any).searchVolume) * 13, 40) : 0)}/40</span>
                           </div>
                           <div className="flex items-center justify-between">
-                            <span className="text-[#8B8FA3]">Difficulty bonus</span>
-                            <span className="text-[#EDEEF1] tabular-nums">{Math.round(Math.max(0, (100 - ((topic as any).keywordDifficulty ?? 50)) * 0.4))}/40</span>
+                            <span className="text-[#8A8F98]">Difficulty bonus</span>
+                            <span className="text-[#F7F8F8] tabular-nums">{Math.round(Math.max(0, (100 - ((topic as any).keywordDifficulty ?? 50)) * 0.4))}/40</span>
                           </div>
                           <div className="flex items-center justify-between">
-                            <span className="text-[#8B8FA3]">Commercial value</span>
-                            <span className="text-[#EDEEF1] tabular-nums">{Math.round(Math.min(((topic as any).cpc ?? 0) * 4, 20))}/20</span>
+                            <span className="text-[#8A8F98]">Commercial value</span>
+                            <span className="text-[#F7F8F8] tabular-nums">{Math.round(Math.min(((topic as any).cpc ?? 0) * 4, 20))}/20</span>
                           </div>
                           <div className="flex items-center justify-between border-t border-white/[0.04] pt-1 mt-0.5">
                             <span className={`font-medium ${getOpportunityColor(opportunity)}`}>Total Score</span>
@@ -737,10 +737,10 @@ export default function PlanPage() {
                     {/* PAA Questions */}
                     {(topic as any).paaQuestions?.length > 0 && (
                       <div className="mt-3 pt-3 border-t border-white/[0.04]">
-                        <p className="text-[#565A6E] uppercase tracking-wider text-[9px] mb-1.5">People Also Ask (from Google)</p>
+                        <p className="text-[#62666D] uppercase tracking-wider text-[9px] mb-1.5">People Also Ask (from Google)</p>
                         <div className="flex flex-wrap gap-1.5">
                           {(topic as any).paaQuestions.slice(0, 5).map((q: string, i: number) => (
-                            <span key={i} className="rounded bg-white/[0.04] px-2 py-0.5 text-[10px] text-[#8B8FA3]">
+                            <span key={i} className="rounded bg-white/[0.04] px-2 py-0.5 text-[10px] text-[#8A8F98]">
                               {q}
                             </span>
                           ))}
@@ -750,10 +750,10 @@ export default function PlanPage() {
                     {/* Secondary keywords */}
                     {topic.secondaryKeywords.length > 0 && (
                       <div className="mt-3 pt-3 border-t border-white/[0.04]">
-                        <p className="text-[#565A6E] uppercase tracking-wider text-[9px] mb-1.5">Supporting keywords</p>
+                        <p className="text-[#62666D] uppercase tracking-wider text-[9px] mb-1.5">Supporting keywords</p>
                         <div className="flex flex-wrap gap-1.5">
                           {topic.secondaryKeywords.map((kw, i) => (
-                            <span key={i} className="rounded bg-white/[0.04] px-2 py-0.5 text-[10px] text-[#8B8FA3]">
+                            <span key={i} className="rounded bg-white/[0.04] px-2 py-0.5 text-[10px] text-[#8A8F98]">
                               {kw}
                             </span>
                           ))}
@@ -767,9 +767,9 @@ export default function PlanPage() {
           })}
         </div>
       ) : currentTab !== "schedule" ? (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-12 text-center">
-          <Target className="mx-auto h-10 w-10 text-[#565A6E]/30" />
-          <p className="mt-3 text-[13px] text-[#565A6E]">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-12 text-center">
+          <Target className="mx-auto h-10 w-10 text-[#62666D]/30" />
+          <p className="mt-3 text-[13px] text-[#62666D]">
             {topics === undefined
               ? "Loading..."
               : sorted.length === 0
@@ -777,7 +777,7 @@ export default function PlanPage() {
                 : "No topics in this view."}
           </p>
           {topics?.length === 0 && site && (
-            <p className="mt-2 text-[11px] text-[#565A6E]/70">
+            <p className="mt-2 text-[11px] text-[#62666D]/70">
               Our AI will analyze your site, research keywords, evaluate search volume and competition,
               and build an optimized content plan designed to maximize your organic traffic.
             </p>
