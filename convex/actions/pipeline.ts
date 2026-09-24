@@ -1651,11 +1651,12 @@ async function factCheckArticle(
     "   - 70-89: Most claims verified, minor gaps\n" +
     "   - 50-69: Several unverifiable claims\n" +
     "   - Below 50: Major factual concerns\n" +
-    "11. 'claimCount' = total factual claims found. 'verifiedCount' = claims supported by evidence.\n" +
+    "11. 'claimCount' = total externally verifiable factual claims remaining in the returned corrected article. 'verifiedCount' = those remaining claims supported by evidence. Do not count advice, questions, expressly hypothetical scenarios or removed claims as unverified facts. Assess actual factual assertions embedded within advice or scenarios separately.\n" +
     "12. Every operational number, range, timeline, threshold, duration, score, volume, percentage, price, or quantified outcome MUST have direct support in the supplied evidence. Cite external evidence using its matching numbered inline citation [n]; first-party product evidence is unnumbered and must never receive a fabricated citation. Otherwise remove the number. Calling it a best practice, example, framework, or rule of thumb is not an exemption.\n" +
     "13. Any invented scenario must be explicitly labelled hypothetical. Its names, numbers, timelines, dialogue, and results are illustration only and cannot support a factual conclusion.\n" +
     "14. Before returning, scan the complete markdown for every digit and currency symbol. Verify each factual use against supplied evidence or remove it. Step numbers and source citation markers are the only structural exceptions.\n" +
-    "15. Submit the complete corrected article and review metadata through the review_article tool.",
+    "15. Submit the complete corrected article and review metadata through the review_article tool." +
+    (contentProviderActive() ? "\nEXACT-ARTIFACT REVIEW OVERRIDE: This workflow retains the input article unchanged until a separate targeted revision. Return the input markdown unchanged. Score confidenceScore, claimCount and verifiedCount against that exact input, not a proposed correction. Describe needed factual corrections in notes; do not silently remove or rewrite them. Count externally verifiable assertions, not advice, questions or expressly hypothetical illustrations, while still assessing factual assertions embedded within them." : ""),
     userMessage: `Sources to validate against: ${JSON.stringify(
       sources ?? [],
     )}\n\nResearch evidence gathered from the cited sources:\n${researchEvidence || "No research summary supplied."}\n\nFirst-party product evidence:\n${productEvidence || "No first-party product evidence supplied."}\n\nArticle to review:\n${markdown}`,
@@ -1876,6 +1877,7 @@ async function auditFinalArticle(args: {
       "You are the final independent publication auditor for a people-first SEO publication.",
       "Assess the exact finished article without rewriting it.",
       "The score measures search-intent satisfaction, usefulness, factual restraint, product grounding, clarity, structure, citation integrity, and absence of generic AI filler.",
+      "Product grounding means that any product claims present must match the supplied evidence. It does not require a brand mention, promotional section, CTA, or product recommendation. Useful advice relevant to the business and reader can stand alone; do not invent a defect solely because the publisher is not mentioned.",
       "A score of 85 or more means the article is ready for a discerning reader without a material editorial change.",
       "Do not require an external citation for advice, decision questions, or an explicitly author-proposed framework. Lack of sources alone is not a defect; presenting an uncited taxonomy or best practice as settled external fact is.",
       "Missing retrieved evidence is not proof of nonexistence. Reject unsupported assertions that a platform publishes no documentation, discloses no mechanics, or offers no measurement merely because the supplied research found none. An author-proposed framework or uncertainty disclaimer does not exempt surrounding factual assertions from review.",
@@ -5281,7 +5283,6 @@ async function handleArticle(
       const exactAudit = await auditFinalArticleWithUnsupportedClaimRemoval(auditArgs);
       finalMarkdown = exactAudit.markdown;
       const finalAudit = exactAudit.audit;
-      const initialUncitedClaims = uncitedEvidenceRequiredParagraphs(finalMarkdown);
       const auditEvidenceSnapshot = [
         finalSources
           .map((source, index) =>
@@ -5297,6 +5298,10 @@ async function handleArticle(
         productEvidence,
         productEvidenceHash,
         claimEvidence: finalAudit.claimEvidence,
+      });
+      const initialUncitedClaims = uncitedEvidenceRequiredParagraphs(finalMarkdown, {
+        claimEvidenceStatus: initialClaimAudit.passed ? "passed" : "failed", claimEvidence: finalAudit.claimEvidence,
+        productEvidenceSnapshot: productEvidence, productEvidenceHash,
       });
       const initialUnsupportedClaims = finalAudit.claimEvidence.filter(
         (claim) => !claim.supported,
@@ -5388,9 +5393,6 @@ async function handleArticle(
           });
           const exactRemediationMarkdown = exactRemediationAudit.markdown;
           const remediationAudit = exactRemediationAudit.audit;
-          const remainingUncitedClaims = uncitedEvidenceRequiredParagraphs(
-            exactRemediationMarkdown,
-          );
           const remediationClaimAudit = validateClaimEvidenceLedger({
             markdown: exactRemediationMarkdown,
             sources: finalSources,
@@ -5398,6 +5400,10 @@ async function handleArticle(
             productEvidence,
             productEvidenceHash,
             claimEvidence: remediationAudit.claimEvidence,
+          });
+          const remainingUncitedClaims = uncitedEvidenceRequiredParagraphs(exactRemediationMarkdown, {
+            claimEvidenceStatus: remediationClaimAudit.passed ? "passed" : "failed", claimEvidence: remediationAudit.claimEvidence,
+            productEvidenceSnapshot: productEvidence, productEvidenceHash,
           });
           const remainingUnsupportedClaims = remediationAudit.claimEvidence.filter(
             (claim) => !claim.supported,
@@ -7246,7 +7252,6 @@ async function reviewExistingArticleHandler(
       markdown: string,
       auditResult: Awaited<ReturnType<typeof auditFinalArticle>>,
     ) => {
-      const evidenceDefects = uncitedEvidenceRequiredParagraphs(markdown);
       const unsupportedClaims = auditResult.claimEvidence.filter(
         (claim) => !claim.supported,
       );
@@ -7257,6 +7262,10 @@ async function reviewExistingArticleHandler(
         productEvidence,
         productEvidenceHash,
         claimEvidence: auditResult.claimEvidence,
+      });
+      const evidenceDefects = uncitedEvidenceRequiredParagraphs(markdown, {
+        claimEvidenceStatus: deterministicClaimAudit.passed ? "passed" : "failed", claimEvidence: auditResult.claimEvidence,
+        productEvidenceSnapshot: productEvidence, productEvidenceHash,
       });
       const evidenceDefectCount =
         evidenceDefects.length +

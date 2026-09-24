@@ -59,6 +59,21 @@ const body = Array.from(
   (_, index) => `useful${index}`,
 ).join(" ");
 
+test("a hypothetical's explicit non-evidence disclaimer is not an affirmative evidence claim", () => {
+  for (const business of ["bookkeeping practice", "garden maintenance company", "software team"]) {
+    const paragraph = `Imagine a ${business} preparing a customer question brief. In this hypothetical, the team records the reader and the intended next step. This scenario illustrates the proposed brief structure; it is not evidence of search demand.`;
+    assert.deepEqual(evidenceRequiredParagraphs(paragraph, ""), []);
+    assert.equal(validateClaimEvidenceLedger({ markdown: paragraph, sources: [], researchEvidence: "", productEvidence: "",
+      claimEvidence: [{ claim: paragraph, citationNumbers: [], supported: true, reason: "Explicitly hypothetical illustration, not an observed outcome." }] }).passed, true);
+    for (const extra of ["There is evidence of search demand.", "Our software increases conversions by 40%.", "According to a study, readers prefer this workflow."]) {
+      const mixed = `${paragraph} ${extra}`;
+      assert.deepEqual(evidenceRequiredParagraphs(mixed, ""), [mixed]);
+      assert.equal(validateClaimEvidenceLedger({ markdown: mixed, sources: [], researchEvidence: "", productEvidence: "",
+        claimEvidence: [{ claim: mixed, citationNumbers: [], supported: true, reason: "Hypothetical framing cannot certify the appended assertion." }] }).passed, false);
+    }
+  }
+});
+
 test("length recovery reserves bounded headroom for deterministic evidence pruning", () => {
   assert.equal(evidenceSafeLengthRecoveryTarget({
     currentWords: 683,
@@ -1466,6 +1481,8 @@ test("publication accepts audited first-party quantities without inventing exter
     const numericIssues = (value: typeof article) => evaluatePublicationQuality(value, "strict").issues
       .filter(issue => issue.includes("quantified outcome or operational"));
     assert.deepEqual(numericIssues(article), []);
+    assert.deepEqual(uncitedEvidenceRequiredParagraphs(claim, article), []);
+    assert.deepEqual(uncitedEvidenceRequiredParagraphs(claim), [claim], "No evidence context remains fail-closed");
     for (const patch of [
       { productEvidenceHash: sha256Hex("changed") },
       { productEvidenceSnapshot: "" },
@@ -1475,7 +1492,11 @@ test("publication accepts audited first-party quantities without inventing exter
       { markdown: claim.replace("3", "900") },
       { markdown: `${claim} Customers save 90% of their time.` },
       { markdown: `${claim}\n\nOther software saves 90% of customer time.` },
-    ]) assert.ok(numericIssues({ ...article, ...patch }).length > 0, JSON.stringify(patch));
+    ]) {
+      const changed = { ...article, ...patch };
+      assert.ok(numericIssues(changed).length > 0, JSON.stringify(patch));
+      assert.ok(uncitedEvidenceRequiredParagraphs(changed.markdown, changed).length > 0, JSON.stringify(patch));
+    }
   }
 });
 

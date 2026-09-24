@@ -9,6 +9,20 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { getFunctionName } from "convex/server";
 
 const actual = createRequire(import.meta.url);
+test("Content progress reports its actual stage without claiming unused legacy research and media steps", () => {
+  const code = buildSync({ entryPoints: ["src/components/ui/article-progress.tsx"], bundle: true,
+    platform: "node", format: "cjs", packages: "external", write: false }).outputFiles[0].text;
+  for (const [stage, label] of [["prepare", "Preparing your draft"], ["review", "Reviewing your draft"],
+    ["publish", "Publishing approved content"], ["verify", "Checking the live page"]]) {
+    const runtime = { exports: {} as Record<string, never> };
+    runInNewContext(code, { module: runtime, exports: runtime.exports,
+      require: (name: string) => name === "convex/react" ? { useQuery: () => ({ type: "article",
+        contentWork: { stage }, stepProgress: { current: 9, total: 9 } }) } : actual(name) });
+    const html = renderToStaticMarkup(createElement(runtime.exports.ArticleProgress, { siteId: "sites:synthetic" }));
+    assert.match(html, new RegExp(label));
+    assert.doesNotMatch(html, /Web research|YouTube|Site screenshot|Image search|Featured image|9\/9|Generating article/);
+  }
+});
 const state = { siteId: "sites:synthetic", setupPending: false, serviceMode: "growth_first", reviewToken: "synthetic-consent", profile: { name: "Fixture business", summary: "Confirmed facts", audience: "Garden owners", productUsage: "Visit planning", offerings: [] },
   destination: { kind: "github", domain: "fixture.example", repository: "fixture/website", branch: "main", contentDirectory: "content/blog", verified: true },
   entitlement: true, enabled: true, approvalRequired: false, bindingCurrent: true, schedule: { active: false, paused: true, nextDeadlineAt: 1, intervalMs: 86_400_000, timezone: "UTC" },

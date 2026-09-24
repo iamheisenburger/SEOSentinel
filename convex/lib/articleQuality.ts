@@ -305,7 +305,7 @@ export function countDifferentiationSignals(
 // "evidence that/of...") while the independent citation, numeric, outcome,
 // and named-product checks below continue to guard facts embedded in advice.
 const FACTUAL_CLAIM_PATTERN =
-  /\b(?:according to|stud(?:y|ies)|survey|dataset|findings?|average|majority)\b|\bevidence\s+(?:that|of)\b|\b(?:study|survey|report|data|evidence|research)\b[^\n.!?]{0,40}\b(?:shows?|found|finds?|indicates?|reports?|supports?|suggests?|demonstrates?|confirms?)\b|\b(?:shows?|found|indicates?)\s+that\b/i;
+  /\b(?:according to|stud(?:y|ies)|survey|dataset|findings?|average|majority)\b|(?<!\bnot )\bevidence\s+(?:that|of)\b|\b(?:study|survey|report|data|evidence|research)\b[^\n.!?]{0,40}\b(?:shows?|found|finds?|indicates?|reports?|supports?|suggests?|demonstrates?|confirms?)\b|\b(?:shows?|found|indicates?)\s+that\b/i;
 
 /**
  * Pentra publishes plain Markdown, never executable MDX.  Keep this deliberately
@@ -516,7 +516,7 @@ function hasNonExemptAssertion(value: string, productEvidence: string): boolean 
     if (isEvaluationQuestion(plain)) return false;
     if (/^(?:the|a|your|our)\s+(?:\w+\s+){0,2}question\s+is\s+whether\b/i.test(plain) && !/;|\bbut\b/i.test(plain)) return false;
     return (
-      /\baccording to\b|\bevidence\s+(?:that|of)\b|\b(?:study|survey|report|data|evidence|research)\b[^\n.!?]{0,40}\b(?:shows?|found|finds?|indicates?|reports?|supports?|suggests?|demonstrates?|confirms?)\b/i.test(plain) ||
+      /\baccording to\b|(?<!\bnot )\bevidence\s+(?:that|of)\b|\b(?:study|survey|report|data|evidence|research)\b[^\n.!?]{0,40}\b(?:shows?|found|finds?|indicates?|reports?|supports?|suggests?|demonstrates?|confirms?)\b/i.test(plain) ||
       hasExternalSystemAssertion(plain) ||
       (referencesNamedProduct(plain, productEvidence) &&
         /\b(?:offers?|provides?|includes?|supports?|automates?|publishes?|crawls?|detects?|generates?|integrates?|connects?|tracks?|monitors?|analy[sz]es?|creates?)\b/i.test(plain)) ||
@@ -1161,12 +1161,23 @@ function quantifiedParagraphs(markdown: string): string[] {
     );
 }
 
-export function uncitedEvidenceRequiredParagraphs(markdown: string): string[] {
+export function uncitedEvidenceRequiredParagraphs(markdown: string,
+  evidence?: Pick<PublicationArticle, "claimEvidenceStatus" | "claimEvidence" | "productEvidenceSnapshot" | "productEvidenceHash">): string[] {
   return quantifiedParagraphs(markdown).filter(
     (paragraph) =>
       inlineCitationNumbers(paragraph).length === 0 &&
       !EXTERNAL_LINK_PATTERN.test(paragraph),
-  );
+  ).filter(paragraph => {
+    // Shared by exact-prose scoring and final publication, so a valid product
+    // quantity cannot pass one boundary and be rejected at the other.
+    const claims = evidence?.claimEvidence?.filter(entry => entry.supported &&
+      entry.citationNumbers.length === 0 && entry.claim.trim() === paragraph) ?? [];
+    if (evidence?.claimEvidenceStatus !== "passed" || claims.length === 0 ||
+      !evidence.productEvidenceSnapshot || !evidence.productEvidenceHash) return true;
+    return !validateClaimEvidenceLedger({ markdown: paragraph, sources: [], researchEvidence: "",
+      productEvidence: evidence.productEvidenceSnapshot, productEvidenceHash: evidence.productEvidenceHash,
+      claimEvidence: claims }).passed;
+  });
 }
 
 /**
@@ -1549,18 +1560,7 @@ export function evaluatePublicationQuality(
   const sourceHosts = new Set(validSources.map((source) => source.hostname));
   const paragraphsWithClaims = quantifiedParagraphs(markdown);
   const paragraphsWithOutcomes = quantifiedOutcomeParagraphs(markdown);
-  const uncitedClaims = uncitedEvidenceRequiredParagraphs(markdown).filter(paragraph => {
-    // First-party facts use the preserved product snapshot, not a fabricated
-    // external citation ordinal. Require the exact current paragraph's supported
-    // receipt AND revalidate its evidence; a stale "passed" flag is insufficient.
-    const claims = article.claimEvidence?.filter(entry => entry.supported &&
-      entry.citationNumbers.length === 0 && entry.claim.trim() === paragraph) ?? [];
-    if (article.claimEvidenceStatus !== "passed" || claims.length === 0 ||
-      !article.productEvidenceSnapshot || !article.productEvidenceHash) return true;
-    return !validateClaimEvidenceLedger({ markdown: paragraph, sources: [], researchEvidence: "",
-      productEvidence: article.productEvidenceSnapshot, productEvidenceHash: article.productEvidenceHash,
-      claimEvidence: claims }).passed;
-  });
+  const uncitedClaims = uncitedEvidenceRequiredParagraphs(markdown, article);
   if (uncitedClaims.length > 0) {
     const message = `${uncitedClaims.length} quantified outcome or operational claim(s) lack an inline citation.`;
     if (mode === "strict") issues.push(message);

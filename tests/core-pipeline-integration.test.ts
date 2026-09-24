@@ -2071,7 +2071,13 @@ test("SLC53 actual draft, factual review and revision share evidence rules witho
     for (const review of reviews) {
       assert.match(review.system, /first-party product evidence is unnumbered/);
       assert.match(review.system, /remove the unsupported proposition, not merely soften/);
+      assert.match(review.system, /claims remaining in the returned corrected article/);
+      assert.match(review.system, /Score confidenceScore, claimCount and verifiedCount against that exact input, not a proposed correction/);
+      assert.match(review.system, /Do not count advice, questions, expressly hypothetical scenarios or removed claims/);
     }
+    const audits = f.modelCalls.filter(c => c.tools[0].name === "audit_final_article");
+    assert.ok(audits.length > 0);
+    for (const audit of audits) assert.match(audit.system, /does not require a brand mention, promotional section, CTA/);
     const revisions = f.modelCalls.filter(c => c.tools[0].name === "remediate_final_article");
     assert.equal(revisions.length, 2);
     for (const revision of revisions) {

@@ -9,9 +9,9 @@ replace existing autonomous commitments or certify WordPress/backlinks/growth.
 
 Acceptance checklist (unchecked means incomplete, not absent code):
 - [x] Fresh exact-tenant production snapshot and genuine signed-in Articles UI.
-- [ ] Customer-requested generation independent of a failed automatic slot.
-- [ ] Safe customer editing, review and rejection/recovery.
-- [ ] Exact approved publication and live verification through the UI.
+- [x] Customer-requested generation independent of a failed automatic slot.
+- [ ] Safe customer editing, review and rejection/recovery (editing demonstrated; live rejection still to check).
+- [x] Exact approved publication and live verification through the UI.
 - [ ] Two fresh complete cycles on each authorized production tenant.
 - [ ] New-customer onboarding, billing and GitHub connection acceptance.
 - [ ] Truthful simple reporting and claims.
@@ -37,7 +37,7 @@ first-party plan quantity and capped editorial84. LeadPilot job
 actual receipts $0.686368. Repeated cached-response attempts made no extra paid
 calls. Neither request published. Failed records were not reset or re-sealed.
 
-September24 recovery release candidate:
+September24 recovery release `a4dabef27fa3b113bb3d8b85818fc9a522f6bb34`:
 - Revalidate exact first-party quantitative paragraphs against their preserved
   evidence snapshot/ledger rather than demand invented external citations.
   Unsupported, changed, stale or missing evidence remains rejected.
@@ -58,9 +58,51 @@ new requests total $1.459882. No authorization increase or reservation reset.
 Final candidate gates:1,840 tests/1,839 passed/zero failures/one existing skip;
 type-check, build, additive schema, secret scan, dependency audit and Convex
 dry-run passed. Lint:zero errors/157 existing warnings. Browser:36 passed/two
-authenticated skips. Deployment and genuine UI acceptance are next. The editor
-is not yet deployed. Ordinary new-customer pricing remains a release requirement;
+authenticated skips. The editor is deployed: Convex succeeded,
+hosted quality35984411508 passed and Vercel
+deployment6635067570 succeeded. Ordinary new-customer pricing remains a release requirement;
 the currently enabled pricing is limited to the authorized validation run.
+
+### September24 live owner-reviewed delivery evidence
+
+Both failed originals above were edited through the real authenticated UI,
+creating new checkpoints and separately reserved bounded reviews. Original
+artifacts, failures and costs were retained. Final reviewed prose was inspected
+before explicit Publish Now; ordinary publication verification then completed.
+
+| Site | New checkpoint | Published at (UTC) | Verified at (UTC) | Exact Git commit |
+| --- | --- | --- | --- | --- |
+| Pentra | `j57d4tg0sst7gcf32ykphdjjrd8f06gh` | 2026-09-24T10:09:59.190Z | 2026-09-24T10:10:00.428Z | `6787fa66cab5e9353ad76003aa2d398c512796f5` |
+| LeadPilot | `j573hvbrx4ga7ea06c834wscmh8f06e2` | 2026-09-24T10:06:46.590Z | 2026-09-24T10:09:18.933Z | `10f3db15f8ad801962c73e7e1fa5aa3d2af5d807` |
+
+Live URLs:
+- https://pentra.dev/blog/keyword-research-content-automation-practical-guide-3-edited
+- https://leadpilot.chat/blog/sales-integration-explained-edited
+
+Audited/published hashes match: Pentra
+`d72752f005224668d53a3d2892bde924f20c943a2de56e55212f230eafdca379`,
+LeadPilot `adb0de0b4611f45e926f7b28902de65254b1b7c3783f9eae96aa073801b70ba2`.
+Final scores: Pentra editorial88/factual86; LeadPilot editorial85/factual100.
+These are supporting checks, not evidence of traffic growth or autonomous cadence.
+
+Settled exact-site budget at1790244755548/1790244759552: cumulative validation
+consumption $3.646882 + $4.048586 = **$7.695468 of $20**, including retained
+historical ceilings. Four new September24 requests have measured receipts
+totaling **$2.013392**. No active jobs remain. No limits or attempts reset.
+
+Next small repair unifies exact-review/publication first-party evidence handling,
+avoids treating the explicit disclaimer “not evidence of” as an assertion,
+clarifies that brand promotion is not mandatory, binds factual review to the
+exact retained artifact and replaces misleading legacy progress steps for
+content-work jobs. It does not lower quality thresholds. Second fresh cycles,
+live rejection, ordinary customer funding/onboarding and final acceptance remain.
+
+Exact-artifact repair gates: 1,842 tests / 1,841 passed / zero failures / one
+existing skip; five-business connected prompt/recovery tests pass. Type-check,
+production build with CI's non-secret configuration, additive schema check,
+secret scan, dependency audit and Convex dry-run pass. Lint remains zero errors /
+157 existing warnings. Browser regression: 36 passed / two authenticated skips.
+Both live URLs independently returned HTTP200 with matching canonicals and H1s.
 
 September24 read-only production check: both sites have no active jobs/ready
 buffer, retained `content_failed_slot`, inactive schedules and unchanged overdue

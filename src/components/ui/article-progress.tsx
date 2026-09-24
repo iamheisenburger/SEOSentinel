@@ -31,6 +31,16 @@ const STEPS = [
 export function ArticleProgress({ siteId }: { siteId: Id<"sites"> }) {
   const runningJob = useQuery(api.jobs.getRunningBySite, { siteId });
 
+  // Content work does not run the legacy nine-step research/media pipeline.
+  // Its numeric checkpoint must not imply those optional calls happened.
+  if (runningJob?.type === "article" && runningJob.contentWork) {
+    const labels: Record<string, string> = { prepare: "Preparing your draft", review: "Reviewing your draft",
+      publish: "Publishing approved content", verify: "Checking the live page" };
+    return <div role="status" className="rounded-xl border border-[#0EA5E9]/[0.15] bg-[#0EA5E9]/[0.03] p-5 text-sm text-[#38BDF8]">
+      {labels[runningJob.contentWork.stage] ?? "Processing content"}
+    </div>;
+  }
+
   if (!runningJob || !runningJob.stepProgress || runningJob.type !== "article") return null;
 
   const { current, total } = runningJob.stepProgress;
