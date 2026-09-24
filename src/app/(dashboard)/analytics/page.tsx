@@ -174,7 +174,7 @@ export default function AnalyticsPage() {
                 }
               }, 500);
             }}
-            className="inline-flex items-center gap-2 rounded-lg bg-[#0EA5E9] px-5 py-2.5 text-[13px] font-medium text-white transition hover:bg-[#0EA5E9]/90"
+            className="inline-flex items-center gap-2 rounded-lg bg-[#F7F8F8] px-5 py-2.5 text-[13px] font-medium text-[#08090A] transition hover:bg-[#F7F8F8]/90"
           >
             <BarChart3 className="h-3.5 w-3.5" />
             Connect Search Console
@@ -214,7 +214,7 @@ export default function AnalyticsPage() {
                 setSyncing(false);
               }
             }}
-            className="inline-flex items-center gap-2 rounded-lg bg-[#0EA5E9] px-5 py-2.5 text-[13px] font-medium text-white transition hover:bg-[#0EA5E9]/90 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg bg-[#F7F8F8] px-5 py-2.5 text-[13px] font-medium text-[#08090A] transition hover:bg-[#F7F8F8]/90 disabled:opacity-50"
           >
             {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <BarChart3 className="h-3.5 w-3.5" />}
             {syncing ? "Syncing..." : "Sync Now"}
@@ -276,11 +276,11 @@ export default function AnalyticsPage() {
           </div>
 
           {/* How published articles are doing in Google */}
-          <div className="rounded-xl border border-[#0EA5E9]/[0.15] bg-[#0EA5E9]/[0.02] p-5">
+          <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-4">
               <div>
                 <div className="flex items-center gap-2">
-                  <Workflow className="h-4 w-4 text-[#0EA5E9]" />
+                  <Workflow className="h-4 w-4 text-[#8A8F98]" />
                   <h2 className="text-[13px] font-semibold text-[#F7F8F8]">Your articles in Google</h2>
                 </div>
                 <p className="mt-1 text-[11px] text-[#62666D]">
@@ -404,7 +404,7 @@ export default function AnalyticsPage() {
                           )}
                           <p className="text-[11px] text-[#62666D]">“{q.query}”</p>
                         </td>
-                        <td className="py-2.5 text-[12px] text-[#F59E0B] text-right font-mono">{q.position}</td>
+                        <td className="py-2.5 text-[12px] text-[#F59E0B] text-right font-mono tabular-nums">{q.position.toFixed(1)}</td>
                         <td className="py-2.5 text-[12px] text-[#8A8F98] text-right">{q.impressions.toLocaleString()}</td>
                       </tr>
                     ))}
@@ -432,8 +432,8 @@ export default function AnalyticsPage() {
                     <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D] text-right">Clicks</th>
                     <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D] text-right">Impressions</th>
                     <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D] text-right">CTR</th>
-                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D] text-right">Position</th>
-                    <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#62666D]">Page</th>
+                    <th className="pb-2 pl-4 text-[10px] font-medium uppercase tracking-wider text-[#62666D] text-right">Position</th>
+                    <th className="pb-2 pl-6 text-[10px] font-medium uppercase tracking-wider text-[#62666D]">Page</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -444,8 +444,8 @@ export default function AnalyticsPage() {
                       <td className="py-2.5 text-[12px] text-[#F7F8F8] text-right font-mono">{q.clicks}</td>
                       <td className="py-2.5 text-[12px] text-[#62666D] text-right">{q.impressions.toLocaleString()}</td>
                       <td className="py-2.5 text-[12px] text-[#62666D] text-right">{(q.ctr * 100).toFixed(1)}%</td>
-                      <td className="py-2.5 text-right">
-                        <span className={`text-[12px] font-mono ${
+                      <td className="py-2.5 pl-4 text-right">
+                        <span className={`text-[12px] font-mono tabular-nums ${
                           q.position <= 3
                             ? "text-[#22C55E]"
                             : q.position <= 10
@@ -454,18 +454,18 @@ export default function AnalyticsPage() {
                                 ? "text-[#F59E0B]"
                                 : "text-[#62666D]"
                         }`}>
-                          {q.position}
+                          {Number.isFinite(q.position) ? q.position.toFixed(1) : "—"}
                         </span>
                       </td>
-                      <td className="py-2.5">
+                      <td className="py-2.5 pl-6">
                         {q.page && (
                           <a
                             href={q.page}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-[10px] text-[#62666D] hover:text-[#8A8F98] transition max-w-[150px] truncate"
+                            className="inline-flex max-w-[220px] items-center gap-1 text-[11px] text-[#62666D] transition hover:text-[#8A8F98]"
                           >
-                            {pagePath(q.page)}
+                            <span className="truncate">{pagePath(q.page)}</span>
                             <ExternalLink className="h-2.5 w-2.5 shrink-0" />
                           </a>
                         )}

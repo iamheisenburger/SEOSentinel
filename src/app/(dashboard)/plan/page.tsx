@@ -32,6 +32,7 @@ import Link from "next/link";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
 import { cadenceLabel } from "../../../../convex/planLimits";
+import { topicTitle } from "@/components/content-work-overview";
 
 /** Format search volume with K/M suffixes */
 function formatVolume(vol: number): string {
@@ -173,6 +174,7 @@ export default function PlanPage() {
       return t.status === currentTab;
     });
   }, [sorted, currentTab, activeTopicLabel]);
+  const anyMetrics = filtered.some((t) => (t as any).searchVolume !== undefined);
 
   const available = useMemo(
     () => sorted.filter((t) =>
@@ -356,7 +358,7 @@ export default function PlanPage() {
       {seoStats && !isPlanGenerating && (
         <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
           <div className="flex flex-wrap items-center gap-2 mb-3">
-            <Shield className="h-4 w-4 text-[#0EA5E9]" />
+            <Shield className="h-4 w-4 text-[#8A8F98]" />
             <span className="text-[12px] font-semibold text-[#F7F8F8]">SEO Intelligence Summary</span>
             {/* Same count as the "All" tab; averages use topics with search data. */}
             <span className="text-[10px] text-[#62666D]">
@@ -516,7 +518,7 @@ export default function PlanPage() {
 
       {/* Topic List */}
       {currentTab !== "schedule" && filtered.length > 0 ? (
-        <div className="flex flex-col gap-2">
+        <div className="divide-y divide-white/[0.05] overflow-hidden rounded-xl border border-white/[0.06] bg-[#0E0F11]">
           {filtered.map((topic) => {
             const isUsed = topic.status === "used";
             const isGenerating = activeTopicLabel === topic.label;
@@ -531,12 +533,12 @@ export default function PlanPage() {
             return (
               <div
                 key={topic._id}
-                className={`rounded-xl border overflow-hidden transition-all ${
+                className={`transition-colors ${
                   isGenerating
-                    ? "border-[#0EA5E9]/[0.2] bg-[#0EA5E9]/[0.03]"
+                    ? "bg-[#0EA5E9]/[0.04]"
                     : isUsed || isDisqualified
-                      ? "border-white/[0.04] bg-[#0E0F11] opacity-50"
-                      : "border-white/[0.06] bg-[#0E0F11] hover:border-white/[0.1]"
+                      ? "opacity-50"
+                      : "hover:bg-white/[0.02]"
                 }`}
               >
                 {/* Main row */}
@@ -554,18 +556,18 @@ export default function PlanPage() {
                         />
                       </div>
                     </div>
-                  ) : (
-                    <div className="shrink-0 w-14" />
-                  )}
+                  ) : anyMetrics ? (
+                    <div className="hidden shrink-0 w-14 sm:block" />
+                  ) : null}
 
                   {/* Content */}
                   <div className="min-w-0 flex-1">
-                    <p className="text-[13px] font-medium text-[#F7F8F8] leading-snug">
-                      {topic.label}
+                    <p className="text-[13.5px] font-medium text-[#F7F8F8] leading-snug">
+                      {topicTitle(topic.label)}
                     </p>
                     <div className="mt-1 flex items-center gap-2 flex-wrap">
-                      <span className="text-[11px] font-medium text-[#0EA5E9]">
-                        {topic.primaryKeyword}
+                      <span className="text-[12px] text-[#8A8F98]" title="The search this article targets">
+                        &ldquo;{topic.primaryKeyword}&rdquo;
                       </span>
 
                       {(topic as any).searchVolume != null && (topic as any).searchVolume > 0 && (
@@ -589,19 +591,16 @@ export default function PlanPage() {
                   </div>
 
                   {/* Article Type */}
-                  <span className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${articleTypeInfo.bg} ${articleTypeInfo.color}`}>
+                  <span className="shrink-0 rounded-md border border-white/[0.08] px-2 py-0.5 text-[11px] text-[#8A8F98]">
                     {articleTypeInfo.label}
                   </span>
 
                   {/* Intent */}
                   {topic.intent && (
-                    <span className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${
-                      topic.intent === "commercial"
-                        ? "bg-[#F59E0B]/[0.08] text-[#FBBF24]"
-                        : topic.intent === "transactional"
-                          ? "bg-[#22C55E]/[0.08] text-[#4ADE80]"
-                          : "bg-white/[0.04] text-[#8A8F98]"
-                    }`}>
+                    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-white/[0.08] px-2 py-0.5 text-[11px] capitalize text-[#8A8F98]" title={topic.intent === "commercial" || topic.intent === "transactional" ? "People searching this are close to buying" : "People searching this are researching"}>
+                      <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${
+                        topic.intent === "commercial" ? "bg-[#F2994A]" : topic.intent === "transactional" ? "bg-[#4CB782]" : "bg-[#62666D]"
+                      }`} />
                       {topic.intent}
                     </span>
                   )}
@@ -638,7 +637,7 @@ export default function PlanPage() {
                                 setStatus(err instanceof Error ? err.message : "Failed to start");
                               }
                             }}
-                            className="inline-flex items-center gap-1 rounded-md bg-[#22C55E]/[0.08] px-2 py-1 text-[10px] font-medium text-[#4ADE80] hover:bg-[#22C55E]/[0.15] transition"
+                            className="inline-flex items-center gap-1 rounded-md border border-white/[0.1] px-2 py-1 text-[11px] font-medium text-[#D0D6E0] hover:bg-white/[0.05] hover:text-[#F7F8F8] transition"
                           >
                             <Play className="h-2.5 w-2.5" />
                             Run Now
@@ -661,7 +660,7 @@ export default function PlanPage() {
                       <button
                         onClick={() => handleGenerateArticle(topic._id)}
                         disabled={!!runningJob || isManuallyGenerating || atArticleLimit}
-                        className="inline-flex items-center gap-1 rounded-md bg-[#0EA5E9]/[0.08] px-2.5 py-1 text-[10px] font-medium text-[#38BDF8] hover:bg-[#0EA5E9]/[0.15] transition disabled:opacity-30 disabled:cursor-not-allowed"
+                        className="inline-flex items-center gap-1 rounded-md border border-white/[0.1] px-2.5 py-1 text-[11px] font-medium text-[#D0D6E0] hover:bg-white/[0.05] hover:text-[#F7F8F8] transition disabled:opacity-30 disabled:cursor-not-allowed"
                       >
                         {isManuallyGenerating ? (
                           <Loader2 className="h-2.5 w-2.5 animate-spin" />

@@ -83,15 +83,15 @@ export function Sidebar() {
   const brandColor = activeSite?.brandPrimaryColor || "#0EA5E9";
 
   const nav = (
-    <nav className="flex flex-col gap-7 px-3">
+    <nav className="flex flex-col gap-6 px-3">
       {navSections.map((section, si) => (
         <div key={si}>
           {section.label && (
-            <p className="mb-2 px-3 text-[11px] font-bold uppercase tracking-[0.12em] text-[#62666D]">
+            <p className="mb-1.5 px-2.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[#62666D]">
               {section.label}
             </p>
           )}
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-0.5">
             {section.items.map((item) => {
               const active = isActive(item.href);
               const Icon = item.icon;
@@ -101,23 +101,20 @@ export function Sidebar() {
                   href={item.href}
                   onClick={() => setMobileOpen(false)}
                   className={`
-                    group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-[14px] font-medium transition-all
+                    group relative flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13.5px] font-medium transition-colors
                     ${
                       active
-                        ? "bg-white/[0.06] text-white"
-                        : "text-[#8A8F98] hover:bg-white/[0.03] hover:text-white"
+                        ? "bg-white/[0.07] text-[#F7F8F8]"
+                        : "text-[#8A8F98] hover:bg-white/[0.04] hover:text-[#F7F8F8]"
                     }
                   `}
                 >
                   <Icon
-                    className={`h-[18px] w-[18px] shrink-0 transition-colors ${
-                      active ? "text-[#0EA5E9]" : "text-[#62666D] group-hover:text-[#8A8F98]"
+                    className={`h-4 w-4 shrink-0 transition-colors ${
+                      active ? "text-[#F7F8F8]" : "text-[#62666D] group-hover:text-[#8A8F98]"
                     }`}
                   />
                   <span>{item.label}</span>
-                  {active && (
-                    <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full bg-[#0EA5E9]" />
-                  )}
                 </Link>
               );
             })}
@@ -148,37 +145,37 @@ export function Sidebar() {
       {/* Sidebar */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-white/[0.04] bg-[#0B0C0E]
+          fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-white/[0.06] bg-[#0B0C0E]
           transition-transform duration-200 ease-out
           lg:translate-x-0
           ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
         `}
       >
         {/* Logo */}
-        <div className="flex h-16 items-center gap-3 border-b border-white/[0.04] px-5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#0EA5E9]/[0.1]">
-            <Radar className="h-[18px] w-[18px] text-[#0EA5E9]" />
-          </div>
-          <span className="text-[18px] font-bold tracking-tight">
+        <Link href="/dashboard" className="flex h-14 items-center gap-2.5 border-b border-white/[0.05] px-5">
+          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#0EA5E9]/15">
+            <Radar className="h-4 w-4 text-[#0EA5E9]" />
+          </span>
+          <span className="text-[15px] font-semibold tracking-[-0.01em] text-[#F7F8F8]">
             Pentra
           </span>
-        </div>
+        </Link>
 
         {/* Navigation */}
-        <div className="flex-1 overflow-y-auto py-5">{nav}</div>
+        <div className="flex-1 overflow-y-auto py-4">{nav}</div>
 
         {/* Upgrade CTA (free plan only) */}
         {isPlanLoaded && isFreePlan && (
           <div className="px-3 pb-3">
             <Link
               href="/upgrade"
-              className="flex items-center justify-between rounded-xl border border-[#0EA5E9]/25 bg-[#0EA5E9]/[0.06] px-4 py-3.5 transition hover:bg-[#0EA5E9]/[0.12]"
+              className="flex items-center justify-between rounded-lg border border-white/[0.08] bg-white/[0.03] px-3.5 py-3 transition hover:bg-white/[0.06]"
             >
               <div>
-                <p className="text-[13px] font-bold text-[#0EA5E9]">Upgrade Plan</p>
-                <p className="text-[11px] text-[#8A8F98] mt-0.5">Unlock more articles & sites</p>
+                <p className="text-[13px] font-semibold text-[#F7F8F8]">Upgrade plan</p>
+                <p className="mt-0.5 text-[11px] text-[#8A8F98]">More articles and sites</p>
               </div>
-              <ArrowUpRight className="h-4 w-4 text-[#0EA5E9]" />
+              <ArrowUpRight className="h-4 w-4 text-[#8A8F98]" />
             </Link>
           </div>
         )}
@@ -244,7 +241,7 @@ export function Sidebar() {
                           )}
                         </div>
                         {isSelected && (
-                          <Check className="ml-auto h-3.5 w-3.5 shrink-0 text-[#0EA5E9]" />
+                          <Check className="ml-auto h-3.5 w-3.5 shrink-0 text-[#F7F8F8]" />
                         )}
                       </button>
                     );

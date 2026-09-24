@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { FileText, PenTool, ArrowRight, Trash2, Upload, TrendingDown } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { ArticleProgress } from "@/components/ui/article-progress";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
@@ -228,7 +228,7 @@ export default function ArticlesPage() {
       {filtered.length > 0 ? (
         <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
           {/* Table header */}
-          <div className="hidden sm:grid sm:grid-cols-[1fr_100px_80px_140px_100px] gap-4 px-5 py-2.5 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#62666D]">
+          <div className="hidden sm:grid sm:grid-cols-[1fr_110px_72px_110px_96px] gap-4 px-5 py-2.5 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#62666D]">
             <span>Title</span>
             <span>Status</span>
             <span>Words</span>
@@ -242,7 +242,7 @@ export default function ArticlesPage() {
             return (
               <div
                 key={article._id}
-                className="group flex flex-col sm:grid sm:grid-cols-[1fr_100px_80px_140px_100px] gap-1 sm:gap-4 sm:items-center px-5 py-3.5 border-b border-white/[0.04] last:border-0 transition hover:bg-white/[0.02]"
+                className="group flex flex-col sm:grid sm:grid-cols-[1fr_110px_72px_110px_96px] gap-1 sm:gap-4 sm:items-center px-5 py-3.5 border-b border-white/[0.04] last:border-0 transition hover:bg-white/[0.02]"
               >
                 <Link href={`/articles/${article._id}`} className="flex items-center gap-3 min-w-0">
                   {article.featuredImage && (
@@ -325,8 +325,8 @@ export default function ArticlesPage() {
                     </button>
                   )}
                 </div>
-                <Link href={`/articles/${article._id}`} className="text-[11px] text-[#62666D] sm:text-right flex items-center gap-1 sm:justify-end">
-                  {formatDistanceToNow(article.createdAt, { addSuffix: true })}
+                <Link href={`/articles/${article._id}`} title={formatDistanceToNow(article.createdAt, { addSuffix: true })} className="whitespace-nowrap text-[12px] tabular-nums text-[#62666D] sm:text-right flex items-center gap-1 sm:justify-end">
+                  {format(article.createdAt, "MMM d")}
                   <ArrowRight className="h-3 w-3 opacity-0 group-hover:opacity-100 transition" />
                 </Link>
               </div>

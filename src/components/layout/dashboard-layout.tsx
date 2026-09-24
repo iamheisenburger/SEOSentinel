@@ -34,7 +34,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                 <button type="button" onClick={() => window.location.reload()} className="rounded-lg border border-white/15 px-4 py-2">
                   Try again
                 </button>
-                <Link href="/sign-in" className="rounded-lg bg-[#0EA5E9] px-4 py-2 text-white">Sign in</Link>
+                <Link href="/sign-in" className="rounded-lg bg-[#F7F8F8] px-4 py-2 text-[#08090A]">Sign in</Link>
               </div>
             </>
           )}

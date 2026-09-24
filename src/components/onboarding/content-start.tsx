@@ -55,14 +55,14 @@ export function ContentStart() {
   }
   const steps = (active: number) => <ol className="flex flex-wrap gap-2 text-[12px]" aria-label="Setup steps">
     {["Your business", "Connect your website", "Autopilot or Review first"].map((step, n) => <li key={step}
-      className={`flex items-center gap-2 rounded-full border px-3 py-1 ${n === active ? "border-[#0EA5E9]/40 bg-[#0EA5E9]/10 text-[#F7F8F8]" : n < active ? "border-[#22C55E]/30 text-[#22C55E]" : "border-white/[0.08] text-[#8A8F98]"}`}>
-      <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold ${n === active ? "bg-[#0EA5E9] text-white" : n < active ? "bg-[#22C55E]/20" : "bg-white/[0.06]"}`}>{n < active ? "✓" : n + 1}</span>{step}</li>)}
+      className={`flex items-center gap-2 rounded-full border px-3 py-1 ${n === active ? "border-white/20 bg-white/[0.06] text-[#F7F8F8]" : n < active ? "border-[#4CB782]/30 text-[#4CB782]" : "border-white/[0.08] text-[#8A8F98]"}`}>
+      <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold ${n === active ? "bg-[#F7F8F8] text-[#08090A]" : n < active ? "bg-[#4CB782]/20" : "bg-white/[0.06]"}`}>{n < active ? "✓" : n + 1}</span>{step}</li>)}
   </ol>;
   if (siteId) return <div className="mx-auto max-w-3xl space-y-5">
     <header className="space-y-3"><h1 className="text-2xl font-semibold tracking-tight text-[#F7F8F8]">Finish setting up Pentra</h1>{steps(adapter === "manual" ? 2 : 1)}</header>
     {adapter === "manual" ? <p className="text-[14px] text-[#8A8F98]">Your profile is saved. Start Pentra below: it researches and writes each article, and you paste it into your site.</p> : <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#0EA5E9]/30 bg-[#0EA5E9]/[0.04] p-4">
       <p className="flex-1 text-[14px] text-[#F7F8F8]">Your profile is saved. Connect and verify your website, then choose Autopilot or Review first.</p>
-      <Link className="rounded-lg bg-[#0EA5E9] px-4 py-2 text-[13px] font-medium text-white hover:bg-[#0284C7]" href={`/sites/${siteId}?tab=settings`}>Connect your website in settings</Link></div>}
+      <Link className="rounded-lg bg-[#F7F8F8] px-4 py-2 text-[13px] font-medium text-[#08090A] hover:bg-white" href={`/sites/${siteId}?tab=settings`}>Connect your website in settings</Link></div>}
     <ContentWorkService key={siteId} siteId={siteId} />
   </div>;
   const PANEL = "space-y-4 rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5", H2 = "text-[15px] font-semibold text-[#F7F8F8]", HELP = "text-[13px] leading-relaxed text-[#8A8F98]";
@@ -84,11 +84,11 @@ export function ContentStart() {
     <section className={PANEL} aria-labelledby="setup-business">
       <div className="space-y-1"><h2 id="setup-business" className={H2}>About your business</h2>
         <p className={HELP}>Pentra writes only from these facts and from sources it cites, so keep them accurate.</p></div>
-      <Input label="Business name" value={name} onChange={edit(setName)} />
-      <Textarea label="Confirmed business facts" value={summary} onChange={edit(setSummary)} />
-      <Textarea label="Who you serve" value={audience} onChange={edit(setAudience)} />
-      <Textarea label="What your product or service does" value={product} onChange={edit(setProduct)} />
-      <Textarea label="Real customer questions (one per line)" value={questions} onChange={edit(setQuestions)} />
+      <Input label="Business name" value={name} onChange={edit(setName)} placeholder="Northside Dental" />
+      <Textarea label="Confirmed business facts" value={summary} onChange={edit(setSummary)} placeholder="Family dental practice in Leeds since 2009. General, cosmetic and emergency dentistry. Open Saturdays." />
+      <Textarea label="Who you serve" value={audience} onChange={edit(setAudience)} placeholder="Families and working adults in north Leeds who want a dentist they can reach quickly." />
+      <Textarea label="What your product or service does" value={product} onChange={edit(setProduct)} placeholder="Check-ups, cleaning, whitening, Invisalign and same-day emergency appointments." />
+      <Textarea label="Real customer questions (one per line)" value={questions} onChange={edit(setQuestions)} placeholder={"How long does teeth whitening last?\nDo you take emergency patients on weekends?"} />
     </section>
     <section className={PANEL} aria-labelledby="setup-next-step">
       <div className="space-y-1"><h2 id="setup-next-step" className={H2}>Turning readers into customers</h2>
@@ -100,7 +100,7 @@ export function ContentStart() {
     <section className={PANEL} aria-labelledby="setup-destination">
       <h2 id="setup-destination" className={H2}>Where Pentra publishes</h2>
       <label className="block space-y-1.5"><span className="text-[13px] font-medium text-[#8A8F98]">Publishing destination</span>
-        <select className="block w-full rounded-lg border border-white/[0.1] bg-[#08090A] px-3 py-2.5 text-[14px] text-[#F7F8F8] focus:border-[#0EA5E9] focus:outline-none"
+        <select className="block w-full rounded-lg border border-white/[0.1] bg-[#08090A] px-3 py-2.5 text-[14px] text-[#F7F8F8] focus:border-white/30 focus:outline-none"
           aria-label="Content publishing destination" value={adapter} onChange={e => { setAdapter(e.target.value); setConfirmed(false); }}>
           <option value="github">GitHub · plain Markdown/MDX</option>
           <option value="wordpress">WordPress · install the Pentra publisher plugin</option>
@@ -111,11 +111,11 @@ export function ContentStart() {
       {adapter === "wordpress" && <p className={HELP}><a className="font-medium text-[#0EA5E9] hover:underline" href="/pentra-wordpress-plugin.zip" download>Download the Pentra WordPress plugin (ZIP)</a>. In WordPress go to Plugins → Add New → Upload Plugin, choose the ZIP and activate it. You&apos;ll connect it in the next step.</p>}
     </section>
     <section className={PANEL}>
-      <label className="flex items-start gap-3 text-[14px] text-[#F7F8F8]"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#0EA5E9]" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+      <label className="flex items-start gap-3 text-[14px] text-[#F7F8F8]"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#F7F8F8]" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
         <span>These facts are accurate. Pentra writes only from them and from sources it cites.</span></label>
       <div className="flex flex-wrap items-center gap-4">
         <Button disabled={busy || !isLoaded || !userId || !confirmed || !ctaValid || !domain.trim() || !summary.trim() || !audience.trim() || !product.trim()} onClick={save}>{busy ? "Saving…" : "Save and continue"}</Button>
-        <Link className="text-[13px] text-[#0EA5E9] hover:underline" href="/upgrade">Plans &amp; billing</Link>
+        <Link className="text-[13px] text-[#8A8F98] underline-offset-2 hover:text-[#F7F8F8] hover:underline" href="/upgrade">Plans &amp; billing</Link>
       </div>
       <p className={HELP}>Saving doesn&apos;t charge you. Pentra only adds new articles; it never changes your pricing, checkout or legal pages.</p>
       {error && <p role="alert" className="text-[13px] text-red-400">{error}</p>}

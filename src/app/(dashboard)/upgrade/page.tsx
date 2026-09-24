@@ -331,7 +331,7 @@ export default function UpgradePage() {
             onClick={() => setPeriod("month")}
             className={`rounded-full px-5 py-2 text-[13px] font-medium transition cursor-pointer ${
               period === "month"
-                ? "bg-[#0EA5E9] text-white"
+                ? "bg-[#F7F8F8] text-[#08090A]"
                 : "text-[#8A8F98] hover:text-white"
             }`}
           >
@@ -343,7 +343,7 @@ export default function UpgradePage() {
             onClick={() => setPeriod("annual")}
             className={`flex items-center gap-2 rounded-full px-5 py-2 text-[13px] font-medium transition cursor-pointer ${
               period === "annual"
-                ? "bg-[#0EA5E9] text-white"
+                ? "bg-[#F7F8F8] text-[#08090A]"
                 : "text-[#8A8F98] hover:text-white"
             }`}
           >
@@ -351,7 +351,7 @@ export default function UpgradePage() {
             <span
               className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                 period === "annual"
-                  ? "bg-white/20 text-white"
+                  ? "bg-[#08090A]/10 text-[#08090A]"
                   : "bg-[#22C55E]/10 text-[#22C55E]"
               }`}
             >
@@ -437,30 +437,32 @@ export default function UpgradePage() {
               key={tier.key}
               className={`relative flex flex-col overflow-hidden rounded-xl ${
                 isCurrent
-                  ? "border border-[#22C55E]/30 bg-[#0E0F11]"
+                  ? "border border-[#4CB782]/30 bg-[#0E0F11]"
                   : tier.featured
-                    ? "border border-[#0EA5E9]/20 bg-[#0EA5E9]/[0.02]"
+                    ? "border border-white/[0.14] bg-[#101113] shadow-[0_24px_48px_-24px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.05)]"
                     : "border border-white/[0.06] bg-[#0E0F11]"
               }`}
             >
               {tier.featured && (
-                <div className="bg-[#0EA5E9] py-1.5 text-center text-[11px] font-semibold tracking-wide text-white">
-                  MOST POPULAR
-                </div>
+                <span aria-hidden className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#0EA5E9] to-transparent" />
               )}
               <div className="flex flex-1 flex-col p-6">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-[12px] font-medium uppercase tracking-[0.1em] text-[#8A8F98]">
                     {tier.name}
                   </p>
-                  {isCurrent && (
-                    <span className="rounded-full bg-[#22C55E]/10 px-2 py-0.5 text-[10px] font-semibold text-[#4ADE80]">
+                  {isCurrent ? (
+                    <span className="rounded-full bg-[#4CB782]/10 px-2 py-0.5 text-[10px] font-semibold text-[#4CB782]">
                       Current plan
                     </span>
-                  )}
+                  ) : tier.featured ? (
+                    <span className="rounded-full border border-white/[0.1] px-2 py-0.5 text-[10px] font-medium text-[#D0D6E0]">
+                      Most popular
+                    </span>
+                  ) : null}
                 </div>
                 <div className="mt-2 flex items-baseline gap-0.5">
-                  <span className="text-3xl font-bold tracking-tight text-[#F7F8F8]">
+                  <span className="text-[32px] font-semibold tracking-[-0.03em] text-[#F7F8F8]">
                     ${price}
                   </span>
                   <span className="text-[13px] text-[#8A8F98]">/mo</span>
@@ -469,7 +471,7 @@ export default function UpgradePage() {
                   {isFree
                     ? "No charge"
                     : showAnnual
-                      ? <span className="text-[#22C55E]">${tier.annualPrice}/mo billed annually (${tier.annualPrice * 12} a year) · save {savingPercent(tier)}%</span>
+                      ? <span className="text-[#4CB782]">${tier.annualPrice}/mo billed annually (${tier.annualPrice * 12} a year) · save {savingPercent(tier)}%</span>
                       : period === "annual"
                         ? "Billed monthly. Annual billing isn't offered on this plan."
                         : "Billed monthly"}
@@ -483,7 +485,7 @@ export default function UpgradePage() {
                       className="flex items-center gap-2 text-[13px] font-semibold text-[#F7F8F8]"
                     >
                       <CheckCircle2
-                        className={`h-3.5 w-3.5 shrink-0 ${tier.featured ? "text-[#0EA5E9]" : "text-[#22C55E]"}`}
+                        className="h-3.5 w-3.5 shrink-0 text-[#4CB782]"
                       />
                       {line}
                     </div>
@@ -503,7 +505,7 @@ export default function UpgradePage() {
                         className="flex items-center gap-2 text-[12px] text-[#8A8F98]"
                       >
                         <CheckCircle2
-                          className={`h-3 w-3 shrink-0 ${tier.featured ? "text-[#0EA5E9]" : "text-[#62666D]"}`}
+                          className="h-3 w-3 shrink-0 text-[#62666D]"
                         />
                         {feature}
                       </li>
@@ -525,7 +527,7 @@ export default function UpgradePage() {
           Questions about billing?{" "}
           <a
             href="mailto:pentrahelp@gmail.com"
-            className="text-[#0EA5E9] hover:underline"
+            className="text-[#D0D6E0] underline-offset-2 hover:underline"
           >
             Email us
           </a>

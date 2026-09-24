@@ -1,20 +1,11 @@
 import Link from "next/link";
-import {
-  ArrowLeft,
-  BarChart3,
-  Check,
-  FileCheck2,
-  Radar,
-  Search,
-  Send,
-  ShieldCheck,
-} from "lucide-react";
+import { ArrowLeft, Radar, ShieldCheck } from "lucide-react";
 
 const workflow = [
-  { label: "Research", detail: "Topics your buyers search", icon: Search },
-  { label: "Draft", detail: "Fact-checked, with sources", icon: FileCheck2 },
-  { label: "Publish", detail: "Autopilot or review-first", icon: Send },
-  { label: "Verify & measure", detail: "Live page, Search Console", icon: BarChart3 },
+  { label: "Research", detail: "Finds the searches your customers make that your site doesn't answer yet." },
+  { label: "Write and fact-check", detail: "Every claim is matched to a source. Drafts that fail are held back." },
+  { label: "Publish", detail: "On Autopilot at your pace, or after your approval. Your choice." },
+  { label: "Verify and measure", detail: "Confirms each page is live, then tracks clicks in Search Console." },
 ];
 
 export function AuthShell({
@@ -28,48 +19,37 @@ export function AuthShell({
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#08090A] text-[#F7F8F8]">
-      <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-        <div className="absolute -left-48 top-[-18rem] h-[44rem] w-[44rem] rounded-full bg-[#0EA5E9]/[0.07] blur-[140px]" />
-        <div className="absolute -bottom-72 right-[-16rem] h-[42rem] w-[42rem] rounded-full bg-[#22D3EE]/[0.045] blur-[150px]" />
-        <div className="absolute inset-0 opacity-[0.025] [background-image:linear-gradient(rgba(255,255,255,.35)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.35)_1px,transparent_1px)] [background-size:64px_64px]" />
-      </div>
+      {/* One soft light from above; decorative only. */}
+      <div aria-hidden="true" className="pointer-events-none absolute left-[22%] top-[-14rem] h-[28rem] w-[40rem] -translate-x-1/2 rounded-full bg-[#0EA5E9]/[0.07] blur-[120px]" />
 
-      <header className="absolute inset-x-0 top-0 z-20 flex h-20 items-center justify-between px-6 sm:px-8 lg:px-12">
+      <header className="absolute inset-x-0 top-0 z-20 flex h-16 items-center justify-between px-6 sm:px-8 lg:px-12">
         <Link
           href="/"
           aria-label="Pentra home"
-          className="flex items-center gap-3 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0EA5E9]"
+          className="flex items-center gap-2.5 rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0EA5E9]"
         >
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#0EA5E9]/20 bg-[#0EA5E9]/10 shadow-[0_0_28px_rgba(14,165,233,0.08)]">
-            <Radar className="h-5 w-5 text-[#38BDF8]" />
+          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#0EA5E9]/15">
+            <Radar className="h-4 w-4 text-[#0EA5E9]" />
           </span>
-          <span className="text-[18px] font-bold tracking-[-0.02em]">Pentra</span>
+          <span className="text-[15px] font-semibold tracking-[-0.01em]">Pentra</span>
         </Link>
 
         <Link
           href="/"
-          className="group flex items-center gap-2 text-[13px] font-medium text-[#8A8F98] transition-colors hover:text-white"
+          className="group flex items-center gap-1.5 text-[13px] text-[#8A8F98] transition-colors hover:text-[#F7F8F8]"
         >
           <ArrowLeft className="h-3.5 w-3.5 transition-transform group-hover:-translate-x-0.5" />
           Product home
         </Link>
       </header>
 
-      <div className="relative z-10 grid min-h-screen lg:grid-cols-[minmax(0,1.08fr)_minmax(31rem,0.92fr)]">
-        <section className="hidden items-center px-6 pb-16 pt-28 sm:px-10 lg:flex lg:px-16 xl:px-24">
-          <div className="mx-auto w-full max-w-xl lg:mx-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-[#0EA5E9]/20 bg-[#0EA5E9]/[0.06] px-3 py-1.5">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#38BDF8] opacity-70" />
-                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[#38BDF8]" />
-              </span>
-              <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#38BDF8]">
-                Autopilot SEO
-              </span>
-            </div>
+      <div className="relative z-10 grid min-h-screen lg:grid-cols-[minmax(0,1.1fr)_minmax(30rem,0.9fr)]">
+        <section className="hidden items-center px-6 pb-16 pt-24 sm:px-10 lg:flex lg:px-16 xl:px-24">
+          <div className="mx-auto w-full max-w-[34rem] lg:mx-0">
+            <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-[#8A8F98]">Autopilot SEO</p>
 
             {/* The Clerk form owns the page's single h1 ("Create your account" / "Sign in"). */}
-            <p className="mt-7 max-w-lg text-[clamp(2.25rem,5vw,4.35rem)] font-bold leading-[1.02] tracking-[-0.045em]">
+            <p className="mt-5 text-[clamp(2.25rem,4.4vw,3.5rem)] font-semibold leading-[1.04] tracking-[-0.035em]">
               {isSignIn ? (
                 <>
                   Your next article is
@@ -83,64 +63,40 @@ export function AuthShell({
               )}
             </p>
 
-            <p className="mt-5 max-w-lg text-[15px] leading-7 text-[#8A8F98] sm:text-[16px]">
+            <p className="mt-5 max-w-[30rem] text-[15px] leading-7 text-[#8A8F98]">
               {isSignIn
                 ? "Review your drafts, approve what is ready, and see how published pages perform."
                 : "Add your website, connect it once, and Pentra researches, writes and publishes on your plan's schedule. Your first article is free."}
             </p>
 
-            <div className="mt-10 overflow-hidden rounded-2xl border border-white/[0.07] bg-[#0B0C0E]/85 shadow-2xl shadow-black/30 backdrop-blur-xl">
-              <div className="flex items-center justify-between border-b border-white/[0.05] px-5 py-3.5">
-                <div className="flex items-center gap-2">
-                  <span className="h-2 w-2 rounded-full bg-[#EF4444]/50" />
-                  <span className="h-2 w-2 rounded-full bg-[#F59E0B]/50" />
-                  <span className="h-2 w-2 rounded-full bg-[#22C55E]/60" />
-                </div>
-                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#62666D]">
-                  How Pentra works
-                </span>
-              </div>
-
-              <div className="grid gap-px bg-white/[0.04] sm:grid-cols-2">
-                {workflow.map(({ label, detail, icon: Icon }) => (
-                  <div
-                    key={label}
-                    className="flex items-center gap-3 bg-[#0B0C0E] px-5 py-4"
-                  >
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#0EA5E9]/[0.08]">
-                      <Icon className="h-4 w-4 text-[#38BDF8]" />
+            <div className="mt-12 border-t border-white/[0.08] pt-6">
+              <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-[#62666D]">How Pentra works</p>
+              <ol className="mt-4 divide-y divide-white/[0.06]">
+                {workflow.map(({ label, detail }, n) => (
+                  <li key={label} className="grid grid-cols-[2rem_1fr] gap-x-2 py-3.5">
+                    <span className="pt-px font-mono text-[12px] text-[#62666D]">0{n + 1}</span>
+                    <span>
+                      <span className="block text-[14px] font-medium text-[#F7F8F8]">{label}</span>
+                      <span className="mt-0.5 block text-[13px] leading-relaxed text-[#8A8F98]">{detail}</span>
                     </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[13px] font-semibold text-[#F7F8F8]">
-                        {label}
-                      </span>
-                      <span className="block truncate text-[11px] text-[#62666D]">
-                        {detail}
-                      </span>
-                    </span>
-                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#22C55E]/10">
-                      <Check className="h-3 w-3 text-[#22C55E]" />
-                    </span>
-                  </div>
+                  </li>
                 ))}
-              </div>
-
-              <div className="flex items-center gap-2 border-t border-white/[0.05] px-5 py-3 text-[11px] text-[#8A8F98]">
-                <ShieldCheck className="h-3.5 w-3.5 text-[#22C55E]" />
+              </ol>
+              <p className="mt-4 flex items-center gap-2 text-[12px] text-[#8A8F98]">
+                <ShieldCheck className="h-3.5 w-3.5 text-[#4CB782]" />
                 Drafts that don&apos;t pass the fact check never go live.
-              </div>
+              </p>
             </div>
           </div>
         </section>
 
-        <section className="relative flex min-h-screen items-center justify-center border-t border-white/[0.05] bg-[#05060A]/70 px-5 py-24 backdrop-blur-sm sm:px-10 lg:min-h-0 lg:border-l lg:border-t-0 lg:px-12">
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#0EA5E9]/30 to-transparent lg:inset-y-0 lg:left-0 lg:h-auto lg:w-px lg:bg-gradient-to-b" />
-          <div className="w-full max-w-[27rem]">
+        <section className="relative flex min-h-screen items-center justify-center border-t border-white/[0.06] bg-[#0B0C0E] px-5 py-24 sm:px-10 lg:min-h-0 lg:border-l lg:border-t-0 lg:px-12">
+          <div className="w-full max-w-[26rem]">
             <div className="mb-7 lg:hidden">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#38BDF8]">
+              <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-[#8A8F98]">
                 Pentra workspace
               </p>
-              <h2 className="mt-2 text-2xl font-bold tracking-tight">
+              <h2 className="mt-2 text-2xl font-semibold tracking-tight">
                 {isSignIn ? "Welcome back" : "Create your account"}
               </h2>
             </div>
@@ -149,11 +105,11 @@ export function AuthShell({
 
             <p className="mt-7 text-center text-[11px] leading-5 text-[#62666D]">
               By continuing, you agree to Pentra&apos;s{" "}
-              <Link href="/legal/terms" className="transition-colors hover:text-[#8A8F98]">
+              <Link href="/legal/terms" className="underline-offset-2 transition-colors hover:text-[#8A8F98] hover:underline">
                 Terms
               </Link>{" "}
               and acknowledge the{" "}
-              <Link href="/legal/privacy" className="transition-colors hover:text-[#8A8F98]">
+              <Link href="/legal/privacy" className="underline-offset-2 transition-colors hover:text-[#8A8F98] hover:underline">
                 Privacy Policy
               </Link>
               .
@@ -170,7 +126,7 @@ export function AuthFormLoading({ label }: { label: string }) {
     <div
       aria-live="polite"
       aria-label={label}
-      className="w-full overflow-hidden rounded-2xl border border-white/[0.08] bg-[#111318] shadow-2xl shadow-black/40"
+      className="w-full overflow-hidden rounded-xl border border-white/[0.08] bg-[#0E0F11] shadow-[0_24px_48px_-16px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.04)]"
     >
       <div className="space-y-3 px-9 pb-5 pt-8 text-center">
         <div className="mx-auto h-5 w-36 animate-pulse rounded bg-white/[0.08]" />
@@ -187,7 +143,7 @@ export function AuthFormLoading({ label }: { label: string }) {
           <div className="h-3 w-24 animate-pulse rounded bg-white/[0.06]" />
           <div className="h-10 animate-pulse rounded-lg bg-white/[0.06]" />
         </div>
-        <div className="h-10 animate-pulse rounded-lg bg-[#0EA5E9]/20" />
+        <div className="h-10 animate-pulse rounded-lg bg-white/[0.12]" />
       </div>
       <div className="border-t border-white/[0.05] px-8 py-5 text-center text-[11px] text-[#62666D]">
         {label}

@@ -7,7 +7,7 @@ import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
-import { Trash2, Loader2, Bell, CreditCard, ArrowUpRight, Zap, User, Mail, Shield, ExternalLink, Upload, GitBranch, Globe, Webhook, Copy, KeyRound, Check } from "lucide-react";
+import { Trash2, Loader2, CreditCard, ArrowUpRight, Zap, User, Mail, Shield, ExternalLink, Upload, GitBranch, Globe, Webhook, Copy, KeyRound, Check } from "lucide-react";
 import { useState } from "react";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
@@ -107,7 +107,7 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
   return (
     <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
       <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
-        <Upload className="h-4 w-4 text-[#0EA5E9]" />
+        <Upload className="h-4 w-4 text-[#8A8F98]" />
         <p className="text-[13px] font-semibold text-[#F7F8F8]">Publishing</p>
         <span className="ml-auto text-[11px] text-[#62666D]">{pubSite.domain}</span>
       </div>
@@ -190,7 +190,7 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
                 </>
               )}
               <div className="flex items-center gap-2 mt-1">
-                <button onClick={handleSave} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg bg-[#0EA5E9] px-4 py-2 text-[12px] font-medium text-white transition hover:bg-[#38BDF8] disabled:opacity-50">
+                <button onClick={handleSave} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg bg-[#F7F8F8] px-4 py-2 text-[12px] font-medium text-[#08090A] transition hover:bg-white disabled:opacity-50">
                   {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                   {saving ? "Saving..." : "Save"}
                 </button>
@@ -360,7 +360,7 @@ export default function SettingsPage() {
       {/* Plan & Billing */}
       <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
         <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
-          <CreditCard className="h-4 w-4 text-[#0EA5E9]" />
+          <CreditCard className="h-4 w-4 text-[#8A8F98]" />
           <p className="text-[13px] font-semibold text-[#F7F8F8]">
             Plan & billing
           </p>
@@ -398,7 +398,7 @@ export default function SettingsPage() {
             {isFreePlan && (
               <Link
                 href="/upgrade"
-                className="inline-flex items-center gap-1.5 rounded-lg bg-[#0EA5E9] px-4 py-2 text-[13px] font-medium text-white transition hover:bg-[#38BDF8]"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#F7F8F8] px-4 py-2 text-[13px] font-medium text-[#08090A] transition hover:bg-white"
               >
                 <Zap className="h-3.5 w-3.5" />
                 Upgrade
@@ -465,7 +465,7 @@ export default function SettingsPage() {
       {/* Account */}
       <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
         <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
-          <User className="h-4 w-4 text-[#0EA5E9]" />
+          <User className="h-4 w-4 text-[#8A8F98]" />
           <p className="text-[13px] font-semibold text-[#F7F8F8]">
             Account
           </p>
@@ -480,7 +480,7 @@ export default function SettingsPage() {
                     <img src={user.imageUrl} alt="" className="h-10 w-10 rounded-full border border-white/[0.06]" />
                   ) : (
                     <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#0EA5E9]/[0.1]">
-                      <User className="h-4 w-4 text-[#0EA5E9]" />
+                      <User className="h-4 w-4 text-[#8A8F98]" />
                     </div>
                   )}
                   <div>
@@ -534,21 +534,6 @@ export default function SettingsPage() {
       {pubSite && (
         <PublishingSection pubSite={pubSite} />
       )}
-
-      {/* Notifications */}
-      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
-        <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
-          <Bell className="h-4 w-4 text-[#0EA5E9]" />
-          <p className="text-[13px] font-semibold text-[#F7F8F8]">
-            Notifications
-          </p>
-        </div>
-        <div className="px-5 py-5">
-          <p className="text-[12px] text-[#62666D]">
-            Email notification preferences coming soon.
-          </p>
-        </div>
-      </div>
 
       {/* Danger Zone */}
       <div className="rounded-xl border border-[#EF4444]/20 bg-[#0E0F11] overflow-hidden">

@@ -655,7 +655,7 @@ export function SetupWizard({
                 onClick={() => setCadence(option.value)}
                 className={`rounded-lg px-3 py-2 text-[11px] font-medium transition ${
                   cadence === option.value
-                    ? "bg-[#0EA5E9] text-white"
+                    ? "bg-[#F7F8F8] text-[#08090A]"
                     : "bg-white/[0.04] text-[#8A8F98] hover:bg-white/[0.07]"
                 }`}
               >

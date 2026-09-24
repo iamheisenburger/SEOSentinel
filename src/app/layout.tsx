@@ -67,13 +67,14 @@ export default function RootLayout({
           appearance={{
             theme: dark,
             variables: {
-              colorPrimary: "#0EA5E9",
-              colorBackground: "#111318",
-              colorInput: "#1E2130",
+              colorPrimary: "#F7F8F8",
+              colorPrimaryForeground: "#08090A",
+              colorBackground: "#0E0F11",
+              colorInput: "#141518",
               colorInputForeground: "#F7F8F8",
               colorForeground: "#F7F8F8",
-              colorMutedForeground: "#94A3B8",
-              borderRadius: "0.75rem",
+              colorMutedForeground: "#8A8F98",
+              borderRadius: "0.5rem",
             },
             elements: {
               rootBox: {
@@ -81,42 +82,42 @@ export default function RootLayout({
               },
               card: {
                 width: "100%",
-                backgroundColor: "#111318",
+                backgroundColor: "#0E0F11",
                 border: "1px solid rgba(255,255,255,0.08)",
-                boxShadow: "0 25px 50px -12px rgba(0,0,0,0.5)",
+                boxShadow: "0 24px 48px -16px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.04)",
               },
               headerTitle: {
                 color: "#F7F8F8",
               },
               headerSubtitle: {
-                color: "#94A3B8",
+                color: "#8A8F98",
               },
               formFieldLabel: {
-                color: "#CBD5E1",
+                color: "#D0D6E0",
               },
               formFieldInput: {
-                backgroundColor: "#1E2130",
+                backgroundColor: "#141518",
                 borderColor: "rgba(255,255,255,0.1)",
                 color: "#F7F8F8",
               },
               footerActionLink: {
-                color: "#0EA5E9",
+                color: "#F7F8F8",
               },
               dividerLine: {
                 borderColor: "rgba(255,255,255,0.08)",
               },
               dividerText: {
-                color: "#64748B",
+                color: "#62666D",
               },
               socialButtonsBlockButton: {
-                backgroundColor: "#1E2130",
+                backgroundColor: "#141518",
                 borderColor: "rgba(255,255,255,0.1)",
                 color: "#F7F8F8",
               },
               formButtonPrimary: {
-                backgroundColor: "#0EA5E9",
-                color: "#FFFFFF",
-                boxShadow: "0 10px 28px rgba(14,165,233,0.16)",
+                backgroundColor: "#F7F8F8",
+                color: "#08090A",
+                boxShadow: "none",
               },
             },
           }}

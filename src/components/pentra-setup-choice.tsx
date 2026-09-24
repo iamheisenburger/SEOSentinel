@@ -91,11 +91,11 @@ export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAva
   const setCadence = useMutation(api.contentWork.setAutopilotCadence);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const pace = cadencePerWeek ? `${cadencePerWeek} article${cadencePerWeek === 1 ? "" : "s"} a week (${rhythm(intervalMs)})` : rhythm(intervalMs);
-  return <div className="flex flex-wrap items-center gap-3 rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
-    <span aria-hidden className={`h-2.5 w-2.5 rounded-full ${on && !paused ? "bg-[#22C55E] shadow-[0_0_8px_#22C55E]" : on ? "bg-[#F59E0B]" : "bg-[#8A8F98]"}`} />
-    <div className="flex-1">
-      <p className="font-medium text-[#F7F8F8]">Autopilot is {on ? (paused ? "paused" : "on") : "off"}</p>
-      <p className="text-sm text-[#8A8F98]">{on ? paused ? "No new articles start while paused. Resume from Service settings."
+  return <div className="flex flex-wrap items-center gap-3 rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
+    <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${on && !paused ? "bg-[#4CB782] shadow-[0_0_0_3px_rgba(76,183,130,0.15)]" : on ? "bg-[#F2994A]" : "bg-[#62666D]"}`} />
+    <div className="min-w-0 flex-1">
+      <p className="text-[14px] font-medium text-[#F7F8F8]">Autopilot is {on ? (paused ? "paused" : "on") : "off"}</p>
+      <p className="text-[13px] leading-relaxed text-[#8A8F98]">{on ? paused ? "No new articles start while paused. Resume from Service settings."
         : `Pentra publishes ${pace}${articlesPerMonth ? `, up to ${articlesPerMonth} a month on your plan` : ""}. Drafts it isn't confident about are held back and never published.`
         : "Every article waits for your approval in Articles."}</p>
     </div>
@@ -105,8 +105,8 @@ export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAva
       catch (err) { setError(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Couldn't change Autopilot. Refresh and try again."); }
       finally { setBusy(false); }
     }}>{on ? "Switch to review first" : "Turn on Autopilot"}</Button>}
-    {on && !paused && <label className="flex w-full items-center gap-2 text-sm text-[#8A8F98]">Pace
-      <select aria-label="Articles per week" className="rounded-md border border-white/[0.1] bg-[#08090A] px-2 py-1 text-[#F7F8F8]"
+    {on && !paused && <label className="flex w-full flex-wrap items-center gap-2 pl-5 text-[13px] text-[#8A8F98]">Pace
+      <select aria-label="Articles per week" className="rounded-md border border-white/[0.1] bg-[#08090A] px-2 py-1 text-[13px] text-[#F7F8F8] focus:border-white/30 focus:outline-none"
         value={cadencePerWeek ?? ""} disabled={busy} onChange={async e => {
           setBusy(true); setError("");
           try { await setCadence({ siteId, reviewToken, cadencePerWeek: Number(e.target.value) }); }
@@ -116,7 +116,7 @@ export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAva
         {!cadencePerWeek && <option value="">Plan default</option>}
         {PACES.map(n => <option key={n} value={n}>{n} a week</option>)}
       </select>
-      <span className="text-xs">Applies from the next article not yet prepared.</span>
+      <span className="text-[12px] text-[#62666D]">Applies from the next article not yet prepared.</span>
     </label>}
     {error && <p role="alert" className="w-full text-sm text-red-400">{error}</p>}
   </div>;

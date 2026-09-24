@@ -609,10 +609,9 @@ export default function ArticleDetailPage() {
           <ArrowLeft className="h-3 w-3" />
           Back to Articles
         </Link>
-        <PageHeader
-          title={article.title}
-          actions={
-            <div className="flex flex-wrap gap-2">
+        <PageHeader title={article.title} />
+        <div className="mt-4 flex flex-wrap items-start justify-between gap-3">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
               {(article.status === "draft" || article.status === "review") && (
                 <>
                   {plainApproveAllowed && (
@@ -662,6 +661,8 @@ export default function ArticleDetailPage() {
                 {editing && <p className="text-xs text-[#8A8F98]">Save your edits for review or cancel editing before publishing.</p>}
                 </div>
               )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="secondary"
                 size="sm"
@@ -698,8 +699,7 @@ export default function ArticleDetailPage() {
                 </Button>
               )}
             </div>
-          }
-        />
+        </div>
       </div>
 
       {linkStatus && (

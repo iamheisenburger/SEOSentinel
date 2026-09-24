@@ -10,6 +10,7 @@ import { format } from "date-fns";
 import { api } from "../../../../convex/_generated/api";
 import { LandingNav } from "@/components/layout/landing-nav";
 import { convexHttp } from "@/lib/convexHttpClient";
+import "./article-content.css";
 
 export const dynamic = "force-dynamic";
 

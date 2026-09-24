@@ -46,7 +46,7 @@ export function BrandedErrorState({
             <button
               type="button"
               onClick={onRetry}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#0EA5E9] px-5 py-3 text-[14px] font-semibold text-white transition hover:bg-[#38BDF8]"
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#F7F8F8] px-5 py-3 text-[14px] font-semibold text-[#08090A] transition hover:bg-white"
             >
               <RefreshCw className="h-4 w-4" />
               Try again

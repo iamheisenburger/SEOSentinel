@@ -219,7 +219,7 @@ export function SetupReadiness({
           <button
             type="button"
             onClick={() => window.location.assign("/dashboard?setup=existing")}
-            className="mt-3 rounded-md bg-[#0EA5E9] px-3 py-1.5 text-[10px] font-medium text-white transition hover:bg-[#0284C7]"
+            className="mt-3 rounded-md bg-[#F7F8F8] px-3 py-1.5 text-[10px] font-medium text-[#08090A] transition hover:bg-white"
           >
             Finish One Setup
           </button>
@@ -274,7 +274,7 @@ export function SetupReadiness({
                       type="button"
                       disabled={pendingAction !== null}
                       onClick={() => void runOwnerAction(stage.actionKind!)}
-                      className="ml-5 mt-3 rounded-md bg-[#0EA5E9] px-3 py-1.5 text-[10px] font-medium text-white transition hover:bg-[#0284C7] disabled:cursor-wait disabled:opacity-60"
+                      className="ml-5 mt-3 rounded-md bg-[#F7F8F8] px-3 py-1.5 text-[10px] font-medium text-[#08090A] transition hover:bg-white disabled:cursor-wait disabled:opacity-60"
                     >
                       {pendingAction === stage.actionKind
                         ? "Saving…"

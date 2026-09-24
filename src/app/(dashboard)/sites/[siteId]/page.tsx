@@ -321,10 +321,10 @@ export default function SiteDetailPage() {
                 ${active ? "text-[#F7F8F8]" : "text-[#62666D] hover:text-[#8A8F98]"}
               `}
             >
-              <Icon className={`h-3.5 w-3.5 ${active ? "text-[#0EA5E9]" : ""}`} />
+              <Icon className={`h-3.5 w-3.5 ${active ? "text-[#F7F8F8]" : ""}`} />
               <span className="hidden sm:inline">{tab.label}</span>
               {active && (
-                <span className="absolute inset-x-0 -bottom-px h-px bg-[#0EA5E9]" />
+                <span className="absolute inset-x-0 -bottom-px h-px bg-[#F7F8F8]" />
               )}
             </button>
           );
@@ -437,36 +437,6 @@ function OverviewTab({
   onTabChange: (tab: Tab) => void;
 }) {
   // Quick link cards
-  const quickLinks: Array<{
-    label: string;
-    count: number;
-    color: string;
-    icon: typeof Globe;
-    href?: string;
-    onClick?: () => void;
-  }> = [
-    {
-      label: "Articles",
-      count: articleCount,
-      color: "#0EA5E9",
-      onClick: () => onTabChange("articles"),
-      icon: FileText,
-    },
-    {
-      label: "Topics",
-      count: topicCount,
-      color: "#F59E0B",
-      href: "/plan",
-      icon: Target,
-    },
-    {
-      label: "Articles waiting for review",
-      count: reviewCount,
-      color: "#8B5CF6",
-      href: "/articles",
-      icon: Zap,
-    },
-  ];
 
   return (
     <div className="flex flex-col gap-5">
@@ -493,43 +463,23 @@ function OverviewTab({
       {/* Article progress (live) */}
       <ArticleProgress siteId={siteId} />
 
-      {/* Quick links */}
-      <div className="grid gap-3 sm:grid-cols-3">
-        {quickLinks.map((item) => {
-          const Icon = item.icon;
-          const content = (
-            <div
-              className="group relative rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1] cursor-pointer"
-            >
-              <div className="flex items-center justify-between">
-                <div
-                  className="flex h-9 w-9 items-center justify-center rounded-lg"
-                  style={{ backgroundColor: `${item.color}15` }}
-                >
-                  <Icon className="h-4 w-4" style={{ color: item.color }} />
-                </div>
-                <ArrowRight className="h-3.5 w-3.5 text-[#62666D] opacity-0 group-hover:opacity-100 transition" />
-              </div>
-              <p className="mt-3 text-[22px] font-bold text-[#F7F8F8]">
-                {item.count}
-              </p>
-              <p className="text-[11px] text-[#62666D]">
-                {item.label}
-              </p>
-            </div>
-          );
-
-          if (item.href) {
-            return <Link key={item.label} href={item.href}>{content}</Link>;
-          }
-          return <div key={item.label} onClick={item.onClick}>{content}</div>;
+      {/* At a glance: one strip, each figure opens where it lives */}
+      <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-white/[0.06] bg-[#0E0F11] sm:grid-cols-4 [&>*]:border-white/[0.06] [&>*:not(:first-child)]:sm:border-l [&>*:nth-child(n+3)]:border-t [&>*:nth-child(n+3)]:sm:border-t-0 [&>*:nth-child(2)]:border-l">
+        {[
+          { label: "Published", value: publishedCount, go: () => onTabChange("articles") },
+          { label: "Waiting for review", value: reviewCount, href: "/articles" },
+          { label: "Drafts", value: draftCount, go: () => onTabChange("articles") },
+          { label: "Topics planned", value: topicCount, href: "/plan" },
+        ].map(item => {
+          const body = <>
+            <p className="text-[22px] font-semibold tracking-tight tabular-nums text-[#F7F8F8]">{item.value}</p>
+            <p className="mt-0.5 flex items-center gap-1 text-[12px] text-[#8A8F98]">{item.label}
+              <ArrowRight className="h-3 w-3 opacity-0 transition group-hover:opacity-100" /></p>
+          </>;
+          return item.href
+            ? <Link key={item.label} href={item.href} className="group px-5 py-4 transition hover:bg-white/[0.02]">{body}</Link>
+            : <button key={item.label} type="button" onClick={item.go} className="group px-5 py-4 text-left transition hover:bg-white/[0.02]">{body}</button>;
         })}
-      </div>
-
-      {/* Stats grid — topics and review counts are already on the cards above */}
-      <div className="grid grid-cols-2 gap-3">
-        <StatMini label="Published" value={publishedCount} />
-        <StatMini label="Drafts" value={draftCount} />
       </div>
 
       {/* Site details */}
@@ -617,15 +567,6 @@ function OverviewTab({
           </Link>
         )}
       </div>
-    </div>
-  );
-}
-
-function StatMini({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-lg bg-[#0E0F11] border border-white/[0.06] p-3 text-center">
-      <p className="text-[18px] font-bold text-[#F7F8F8]">{value}</p>
-      <p className="text-[10px] text-[#62666D]">{label}</p>
     </div>
   );
 }
@@ -969,7 +910,7 @@ function SettingsTab({
                   disabled={cadenceCapacity === undefined || !cadenceCapacity.ready}
                   className={`rounded-lg px-3 py-2 text-[11px] font-medium transition ${
                     cadence === option.value
-                      ? "bg-[#0EA5E9] text-white"
+                      ? "bg-[#F7F8F8] text-[#08090A]"
                       : "bg-white/[0.04] text-[#8A8F98] hover:bg-white/[0.07]"
                   }`}
                 >
@@ -1216,7 +1157,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
   return (
     <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
       <div className="flex items-center gap-2.5 px-5 py-3 border-b border-white/[0.04]">
-        <Upload className="h-4 w-4 text-[#0EA5E9]" />
+        <Upload className="h-4 w-4 text-[#8A8F98]" />
         <p className="text-[13px] font-semibold text-[#F7F8F8]">Connection</p>
       </div>
       <div className="px-5 py-5">
@@ -1304,7 +1245,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
                 </>
               )}
               <div className="flex items-center gap-2 mt-1">
-                <button onClick={handleSave} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg bg-[#0EA5E9] px-4 py-2 text-[12px] font-medium text-white transition hover:bg-[#38BDF8] disabled:opacity-50">
+                <button onClick={handleSave} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg bg-[#F7F8F8] px-4 py-2 text-[12px] font-medium text-[#08090A] transition hover:bg-white disabled:opacity-50">
                   <Check className="h-3 w-3" />
                   {saving ? "Saving..." : "Save"}
                 </button>
@@ -1408,7 +1349,7 @@ function GSCSection({ site }: { site: SiteView }) {
   return (
     <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
       <div className="flex items-center gap-2.5 px-5 py-3 border-b border-white/[0.04]">
-        <BarChart3 className="h-4 w-4 text-[#0EA5E9]" />
+        <BarChart3 className="h-4 w-4 text-[#8A8F98]" />
         <p className="text-[13px] font-semibold text-[#F7F8F8]">Google Search Console</p>
       </div>
       <div className="px-5 py-5">
@@ -1481,7 +1422,7 @@ function GSCSection({ site }: { site: SiteView }) {
 
               <button
                 onClick={handleConnect}
-                className="flex items-center justify-center gap-2 rounded-lg bg-[#0EA5E9] px-4 py-2.5 text-[13px] font-medium text-white transition hover:bg-[#38BDF8]"
+                className="flex items-center justify-center gap-2 rounded-lg bg-[#F7F8F8] px-4 py-2.5 text-[13px] font-medium text-[#08090A] transition hover:bg-white"
               >
                 <BarChart3 className="h-4 w-4" />
                 Connect Google Search Console
@@ -1514,7 +1455,7 @@ function SettingsSection({
   return (
     <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
       <div className="flex items-center gap-2.5 px-5 py-3 border-b border-white/[0.04]">
-        <Icon className="h-4 w-4 text-[#0EA5E9]" />
+        <Icon className="h-4 w-4 text-[#8A8F98]" />
         <p className="text-[13px] font-semibold text-[#F7F8F8]">{title}</p>
       </div>
       <div className="divide-y divide-white/[0.04]">{children}</div>

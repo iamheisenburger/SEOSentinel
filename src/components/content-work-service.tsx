@@ -81,23 +81,32 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
   // Sites set up through the Autopilot / Review-first choice get a plain summary.
   if (newFlow) {
     const needsReview = state.work.filter(w => !w.retiredAt && (w.stage === "failed" || w.stage === "review_failed") && !w.superseded && !w.parked && !(state.published ?? []).some(a => a.articleId === w.articleId));
-    return <section className="rounded-xl border border-white/10 p-5 space-y-4" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
-      <AutopilotSwitch siteId={siteId} reviewToken={state.reviewToken} on={Boolean(state.autopilot?.on)} intervalMs={state.plan?.autopilotIntervalMs ?? 86_400_000}
-        reviewAvailable={state.autopilot?.reviewAvailable ?? true} paused={Boolean(state.schedule?.paused)} />
-      <h2 id="content-service-heading" className="font-semibold">Your Pentra service</h2>
-      <p className="text-sm">Website: <Link className="underline" href={`/sites/${state.siteId}?tab=settings`}>{state.destination.domain}</Link> · {state.destination.kind === "wordpress" ? "WordPress" : "GitHub"} · {state.destination.verified ? "connected" : "not connected yet"}</p>
-      <p className="text-sm">Status: {delivery.label}. {state.plan && `Your plan includes ${state.plan.articlesPerMonth} new article${state.plan.articlesPerMonth === 1 ? "" : "s"} a month.`}</p>
-      {!state.entitlement && <p role="alert" className="text-sm">Your plan isn&apos;t active. <Link href="/upgrade" className="underline">Plans &amp; billing</Link></p>}
-      {!state.destination.verified && <p role="alert" className="text-sm">Connect and verify your website in <Link href={`/sites/${siteId}?tab=settings`} className="underline">website settings</Link>.</p>}
-      {needsReview.length > 0 && <p role="alert" className="text-sm">{needsReview.length === 1 ? "A draft needs" : `${needsReview.length} drafts need`} your review in <Link href="/articles" className="underline">Articles</Link>. Nothing was published.</p>}
-      {state.funding.status !== "available" && <p className="text-sm">{fundingMessage(state.funding, state.schedule?.timezone ?? "UTC")}{" "}
-        {state.funding.status === "blocked" && <Link href="/upgrade" className="underline">Plans &amp; billing</Link>}</p>}
-      {(delivery.canPause || delivery.canResume) && <div className="flex flex-wrap gap-2">
-        {delivery.canPause && <Button size="sm" variant="secondary" disabled={saving} onClick={() => operate("pause")}>Pause Pentra</Button>}
-        {delivery.canResume && <Button size="sm" disabled={saving} onClick={() => operate("resume")}>Resume Pentra</Button>}
-      </div>}
-      {setupDetails}
-      {error && <p role="alert">{error}</p>}
+    const link = "text-[#F7F8F8] underline decoration-white/30 underline-offset-2 hover:decoration-white";
+    return <section className="overflow-hidden rounded-xl border border-white/[0.06] bg-[#0E0F11]" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
+      <div className="flex items-center justify-between gap-3 border-b border-white/[0.04] px-5 py-4">
+        <h2 id="content-service-heading" className="text-[13px] font-semibold text-[#F7F8F8]">Your Pentra service</h2>
+        <span className="text-[12px] text-[#62666D]">{state.destination.domain}</span>
+      </div>
+      <div className="space-y-4 px-5 py-5 text-[13px] leading-relaxed text-[#8A8F98]">
+        <AutopilotSwitch siteId={siteId} reviewToken={state.reviewToken} on={Boolean(state.autopilot?.on)} intervalMs={state.plan?.autopilotIntervalMs ?? 86_400_000}
+          reviewAvailable={state.autopilot?.reviewAvailable ?? true} paused={Boolean(state.schedule?.paused)}
+          cadencePerWeek={state.plan?.cadencePerWeek ?? null} articlesPerMonth={state.plan?.articlesPerMonth ?? null} />
+        <div className="space-y-1.5">
+          <p>Website: <Link className={link} href={`/sites/${state.siteId}?tab=settings`}>{state.destination.domain}</Link> · {state.destination.kind === "wordpress" ? "WordPress" : "GitHub"} · {state.destination.verified ? "connected" : "not connected yet"}</p>
+          <p>Status: {delivery.label}. {state.plan && `Your plan includes ${state.plan.articlesPerMonth} new article${state.plan.articlesPerMonth === 1 ? "" : "s"} a month.`}</p>
+        </div>
+        {!state.entitlement && <p role="alert" className="text-[#F2994A]">Your plan isn&apos;t active. <Link href="/upgrade" className={link}>Plans &amp; billing</Link></p>}
+        {!state.destination.verified && <p role="alert" className="text-[#F2994A]">Connect and verify your website in <Link href={`/sites/${siteId}?tab=settings`} className={link}>website settings</Link>.</p>}
+        {needsReview.length > 0 && <p role="alert" className="text-[#F2994A]">{needsReview.length === 1 ? "A draft needs" : `${needsReview.length} drafts need`} your review in <Link href="/articles" className={link}>Articles</Link>. Nothing was published.</p>}
+        {state.funding.status !== "available" && <p>{fundingMessage(state.funding, state.schedule?.timezone ?? "UTC")}{" "}
+          {state.funding.status === "blocked" && <Link href="/upgrade" className={link}>Plans &amp; billing</Link>}</p>}
+        {(delivery.canPause || delivery.canResume) && <div className="flex flex-wrap gap-2">
+          {delivery.canPause && <Button size="sm" variant="secondary" disabled={saving} onClick={() => operate("pause")}>Pause Pentra</Button>}
+          {delivery.canResume && <Button size="sm" disabled={saving} onClick={() => operate("resume")}>Resume Pentra</Button>}
+        </div>}
+        <div className="border-t border-white/[0.04] pt-4 [&_summary]:text-[#D0D6E0]">{setupDetails}</div>
+        {error && <p role="alert" className="text-[#EB5757]">{error}</p>}
+      </div>
     </section>;
   }
   return <section className="rounded-xl border border-white/10 p-5 space-y-4" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>

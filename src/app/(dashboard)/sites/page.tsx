@@ -58,7 +58,7 @@ export default function WebsitesPage() {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Websites"
-        subtitle={`${sites.length} / ${maxSites === 9999 ? "∞" : maxSites} website${sites.length !== 1 ? "s" : ""}`}
+        subtitle={maxSites >= 9999 ? `${sites.length} website${sites.length !== 1 ? "s" : ""}` : `${sites.length} of ${maxSites} website${maxSites !== 1 ? "s" : ""} on your plan`}
         actions={
           atSiteLimit ? (
             <Link
@@ -120,6 +120,7 @@ function SiteCard({
     autopilotEnabled?: boolean;
     serviceMode?: string;
     brandPrimaryColor?: string;
+    contentSchedule?: { paused: boolean; autopilotSelectedAt?: number };
     createdAt: number;
     updatedAt: number;
   };
@@ -170,9 +171,9 @@ function SiteCard({
   const brandColor = site.brandPrimaryColor || "#0EA5E9";
 
   return (
-    <div className="group relative rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden transition-all hover:-translate-y-0.5 hover:border-white/[0.1] hover:shadow-lg hover:shadow-black/20">
-      {/* Color accent bar */}
-      <div className="h-1" style={{ backgroundColor: brandColor }} />
+    <div className="group relative rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden transition-colors hover:border-white/[0.12]">
+      {/* Brand colour as a hairline, not a slab */}
+      <div aria-hidden className="h-px" style={{ background: `linear-gradient(90deg, transparent, ${brandColor}, transparent)` }} />
 
       {/* Card body */}
       <Link href={`/sites/${site._id}`} className="block px-5 pt-4 pb-3">
@@ -210,31 +211,28 @@ function SiteCard({
         </div>
 
         {/* Stats */}
-        <div className="mt-4 grid grid-cols-3 gap-2">
-          <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2 text-center">
-            <p className="text-[15px] font-bold text-[#F7F8F8]">
-              {publishedCount}
-            </p>
-            <p className="text-[10px] text-[#62666D]">Published</p>
-          </div>
-          <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2 text-center">
-            <p className="text-[15px] font-bold text-[#F7F8F8]">
-              {articleCount - publishedCount}
-            </p>
-            <p className="text-[10px] text-[#62666D]">Drafts</p>
-          </div>
-          <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2 text-center">
-            <p className="text-[15px] font-bold text-[#F7F8F8]">
-              {topicCount}
-            </p>
-            <p className="text-[10px] text-[#62666D]">Topics</p>
-          </div>
+        <div className="mt-4 grid grid-cols-3 divide-x divide-white/[0.06] rounded-lg border border-white/[0.06]">
+          {([["Published", publishedCount], ["Drafts", articleCount - publishedCount], ["Topics", topicCount]] as const).map(([label, value]) => (
+            <div key={label} className="px-3 py-2.5">
+              <p className="text-[18px] font-semibold tracking-tight tabular-nums text-[#F7F8F8]">{value}</p>
+              <p className="text-[11px] text-[#62666D]">{label}</p>
+            </div>
+          ))}
         </div>
 
         {/* Footer info */}
-        <div className="mt-3 flex items-center gap-3 text-[10px] text-[#62666D]">
+        <div className="mt-3 flex items-center gap-3 text-[11px] text-[#62666D]">
           {growthFirst ? (
-            <span>Pentra service</span>
+            <span className="flex items-center gap-1.5">
+              <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${site.contentSchedule?.paused ? "bg-[#F2994A]" : site.contentSchedule ? "bg-[#4CB782]" : "bg-[#62666D]"}`} />
+              {!site.contentSchedule
+                ? "Setting up"
+                : site.contentSchedule.paused
+                  ? "Paused"
+                  : site.contentSchedule.autopilotSelectedAt
+                    ? `Autopilot${site.cadencePerWeek ? ` · ${cadenceLabel(site.cadencePerWeek)}` : ""}`
+                    : "Review first"}
+            </span>
           ) : (
             <>
               <span className="flex items-center gap-1">
@@ -261,7 +259,7 @@ function SiteCard({
             <Link
               href="/dashboard"
               onClick={() => setActiveSiteId(site._id)}
-              className="inline-flex items-center gap-1.5 text-[11px] text-[#0EA5E9] hover:text-[#38BDF8] transition"
+              className="inline-flex items-center gap-1.5 text-[12px] font-medium text-[#F7F8F8] hover:text-white transition"
             >
               <ArrowRight className="h-3 w-3" />
               Open dashboard
@@ -282,7 +280,7 @@ function SiteCard({
           )}
           <Link
             href={`/sites/${site._id}`}
-            className="inline-flex items-center gap-1.5 text-[11px] text-[#8A8F98] hover:text-[#0EA5E9] transition"
+            className="inline-flex items-center gap-1.5 text-[12px] text-[#8A8F98] hover:text-[#F7F8F8] transition"
           >
             <Settings className="h-3 w-3" />
             Manage

@@ -32,14 +32,14 @@ export function Tabs({ tabs, active, onChange }: TabsProps) {
           {tab.count !== undefined && (
             <span
               className={`ml-1.5 text-[11px] ${
-                active === tab.id ? "text-[#0EA5E9]" : "text-[#62666D]"
+                active === tab.id ? "text-[#8A8F98]" : "text-[#62666D]"
               }`}
             >
               {tab.count}
             </span>
           )}
           {active === tab.id && (
-            <span className="absolute inset-x-0 -bottom-px h-px bg-[#0EA5E9]" />
+            <span className="absolute inset-x-0 -bottom-px h-px bg-[#F7F8F8]" />
           )}
         </button>
       ))}
