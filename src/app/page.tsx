@@ -60,8 +60,8 @@ function Proof() {
     <section className="border-t border-white/[0.06]">
       <div className={`${WRAP} flex flex-col gap-4 py-8 md:flex-row md:items-center md:justify-between`}>
         <p className="text-[15px] text-[#8A8F98]">
-          <span className="text-[#F7F8F8]">We run our own marketing on Pentra.</span> The guides on this site are researched,
-          fact-checked and published by Pentra on Autopilot.
+          <span className="text-[#F7F8F8]">We run our own marketing on Pentra.</span> The guides on this site are written,
+          fact-checked and published by Pentra, now on Autopilot.
         </p>
         <Link href="/blog" className="shrink-0 text-[14px] font-medium text-[#D0D6E0] transition hover:text-white">Read them <span aria-hidden>→</span></Link>
       </div>
@@ -336,7 +336,7 @@ function Footer() {
             <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#0EA5E9]/15"><Radar className="h-4 w-4 text-[#0EA5E9]" /></span>
             <span className="text-[16px] font-semibold">Pentra</span>
           </div>
-          <p className="max-w-[18rem] text-[13px] leading-relaxed text-[#62666D]">Autopilot SEO for your website. Researched, fact-checked, published and measured.</p>
+          <p className="max-w-[18rem] text-[13px] leading-relaxed text-[#62666D]">Autopilot SEO for your website. Planned, fact-checked, published and measured.</p>
         </div>
         <div className="grid grid-cols-2 gap-x-16 gap-y-3">
           <div className="flex flex-col gap-3">

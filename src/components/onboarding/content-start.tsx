@@ -83,7 +83,7 @@ export function ContentStart() {
     </section>
     <section className={PANEL} aria-labelledby="setup-business">
       <div className="space-y-1"><h2 id="setup-business" className={H2}>About your business</h2>
-        <p className={HELP}>Pentra writes only from these facts and from sources it cites, so keep them accurate.</p></div>
+        <p className={HELP}>Pentra writes only from these facts, so keep them accurate and specific.</p></div>
       <Input label="Business name" value={name} onChange={edit(setName)} placeholder="Northside Dental" />
       <Textarea label="Confirmed business facts" value={summary} onChange={edit(setSummary)} placeholder="Family dental practice in Leeds since 2009. General, cosmetic and emergency dentistry. Open Saturdays." />
       <Textarea label="Who you serve" value={audience} onChange={edit(setAudience)} placeholder="Families and working adults in north Leeds who want a dentist they can reach quickly." />
@@ -112,7 +112,7 @@ export function ContentStart() {
     </section>
     <section className={PANEL}>
       <label className="flex items-start gap-3 text-[14px] text-[#F7F8F8]"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#F7F8F8]" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
-        <span>These facts are accurate. Pentra writes only from them and from sources it cites.</span></label>
+        <span>These facts are accurate. Pentra writes only from them.</span></label>
       <div className="flex flex-wrap items-center gap-4">
         <Button disabled={busy || !isLoaded || !userId || !confirmed || !ctaValid || !domain.trim() || !summary.trim() || !audience.trim() || !product.trim()} onClick={save}>{busy ? "Saving…" : "Save and continue"}</Button>
         <Link className="text-[13px] text-[#8A8F98] underline-offset-2 hover:text-[#F7F8F8] hover:underline" href="/upgrade">Plans &amp; billing</Link>

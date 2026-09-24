@@ -3,7 +3,7 @@ import { ArrowLeft, Radar, ShieldCheck } from "lucide-react";
 
 const workflow = [
   { label: "Research", detail: "Finds the searches your customers make that your site doesn't answer yet." },
-  { label: "Write and fact-check", detail: "Every claim is matched to a source. Drafts that fail are held back." },
+  { label: "Write and fact-check", detail: "Written only from the facts you confirm. Drafts that fail the fact check are held back." },
   { label: "Publish", detail: "On Autopilot at your pace, or after your approval. Your choice." },
   { label: "Verify and measure", detail: "Confirms each page is live, then tracks clicks in Search Console." },
 ];

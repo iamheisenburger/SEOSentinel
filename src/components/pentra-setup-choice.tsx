@@ -74,7 +74,7 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
     </fieldset>
     {(choice === "autopilot" || !reviewAvailable) && <p className="text-xs text-[#8A8F98]">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>}
     <label className="block text-sm"><input type="checkbox" className="mr-2" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
-      My business details are accurate. Pentra writes only from these facts and its cited research.</label>
+      My business details are accurate. Pentra writes only from these facts.</label>
     <Button disabled={!ready || !confirmed || busy} loading={busy} onClick={start}>Start Pentra</Button>
     {!ready && <p className="text-sm text-[#8A8F98]">Finish the steps above to start.</p>}
     {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
