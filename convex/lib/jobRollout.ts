@@ -7,7 +7,7 @@ import {
 } from "./siteDomainBinding.ts";
 
 export type JobRolloutState = {
-  contentWork?: { connectionHash: string; profileHash: string; retiredAt?: number };
+  contentWork?: { connectionHash: string; profileHash: string; retiredAt?: number; ownerRequest?: { userId: string } };
   payload?: unknown;
   rolloutEpoch?: number;
   canonicalDomain?: string;
@@ -15,6 +15,7 @@ export type JobRolloutState = {
 };
 
 export type SiteRolloutState = {
+  userId?: string;
   serviceMode?: string;
   contentSchedule?: { connectionHash: string; profileHash: string; paused: boolean };
   autopilotEnabled?: boolean;
@@ -51,10 +52,11 @@ export function jobAuthorizedForExecution(
   if (!siteExecutionActive(site)) return false;
   if (job.contentWork?.retiredAt !== undefined) return false;
   if (site.serviceMode === "growth_first") {
-    if (!job.contentWork || !site.contentSchedule || site.contentSchedule.paused ||
+    if (!job.contentWork || !site.contentSchedule || (site.contentSchedule.paused && !job.contentWork.ownerRequest) ||
       job.contentWork.connectionHash !== site.contentSchedule.connectionHash ||
       job.contentWork.profileHash !== site.contentSchedule.profileHash) return false;
   } else if (job.contentWork) return false;
+  if (job.contentWork?.ownerRequest && (job.contentWork.ownerRequest.userId !== site.userId || !isManualJobPayload(job.payload))) return false;
   const currentDomain = siteCanonicalDomain(site);
   const currentRevision = siteCanonicalDomainRevision(site);
   const hasJobBinding = job.canonicalDomain !== undefined ||

@@ -3211,6 +3211,16 @@ export const reject = mutation({
     if (article.status === "published") {
       throw new Error("Cannot reject a published article");
     }
+    const jobs = await ctx.db.query("jobs").withIndex("by_site_article", q => q.eq("siteId", article.siteId).eq("articleId", articleId)).take(21);
+    if (jobs.length > 20) throw new Error("Article work history requires reconciliation before rejection");
+    const ownerJobs = jobs.filter(job => job.contentWork?.ownerRequest && !["verified", "failed"].includes(job.contentWork.stage));
+    if (ownerJobs.some(job => job.status !== "done" || job.contentWork?.stage !== "ready")) {
+      throw new Error("Wait for the current draft review or publication to finish before rejecting it");
+    }
+    for (const job of ownerJobs) await ctx.db.patch(job._id, {
+      contentWork: { ...job.contentWork!, stage: "failed", failure: "owner_rejected_draft", approvedArtifactHash: undefined },
+      status: "failed", updatedAt: now(),
+    });
     await ctx.db.patch(articleId, { status: "rejected", updatedAt: now() });
     await syncSummary(ctx, articleId);
   },
@@ -3264,6 +3274,10 @@ export const deleteArticle = mutation({
     assertNotPublishing(article);
     if (article.status === "published") {
       throw new Error("Published audit evidence is immutable and cannot be deleted");
+    }
+    const work = await ctx.db.query("jobs").withIndex("by_site_article", q => q.eq("siteId", article.siteId).eq("articleId", articleId)).take(21);
+    if (work.length > 20 || work.some(job => job.contentWork?.ownerRequest)) {
+      throw new Error("This draft retains generation and review history. Decline it instead of deleting its evidence.");
     }
     const summary = await ctx.db
       .query("article_summaries")

@@ -1,7 +1,7 @@
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { contentIntentConflicts, evaluateTopicBusinessFit, tenantDiscoveryAnchors, tenantTopicBusinessSignals, isSealedReady } from "./lib/autopilotBuffer";
 import { publicationArtifactHash, publicationDeliveryConfig, sha256Hex } from "./lib/publicationArtifact";
 import { legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
@@ -510,9 +510,13 @@ export const readiness = query({
       schedule: s ? { active: s.active, paused: s.paused, nextDeadlineAt: s.nextDeadlineAt, intervalMs: s.intervalMs, timezone: s.timezone ?? "UTC" } : null,
       funding: { ...await contentFunding(ctx, site, pricing?.budgetMicroUsd),
         pricingScope: !pricing ? "unavailable" as const : pricing.validationAuthorizationId ? "validation_run" as const : "ordinary" as const },
-      complete: jobs.length <= LIMIT, ready: jobs.filter(j => j.contentWork?.stage === "ready" && j.contentWork.retiredAt === undefined &&
+      ownerDraft: { maximumMicroUsd: pricing?.budgetMicroUsd ?? null,
+        latest: jobs.filter(j => j.contentWork?.ownerRequest).sort((a, b) => b.createdAt - a.createdAt).slice(0, 1).map(j => ({
+          jobId: j._id, articleId: j.articleId, stage: j.contentWork!.stage, issue: contentIssue(j.contentWork!.failure),
+        }))[0] ?? null },
+      complete: jobs.length <= LIMIT, ready: jobs.filter(j => j.contentWork?.stage === "ready" && !j.contentWork.ownerRequest && j.contentWork.retiredAt === undefined &&
         j.contentWork.profileHash === confirmedContentProfileHash(site) && j.contentWork.connectionHash === s?.connectionHash && bindingCurrent).length,
-      work: jobs.filter(j => j.contentWork).map(j => {
+      work: jobs.filter(j => j.contentWork && !j.contentWork.ownerRequest).map(j => {
         const lastReview = j.contentWork!.providerCalls.at(-1);
         // This repaired failure can be rechecked through ordinary owner Resume.
         // The mutation still verifies lineage, unchanged source and no writes;
@@ -611,7 +615,7 @@ export const control = mutation({ args: { siteId: v.id("sites"), action: v.union
     await wake(ctx, site._id);
   } });
 
-async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">) {
+async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: Id<"topic_clusters">) {
   const topics = await takeCurrentDomainTopics(ctx, site, LIMIT + 1);
   if (topics.length > LIMIT) throw new Error("Topic inventory is incomplete");
   const signals = tenantTopicBusinessSignals(site);
@@ -636,6 +640,7 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">) {
     ![...covered, ...pageCoverage].some(c => contentIntentConflicts(t, c)));
   // Optional forecasts order work only. Absence remains absent in storage.
   planned.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+  if (preferredId) return planned.find(t => t._id === preferredId) ?? null;
   if (planned[0]) return planned[0];
   const anchors = tenantDiscoveryAnchors([...(site.anchorKeywords ?? []), ...(site.keyFeatures ?? []),
     ...(site.painPoints ?? []), site.productUsage], 40);
@@ -651,6 +656,84 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">) {
   }
   return null;
 }
+
+/** An explicit owner order uses the same priced worker, not the automatic
+ * schedule's failed slot. Its approval is for drafting only, never publishing. */
+export const requestDraft = mutation({
+  args: { siteId: v.id("sites"), reviewToken: v.string(), requestKey: v.string(),
+    maximumMicroUsd: v.number(), topicId: v.optional(v.id("topic_clusters")) },
+  handler: async (ctx, args) => {
+    const site = await requireOwner(ctx, args.siteId), schedule = site.contentSchedule;
+    if (site.serviceMode !== "growth_first" || !schedule || site.publishMethod !== "github" ||
+      !contentConnectionComplete(site) || !publisherDestinationReceiptVerified({ site }) ||
+      !await contentEntitlementAuthorized(ctx, site)) throw new ConvexError("Confirm your business, GitHub destination and billing in Settings first");
+    if (args.reviewToken !== contentConsentToken(site) || schedule.profileHash !== confirmedContentProfileHash(site) ||
+      schedule.connectionHash !== contentConnectionHash(site)) throw new ConvexError("Business or destination changed; review Settings first");
+    if (!/^[a-zA-Z0-9-]{16,80}$/.test(args.requestKey)) throw new ConvexError("Invalid draft request reference");
+    const jobs = await jobsForSite(ctx, site._id);
+    const same = jobs.find(j => j.contentWork?.ownerRequest?.userId === site.userId && j.contentWork?.ownerRequest?.key === args.requestKey);
+    if (same) return { jobId: same._id, created: false };
+    const outstanding = jobs.find(j => j.contentWork?.ownerRequest && j.contentWork.retiredAt === undefined &&
+      !["verified", "failed"].includes(j.contentWork.stage));
+    if (outstanding) return { jobId: outstanding._id, created: false };
+    const pricing = await pricingConfiguration(ctx, site);
+    if (!pricing || args.maximumMicroUsd !== pricing.budgetMicroUsd) throw new ConvexError("Draft pricing changed; refresh before requesting work");
+    const topic = await chooseTopic(ctx, site, args.topicId);
+    if (!topic) throw new ConvexError("No distinct supported topic is available. Review your business offerings or select another planned topic.");
+    const requestedAt = Date.now(), { budgetMicroUsd, ...price } = pricing;
+    const request = { siteId: site._id, userId: site.userId!, purpose: "content_work" as const,
+      trigger: `content_slot:${requestedAt}`, reservedMicroUsd: budgetMicroUsd, timestamp: requestedAt };
+    const funding = await inspectSharedProviderBudget(ctx, request);
+    if (!funding.ok) throw new ConvexError(contentIssue(funding.reason) ?? "Draft funding is unavailable");
+    const jobId = await ctx.db.insert("jobs", { siteId: site._id, canonicalDomain: siteCanonicalDomain(site)!,
+      domainRevision: siteCanonicalDomainRevision(site), rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+      type: "article", status: "pending", workerAttempts: 0, publicationAttempts: 0,
+      payload: { manual: true, topicId: topic._id, bufferFill: true, options: { includeImages: false, includeYouTube: false } },
+      contentWork: { ownerRequest: { userId: site.userId!, key: args.requestKey, requestedAt },
+        validationAuthorizationId: schedule.validationAuthorizationId, intent: "create", stage: "prepare",
+        deadlineAt: requestedAt, windowStartAt: requestedAt, profileHash: schedule.profileHash, connectionHash: schedule.connectionHash,
+        revisions: 0, replacements: 0, discardedArticleIds: [], budgetMicroUsd, pricing: price, providerCalls: [] },
+      createdAt: requestedAt, updatedAt: requestedAt });
+    const reserved = await reserveSharedProviderBudget(ctx, { ...request, contentWorkJobId: jobId });
+    if (!reserved.ok) throw new ConvexError("Draft reservation changed; no work was admitted");
+    await ctx.db.patch(jobId, { providerSpendReservationId: reserved.reservationId });
+    await ctx.db.patch(topic._id, { status: "queued", updatedAt: requestedAt });
+    await ctx.scheduler.runAfter(0, internal.actions.pipeline.processNextJob, { siteId: site._id, jobId });
+    return { jobId, created: true };
+  },
+});
+
+async function reviseFailedWork(ctx: MutationCtx, site: Doc<"sites">, failed: Doc<"jobs">): Promise<CadenceScheduleResult> {
+  const cw = failed.contentWork!;
+  if (cw.revisions < 2) {
+    await ctx.db.patch(failed._id, { status: "pending", workerAttempts: (failed.workerAttempts ?? 0) + 1,
+      payload: { ...failed.payload, qualityRetry: true, articleId: failed.articleId, bufferFill: true },
+      contentWork: { ...cw, stage: "review", revisions: cw.revisions + 1 }, updatedAt: Date.now() });
+    return { scheduled: 1, mode: "quality_revision", activeJobId: failed._id };
+  }
+  const replacement = cw.replacements === 0 ? await chooseTopic(ctx, site) : null;
+  if (replacement && failed.articleId) {
+    await ctx.db.patch(failed._id, { status: "pending", articleId: undefined, reservationId: undefined,
+      workerAttempts: (failed.workerAttempts ?? 0) + 1,
+      payload: { ...(cw.ownerRequest ? { manual: true } : {}), topicId: replacement._id, bufferFill: true, options: { includeImages: false, includeYouTube: false } },
+      contentWork: { ...cw, intent: "create", targetPageId: undefined, baseRevision: undefined, permissionVersion: undefined,
+        opportunity: undefined, revisionId: undefined, editTarget: undefined, stage: "prepare", replacements: 1,
+        discardedArticleIds: [...cw.discardedArticleIds, failed.articleId] }, updatedAt: Date.now() });
+    await ctx.db.patch(replacement._id, { status: "queued", updatedAt: Date.now() });
+    return { scheduled: 1, mode: "buffer_fill", activeJobId: failed._id };
+  }
+  await ctx.db.patch(failed._id, { status: "failed", contentWork: { ...cw, stage: "failed", failure: "bounded_content_quality_exhausted" }, updatedAt: Date.now() });
+  await settleFailedContentWork(ctx, failed._id);
+  return { scheduled: 0, mode: "content_quality_exhausted" };
+}
+
+export const advanceOwnerDraft = internalMutation({ args: { jobId: v.id("jobs") }, handler: async (ctx, { jobId }) => {
+  const job = await ctx.db.get(jobId), site = job?.siteId ? await ctx.db.get(job.siteId) : null;
+  if (!job?.contentWork?.ownerRequest || !site || !jobAuthorizedForExecution(site, job) || job.status !== "done" ||
+    job.contentWork.stage !== "review_failed") return;
+  const result = await reviseFailedWork(ctx, site, job);
+  if (result.scheduled) await ctx.scheduler.runAfter(0, internal.actions.pipeline.processNextJob, { siteId: site._id, jobId });
+} });
 
 /** One scheduler, same jobs and workers. A done/ready job is a checkpoint, not
  * another queue. Delivery reclaims that identical execution record. */
@@ -671,7 +754,7 @@ export const advance = internalMutation({
     if (!contentConnectionComplete(site) || schedule.profileHash !== confirmedContentProfileHash(site) ||
       schedule.connectionHash !== contentConnectionHash(site)) return { scheduled: 0, mode: "content_binding_changed" };
     if (site.approvalRequired) return { scheduled: 0, mode: "approval_waiting" };
-    const all = await jobsForSite(ctx, siteId, schedule.nextDeadlineAt), work = all.filter(j => j.contentWork && j.contentWork.retiredAt === undefined);
+    const all = await jobsForSite(ctx, siteId, schedule.nextDeadlineAt), work = all.filter(j => j.contentWork && !j.contentWork.ownerRequest && j.contentWork.retiredAt === undefined);
     if (all.some(j => !j.contentWork && ["pending", "running"].includes(j.status))) return { scheduled: 0, mode: "content_migration_pending" };
     const waiting = work.filter(j => !["verified", "failed"].includes(j.contentWork!.stage)).sort((a,b) => a.contentWork!.deadlineAt - b.contentWork!.deadlineAt);
     const restoration = waiting.find(j => j.contentWork!.operation);
@@ -747,28 +830,7 @@ export const advance = internalMutation({
       return { scheduled: 0, mode: article?.publicUrlStatus === "failed" ? "public_url_failed" : "public_url_pending" };
     }
     const failed = waiting.find(j => j.contentWork!.stage === "review_failed");
-    if (failed) {
-      const cw = failed.contentWork!;
-      if (cw.revisions < 2) {
-        await ctx.db.patch(failed._id, { status: "pending", workerAttempts: (failed.workerAttempts ?? 0) + 1,
-          payload: { ...failed.payload, qualityRetry: true, articleId: failed.articleId, bufferFill: true },
-          contentWork: { ...cw, stage: "review", revisions: cw.revisions + 1 }, updatedAt: Date.now() });
-        return { scheduled: 1, mode: "quality_revision" };
-      }
-      const replacement = cw.replacements === 0 ? await chooseTopic(ctx, site) : null;
-      if (replacement && failed.articleId) {
-        await ctx.db.patch(failed._id, { status: "pending", articleId: undefined, reservationId: undefined,
-          workerAttempts: (failed.workerAttempts ?? 0) + 1,
-          payload: { topicId: replacement._id, bufferFill: true, options: { includeImages: false, includeYouTube: false } },
-          contentWork: { ...cw, intent: "create", targetPageId: undefined, baseRevision: undefined, permissionVersion: undefined,
-            opportunity: undefined, revisionId: undefined, editTarget: undefined, stage: "prepare", replacements: 1, discardedArticleIds: [...cw.discardedArticleIds, failed.articleId] }, updatedAt: Date.now() });
-        await ctx.db.patch(replacement._id, { status: "queued", updatedAt: Date.now() });
-        return { scheduled: 1, mode: "buffer_fill" };
-      }
-      await ctx.db.patch(failed._id, { status: "failed", contentWork: { ...cw, stage: "failed", failure: "bounded_content_quality_exhausted" }, updatedAt: Date.now() });
-      await settleFailedContentWork(ctx, failed._id);
-      return { scheduled: 0, mode: "content_quality_exhausted" };
-    }
+    if (failed) return reviseFailedWork(ctx, site, failed);
     // A failed delivery slot cannot silently mint unlimited replacement jobs.
     const failedSlot = work.find(j => j.contentWork!.stage === "failed" && j.contentWork!.deadlineAt === schedule.nextDeadlineAt);
     if (failedSlot) return { scheduled: 0, mode: "content_failed_slot", blockers: [failedSlot.contentWork!.failure ?? "content_work_failed"] };
@@ -843,6 +905,10 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">, r
   await ctx.db.patch(job._id, { contentWork: { ...cw, stage, failure: selectedFailure ?? (stage === "ready" ? undefined : cw.failure),
     approvedArtifactHash: stage === "ready" ? article.auditedContentHash : stage === "review_failed" ? undefined : cw.approvedArtifactHash,
     publishedAt: article.publishedAt, verifiedAt: article.publicUrlVerifiedAt } });
+  if (cw.ownerRequest) {
+    if (stage === "review_failed") await ctx.scheduler.runAfter(0, internal.contentWork.advanceOwnerDraft, { jobId: job._id });
+    return;
+  }
   await wake(ctx, job.siteId!);
 }
 
@@ -859,6 +925,7 @@ export async function contentWorkVerified(ctx: MutationCtx, site: Doc<"sites">, 
   if (job.contentWork.intent === "create" && currentBinding) await enrollVerifiedCreation(ctx, site, article, job);
   await ctx.db.patch(job._id, { contentWork: { ...job.contentWork, stage: "verified", publishedAt: article.publishedAt, verifiedAt: checkedAt } });
   await closeVerifiedContentWake(ctx, (await ctx.db.get(job._id))!);
+  if (job.contentWork.ownerRequest) return;
   if (job.contentWork.deadlineAt === site.contentSchedule.nextDeadlineAt) await ctx.db.patch(site._id, {
     contentSchedule: { ...site.contentSchedule, nextDeadlineAt: site.contentSchedule.nextDeadlineAt + site.contentSchedule.intervalMs }, updatedAt: checkedAt });
   await wake(ctx, site._id);
@@ -915,10 +982,11 @@ export async function recoverContentWork(ctx: MutationCtx, job: Doc<"jobs">, err
       stage: willRetry ? cw.stage : "failed", failure },
     error: failure ?? `Content recovery ${recoveries + 1}/${MAX_CONTENT_RECOVERIES} scheduled: ${error}`,
     updatedAt: Date.now() });
-  if (willRetry) await ctx.scheduler.runAt(nextAttemptAt!, internal.autopilot.dispatchSiteFollowup,
+  if (willRetry && cw.ownerRequest) await ctx.scheduler.runAt(nextAttemptAt!, internal.actions.pipeline.processNextJob, { siteId: job.siteId!, jobId: job._id });
+  else if (willRetry) await ctx.scheduler.runAt(nextAttemptAt!, internal.autopilot.dispatchSiteFollowup,
     { siteId: job.siteId!, trigger: "job_retry", reason: `content_recovery_${recoveries + 1}` });
   else await settleFailedContentWork(ctx, job._id);
-  if (internalContentProcessingError(failure ?? error) && job.siteId) {
+  if (!cw.ownerRequest && internalContentProcessingError(failure ?? error) && job.siteId) {
     const site = await ctx.db.get(job.siteId);
     if (site?.serviceMode === "growth_first" && site.contentSchedule) await ctx.db.patch(site._id,
       { contentSchedule: { ...site.contentSchedule, active: false, paused: true }, updatedAt: Date.now() });
@@ -935,7 +1003,7 @@ export const beginProviderCall = internalMutation({
     if (cw?.operation) throw new Error("Owner correction/restoration is provider-free; no paid work is authorized");
     if (!job || !cw || !site || job.workerToken !== args.workerToken || job.status !== "running" ||
       (job.leaseExpiresAt ?? 0) <= Date.now() || !jobAuthorizedForExecution(site, job) ||
-      site.approvalRequired === true || !(await contentEntitlementAuthorized(ctx, site)) || !contentConnectionComplete(site) || confirmedContentProfileHash(site) !== cw.profileHash ||
+      (site.approvalRequired === true && !cw.ownerRequest) || !(await contentEntitlementAuthorized(ctx, site)) || !contentConnectionComplete(site) || confirmedContentProfileHash(site) !== cw.profileHash ||
       contentConnectionHash(site) !== cw.connectionHash) throw new Error("Content provider authority changed");
     await authorizedWorkPage(ctx, site, job);
     const previousCalls = cw.providerCalls.filter(c => (c.logicalKey ?? c.key) === args.key);

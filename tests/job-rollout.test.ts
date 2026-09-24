@@ -30,7 +30,7 @@ test("manual owner jobs remain available while autonomous rollout observes", () 
   );
 
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
-  assert.match(pipeline, /if \(payload\?\.manual\)[\s\S]{0,300}status: site\.approvalRequired \? "review" : "ready"/);
+  assert.match(pipeline, /if \(payload\?\.manual\)[\s\S]{0,300}status: job\.contentWork\?\.ownerRequest \? "ready" : site\.approvalRequired \? "review" : "ready"/);
   assert.match(pipeline, /if \(payload\.manual\)[\s\S]{0,350}manualDeliveryWaiting: true/);
 });
 

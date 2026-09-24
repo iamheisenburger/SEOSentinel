@@ -847,6 +847,112 @@ test("SLC51 invalid content envelopes cannot remove old deferrals or override mo
   });
 });
 
+test("SLC54 owner draft completes two fresh approved publication cycles without changing the paused cadence", async () => {
+  const f = await scopedPricingFixture();
+  for (const s of f.sites.slice(0, 2)) f.get(s.id)!.contentSchedule.paused = true;
+  const site = f.get(f.sites[0].id)!;
+  site.autopilotEnabled = false; site.approvalRequired = true;
+  const before = structuredClone(site.contentSchedule);
+  f.setIdentity(site.userId);
+  const readiness = await f.invoke("contentWork:readiness", { siteId: site._id });
+  for (let cycle = 0; cycle < 2; cycle++) {
+    const args = { siteId: site._id, reviewToken: readiness.reviewToken, requestKey: `owner-draft-cycle-${cycle}`, maximumMicroUsd: readiness.ownerDraft.maximumMicroUsd };
+    const [first, duplicate] = await Promise.all([f.invoke("contentWork:requestDraft", args), f.invoke("contentWork:requestDraft", args)]);
+    assert.equal(first.jobId, duplicate.jobId);
+    await pumpUntil(f, () => ["ready", "failed"].includes(f.get(first.jobId)!.contentWork.stage));
+    const job = f.get(first.jobId)!;
+    assert.equal(job.contentWork.stage, "ready", diagnostic(f));
+    assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, cycle, "No publication before explicit approval");
+    assert.equal((await f.invoke("contentWork:readiness", { siteId: site._id })).ready, 0, "Manual drafts are not automatic buffer");
+    await f.invoke("actions/pipeline:publishApproved", { siteId: site._id, articleId: job.articleId });
+    await pumpUntil(f, () => f.get(job.articleId)!.publicUrlStatus === "verified");
+    assert.equal(f.get(first.jobId)!.contentWork.stage, "verified");
+    assert.deepEqual(f.get(site._id)!.contentSchedule, before);
+    assert.equal((await f.invoke("contentWork:requestDraft", args)).jobId, first.jobId, "Old click cannot buy work again after publication");
+  }
+  assert.equal(f.modelCalls.filter(c => c.tools[0].name === "submit_article").length, 2);
+  assert.equal(f.tables.jobs.filter(j => j.contentWork?.ownerRequest).length, 2);
+  assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 2);
+  f.assertOffline();
+});
+
+test("SLC54 declining an owner draft permits fresh work without replay or publication", async () => {
+  const f = await scopedPricingFixture(), site = f.get(f.sites[0].id)!;
+  f.setIdentity(site.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site._id });
+  const args = { siteId: site._id, reviewToken: r.reviewToken, requestKey: "owner-declined-draft", maximumMicroUsd: r.ownerDraft.maximumMicroUsd };
+  const first = await f.invoke("contentWork:requestDraft", args);
+  const outstanding = await f.invoke("contentWork:requestDraft", { ...args, requestKey: "another-click-in-flight" });
+  assert.equal(first.jobId, outstanding.jobId);
+  await pumpUntil(f, () => f.get(first.jobId)!.contentWork.stage === "ready");
+  const job = f.get(first.jobId)!, calls = structuredClone(job.contentWork.providerCalls), reservation = structuredClone(f.get(job.providerSpendReservationId));
+  await assert.rejects(f.invoke("articles:deleteArticle", { articleId: job.articleId }), /Decline it/);
+  await f.invoke("articles:reject", { articleId: job.articleId });
+  assert.equal(f.get(first.jobId)!.contentWork.failure, "owner_rejected_draft");
+  assert.deepEqual(f.get(first.jobId)!.contentWork.providerCalls, calls);
+  assert.deepEqual(f.get(job.providerSpendReservationId), reservation);
+  assert.equal((await f.invoke("contentWork:requestDraft", args)).jobId, first.jobId);
+  const next = await f.invoke("contentWork:requestDraft", { ...args, requestKey: "explicit-next-fresh-draft" });
+  assert.notEqual(next.jobId, first.jobId);
+  await pumpUntil(f, () => f.get(next.jobId)!.contentWork.stage === "ready");
+  assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0);
+  f.assertOffline();
+});
+
+test("SLC54 owner draft authorization and pricing fail before paid work", async t => {
+  for (const defect of ["foreign_owner", "stale_profile", "changed_price", "foreign_topic", "stopped_grant"] as const) await t.test(defect, async () => {
+    const f = await scopedPricingFixture(), site = f.get(f.sites[0].id)!;
+    f.setIdentity(site.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site._id });
+    const args: Fields = { siteId: site._id, reviewToken: r.reviewToken, requestKey: "owner-denied-request", maximumMicroUsd: r.ownerDraft.maximumMicroUsd };
+    if (defect === "foreign_owner") f.setIdentity("another-owner");
+    if (defect === "stale_profile") site.siteSummary += " changed";
+    if (defect === "changed_price") args.maximumMicroUsd++;
+    if (defect === "foreign_topic") args.topicId = f.add("topic_clusters", { siteId: f.sites[1].id, title: "Foreign topic", status: "planned", createdAt: START });
+    if (defect === "stopped_grant") await f.stop();
+    await assert.rejects(f.invoke("contentWork:requestDraft", args));
+    assert.equal(f.modelCalls.length, 0); assert.equal(f.tables.jobs.length, 0); f.assertOffline();
+  });
+});
+
+test("SLC54 rejected owner drafts remain bounded and never restart or hide failed cadence", async () => {
+  const f = await scopedPricingFixture({}, {}, { quality: "low" }), site = f.get(f.sites[0].id)!;
+  for (const s of f.sites.slice(0, 2)) f.get(s.id)!.contentSchedule.paused = true;
+  f.setIdentity(site.userId);
+  const before = structuredClone(site.contentSchedule), r = await f.invoke("contentWork:readiness", { siteId: site._id });
+  const args = { siteId: site._id, reviewToken: r.reviewToken, requestKey: "owner-low-quality-draft", maximumMicroUsd: r.ownerDraft.maximumMicroUsd };
+  const result = await f.invoke("contentWork:requestDraft", args);
+  await pumpUntil(f, () => f.get(result.jobId)!.contentWork.stage === "failed");
+  const job = f.get(result.jobId)!;
+  assert.equal(job.contentWork.revisions, 2); assert.equal(job.contentWork.replacements, 1);
+  assert.equal(job.contentWork.failure, "bounded_content_quality_exhausted");
+  assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0);
+  const calls = f.modelCalls.length, snapshot = structuredClone(job);
+  assert.equal((await f.invoke("contentWork:requestDraft", args)).jobId, job._id);
+  await f.invoke("contentWork:advanceOwnerDraft", { jobId: job._id });
+  assert.deepEqual(f.get(job._id), snapshot); assert.equal(f.modelCalls.length, calls);
+  assert.deepEqual(f.get(site._id)!.contentSchedule, before); f.assertOffline();
+});
+
+test("SLC54 owner work rechecks current authority before a provider call", async t => {
+  for (const change of ["owner", "profile", "destination", "revoked_plan", "stopped_grant"] as const) await t.test(change, async () => {
+    const f = await scopedPricingFixture(), site = f.get(f.sites[0].id)!;
+    f.setIdentity(site.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site._id });
+    const { jobId } = await f.invoke("contentWork:requestDraft", { siteId: site._id, reviewToken: r.reviewToken,
+      requestKey: "owner-revocation-test", maximumMicroUsd: r.ownerDraft.maximumMicroUsd });
+    if (change === "owner") site.userId = "different-owner";
+    if (change === "profile") site.siteSummary += " changed";
+    if (change === "destination") site.repoName = "different-destination";
+    if (change === "revoked_plan") f.tables.account_plan_entitlements.find(e => e.userId === site.userId)!.status = "revoked";
+    if (change === "stopped_grant") await f.stop();
+    f.restartRuntime();
+    await f.invoke("actions/pipeline:processNextJob", { siteId: site._id, jobId });
+    assert.equal(f.modelCalls.length, 0, change); assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0);
+    f.assertOffline();
+  });
+});
+
 test("SLC52 owner publishes one reviewed GitHub article while automatic preparation remains inactive", async () => {
   const f = await scopedPricingFixture({}, {}, { liveTitleBrand: "ReservoirNote" }); await f.admit(0);
   const job = f.tables.jobs[0], site = f.get(job.siteId)!;

@@ -9236,7 +9236,7 @@ export const processNextJob = internalAction({
           if (payload.manual) {
             await ctx.runMutation(internal.articles.setWorkflowStatusInternal, {
               articleId: payload.articleId,
-              status: site.approvalRequired ? "review" : "ready",
+              status: job.contentWork?.ownerRequest ? "ready" : site.approvalRequired ? "review" : "ready",
             });
           } else if (
             payload.bufferFill &&
@@ -9579,7 +9579,7 @@ export const processNextJob = internalAction({
       if (payload?.manual) {
         await ctx.runMutation(internal.articles.setWorkflowStatusInternal, {
           articleId,
-          status: site.approvalRequired ? "review" : "ready",
+          status: job.contentWork?.ownerRequest ? "ready" : site.approvalRequired ? "review" : "ready",
         });
       } else if (
         payload?.bufferFill &&

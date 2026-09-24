@@ -3,7 +3,7 @@
 import { useAction, useMutation, useQuery } from "convex/react";
 import { useAuth } from "@clerk/nextjs";
 import { api } from "../../../../convex/_generated/api";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,10 @@ export default function ArticlesPage() {
     site?._id ? { siteId: site._id } : "skip",
   );
   const queueArticle = useMutation(api.jobs.queueArticleNow);
+  const requestDraft = useMutation(api.contentWork.requestDraft);
+  const readiness = useQuery(api.contentWork.readiness, site?.serviceMode === "growth_first" ? { siteId: site._id } : "skip");
+  const draftRequestKey = useRef<{ siteId: string; key: string } | null>(null);
+  const [generating, setGenerating] = useState(false);
 
   const deleteArticle = useMutation(api.articles.deleteArticle);
   const publishAction = useAction(api.actions.pipeline.publishApproved);
@@ -101,16 +105,28 @@ export default function ArticlesPage() {
   }
 
   const handleGenerate = async () => {
-    if (!site?._id) return;
+    if (!site?._id || generating) return;
+    setGenerating(true);
     setStatus("Queued — generation will start shortly...");
     try {
-      await queueArticle({ siteId: site._id, topicId: selectedTopic });
-      setStatus("Article queued.");
+      if (site.serviceMode === "growth_first") {
+        if (!readiness?.ownerDraft.maximumMicroUsd) throw new Error("Check generation readiness in Settings first.");
+        const currentRequest = draftRequestKey.current;
+        const request = currentRequest && currentRequest.siteId === site._id ? currentRequest : { siteId: site._id, key: crypto.randomUUID() };
+        draftRequestKey.current = request;
+        const result = await requestDraft({ siteId: site._id, requestKey: request.key,
+          reviewToken: readiness.reviewToken, maximumMicroUsd: readiness.ownerDraft.maximumMicroUsd, topicId: selectedTopic });
+        draftRequestKey.current = null;
+        setStatus(result.created ? "Draft requested. Review and approve it before publishing. Your automatic schedule is unchanged." : "Your existing draft request is retained. Open it below to check progress.");
+      } else {
+        await queueArticle({ siteId: site._id, topicId: selectedTopic });
+        setStatus("Article queued.");
+      }
     } catch (err: unknown) {
       setStatus(
         err instanceof Error ? err.message : "Failed to queue article",
       );
-    }
+    } finally { setGenerating(false); }
   };
 
   return (
@@ -141,10 +157,10 @@ export default function ArticlesPage() {
             <Button
               size="sm"
               onClick={handleGenerate}
-              disabled={!site || atArticleLimit}
+              disabled={!site || atArticleLimit || generating || (site.serviceMode === "growth_first" && !readiness?.ownerDraft.maximumMicroUsd)}
               icon={atArticleLimit ? <Zap className="h-3.5 w-3.5" /> : <PenTool className="h-3.5 w-3.5" />}
             >
-              {atArticleLimit ? "Limit Reached" : "Generate"}
+              {atArticleLimit ? "Limit Reached" : generating ? "Requesting…" : "Generate"}
             </Button>
           </div>
         }
@@ -154,6 +170,16 @@ export default function ArticlesPage() {
         <div className="rounded-lg bg-[#0EA5E9]/[0.08] px-4 py-2 text-[13px] text-[#38BDF8]">
           {status}
         </div>
+      )}
+
+      {readiness?.ownerDraft && (
+        <section aria-label="Owner-requested draft" className="rounded-lg border border-white/[0.06] p-4 text-sm">
+          <p>Generate a draft for your approval. This does not activate or repair your automatic schedule.</p>
+          {readiness.ownerDraft.maximumMicroUsd != null && <p>Uses your existing generation allowance, with a maximum provider budget of ${(readiness.ownerDraft.maximumMicroUsd / 1_000_000).toFixed(2)} per request, including bounded revisions.</p>}
+          {readiness.ownerDraft.latest && <p role="status">Draft: {readiness.ownerDraft.latest.stage.replaceAll("_", " ")}. {readiness.ownerDraft.latest.issue}
+            {readiness.ownerDraft.latest.articleId && <> <Link className="underline" href={`/articles/${readiness.ownerDraft.latest.articleId}`}>Open draft</Link></>}
+          </p>}
+        </section>
       )}
 
       {atArticleLimit && (

@@ -9,6 +9,7 @@ import { internalContentProcessingError } from "./contentAudit";
 // Browser-facing copy is selected, never raw exception/provider payload text.
 export function contentIssue(reason?: string) {
   if (!reason) return null;
+  if (reason === "owner_rejected_draft") return "You declined this draft. It will not publish. You can request a new draft; previous work and spending remain recorded.";
   if (internalContentProcessingError(reason)) return "Pentra encountered an internal processing error. Our team must repair it. Your drafts, spending history and original deadline are preserved. You do not need to change your plan or fund a provider.";
   if (reason.includes("wordpress_receipt_update_required")) return "Update the Pentra WordPress connector to 1.1.0 or newer, then recheck this retained delivery. Do not publish another copy.";
   if (reason === "content_provider_credit_unavailable") return "Pentra's generation service is interrupted. Our team must restore it; you do not need to fund a provider or change your plan. Your original delivery deadline and prior attempt remain visible.";

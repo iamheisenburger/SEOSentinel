@@ -1,5 +1,41 @@
 # Pentra — fresh-task handoff
 
+## September 24: smallest complete owner-reviewed GitHub v1
+
+Current work remains in `.claude/assignment24`. The owner approved a narrow
+repeatable customer journey: request a fresh relevant draft, review/edit it,
+explicitly approve publication, verify the live page, and repeat. This does not
+replace existing autonomous commitments or certify WordPress/backlinks/growth.
+
+Acceptance checklist (unchecked means incomplete, not absent code):
+- [x] Fresh exact-tenant production snapshot and genuine signed-in Articles UI.
+- [ ] Customer-requested generation independent of a failed automatic slot.
+- [ ] Safe customer editing, review and rejection/recovery.
+- [ ] Exact approved publication and live verification through the UI.
+- [ ] Two fresh complete cycles on each authorized production tenant.
+- [ ] New-customer onboarding, billing and GitHub connection acceptance.
+- [ ] Truthful simple reporting and claims.
+- [ ] Final regression, deployment and authenticated production acceptance.
+
+Unreleased candidate adds `contentWork.requestDraft` to the existing durable
+jobs/worker/budget path. No new engine or table. Explicit owner drafting never
+authorizes automatic publication or advances the old schedule. Duplicate clicks
+reuse one job; 2 revisions/1 distinct replacement and all monetary bounds remain.
+Declining a completed draft closes that owner request without deleting its
+artifact, financial evidence or provider calls. Public expected admission errors
+are actionable. Fifteen connected isolated checks pass, including two fresh
+approved publications, rejection then fresh work, denied admission and revocation
+before provider spend. They are NOT production acceptance. No provider calls or
+production mutations have been made for this candidate yet. Editing remains to
+be completed; the existing article "Editor" is a read-only rendered view.
+
+September24 read-only production check: both sites have no active jobs/ready
+buffer, retained `content_failed_slot`, inactive schedules and unchanged overdue
+deadlines. Both publisher destinations are verified; GSC data through September20
+is connected. Do not replay the old exhausted jobs or reset their accounting.
+Previous release fa4448dc82ced4789fea803cbedc7f8222366cef hosted CI35788352839
+is confirmed successful. Current candidate is not deployed or accepted yet.
+
 ## Current: September22 direct execution (supersedes supervisor instructions below)
 
 Work here in `.claude/assignment24`; do not restart the old task or automation.
@@ -46,6 +82,10 @@ schema/secrets/dependency audit passed; lint0 errors/157 existing warnings;
 browser36 passed/2 authenticated skips; Convex dry-run passed. Production
 projection still shows no active jobs and no ready articles on either tenant.
 Both are `content_failed_slot`; these old exhausted jobs were not restarted.
+Repair commit `fa4448dc82ced4789fea803cbedc7f8222366cef` is pushed to main
+and deployed successfully to wary-starfish-773. Hosted CI35788352839 and Vercel
+were still running at this snapshot. This refresh spent $0 on model providers.
+The signed-in customer page still confirms the LeadPilot publication as verified.
 
 The destination's normal ` | LeadPilot` title
 template produced a false negative. Creation now accepts only the exact reviewed
