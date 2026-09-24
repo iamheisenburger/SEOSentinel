@@ -13,7 +13,7 @@ import {
 const workflow = [
   { label: "Research", detail: "Topics your buyers search", icon: Search },
   { label: "Draft", detail: "Fact-checked, with sources", icon: FileCheck2 },
-  { label: "Approve & publish", detail: "Only when you say so", icon: Send },
+  { label: "Publish", detail: "Autopilot or review-first", icon: Send },
   { label: "Verify & measure", detail: "Live page, Search Console", icon: BarChart3 },
 ];
 
@@ -64,7 +64,7 @@ export function AuthShell({
                 <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[#38BDF8]" />
               </span>
               <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#38BDF8]">
-                SEO articles you approve
+                Autopilot SEO
               </span>
             </div>
 
@@ -76,8 +76,8 @@ export function AuthShell({
                 </>
               ) : (
                 <>
-                  Accurate SEO articles,
-                  <span className="block text-[#565A6E]">published when you approve.</span>
+                  More customers from Google,
+                  <span className="block text-[#565A6E]">on autopilot.</span>
                 </>
               )}
             </h1>
@@ -85,7 +85,7 @@ export function AuthShell({
             <p className="mt-5 max-w-lg text-[15px] leading-7 text-[#8B8FA3] sm:text-[16px]">
               {isSignIn
                 ? "Review your drafts, approve what is ready, and see how published pages perform."
-                : "Tell Pentra about your business, connect your GitHub-based site, and get your first researched article free."}
+                : "Add your website, connect it once, and Pentra researches, writes and publishes on your plan's schedule. Your first article is free."}
             </p>
 
             <div className="mt-10 overflow-hidden rounded-2xl border border-white/[0.07] bg-[#0A0B10]/85 shadow-2xl shadow-black/30 backdrop-blur-xl">
@@ -126,7 +126,7 @@ export function AuthShell({
 
               <div className="flex items-center gap-2 border-t border-white/[0.05] px-5 py-3 text-[11px] text-[#8B8FA3]">
                 <ShieldCheck className="h-3.5 w-3.5 text-[#22C55E]" />
-                Nothing publishes without your approval.
+                Drafts with a factual concern always wait for you.
               </div>
             </div>
           </div>

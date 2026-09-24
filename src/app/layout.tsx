@@ -21,16 +21,16 @@ const GA_ID = process.env.NEXT_PUBLIC_GA_ID;
 
 export const metadata: Metadata = {
   title: {
-    default: "Pentra — Accurate SEO articles you approve",
+    default: "Pentra — Autopilot SEO for your website",
     template: "%s | Pentra",
   },
   description:
-    "Pentra researches and writes fact-checked SEO articles about your business, publishes them to your GitHub-based site when you approve, and verifies the live page.",
+    "Add your website and Pentra takes it from there: researched, fact-checked articles published on a schedule, improvements to pages near page one, and Search Console reporting.",
   metadataBase: new URL("https://pentra.dev"),
   openGraph: {
-    title: "Pentra — Accurate SEO articles you approve",
+    title: "Pentra — Autopilot SEO for your website",
     description:
-      "Research-backed, fact-checked SEO articles about your business. You approve; Pentra publishes to your GitHub-based site and verifies the live page.",
+      "Autopilot SEO: researched, fact-checked articles published to your WordPress or GitHub-based site on a schedule, with Search Console reporting.",
     url: "https://pentra.dev",
     siteName: "Pentra",
     locale: "en_US",
@@ -38,9 +38,9 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Pentra — Accurate SEO articles you approve",
+    title: "Pentra — Autopilot SEO for your website",
     description:
-      "Research-backed, fact-checked SEO articles about your business. You approve; Pentra publishes to your GitHub-based site and verifies the live page.",
+      "Autopilot SEO: researched, fact-checked articles published to your WordPress or GitHub-based site on a schedule, with Search Console reporting.",
   },
   robots: {
     index: true,

@@ -8570,6 +8570,7 @@ export const autopilotTick = internalAction({
       content_pricing_unavailable: "Provider pricing and bounded funding are not configured; no paid work started.",
       content_inputs_exhausted: "No distinct supported question remains in the confirmed business inventory.",
       content_budget_exhausted: "Existing account or fleet funding cannot admit this work.",
+      content_slot_parked: "A draft is waiting for the owner's review; the schedule continued with the next article.",
       autopilot_disabled: "Autopilot is disabled for this tenant.",
       cadence_paused: "The effective tenant cadence is paused.",
       rollout_observe: "Automation remains in fail-closed observe mode.",

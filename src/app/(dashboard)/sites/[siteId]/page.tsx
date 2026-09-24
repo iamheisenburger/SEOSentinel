@@ -51,6 +51,28 @@ import { SetupReadiness } from "@/components/onboarding/setup-readiness";
 type Tab = "overview" | "articles" | "settings";
 type SiteView = NonNullable<FunctionReturnType<typeof api.sites.get>>;
 
+const TONE_OPTIONS = ["professional", "friendly", "casual", "authoritative"];
+
+/** "professional|authoritative" → "Professional, authoritative". */
+function formatTone(tone: string): string {
+  const parts = tone.split(/[|,/]+/).map((part) => part.trim().toLowerCase()).filter(Boolean);
+  const text = parts.join(", ");
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : tone;
+}
+
+/** Growth-first sites manage Autopilot/Review first and pace on the dashboard. */
+function DashboardPointer({ className = "" }: { className?: string }) {
+  return (
+    <p className={`text-[12px] text-[#8B8FA3] ${className}`}>
+      Autopilot and publishing pace are set on your{" "}
+      <Link href="/dashboard" className="font-medium text-[#0EA5E9] hover:text-[#38BDF8] transition">
+        Dashboard
+      </Link>
+      .
+    </p>
+  );
+}
+
 export default function SiteDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -155,6 +177,9 @@ export default function SiteDetailPage() {
   const draftCount = articles?.filter((a) => a.status === "draft").length ?? 0;
   const reviewCount = articles?.filter((a) => a.status === "review").length ?? 0;
   const brandColor = site.brandPrimaryColor || "#0EA5E9";
+  // Growth-first sites use the dashboard Autopilot / Review first switch; the
+  // legacy cadence, autopilot and approval fields are neither shown nor sent.
+  const growthFirst = site.serviceMode === "growth_first";
 
   const handleDeleteSite = async () => {
     setDeleting(true);
@@ -178,9 +203,13 @@ export default function SiteDetailPage() {
         niche: niche || undefined,
         tone: tone || undefined,
         language: language || undefined,
-        cadencePerWeek: cadence,
-        autopilotEnabled: autopilot,
-        approvalRequired: approval,
+        ...(growthFirst
+          ? {}
+          : {
+              cadencePerWeek: cadence,
+              autopilotEnabled: autopilot,
+              approvalRequired: approval,
+            }),
         ctaText: ctaText || undefined,
         ctaUrl: ctaUrl || undefined,
         urlStructure: urlStructure || undefined,
@@ -307,6 +336,7 @@ export default function SiteDetailPage() {
         <OverviewTab
           siteId={siteId}
           site={site}
+          growthFirst={growthFirst}
           articleCount={articleCount}
           topicCount={topicCount}
           publishedCount={publishedCount}
@@ -318,12 +348,14 @@ export default function SiteDetailPage() {
       {activeTab === "articles" && (
         <ArticlesTab
           articles={articles}
+          growthFirst={growthFirst}
           onDelete={(id) => deleteArticle({ articleId: id })}
         />
       )}
       {activeTab === "settings" && (
         <SettingsTab
           site={site}
+          growthFirst={growthFirst}
           siteName={siteName} setSiteName={setSiteName}
           niche={niche} setNiche={setNiche}
           tone={tone} setTone={setTone}
@@ -362,6 +394,7 @@ export default function SiteDetailPage() {
 function OverviewTab({
   siteId,
   site,
+  growthFirst,
   articleCount,
   topicCount,
   publishedCount,
@@ -389,6 +422,7 @@ function OverviewTab({
     wpUsername?: string;
     webhookUrl?: string;
   };
+  growthFirst: boolean;
   articleCount: number;
   topicCount: number;
   publishedCount: number;
@@ -397,7 +431,14 @@ function OverviewTab({
   onTabChange: (tab: Tab) => void;
 }) {
   // Quick link cards
-  const quickLinks = [
+  const quickLinks: Array<{
+    label: string;
+    count: number;
+    color: string;
+    icon: typeof Globe;
+    href?: string;
+    onClick?: () => void;
+  }> = [
     {
       label: "Articles",
       count: articleCount,
@@ -413,18 +454,36 @@ function OverviewTab({
       icon: Target,
     },
     {
-      label: "Pipeline",
+      label: "Articles waiting for review",
       count: reviewCount,
-      suffix: " in review",
       color: "#8B5CF6",
-      href: "/jobs",
+      href: "/articles",
       icon: Zap,
     },
   ];
 
   return (
     <div className="flex flex-col gap-5">
-      <SetupReadiness siteId={siteId} compact />
+      {/* The One Setup checklist (cadence, outreach mailbox…) belongs to the
+          legacy service; growth-first progress lives on the dashboard. */}
+      {growthFirst ? (
+        <div className="flex flex-col gap-3 rounded-xl border border-white/[0.06] bg-[#0F1117] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-[13px] font-semibold text-[#EDEEF1]">Pentra service</p>
+            <p className="mt-1 text-[12px] text-[#8B8FA3]">
+              Your Dashboard shows what Pentra is working on and which
+              articles are confirmed live on your site.
+            </p>
+          </div>
+          <Link href="/dashboard" className="shrink-0">
+            <Button size="sm" variant="secondary" icon={<ArrowRight className="h-3.5 w-3.5" />}>
+              Open Dashboard
+            </Button>
+          </Link>
+        </div>
+      ) : (
+        <SetupReadiness siteId={siteId} compact />
+      )}
       {/* Article progress (live) */}
       <ArticleProgress siteId={siteId} />
 
@@ -449,7 +508,7 @@ function OverviewTab({
                 {item.count}
               </p>
               <p className="text-[11px] text-[#565A6E]">
-                {item.label}{item.suffix ?? ""}
+                {item.label}
               </p>
             </div>
           );
@@ -461,12 +520,10 @@ function OverviewTab({
         })}
       </div>
 
-      {/* Stats grid */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {/* Stats grid — topics and review counts are already on the cards above */}
+      <div className="grid grid-cols-2 gap-3">
         <StatMini label="Published" value={publishedCount} />
         <StatMini label="Drafts" value={draftCount} />
-        <StatMini label="In Review" value={reviewCount} />
-        <StatMini label="Topics" value={topicCount} />
       </div>
 
       {/* Site details */}
@@ -479,16 +536,24 @@ function OverviewTab({
           {site.siteName ? <DetailRow label="Site Name" value={site.siteName} /> : null}
           {site.siteType ? <DetailRow label="Type" value={site.siteType} /> : null}
           {site.niche ? <DetailRow label="Niche" value={site.niche} /> : null}
-          {site.tone ? <DetailRow label="Tone" value={site.tone} /> : null}
+          {site.tone ? <DetailRow label="Tone" value={formatTone(site.tone)} /> : null}
           {site.language ? <DetailRow label="Language" value={site.language} /> : null}
-          <DetailRow
-            label="Cadence"
-            value={cadenceLabel(site.cadencePerWeek ?? 4)}
-          />
-          <DetailRow
-            label="Mode"
-            value={site.autopilotEnabled !== false ? "Autopilot" : "Manual"}
-          />
+          {growthFirst ? (
+            <div className="px-5 py-2.5 bg-[#0F1117]">
+              <DashboardPointer />
+            </div>
+          ) : (
+            <>
+              <DetailRow
+                label="Cadence"
+                value={cadenceLabel(site.cadencePerWeek ?? 4)}
+              />
+              <DetailRow
+                label="Mode"
+                value={site.autopilotEnabled !== false ? "Autopilot" : "Manual"}
+              />
+            </>
+          )}
           {site.brandPrimaryColor ? (
             <DetailRow label="Brand Color" value={site.brandPrimaryColor}>
               <div
@@ -535,14 +600,16 @@ function OverviewTab({
         >
           Edit Settings
         </Button>
-        <Link href="/dashboard">
-          <Button
-            size="sm"
-            icon={<Zap className="h-3.5 w-3.5" />}
-          >
-            Generate Article
-          </Button>
-        </Link>
+        {!growthFirst && (
+          <Link href="/dashboard">
+            <Button
+              size="sm"
+              icon={<Zap className="h-3.5 w-3.5" />}
+            >
+              Generate Article
+            </Button>
+          </Link>
+        )}
       </div>
     </div>
   );
@@ -581,8 +648,10 @@ function DetailRow({
 
 function ArticlesTab({
   articles,
+  growthFirst,
   onDelete,
 }: {
+  growthFirst: boolean;
   articles: Array<{
     _id: Id<"articles">;
     title: string;
@@ -615,11 +684,13 @@ function ArticlesTab({
       <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-12 text-center">
         <FileText className="mx-auto h-10 w-10 text-[#565A6E]/30" />
         <p className="mt-3 text-[13px] text-[#565A6E]">
-          No articles yet. Generate one to get started.
+          {growthFirst
+            ? "No articles yet. Pentra adds them here as it writes them."
+            : "No articles yet. Generate one to get started."}
         </p>
         <Link href="/dashboard">
-          <Button className="mt-4" size="sm" icon={<Zap className="h-3.5 w-3.5" />}>
-            Generate Article
+          <Button className="mt-4" size="sm" icon={growthFirst ? <ArrowRight className="h-3.5 w-3.5" /> : <Zap className="h-3.5 w-3.5" />}>
+            {growthFirst ? "Open Dashboard" : "Generate Article"}
           </Button>
         </Link>
       </div>
@@ -629,12 +700,16 @@ function ArticlesTab({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <p className="text-[12px] text-[#565A6E]">{articles.length} articles</p>
-        <Link href="/dashboard">
-          <Button size="sm" icon={<Plus className="h-3.5 w-3.5" />}>
-            Generate
-          </Button>
-        </Link>
+        <p className="text-[12px] text-[#565A6E]">
+          {articles.length} article{articles.length !== 1 ? "s" : ""}
+        </p>
+        {!growthFirst && (
+          <Link href="/dashboard">
+            <Button size="sm" icon={<Plus className="h-3.5 w-3.5" />}>
+              Generate
+            </Button>
+          </Link>
+        )}
       </div>
 
       <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
@@ -720,6 +795,7 @@ function ArticlesTab({
 
 function SettingsTab({
   site,
+  growthFirst,
   siteName, setSiteName,
   niche, setNiche,
   tone, setTone,
@@ -749,6 +825,7 @@ function SettingsTab({
   onSave,
 }: {
   site: SiteView;
+  growthFirst: boolean;
   siteName: string; setSiteName: (v: string) => void;
   niche: string; setNiche: (v: string) => void;
   tone: string; setTone: (v: string) => void;
@@ -789,6 +866,10 @@ function SettingsTab({
       cadenceFitsOperationalLimit(cadence),
   );
   const cadenceMonthlyCost = requiredMonthlyArticlesForCadence(cadence);
+  // Growth-first saves never send cadence, so it cannot block them.
+  const saveBlocked = !growthFirst && !cadenceValid;
+  const showSyndicationNotice =
+    !growthFirst && Boolean(site.mediumConnected || site.linkedinConnected);
 
   return (
     <div className="flex flex-col gap-5">
@@ -801,7 +882,7 @@ function SettingsTab({
           size="sm"
           onClick={onSave}
           loading={saving}
-          disabled={!cadenceValid}
+          disabled={saveBlocked}
           icon={saved ? <Check className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
         >
           {saved ? "Saved" : "Save Changes"}
@@ -819,20 +900,17 @@ function SettingsTab({
       {/* Google Search Console */}
       <GSCSection site={site} />
 
-      {/* Content Syndication */}
-      <SettingsSection title="Content Syndication" icon={Share2}>
-        <div className="rounded-lg border border-[#F59E0B]/15 bg-[#F59E0B]/[0.04] px-4 py-3">
-          <p className="text-[12px] font-medium text-[#FBBF24]">Unavailable</p>
-          <p className="mt-1 text-[11px] leading-relaxed text-[#8B8FA3]">
-            Automatic Medium and LinkedIn syndication is not available yet. Pentra does not collect new platform tokens or claim cross-post delivery without an audited, idempotent destination receipt.
-          </p>
-          {(site.mediumConnected || site.linkedinConnected) && (
-            <p className="mt-2 text-[10px] text-[#565A6E]">
-              A previously saved credential remains preserved but is not used by the disabled workflow.
+      {/* Syndication is disabled. Only legacy sites that saved a Medium or
+          LinkedIn connection get a note; nothing here collects credentials. */}
+      {showSyndicationNotice && (
+        <SettingsSection title="Medium and LinkedIn" icon={Share2}>
+          <div className="px-5 py-4">
+            <p className="text-[11px] leading-relaxed text-[#8B8FA3]">
+              Automatic Medium and LinkedIn syndication is not available yet. Your saved Medium or LinkedIn connection is kept but not used.
             </p>
-          )}
-        </div>
-      </SettingsSection>
+          </div>
+        </SettingsSection>
+      )}
 
       {/* General */}
       <SettingsSection title="General" icon={Globe}>
@@ -849,6 +927,11 @@ function SettingsTab({
             onChange={(e) => setTone(e.target.value)}
           >
             <option value="">Auto-detect</option>
+            {/* A tone detected from the website can combine styles
+                ("professional|authoritative"); keep it selectable as is. */}
+            {tone && !TONE_OPTIONS.includes(tone) && (
+              <option value={tone}>{formatTone(tone)}</option>
+            )}
             <option value="professional">Professional</option>
             <option value="friendly">Friendly</option>
             <option value="casual">Casual</option>
@@ -861,6 +944,13 @@ function SettingsTab({
       </SettingsSection>
 
       {/* Publishing */}
+      {growthFirst ? (
+        <SettingsSection title="Publishing" icon={Zap}>
+          <div className="px-5 py-4">
+            <DashboardPointer />
+          </div>
+        </SettingsSection>
+      ) : (
       <SettingsSection title="Publishing" icon={Zap}>
         <FieldRow label="Publishing cadence" description="Choose the target publishing pace. Monthly plan credits cap total output automatically.">
           <div className="space-y-2">
@@ -924,6 +1014,7 @@ function SettingsTab({
           onChange={setApproval}
         />
       </SettingsSection>
+      )}
 
       {/* Content */}
       <SettingsSection title="Content Settings" icon={FileText}>
@@ -960,7 +1051,7 @@ function SettingsTab({
       <SettingsSection title="SEO Keywords" icon={Target}>
         <TagEditor
           label="Priority keywords"
-          description="Focus keywords for backlinks and SEO"
+          description="Topics you most want to rank for"
           items={keywords}
           onChange={setKeywords}
           placeholder="Add keyword"
@@ -1158,7 +1249,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
                   className={inputCls}
                 >
                   <option value="github">GitHub</option>
-                  <option value="wordpress" disabled={!fullManagedBetaEnabled && !contentWordPress && method !== "wordpress"}>WordPress · Conditional publisher required</option>
+                  <option value="wordpress" disabled={!fullManagedBetaEnabled && !contentWordPress && method !== "wordpress"}>WordPress · Needs the Pentra plugin</option>
                   <option value="webhook" disabled={!fullManagedBetaEnabled && method !== "webhook"}>Signed webhook · Beta</option>
                   <option value="manual">Copy &amp; Paste</option>
                 </select>
@@ -1177,7 +1268,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
               )}
               {isWp && (
                 <>
-                  <p className="text-[12px] text-[#8B8FA3]">Growth-first requires the conditional publisher. <a className="underline" href="https://github.com/iamheisenburger/SEOSentinel/blob/main/connectors/wordpress/README.md" target="_blank" rel="noreferrer">Install the WordPress connector</a>, then save and verify this exact website.</p>
+                  <p className="text-[12px] text-[#8B8FA3]">Pentra publishes to WordPress through a small plugin. <a className="underline" href="https://github.com/iamheisenburger/SEOSentinel/blob/main/connectors/wordpress/README.md" target="_blank" rel="noreferrer">Install the Pentra WordPress plugin</a>, then enter your details below and click Save to check the connection.</p>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-[12px] font-medium text-[#8B8FA3]">WordPress URL</label>
                     <input value={wpUrl} onChange={(e) => setWpUrl(e.target.value)} placeholder="https://yoursite.com" className={inputCls} />
@@ -1239,7 +1330,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
           )}
 
           {!editing && connectionError && <p role="alert" className="text-[12px] text-[#F87171]">{connectionError}</p>}
-          {!editing && connectionVerified && <p role="status" className="text-[12px] text-[#4ADE80]">Repository access and default branch verified. This does not publish content.</p>}
+          {!editing && connectionVerified && <p role="status" className="text-[12px] text-[#4ADE80]">Pentra can reach your repository. Nothing was published.</p>}
 
           {isWp && (() => {
             const ok = !!site.publicationAdapterVerified;
@@ -1254,7 +1345,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
             const ok = !!site.publicationAdapterVerified;
             return (
               <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (ok ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]")}>
-                {ok ? (<><Check className="h-4 w-4 text-[#22C55E]" /><span className="flex-1 text-[12px] text-[#4ADE80]">Webhook signature and receipt verified</span></>) : (<><KeyRound className="h-4 w-4 text-[#F59E0B]" /><span className="flex-1 text-[12px] text-[#FBBF24]">Webhook connection not verified</span></>)}
+                {ok ? (<><Check className="h-4 w-4 text-[#22C55E]" /><span className="flex-1 text-[12px] text-[#4ADE80]">Webhook verified for publishing</span></>) : (<><KeyRound className="h-4 w-4 text-[#F59E0B]" /><span className="flex-1 text-[12px] text-[#FBBF24]">Webhook connection not verified</span></>)}
               </div>
             );
           })()}
@@ -1347,8 +1438,8 @@ function GSCSection({ site }: { site: SiteView }) {
                 {isGrowthEnabled ? <Check className="h-4 w-4 text-[#22C55E]" /> : <RefreshCw className="h-4 w-4 text-[#F59E0B]" />}
                 <span className={`flex-1 text-[12px] ${isGrowthEnabled ? "text-[#4ADE80]" : "text-[#FBBF24]"}`}>
                   {isGrowthEnabled
-                    ? "Daily rank measurement and verified sitemap repair are active"
-                    : "Reconnect once to let Pentra submit your sitemap when indexing stalls"}
+                    ? "Pentra checks your rankings daily and can resubmit your sitemap when new pages aren't being indexed."
+                    : "Reconnect Search Console so Pentra can resubmit your sitemap when new pages aren't being indexed."}
                 </span>
               </div>
 
@@ -1378,7 +1469,7 @@ function GSCSection({ site }: { site: SiteView }) {
                 </div>
                 <div className="flex-1">
                   <p className="text-[14px] font-medium text-[#EDEEF1]">Not connected</p>
-                  <p className="text-[12px] text-[#565A6E]">Connect to track rankings, detect content decay, and optimize SEO</p>
+                  <p className="text-[12px] text-[#565A6E]">Connect to see how your pages rank on Google and spot pages that are losing visitors</p>
                 </div>
               </div>
 

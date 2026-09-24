@@ -75,15 +75,22 @@ export function preservedResearchEvidenceSnapshot(
   ].join("\n\n");
 }
 
-/** Reviewer notes an owner may explicitly accept on an owner-requested draft.
- * Only judgement-based editorial signals qualify, never factual accuracy,
- * safety, metadata, rendering or evidence-for-numbers checks. A missing
- * claim ledger is acceptable only when the independent fact check passed. */
-export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number }): boolean {
+/** Reviewer notes that may be accepted on an exact unpublished draft.
+ * The site owner, reading the draft, may accept judgement-based editorial
+ * notes and a borderline fact-check confidence (70–84) — the reviewer's score,
+ * not a listed factual defect. Pentra's autopilot may only accept style notes
+ * (editorial 80–84) when the fact check itself passed. Safety, metadata,
+ * rendering, word-count and evidence-for-numbers checks are never waivable. */
+export const AUTOPILOT_ACCEPTANCE = "pentra-autopilot";
+export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number }, actor: "owner" | "autopilot" = "owner"): boolean {
   const editorial = /^Editorial quality score is (\d+); strict minimum is 85\.$/.exec(issue);
-  if (editorial) return Number(editorial[1]) >= 70;
+  if (editorial) return Number(editorial[1]) >= (actor === "owner" ? 70 : 80);
   if (issue === PENDING_INTERNAL_LINK_ISSUE) return true;
-  if (issue === "Strict publication requires a completed claim-to-evidence audit.") return (article.factCheckScore ?? 0) >= 85;
+  const factual = /^Fact-check score is (\d+); strict minimum is 85\.$/.exec(issue);
+  if (factual) return actor === "owner" && Number(factual[1]) >= 70;
+  if (issue === "Strict publication requires a completed claim-to-evidence audit.") {
+    return (article.factCheckScore ?? 0) >= (actor === "owner" ? 70 : 85);
+  }
   return false;
 }
 
@@ -1715,7 +1722,8 @@ export function evaluatePublicationQuality(
     try { exact = publicationArtifactHash(article as never) === waiver.artifactHash; } catch { exact = false; }
     if (exact) {
       for (let index = issues.length - 1; index >= 0; index--) {
-        if (waiver.issues.includes(issues[index]) && ownerWaivableIssue(issues[index], article)) {
+        if (waiver.issues.includes(issues[index]) &&
+          ownerWaivableIssue(issues[index], article, waiver.userId === AUTOPILOT_ACCEPTANCE ? "autopilot" : "owner")) {
           warnings.push(`Owner accepted reviewer note: ${issues[index]}`);
           issues.splice(index, 1);
         }

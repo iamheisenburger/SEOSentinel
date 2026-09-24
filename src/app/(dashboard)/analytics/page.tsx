@@ -57,13 +57,30 @@ export default function AnalyticsPage() {
   const gscConnected = !!site?.gscConnected;
   const gscGrowthEnabled = !!site?.gscGrowthEnabled;
   const hasGSC = !!gscSummary;
+  const gscAuthUrl = site?._id ? `/api/gsc/auth?siteId=${site._id}` : null;
+  // Legacy conversion tracking stays for older sites that report real data;
+  // owner-reviewed sites and empty cohorts do not show it.
+  const showOutcomes = site?.serviceMode !== "growth_first" &&
+    !!outcomeCredential?.configured && !!outcomeSummary && outcomeSummary.organicLandingSessions > 0;
+  // Only show a clicks goal the owner actually saved, never the default.
+  const savedClicksGoal = growthSummary?.goal && "_id" in growthSummary.goal
+    ? growthSummary.goal.monthlyOrganicClicksGoal : null;
 
-  // Segment queries by position
+  // Every ranked query lands in exactly one bucket, and the shares add up to
+  // 100%. Queries without a usable position are left out of the total.
   const queries = topQueries ?? [];
-  const top3 = queries.filter((q) => q.position <= 3);
-  const top10 = queries.filter((q) => q.position > 3 && q.position <= 10);
-  const strikingDistance = queries.filter((q) => q.position > 10 && q.position <= 20);
-  const beyond20 = queries.filter((q) => q.position > 20);
+  const rankedQueries = queries.filter((q) => Number.isFinite(q.position) && q.position >= 1);
+  const top3 = rankedQueries.filter((q) => q.position <= 3);
+  const top10 = rankedQueries.filter((q) => q.position > 3 && q.position <= 10);
+  const pageTwo = rankedQueries.filter((q) => q.position > 10 && q.position <= 20);
+  const beyond20 = rankedQueries.filter((q) => q.position > 20);
+  const bucketShares = wholePercentages([top3.length, top10.length, pageTwo.length, beyond20.length]);
+  // "Money pages": already visible in Google and close enough to page one's
+  // top spots that a small improvement can bring real clicks.
+  const closeToPageOne = rankedQueries
+    .filter((q) => q.position >= 4 && q.position <= 20)
+    .sort((a, b) => b.impressions - a.impressions)
+    .slice(0, 10);
 
   return (
     <div className="flex flex-col gap-5">
@@ -84,16 +101,16 @@ export default function AnalyticsPage() {
         )}
       </div>
 
-      {outcomeCredential?.configured && outcomeSummary && (
+      {showOutcomes && outcomeSummary && (
         <div className="rounded-xl border border-[#A78BFA]/[0.16] bg-[#A78BFA]/[0.025] p-5">
           <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <div className="flex items-center gap-2">
                 <Target className="h-4 w-4 text-[#A78BFA]" />
-                <h2 className="text-[13px] font-semibold text-[#EDEEF1]">Organic outcome receipts</h2>
+                <h2 className="text-[13px] font-semibold text-[#EDEEF1]">What Google visitors did next</h2>
               </div>
               <p className="mt-1 text-[11px] text-[#565A6E]">
-                Exact server receipts for 90-day organic article landing cohorts through signup, activation, and paid conversion.
+                People who arrived on your articles from Google in the last 90 days, and how many signed up, started using your product, or paid.
               </p>
             </div>
             <Link href="/settings" className="text-[10px] font-medium text-[#A78BFA] hover:text-[#C4B5FD]">
@@ -103,15 +120,15 @@ export default function AnalyticsPage() {
           <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
             <OutcomeMetric
               icon={<MousePointerClick className="h-3.5 w-3.5 text-[#0EA5E9]" />}
-              label="Organic landings"
+              label="Visits from Google"
               value={outcomeSummary.organicLandingSessions}
-              rateLabel="Landing cohort"
+              rateLabel="Last 90 days"
             />
             <OutcomeMetric
               icon={<UserPlus className="h-3.5 w-3.5 text-[#22D3EE]" />}
               label="Signups"
               value={outcomeSummary.signups}
-              rateLabel={`${(outcomeSummary.organicLandingToSignupRate * 100).toFixed(1)}% of landings`}
+              rateLabel={`${(outcomeSummary.organicLandingToSignupRate * 100).toFixed(1)}% of visits`}
             />
             <OutcomeMetric
               icon={<Rocket className="h-3.5 w-3.5 text-[#F59E0B]" />}
@@ -123,7 +140,7 @@ export default function AnalyticsPage() {
               icon={<BadgeDollarSign className="h-3.5 w-3.5 text-[#22C55E]" />}
               label="Paid conversions"
               value={outcomeSummary.paidConversions}
-              rateLabel={`${(outcomeSummary.organicLandingToPaidRate * 100).toFixed(1)}% of landings`}
+              rateLabel={`${(outcomeSummary.organicLandingToPaidRate * 100).toFixed(1)}% of visits`}
             />
           </div>
         </div>
@@ -136,13 +153,20 @@ export default function AnalyticsPage() {
           </div>
           <h2 className="text-[15px] font-semibold text-[#EDEEF1] mb-2">Connect Google Search Console</h2>
           <p className="text-[13px] text-[#565A6E] max-w-md text-center mb-3">
-            See which keywords bring traffic, track rankings over time, and turn declining pages into auditable recovery actions.
+            See which searches bring people to your site, which pages are close to page one of Google, and which pages are slipping.
           </p>
-          <button
-            onClick={() => {
-              if (!site?._id) return;
-              const popup = window.open("/api/gsc/auth?siteId=" + site._id, "gsc-oauth", "width=600,height=700,popup=yes");
+          <a
+            href={gscAuthUrl ?? "#"}
+            aria-disabled={!gscAuthUrl}
+            onClick={(event) => {
+              if (!gscAuthUrl) {
+                event.preventDefault();
+                return;
+              }
+              const popup = window.open(gscAuthUrl, "gsc-oauth", "width=600,height=700,popup=yes");
+              // If the browser blocks the popup, follow the link in this tab.
               if (!popup) return;
+              event.preventDefault();
               const timer = setInterval(() => {
                 if (popup.closed) {
                   clearInterval(timer);
@@ -153,8 +177,8 @@ export default function AnalyticsPage() {
             className="inline-flex items-center gap-2 rounded-lg bg-[#0EA5E9] px-5 py-2.5 text-[13px] font-medium text-white transition hover:bg-[#0EA5E9]/90"
           >
             <BarChart3 className="h-3.5 w-3.5" />
-            Connect Google Search Console
-          </button>
+            Connect Search Console
+          </a>
           <p className="mt-3 text-[11px] text-[#565A6E] max-w-sm text-center">
             Sign in with the Google account that owns your site in{" "}
             <span className="text-[#8B8FA3]">search.google.com/search-console</span>.
@@ -173,7 +197,7 @@ export default function AnalyticsPage() {
             </p>
           )}
           <p className="text-[13px] text-[#565A6E] max-w-md text-center mb-4">
-            Your data will appear here after syncing. GSC data also syncs automatically every day.
+            Your data will appear here after syncing. Search Console data also updates automatically every day.
           </p>
           <button
             disabled={syncing}
@@ -204,14 +228,22 @@ export default function AnalyticsPage() {
           {!gscGrowthEnabled && (
             <div className="flex items-center justify-between gap-4 rounded-xl border border-[#F59E0B]/[0.18] bg-[#F59E0B]/[0.04] px-5 py-4">
               <p className="text-[12px] text-[#FBBF24]">
-                Reconnect Search Console once to enable verified sitemap repair when Google leaves a page unindexed.
+                Reconnect Search Console once so Pentra can ask Google to look again at pages that are not in search results yet.
               </p>
-              <button
-                onClick={() => site?._id && window.open(`/api/gsc/auth?siteId=${site._id}`, "gsc-oauth", "width=600,height=700,popup=yes")}
+              <a
+                href={gscAuthUrl ?? "#"}
+                onClick={(event) => {
+                  if (!gscAuthUrl) {
+                    event.preventDefault();
+                    return;
+                  }
+                  // Falls back to following the link if the popup is blocked.
+                  if (window.open(gscAuthUrl, "gsc-oauth", "width=600,height=700,popup=yes")) event.preventDefault();
+                }}
                 className="shrink-0 rounded-lg bg-[#F59E0B] px-3 py-2 text-[11px] font-medium text-black"
               >
                 Reconnect
-              </button>
+              </a>
             </div>
           )}
           {/* Summary Cards */}
@@ -243,64 +275,45 @@ export default function AnalyticsPage() {
             />
           </div>
 
-          {/* Measured SEO growth loop */}
+          {/* How published articles are doing in Google */}
           <div className="rounded-xl border border-[#0EA5E9]/[0.15] bg-[#0EA5E9]/[0.02] p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-4">
               <div>
                 <div className="flex items-center gap-2">
                   <Workflow className="h-4 w-4 text-[#0EA5E9]" />
-                  <h2 className="text-[13px] font-semibold text-[#EDEEF1]">Measured Growth Loop</h2>
+                  <h2 className="text-[13px] font-semibold text-[#EDEEF1]">Your articles in Google</h2>
                 </div>
                 <p className="mt-1 text-[11px] text-[#565A6E]">
-                  Pentra classifies each published URL from indexing and Search Console evidence, then records one deduplicated next action.
+                  How your published articles are doing in Google search, updated after each Search Console sync.
                 </p>
               </div>
-              {growthSummary?.health && (
+              {growthSummary?.health && savedClicksGoal !== null && (
                 <div className="flex items-center gap-2 text-[11px] text-[#8B8FA3]">
                   <Target className="h-3.5 w-3.5 text-[#22C55E]" />
-                  {growthSummary.health.organicClicks.toLocaleString()} / {growthSummary.health.monthlyOrganicClicksGoal.toLocaleString()} clicks
+                  {growthSummary.health.organicClicks.toLocaleString()} of your {growthSummary.health.monthlyOrganicClicksGoal.toLocaleString()} monthly clicks goal
                 </div>
               )}
             </div>
 
             {growthSummary?.health ? (
               <>
-                <div className="h-2 rounded-full bg-white/[0.04] overflow-hidden mb-4">
-                  <div
-                    className="h-full rounded-full bg-[#22C55E]/70 transition-all"
-                    style={{ width: `${Math.min(100, Math.round(growthSummary.health.goalProgress * 100))}%` }}
-                  />
-                </div>
-                <div className="grid gap-3 grid-cols-2 lg:grid-cols-4 mb-4">
-                  <GrowthMetric label="Performing" value={growthSummary.health.stageCounts.performing} color="#22C55E" />
-                  <GrowthMetric label="Striking Distance" value={growthSummary.health.stageCounts.strikingDistance} color="#F59E0B" />
-                  <GrowthMetric label="No Visibility" value={growthSummary.health.stageCounts.noVisibility} color="#F87171" />
-                  <GrowthMetric label="Open Actions" value={growthSummary.health.openActions} color="#0EA5E9" />
-                </div>
-                {growthSummary.actions.filter((action) => action.status === "open").length > 0 && (
-                  <div className="flex flex-col gap-2">
-                    {growthSummary.actions
-                      .filter((action) => action.status === "open")
-                      .slice(0, 5)
-                      .map((action) => (
-                        <Link
-                          key={action._id}
-                          href={`/articles/${action.articleId}`}
-                          className="flex items-start gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-2.5 transition hover:bg-white/[0.04]"
-                        >
-                          <span className="mt-0.5 rounded-full bg-[#0EA5E9]/[0.1] px-2 py-0.5 text-[9px] font-medium uppercase tracking-wide text-[#38BDF8]">
-                            {action.actionKind.replaceAll("_", " ")}
-                          </span>
-                          <span className="flex-1 text-[11px] leading-relaxed text-[#8B8FA3]">{action.reason}</span>
-                          <ArrowRight className="mt-0.5 h-3 w-3 shrink-0 text-[#565A6E]" />
-                        </Link>
-                      ))}
+                {savedClicksGoal !== null && (
+                  <div className="h-2 rounded-full bg-white/[0.04] overflow-hidden mb-4">
+                    <div
+                      className="h-full rounded-full bg-[#22C55E]/70 transition-all"
+                      style={{ width: `${Math.min(100, Math.round(growthSummary.health.goalProgress * 100))}%` }}
+                    />
                   </div>
                 )}
+                <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
+                  <GrowthMetric label="Getting clicks" value={growthSummary.health.stageCounts.performing} color="#22C55E" />
+                  <GrowthMetric label="Close to page one" value={growthSummary.health.stageCounts.strikingDistance} color="#F59E0B" />
+                  <GrowthMetric label="Not in search results yet" value={growthSummary.health.stageCounts.noVisibility} color="#F87171" />
+                </div>
               </>
             ) : (
               <p className="text-[11px] text-[#565A6E]">
-                The first growth classification will run after the next completed Search Console sync.
+                This will fill in after the next Search Console sync.
               </p>
             )}
           </div>
@@ -309,10 +322,10 @@ export default function AnalyticsPage() {
           <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
             <h2 className="text-[13px] font-semibold text-[#EDEEF1] mb-4">Ranking Distribution</h2>
             <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
-              <PositionBucket label="Top 3" count={top3.length} color="#22C55E" total={queries.length} />
-              <PositionBucket label="Page 1 (4-10)" count={top10.length} color="#0EA5E9" total={queries.length} />
-              <PositionBucket label="Striking Distance (11-20)" count={strikingDistance.length} color="#F59E0B" total={queries.length} />
-              <PositionBucket label="Beyond Page 2" count={beyond20.length} color="#565A6E" total={queries.length} />
+              <PositionBucket label="Top 3" count={top3.length} color="#22C55E" pct={bucketShares[0]} />
+              <PositionBucket label="Page one (4-10)" count={top10.length} color="#0EA5E9" pct={bucketShares[1]} />
+              <PositionBucket label="Page two (11-20)" count={pageTwo.length} color="#F59E0B" pct={bucketShares[2]} />
+              <PositionBucket label="Beyond page two" count={beyond20.length} color="#565A6E" pct={bucketShares[3]} />
             </div>
           </div>
 
@@ -353,40 +366,57 @@ export default function AnalyticsPage() {
             </div>
           )}
 
-          {/* Striking Distance Opportunities */}
-          {strikingDistance.length > 0 && (
-            <div className="rounded-xl border border-[#F59E0B]/[0.15] bg-[#F59E0B]/[0.02] p-5">
-              <div className="flex items-center gap-2 mb-1">
-                <ArrowUpRight className="h-4 w-4 text-[#F59E0B]" />
-                <h2 className="text-[13px] font-semibold text-[#EDEEF1]">Striking Distance</h2>
-              </div>
-              <p className="text-[11px] text-[#565A6E] mb-4">
-                Keywords ranking 11-20 — a small push could get these to page 1
-              </p>
+          {/* Pages close to page one: the pages most worth improving */}
+          <div className="rounded-xl border border-[#F59E0B]/[0.15] bg-[#F59E0B]/[0.02] p-5">
+            <div className="flex items-center gap-2 mb-1">
+              <ArrowUpRight className="h-4 w-4 text-[#F59E0B]" />
+              <h2 className="text-[13px] font-semibold text-[#EDEEF1]">Pages close to page one (positions 4–20)</h2>
+            </div>
+            <p className="text-[11px] text-[#565A6E] mb-4">
+              Google already shows these pages, just not near the top. A small improvement can bring them more clicks.
+            </p>
+            {closeToPageOne.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full text-left">
                   <thead>
                     <tr className="border-b border-white/[0.06]">
-                      <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Keyword</th>
+                      <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E]">Page and search</th>
                       <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E] text-right">Position</th>
                       <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E] text-right">Impressions</th>
-                      <th className="pb-2 text-[10px] font-medium uppercase tracking-wider text-[#565A6E] text-right">Clicks</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {strikingDistance.slice(0, 10).map((q, i) => (
+                    {closeToPageOne.map((q, i) => (
                       <tr key={i} className="border-b border-white/[0.03] last:border-0">
-                        <td className="py-2.5 text-[12px] text-[#EDEEF1]">{q.query}</td>
+                        <td className="py-2.5 pr-3">
+                          {q.page ? (
+                            <a
+                              href={q.page}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex max-w-[260px] items-center gap-1 truncate text-[12px] text-[#EDEEF1] hover:text-white"
+                            >
+                              {pagePath(q.page)}
+                              <ExternalLink className="h-2.5 w-2.5 shrink-0 text-[#565A6E]" />
+                            </a>
+                          ) : (
+                            <span className="text-[12px] text-[#8B8FA3]">Page not reported</span>
+                          )}
+                          <p className="text-[11px] text-[#565A6E]">“{q.query}”</p>
+                        </td>
                         <td className="py-2.5 text-[12px] text-[#F59E0B] text-right font-mono">{q.position}</td>
-                        <td className="py-2.5 text-[12px] text-[#565A6E] text-right">{q.impressions.toLocaleString()}</td>
-                        <td className="py-2.5 text-[12px] text-[#565A6E] text-right">{q.clicks}</td>
+                        <td className="py-2.5 text-[12px] text-[#8B8FA3] text-right">{q.impressions.toLocaleString()}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-            </div>
-          )}
+            ) : (
+              <p className="text-[12px] text-[#565A6E]">
+                No pages are in positions 4–20 yet. They will show here as Google starts ranking your pages.
+              </p>
+            )}
+          </div>
 
           {/* All Keywords Table */}
           <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-5">
@@ -435,7 +465,7 @@ export default function AnalyticsPage() {
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 text-[10px] text-[#565A6E] hover:text-[#8B8FA3] transition max-w-[150px] truncate"
                           >
-                            {q.page.replace(/^https?:\/\//, "").split("/").slice(1).join("/").replace(/\/$/, "") || "/"}
+                            {pagePath(q.page)}
                             <ExternalLink className="h-2.5 w-2.5 shrink-0" />
                           </a>
                         )}
@@ -446,13 +476,39 @@ export default function AnalyticsPage() {
               </table>
             </div>
             {queries.length === 0 && (
-              <p className="text-center py-8 text-[12px] text-[#565A6E]">No keyword data yet. GSC data syncs daily.</p>
+              <p className="text-center py-8 text-[12px] text-[#565A6E]">No keyword data yet. Search Console data updates daily.</p>
             )}
           </div>
         </>
       )}
     </div>
   );
+}
+
+/* ─── Helpers ─── */
+
+/** Whole-number shares of the total that always add up to exactly 100
+ * (largest-remainder rounding), or all zeros when there is nothing to count. */
+function wholePercentages(counts: number[]): number[] {
+  const total = counts.reduce((sum, count) => sum + count, 0);
+  if (total === 0) return counts.map(() => 0);
+  const exact = counts.map((count) => (count / total) * 100);
+  const shares = exact.map(Math.floor);
+  let remaining = 100 - shares.reduce((sum, share) => sum + share, 0);
+  const byRemainder = exact
+    .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
+    .sort((a, b) => b.remainder - a.remainder);
+  for (const { index } of byRemainder) {
+    if (remaining <= 0) break;
+    shares[index] += 1;
+    remaining -= 1;
+  }
+  return shares;
+}
+
+/** The path part of a page URL, e.g. "/blog/my-article" or "/" for the home page. */
+function pagePath(url: string): string {
+  return url.replace(/^https?:\/\/[^/]*/, "").replace(/\/$/, "") || "/";
 }
 
 /* ─── Sub-components ─── */
@@ -469,17 +525,16 @@ function SummaryCard({ icon, label, value }: { icon: React.ReactNode; label: str
   );
 }
 
-function PositionBucket({ label, count, color, total }: { label: string; count: number; color: string; total: number }) {
-  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+function PositionBucket({ label, count, color, pct }: { label: string; count: number; color: string; pct: number }) {
   return (
     <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-[11px] text-[#EDEEF1]">{label}</span>
-        <span className="text-[10px] text-[#565A6E]">{pct}%</span>
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <span className="min-w-0 text-[11px] text-[#EDEEF1]">{label}</span>
+        <span className="shrink-0 text-[10px] text-[#565A6E]">{pct}%</span>
       </div>
       <p className="text-lg font-bold mb-2" style={{ color }}>{count}</p>
       <div className="h-1 w-full rounded-full bg-white/[0.04]">
-        <div className="h-1 rounded-full transition-all" style={{ width: `${Math.max(pct, 2)}%`, backgroundColor: color + "80" }} />
+        <div className="h-1 rounded-full transition-all" style={{ width: `${count > 0 ? Math.max(pct, 2) : 0}%`, backgroundColor: color + "80" }} />
       </div>
     </div>
   );

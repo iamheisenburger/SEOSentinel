@@ -40,6 +40,11 @@ function formatVolume(vol: number): string {
   return `${vol}`;
 }
 
+/** "1 week", "3 weeks" */
+function weeksLabel(weeks: number): string {
+  return `${weeks} week${weeks === 1 ? "" : "s"}`;
+}
+
 /** Get difficulty label */
 function getDifficultyLabel(diff: number): string {
   if (diff <= 29) return "Easy";
@@ -146,6 +151,10 @@ export default function PlanPage() {
 
   const activeTopicLabel = runningJob?.stepProgress?.topicLabel ?? null;
   const isPlanGenerating = runningJob?.type === "plan";
+  // Growth-first sites set Autopilot and pace on the dashboard; the legacy
+  // cadence projection and Schedule tab don't describe how they publish.
+  const growthFirst = site?.serviceMode === "growth_first";
+  const currentTab = growthFirst && activeTab === "schedule" ? "all" : activeTab;
 
   const sorted = useMemo(() => {
     if (!topics) return [];
@@ -153,17 +162,17 @@ export default function PlanPage() {
   }, [topics]);
 
   const filtered = useMemo(() => {
-    if (activeTab === "all") return sorted;
+    if (currentTab === "all") return sorted;
     return sorted.filter((t) => {
-      if (activeTab === "available")
+      if (currentTab === "available")
         return !["used", "queued", "cannibalizing", "disqualified"].includes(
           t.status ?? "",
         );
-      if (activeTab === "generating")
+      if (currentTab === "generating")
         return t.label === activeTopicLabel || t.status === "queued";
-      return t.status === activeTab;
+      return t.status === currentTab;
     });
-  }, [sorted, activeTab, activeTopicLabel]);
+  }, [sorted, currentTab, activeTopicLabel]);
 
   const available = useMemo(
     () => sorted.filter((t) =>
@@ -185,7 +194,8 @@ export default function PlanPage() {
     const avgKD = Math.round(withMetrics.reduce((sum: number, t: any) => sum + (t.keywordDifficulty ?? 0), 0) / withMetrics.length);
     const avgOpportunity = Math.round(withMetrics.reduce((sum: number, t: any) => sum + computeOpportunity(t), 0) / withMetrics.length);
     const highOpp = withMetrics.filter((t: any) => computeOpportunity(t) >= 40).length;
-    return { totalVolume, avgKD, avgOpportunity, highOpp, analyzed: withMetrics.length };
+    const showOpportunitySplit = highOpp > 0 && highOpp < withMetrics.length;
+    return { totalVolume, avgKD, avgOpportunity, highOpp, showOpportunitySplit, analyzed: withMetrics.length };
   }, [sorted]);
 
   // Schedule weeks
@@ -233,7 +243,9 @@ export default function PlanPage() {
   const tabs = [
     { id: "all", label: "All", count: sorted.length },
     { id: "available", label: "Available", count: availableCount },
-    { id: "schedule", label: "Schedule", count: availableCount },
+    ...(growthFirst
+      ? []
+      : [{ id: "schedule", label: "Schedule", count: availableCount }]),
     ...(generatingCount > 0
       ? [{ id: "generating", label: "In Progress", count: generatingCount }]
       : []),
@@ -286,8 +298,8 @@ export default function PlanPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="Content Strategy"
-        subtitle={`${availableCount} topics ready · ${usedCount} published`}
+        title="Topics"
+        subtitle={`${availableCount} ready to write · ${usedCount} already written`}
         actions={
           <div className="flex items-center gap-2">
             {availableCount > 0 && (
@@ -325,11 +337,11 @@ export default function PlanPage() {
 
       {!site && (
         <div className="rounded-xl border border-[#F59E0B]/[0.15] bg-[#F59E0B]/[0.04] p-4 text-[13px] text-[#FBBF24]">
-          Add a site first on{" "}
+          Add a website first on the{" "}
           <Link href="/sites" className="underline underline-offset-2">
-            Settings
+            Websites
           </Link>{" "}
-          before generating topics.
+          page before generating topics.
         </div>
       )}
 
@@ -342,12 +354,18 @@ export default function PlanPage() {
       {/* SEO Intelligence Summary — shows after topics have metrics */}
       {seoStats && !isPlanGenerating && (
         <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-4">
-          <div className="flex items-center gap-2 mb-3">
+          <div className="flex flex-wrap items-center gap-2 mb-3">
             <Shield className="h-4 w-4 text-[#0EA5E9]" />
             <span className="text-[12px] font-semibold text-[#EDEEF1]">SEO Intelligence Summary</span>
-            <span className="text-[10px] text-[#565A6E]">{seoStats.analyzed} topics analyzed</span>
+            {/* Same count as the "All" tab; averages use topics with search data. */}
+            <span className="text-[10px] text-[#565A6E]">
+              {sorted.length} topic{sorted.length !== 1 ? "s" : ""}
+              {seoStats.analyzed < sorted.length
+                ? ` · ${sorted.length - seoStats.analyzed} without search data yet`
+                : ""}
+            </span>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className={`grid grid-cols-2 gap-3 ${seoStats.showOpportunitySplit ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}>
             <div className="rounded-lg bg-white/[0.02] p-3">
               <p className="text-[10px] text-[#565A6E] uppercase tracking-wider">Total Search Volume</p>
               <p className="mt-1 text-[18px] font-semibold text-[#EDEEF1]">{formatVolume(seoStats.totalVolume)}<span className="text-[11px] text-[#565A6E] font-normal">/mo</span></p>
@@ -360,10 +378,13 @@ export default function PlanPage() {
               <p className="text-[10px] text-[#565A6E] uppercase tracking-wider">Avg Opportunity</p>
               <p className={`mt-1 text-[18px] font-semibold ${getOpportunityColor(seoStats.avgOpportunity)}`}>{seoStats.avgOpportunity}<span className="text-[11px] font-normal"> /100</span></p>
             </div>
-            <div className="rounded-lg bg-white/[0.02] p-3">
-              <p className="text-[10px] text-[#565A6E] uppercase tracking-wider">High Opportunity</p>
-              <p className="mt-1 text-[18px] font-semibold text-[#22C55E]">{seoStats.highOpp}<span className="text-[11px] text-[#565A6E] font-normal"> topics</span></p>
-            </div>
+            {/* Only informative when some, but not all, topics score 40+. */}
+            {seoStats.showOpportunitySplit && (
+              <div className="rounded-lg bg-white/[0.02] p-3" title="Topics with an opportunity score of 40 or more out of 100">
+                <p className="text-[10px] text-[#565A6E] uppercase tracking-wider">Good or better</p>
+                <p className="mt-1 text-[18px] font-semibold text-[#22C55E]">{seoStats.highOpp}<span className="text-[11px] text-[#565A6E] font-normal"> of {seoStats.analyzed} topics</span></p>
+              </div>
+            )}
           </div>
           <p className="mt-3 text-[10px] text-[#565A6E] leading-relaxed">
             Each topic was evaluated against real search data. Low-potential keywords (zero volume + high difficulty) were automatically filtered out.
@@ -392,21 +413,32 @@ export default function PlanPage() {
       )}
 
       {/* Cadence info */}
-      {site && sorted.length > 0 && (
+      {site && sorted.length > 0 && (growthFirst ? (
+        <div className="flex items-center gap-2 text-[11px] text-[#565A6E]">
+          <Clock className="h-3 w-3" />
+          <span>
+            Autopilot and publishing pace are set on your{" "}
+            <Link href="/dashboard" className="text-[#0EA5E9] hover:text-[#38BDF8] transition">
+              Dashboard
+            </Link>
+            .
+          </span>
+        </div>
+      ) : (
         <div className="flex items-center gap-2 text-[11px] text-[#565A6E]">
           <Clock className="h-3 w-3" />
           <span>
             {(site.cadencePerWeek ?? 0) <= 0
               ? "Publishing paused for this site"
-              : `${cadenceLabel(site.cadencePerWeek)} · ~${Math.ceil(availableCount / site.cadencePerWeek)} weeks of content remaining`}
+              : `${cadenceLabel(site.cadencePerWeek)} · ~${weeksLabel(Math.ceil(availableCount / site.cadencePerWeek))} of content remaining`}
           </span>
         </div>
-      )}
+      ))}
 
-      <Tabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
+      <Tabs tabs={tabs} active={currentTab} onChange={setActiveTab} />
 
       {/* Schedule View */}
-      {activeTab === "schedule" && (
+      {currentTab === "schedule" && (
         <div className="flex flex-col gap-4">
           {site && (
             <div className="flex items-center gap-2 text-[11px] text-[#8B8FA3]">
@@ -482,7 +514,7 @@ export default function PlanPage() {
       )}
 
       {/* Topic List */}
-      {activeTab !== "schedule" && filtered.length > 0 ? (
+      {currentTab !== "schedule" && filtered.length > 0 ? (
         <div className="flex flex-col gap-2">
           {filtered.map((topic) => {
             const isUsed = topic.status === "used";
@@ -544,12 +576,12 @@ export default function PlanPage() {
                       {(topic as any).keywordDifficulty != null && (
                         <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${getDifficultyBg((topic as any).keywordDifficulty)} ${getDifficultyColor((topic as any).keywordDifficulty)}`} title={`Keyword difficulty: ${(topic as any).keywordDifficulty}/100 — ${getDifficultyLabel((topic as any).keywordDifficulty)}`}>
                           <BarChart3 className="h-2.5 w-2.5" />
-                          KD {(topic as any).keywordDifficulty}
+                          Difficulty {(topic as any).keywordDifficulty}
                         </span>
                       )}
                       {(topic as any).cpc != null && (topic as any).cpc > 0 && (
-                        <span className="rounded bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-[#8B8FA3]" title="Cost per click (advertiser demand signal)">
-                          ${(topic as any).cpc.toFixed(2)}
+                        <span className="rounded bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-[#8B8FA3]" title="Cost per click: what advertisers pay per Google ad click for this keyword">
+                          CPC ${(topic as any).cpc.toFixed(2)}
                         </span>
                       )}
                     </div>
@@ -662,7 +694,7 @@ export default function PlanPage() {
                             : "Niche keyword"
                           }
                           {(topic as any).keywordDifficulty != null && (
-                            <> with {getDifficultyLabel((topic as any).keywordDifficulty).toLowerCase()} competition (KD {(topic as any).keywordDifficulty})</>
+                            <> with {getDifficultyLabel((topic as any).keywordDifficulty).toLowerCase()} competition (difficulty {(topic as any).keywordDifficulty}/100)</>
                           )}
                           {(topic as any).cpc > 0 && (
                             <>. Advertisers pay ${(topic as any).cpc.toFixed(2)}/click — indicates commercial value</>
@@ -674,7 +706,7 @@ export default function PlanPage() {
                         <p className="text-[#565A6E] uppercase tracking-wider text-[9px] mb-1">Format selected</p>
                         <p className="text-[#8B8FA3] leading-relaxed">
                           {(topic as any).recommendedArticleType
-                            ? `SERP analysis shows top Google results for "${topic.primaryKeyword}" are ${(topic as any).recommendedArticleType} format articles. We matched this format for the best ranking odds.`
+                            ? `Top Google results for "${topic.primaryKeyword}" are mostly ${(topic as any).recommendedArticleType} articles, so Pentra matched that format for the best chance of ranking.`
                             : `${articleTypeInfo.label} format selected based on keyword intent and topic structure.`
                           }
                         </p>
@@ -733,13 +765,15 @@ export default function PlanPage() {
             );
           })}
         </div>
-      ) : activeTab !== "schedule" ? (
+      ) : currentTab !== "schedule" ? (
         <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-12 text-center">
           <Target className="mx-auto h-10 w-10 text-[#565A6E]/30" />
           <p className="mt-3 text-[13px] text-[#565A6E]">
             {topics === undefined
               ? "Loading..."
-              : "No topics yet. Generate a content strategy to get started."}
+              : sorted.length === 0
+                ? "No topics yet. Click Generate Topics to get started."
+                : "No topics in this view."}
           </p>
           {topics?.length === 0 && site && (
             <p className="mt-2 text-[11px] text-[#565A6E]/70">

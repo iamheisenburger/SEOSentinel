@@ -950,12 +950,12 @@ test("SLC59 owners can accept style-only reviewer notes on the exact draft; fact
     assert.equal(job.contentWork.stage, "ready", diagnostic(f));
     // Reproduce the production outcome: a clean fact check, editorial 84, no claim ledger.
     Object.assign(article, { status: "review", publicationGateStatus: "blocked", auditedContentHash: undefined,
-      editorialQualityScore: 84, claimEvidenceStatus: undefined, factCheckScore: scenario === "factual" ? 70 : 92 });
+      editorialQualityScore: 84, claimEvidenceStatus: undefined, factCheckScore: scenario === "factual" ? 60 : 92 });
     Object.assign(job, { status: "failed" }); job.contentWork = { ...job.contentWork, stage: "failed", failure: "bounded_content_quality_exhausted", approvedArtifactHash: undefined };
     const hash = publicationArtifactHash(f.get(job.articleId)! as never);
     await assert.rejects(f.invoke("articles:acceptOwnerReviewNotes", { articleId: job.articleId, artifactHash: "stale" }), /changed/);
     if (scenario === "factual") {
-      await assert.rejects(f.invoke("articles:acceptOwnerReviewNotes", { articleId: job.articleId, artifactHash: hash }), /Fact-check score is 70/);
+      await assert.rejects(f.invoke("articles:acceptOwnerReviewNotes", { articleId: job.articleId, artifactHash: hash }), /Fact-check score is 60/);
       assert.equal(f.get(job.articleId)!.status, "review");
       await assert.rejects(f.invoke("actions/pipeline:publishApproved", { siteId: site.id, articleId: job.articleId }));
       assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 0);
@@ -972,6 +972,35 @@ test("SLC59 owners can accept style-only reviewer notes on the exact draft; fact
     assert.equal(f.get(requested.jobId)!.contentWork.stage, "verified");
     f.assertOffline();
   });
+});
+
+test("SLC61 new customers choose Autopilot with a plan-derived rhythm and can switch to Review first and back", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  assert.equal(r.autopilot.selectable, true); assert.equal(r.plan.tier, "enterprise");
+  await assert.rejects(f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true,
+    reviewToken: r.reviewToken, autopilot: true, ownerReviewedOnly: true }), /Autopilot setup/);
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  let s = f.get(site.id)!;
+  assert.equal(s.autopilotEnabled, true); assert.equal(s.approvalRequired, false);
+  assert.equal(s.contentSchedule.intervalMs, 12 * 3_600_000, "150 articles a month is capped at one every 12 hours");
+  assert.ok(s.contentSchedule.nextDeadlineAt >= f.now() + 23 * 3_600_000);
+  assert.ok(s.contentSchedule.autopilotSelectedAt); assert.ok(s.contentSchedule.autopublishConsentAt);
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  assert.equal(r.autopilot.on, true);
+  await f.invoke("contentWork:setAutopilot", { siteId: site.id, enabled: false, reviewToken: r.reviewToken });
+  s = f.get(site.id)!;
+  assert.equal(s.autopilotEnabled, false); assert.equal(s.approvalRequired, true); assert.equal(s.contentSchedule.ownerReviewedOnly, true);
+  assert.equal(s.contentSchedule.autopublishConsentAt, undefined);
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "content_paused");
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:setAutopilot", { siteId: site.id, enabled: true, reviewToken: r.reviewToken });
+  s = f.get(site.id)!;
+  assert.equal(s.autopilotEnabled, true); assert.equal(s.contentSchedule.ownerReviewedOnly, undefined);
+  f.setIdentity(null);
+  f.assertOffline();
 });
 
 test("SLC54 owner draft completes two fresh approved publication cycles without changing the paused cadence", async () => {
@@ -3294,6 +3323,51 @@ test("SLC bounded reviews allow two targeted revisions and one distinct replacem
     assert.equal(new Set(f.tables.articles.map(a => a.topicId)).size, 2);
     f.assertOffline();
   }
+});
+
+test("SLC60 autopilot accepts style-only notes and never stalls on a draft the reviewer will not pass", async t => {
+  await t.test("style_only", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000,
+      auditResponse: (value: Fields) => ({ ...value, score: 82, materialDefects: ["Tighten the introduction so the answer comes first."] }) });
+    const site = await selectGrowth(f);
+    Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START }); // the new Autopilot setup
+    await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length >= 1 || f.tables.jobs.some(j => j.contentWork?.stage === "failed"));
+    const ready = f.tables.jobs.find(j => j.contentWork?.stage === "ready");
+    assert.ok(ready, diagnostic(f));
+    const article = f.get(ready.articleId)!;
+    assert.equal(article.ownerQualityWaiver?.userId, "pentra-autopilot");
+    assert.ok(article.ownerQualityWaiver.issues.every((issue: string) => /Editorial quality score is 8\d|internal link|claim-to-evidence/.test(issue)), JSON.stringify(article.ownerQualityWaiver));
+    assert.ok(ready.contentWork.revisions < 2, "bounded revisions are not exhausted chasing a style score");
+    assert.equal(f.get(site.id)!.approvalRequired, false);
+    f.assertOffline();
+  });
+  await t.test("factual_failure_parks_for_owner", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], quality: "low", budgetMicroUsd: 2_000_000 });
+    const site = await selectGrowth(f);
+    f.get(site.id)!.contentSchedule.autopilotSelectedAt = START;
+    await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "failed"));
+    const failed = f.tables.jobs.find(j => j.contentWork?.stage === "failed")!;
+    const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+    assert.equal(failed.contentWork.deadlineAt, deadline);
+    assert.equal(f.tables.articles.filter(a => a.status === "published" || a.publicationGateStatus === "passed").length, 0);
+    const result = await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+    assert.equal(result.mode, "content_slot_parked");
+    assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline + f.get(site.id)!.contentSchedule.intervalMs);
+    assert.equal(f.get(failed._id)!.contentWork.failure, "bounded_content_quality_exhausted", "the missed slot stays recorded");
+    assert.ok(f.get(failed.articleId), "the draft is retained for the owner");
+    f.assertOffline();
+  });
+  await t.test("existing_contracts_keep_their_failed_slot", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], quality: "low", budgetMicroUsd: 2_000_000 });
+    const site = await selectGrowth(f);
+    await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "failed"));
+    const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+    const result = await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+    assert.notEqual(result.mode, "content_slot_parked");
+    assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline, "an existing contract's missed deadline is never moved");
+    assert.equal(f.tables.articles.filter(a => a.ownerQualityWaiver?.userId === "pentra-autopilot").length, 0);
+    f.assertOffline();
+  });
 });
 
 test("SLC persisted checkpoint survives restart and duplicate workers without another initial draft", async () => {

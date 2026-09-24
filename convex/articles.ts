@@ -49,6 +49,7 @@ import {
 import {
   clampMetaDescription,
   evaluatePublicationQuality,
+  AUTOPILOT_ACCEPTANCE,
   ownerWaivableIssue,
   repairDanglingStructuredIntroductions,
 } from "./lib/articleQuality";
@@ -2485,9 +2486,14 @@ export const releaseExpiredPristinePublication = internalMutation({
 export async function createOwnerEditedCheckpoint(ctx: MutationCtx, source: Doc<"articles">, markdown: string,
   metadata?: { title: string; metaTitle: string; metaDescription: string }) {
   const timestamp = now();
-  let slug = `${source.slug}-edited`, suffix = 2;
+  // Slugs stay unique per site (public lookups and repository paths rely on
+  // it), so an edit still gets its own unpublished URL. Editing an edit reuses
+  // the original base instead of chaining "-edited-edited-…"; existing slugs,
+  // including published ones, are never changed here.
+  const baseSlug = source.slug.replace(/(?:-edited(?:-\d+)?)+$/, "") || source.slug;
+  let slug = `${baseSlug}-edited`, suffix = 2;
   while (await ctx.db.query("articles").withIndex("by_site_slug", q => q.eq("siteId", source.siteId).eq("slug", slug)).first()) {
-    slug = `${source.slug}-edited-${suffix++}`;
+    slug = `${baseSlug}-edited-${suffix++}`;
     if (suffix > 100) throw new Error("Choose a new draft; too many edited versions exist");
   }
   const articleId = await ctx.db.insert("articles", {
@@ -3186,10 +3192,36 @@ export const updateFeaturedImage = internalMutation({
   },
 });
 
+/** Seal an exact unpublished artifact whose only remaining strict issues are
+ * judgement-based editorial notes, recording who accepted them. Factual,
+ * safety, metadata, rendering and evidence checks still block, and the normal
+ * publication path re-checks everything against this exact artifact. */
+export async function sealAcceptedReviewNotes(ctx: MutationCtx, site: Doc<"sites">, article: Doc<"articles">, acceptedBy: string) {
+  const deliveryConfig = publicationDeliveryConfig(site);
+  const candidate = { ...article, publicationConfigHash: publicationDeliveryConfigHash(deliveryConfig), ownerQualityWaiver: undefined };
+  const review = evaluatePublicationQuality(candidate, "strict");
+  const actor = acceptedBy === AUTOPILOT_ACCEPTANCE ? "autopilot" as const : "owner" as const;
+  const waivable = review.issues.filter(issue => ownerWaivableIssue(issue, candidate, actor));
+  const blocking = review.issues.filter(issue => !waivable.includes(issue));
+  if (blocking.length > 0) return { sealed: false as const, blocking, waivable };
+  if (waivable.length === 0) return { sealed: false as const, blocking: [] as string[], waivable };
+  const checkedAt = now(), hash = publicationArtifactHash(candidate);
+  const waiver = { artifactHash: hash, issues: waivable, acceptedAt: checkedAt, userId: acceptedBy };
+  const sealed = evaluatePublicationQuality({ ...candidate, ownerQualityWaiver: waiver }, "strict");
+  if (!sealed.passed) return { sealed: false as const, blocking: sealed.issues, waivable };
+  await ctx.db.patch(article._id, {
+    status: "ready", ownerQualityWaiver: waiver,
+    publicationGateStatus: "passed", publicationGateIssues: [], publicationGateWarnings: sealed.warnings,
+    publicationCheckedAt: checkedAt, publicationAuditVersion: PUBLICATION_AUDIT_VERSION,
+    publicationConfigHash: candidate.publicationConfigHash, publicationConfigSnapshot: deliveryConfig,
+    auditedContentHash: hash, auditedAt: checkedAt, updatedAt: checkedAt,
+  });
+  await syncSummary(ctx, article._id);
+  return { sealed: true as const, hash, waivable };
+}
+
 /** The owner explicitly accepts the reviewer's remaining judgement-based notes
- * on the exact draft they read, so it can be published with their approval.
- * Factual, safety, metadata, rendering and evidence checks still block; the
- * normal publication path re-checks everything against this exact artifact. */
+ * on the exact draft they read, so it can be published with their approval. */
 export const acceptOwnerReviewNotes = mutation({
   args: { articleId: v.id("articles"), artifactHash: v.string() },
   handler: async (ctx, { articleId, artifactHash }) => {
@@ -3199,36 +3231,23 @@ export const acceptOwnerReviewNotes = mutation({
     const site = (await ctx.db.get(article.siteId))!;
     assertNotPublishing(article);
     if (article.status === "published" || article.publicationAttemptedAt || article.publicationReceipt ||
-      article.publicationOutcomeUnverifiedAt || site.publishMethod !== "github") {
+      article.publicationOutcomeUnverifiedAt || !["github", "wordpress"].includes(site.publishMethod ?? "")) {
       throw new ConvexError("This draft cannot be accepted for publication here.");
     }
     if (publicationArtifactHash(article) !== artifactHash) throw new ConvexError("This draft changed. Refresh before accepting it.");
     const jobs = await ctx.db.query("jobs").withIndex("by_site_article", q => q.eq("siteId", article.siteId).eq("articleId", articleId)).take(21);
-    const job = jobs.find(j => j.contentWork?.ownerRequest && j.contentWork.retiredAt === undefined &&
-      ["failed", "review_failed"].includes(j.contentWork.stage) && j.contentWork.ownerRequest.userId === site.userId);
-    if (!job?.contentWork || jobs.length > 20) throw new ConvexError("Only a reviewed draft you requested can be accepted.");
-    const deliveryConfig = publicationDeliveryConfig(site);
-    const candidate = { ...article, publicationConfigHash: publicationDeliveryConfigHash(deliveryConfig), ownerQualityWaiver: undefined };
-    const review = evaluatePublicationQuality(candidate, "strict");
-    const waivable = review.issues.filter(issue => ownerWaivableIssue(issue, candidate));
-    const blocking = review.issues.filter(issue => !waivable.includes(issue));
-    if (blocking.length > 0) throw new ConvexError(`Fix these before publishing: ${blocking.join(" ")}`);
-    if (waivable.length === 0) throw new ConvexError("There are no reviewer notes to accept on this draft.");
-    const checkedAt = now(), hash = publicationArtifactHash(candidate);
-    const waiver = { artifactHash: hash, issues: waivable, acceptedAt: checkedAt, userId: site.userId! };
-    const sealed = evaluatePublicationQuality({ ...candidate, ownerQualityWaiver: waiver }, "strict");
-    if (!sealed.passed) throw new ConvexError("This draft still needs changes before it can publish.");
-    await ctx.db.patch(articleId, {
-      status: "ready", ownerQualityWaiver: waiver,
-      publicationGateStatus: "passed", publicationGateIssues: [], publicationGateWarnings: sealed.warnings,
-      publicationCheckedAt: checkedAt, publicationAuditVersion: PUBLICATION_AUDIT_VERSION,
-      publicationConfigHash: candidate.publicationConfigHash, publicationConfigSnapshot: deliveryConfig,
-      auditedContentHash: hash, auditedAt: checkedAt, updatedAt: checkedAt,
-    });
+    // Owner-requested drafts, and automatic drafts parked for the owner after
+    // bounded review, can both be accepted by the site owner.
+    const job = jobs.find(j => j.contentWork && j.contentWork.retiredAt === undefined &&
+      ["failed", "review_failed"].includes(j.contentWork.stage) &&
+      (j.contentWork.ownerRequest ? j.contentWork.ownerRequest.userId === site.userId : j.contentWork.intent === "create"));
+    if (!job?.contentWork || jobs.length > 20) throw new ConvexError("Only a reviewed draft for this site can be accepted.");
+    const result = await sealAcceptedReviewNotes(ctx, site, article, site.userId!);
+    if (!result.sealed && result.blocking.length > 0) throw new ConvexError(`Fix these before publishing: ${result.blocking.join(" ")}`);
+    if (!result.sealed) throw new ConvexError("There are no reviewer notes to accept on this draft.");
     await ctx.db.patch(job._id, { status: "done", contentWork: { ...job.contentWork, stage: "ready",
-      failure: undefined, approvedArtifactHash: hash }, updatedAt: checkedAt });
-    await syncSummary(ctx, articleId);
-    return { accepted: waivable.length, artifactHash: hash };
+      failure: undefined, approvedArtifactHash: result.hash }, updatedAt: now() });
+    return { accepted: result.waivable.length, artifactHash: result.hash };
   },
 });
 

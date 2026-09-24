@@ -26,31 +26,31 @@ function Hero() {
       <div className="relative mx-auto max-w-4xl px-6 text-center">
         <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-[#0EA5E9]/[0.15] bg-[#0EA5E9]/[0.05] px-3 py-1">
           <span className="h-1.5 w-1.5 rounded-full bg-[#0EA5E9]" />
-          <span className="text-[12px] font-medium text-[#0EA5E9]">SEO articles you approve</span>
+          <span className="text-[12px] font-medium text-[#0EA5E9]">Autopilot SEO for your website</span>
         </div>
         <h1 className="text-[clamp(2.2rem,5vw,3.75rem)] font-bold leading-[1.06] tracking-[-0.03em]">
-          Accurate SEO articles.
+          More customers from Google.
           <br />
-          <span className="text-[#8B8FA3]">Published when you say so.</span>
+          <span className="text-[#8B8FA3]">On autopilot.</span>
         </h1>
         <p className="mx-auto mt-6 max-w-2xl text-[17px] leading-relaxed text-[#8B8FA3]">
-          Pentra researches topics your customers search for, writes fact-checked articles about what your
-          business actually does, and publishes them to your site the moment you approve. Then it checks the
-          page is live and shows you how it performs in Google.
+          Add your website and Pentra takes it from there. It learns what you sell, finds what your customers
+          search for, publishes researched, fact-checked articles to your site on a steady schedule, improves the
+          pages that are close to page one, and shows you the clicks in your own Search Console data.
         </p>
         <div className="mt-9 flex flex-col items-center justify-center gap-4 sm:flex-row">
           <Link
             href="/sign-up"
             className="group inline-flex items-center justify-center gap-2 rounded-lg bg-[#0EA5E9] px-6 py-3 text-[15px] font-medium text-white transition-all hover:bg-[#38BDF8]"
           >
-            Write my first article free
+            Start free
             <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
           </Link>
           <a href="#pricing" className="text-[14px] font-medium text-[#8B8FA3] hover:text-white">
             See pricing
           </a>
         </div>
-        <p className="mt-4 text-[13px] text-[#565A6E]">1 free article · No credit card · Cancel paid plans anytime</p>
+        <p className="mt-4 text-[13px] text-[#565A6E]">1 free article · No credit card · Autopilot or review-first · Cancel anytime</p>
       </div>
     </section>
   );
@@ -60,29 +60,29 @@ function Hero() {
 
 const steps = [
   {
-    icon: Building2,
-    title: "Tell Pentra what you actually offer",
-    desc: "Confirm your business facts, audience and product once. Pentra writes only from what you confirm and never invents features, statistics, testimonials or case studies.",
+    icon: Globe,
+    title: "Add your website",
+    desc: "Enter your site and confirm what you sell and who buys. Pentra writes only from what you confirm and never invents features, statistics, testimonials or case studies.",
   },
   {
     icon: GitBranch,
-    title: "Connect your site",
-    desc: "Point Pentra at the GitHub repository your blog builds from (Next.js, Astro, Hugo and other Markdown/MDX sites). The destination is verified before anything can publish.",
-  },
-  {
-    icon: Search,
-    title: "Get a researched draft",
-    desc: "Pentra picks a topic your buyers search for, researches it on the live web, writes the article with sources, and runs a separate fact-check review.",
-  },
-  {
-    icon: PencilLine,
-    title: "Review, edit, approve",
-    desc: "Read the draft, edit the text, title and search description, and see exactly what the reviewer flagged. Nothing publishes without your approval.",
+    title: "Connect it once",
+    desc: "Connect WordPress (with the Pentra plugin) or a GitHub-based site, plus Google Search Console. Pentra verifies the connection before anything publishes.",
   },
   {
     icon: ShieldCheck,
-    title: "Published and verified",
-    desc: "Pentra commits the approved article to your repository, confirms the live page loads with the right title and canonical URL, and keeps the exact receipt.",
+    title: "Choose Autopilot or Review first",
+    desc: "On Autopilot, Pentra publishes on your plan's schedule and holds back any draft with a factual concern for you. On Review first, every article waits for your approval.",
+  },
+  {
+    icon: Search,
+    title: "Pentra researches, writes and publishes",
+    desc: "Each article is researched on the live web, written with sources, checked by a separate fact-check review, published to your site and confirmed live.",
+  },
+  {
+    icon: BarChart3,
+    title: "It keeps improving what works",
+    desc: "Pentra updates the pages it wrote (and any you select) to answer the searches they already appear for, and reports clicks, rankings and every change it made.",
   },
 ];
 
@@ -114,14 +114,14 @@ function HowItWorks() {
 /* ─── What you get ─────────────────────────────── */
 
 const features = [
-  { icon: Search, title: "Live web research", desc: "Every draft is researched on the live web. Factual claims link to the sources they came from." },
-  { icon: ShieldCheck, title: "Independent fact-check", desc: "A separate review pass checks each claim against the evidence and flags anything unsupported." },
-  { icon: Building2, title: "Written about your business", desc: "Drafts use only the business facts you confirmed. No made-up features, numbers or customer stories." },
-  { icon: PencilLine, title: "Edit before anything goes live", desc: "Change the body, headline, search title and description. Your edit is re-reviewed before you approve it." },
-  { icon: GitBranch, title: "One-click GitHub publishing", desc: "Approved articles are committed to your repo as Markdown/MDX with the exact commit recorded." },
-  { icon: Globe, title: "Live-page verification", desc: "An article only counts as delivered once the public page loads with the right title and canonical URL." },
-  { icon: BarChart3, title: "Search Console reporting", desc: "Connect Google Search Console to see clicks, impressions and positions for the pages Pentra published." },
-  { icon: CheckCircle2, title: "Clear limits, no surprise bills", desc: "Fixed monthly price with a set number of articles. Edits and re-reviews of a draft do not use extra articles." },
+  { icon: ShieldCheck, title: "Set-and-forget publishing", desc: "Autopilot publishes on your plan's schedule. Drafts with a factual concern wait for you instead of going live." },
+  { icon: Search, title: "Live web research", desc: "Every article is researched on the live web. Factual claims link to the sources they came from." },
+  { icon: CheckCircle2, title: "Independent fact-check", desc: "A separate review checks each claim against the evidence before anything is published." },
+  { icon: Building2, title: "Written about your business", desc: "Articles use only the business facts you confirmed, with a clear next step to your signup, booking or checkout page." },
+  { icon: BarChart3, title: "Improves pages near page one", desc: "Pentra updates its pages to answer the searches they already appear for in Google, then measures the result." },
+  { icon: PencilLine, title: "Written for AI answers too", desc: "Each section answers its question in the first line and stands on its own, the way Google and ChatGPT quote pages." },
+  { icon: GitBranch, title: "WordPress and GitHub publishing", desc: "Articles are published to your site and confirmed live, with a receipt for every change." },
+  { icon: Globe, title: "Search Console reporting", desc: "See clicks, impressions and positions for every page Pentra published or improved." },
 ];
 
 function Features() {
@@ -145,10 +145,10 @@ function Features() {
           <h3 className="text-[15px] font-semibold">What Pentra does not do (yet)</h3>
           <ul className="mt-3 space-y-2 text-[14px] text-[#8B8FA3]">
             {[
-              "Publish anything without your approval.",
+              "Publish a draft that failed its fact check: it waits for you.",
               "Guarantee rankings or traffic. Search results take time and depend on many factors.",
               "Build backlinks or send outreach emails.",
-              "Publish to WordPress, Webflow or other CMSs. GitHub-based sites only for now.",
+              "Publish to Shopify or Webflow yet (coming soon). WordPress and GitHub-based sites are supported today.",
             ].map((line) => (
               <li key={line} className="flex gap-2"><XCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#565A6E]" />{line}</li>
             ))}
@@ -163,12 +163,16 @@ function Features() {
 
 const faqs = [
   {
-    q: "Which websites does Pentra work with?",
-    a: "Sites whose blog is built from Markdown or MDX files in a GitHub repository, such as Next.js, Astro, Hugo, Jekyll and Gatsby sites. Pentra commits each approved article to the folder you choose and verifies the published page.",
+    q: "What does Pentra do after I add my website?",
+    a: "It learns what you sell from the details you confirm, connects to your site and Search Console, and then researches, writes, fact-checks and publishes articles on your plan's schedule. It also improves pages that already appear in Google search, and reports what changed and the clicks that followed.",
   },
   {
-    q: "What happens if a draft isn't good enough?",
-    a: "The reviewer lists exactly what it flagged, such as an unsupported claim. You edit the draft and request review again. Nothing is published until you approve it, and edits of a draft never use another article from your allowance.",
+    q: "Which websites does Pentra work with?",
+    a: "WordPress sites (with the free Pentra publisher plugin) and sites built from Markdown or MDX files in a GitHub repository, such as Next.js, Astro, Hugo, Jekyll and Gatsby. Shopify and Webflow are coming soon.",
+  },
+  {
+    q: "Is Autopilot safe for my brand?",
+    a: "Autopilot only publishes articles that pass the fact check. Drafts with a factual concern wait for you with the reviewer's notes. You can switch to Review first at any time, so nothing publishes without your approval.",
   },
   {
     q: "Will Pentra make things up about my business?",
@@ -176,15 +180,11 @@ const faqs = [
   },
   {
     q: "Does Pentra guarantee rankings?",
-    a: "No one can honestly guarantee rankings. Pentra helps you publish useful, accurate content consistently and shows you real Search Console data so you can see what is working.",
+    a: "No one can honestly guarantee rankings, and search results take weeks to move. Pentra publishes useful, accurate content consistently, improves what is close to page one, and shows you real Search Console data so you can see what is working.",
   },
   {
     q: "How does billing work?",
     a: "Each plan is a fixed monthly or annual price with a set number of new articles per month. There are no usage charges. Monthly and annual plans can be canceled anytime from Billing; your plan remains active through the end of the current billing period.",
-  },
-  {
-    q: "Who owns the content?",
-    a: "You do. Articles are committed to your own repository and stay there if you stop using Pentra.",
   },
 ];
 
@@ -212,9 +212,9 @@ function FinalCTA() {
   return (
     <section className="relative border-t border-white/[0.04] py-24 md:py-32">
       <div className="relative mx-auto max-w-2xl px-6 text-center">
-        <h2 className="text-2xl font-bold tracking-[-0.02em] md:text-4xl">Your next article, researched and ready to approve.</h2>
+        <h2 className="text-2xl font-bold tracking-[-0.02em] md:text-4xl">Add your website. Pentra handles the rest.</h2>
         <p className="mx-auto mt-4 max-w-md text-[15px] text-[#8B8FA3]">
-          Set up your business and site in a few minutes. Your first article is free.
+          Set up takes a few minutes. Your first article is free.
         </p>
         <div className="mt-8">
           <Link
@@ -277,13 +277,14 @@ const organizationSchema = {
   applicationCategory: "BusinessApplication",
   operatingSystem: "Web",
   description:
-    "Pentra researches and writes fact-checked SEO articles about your business, publishes them to your GitHub-based site when you approve, and verifies the live page.",
+    "Autopilot SEO: Pentra researches, writes, fact-checks and publishes articles to your WordPress or GitHub-based site on a schedule, improves pages near page one, and reports Search Console results.",
   offers: { "@type": "AggregateOffer", lowPrice: "0", highPrice: "199", priceCurrency: "USD", offerCount: "4" },
   featureList: [
     "Live web research with cited sources",
     "Independent fact-check review",
-    "Owner review, editing and approval",
-    "GitHub Markdown/MDX publishing with commit receipts",
+    "Autopilot or review-first publishing",
+    "WordPress and GitHub publishing with receipts",
+    "Improvement of pages already ranking",
     "Live-page verification",
     "Google Search Console reporting",
   ],

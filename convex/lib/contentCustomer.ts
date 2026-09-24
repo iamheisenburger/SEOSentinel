@@ -11,7 +11,7 @@ export function contentIssue(reason?: string) {
   if (!reason) return null;
   if (reason === "owner_rejected_draft") return "You declined this draft. It will not publish. You can request a new draft; previous work and spending remain recorded.";
   if (reason === "owner_edited_draft") return "A separately reviewed edit replaces this draft. The original content and spending remain in history.";
-  if (reason === "bounded_content_quality_exhausted") return "This draft needs your edits before it can publish. Open it to see what the reviewer flagged, fix those points, then request review. Nothing was published.";
+  if (reason === "bounded_content_quality_exhausted") return "Your draft is ready for your review. Open it to see the reviewer's notes: if only style notes remain you can accept them and publish; otherwise fix the flagged points and request review. Nothing was published.";
   if (reason === "content_model_response_invalid") return "The generation service returned an incomplete response. No publication occurred. Your saved draft and costs are retained; edit an available draft or explicitly request new work.";
   if (internalContentProcessingError(reason)) return "Pentra encountered an internal processing error. Our team must repair it. Your drafts, spending history and original deadline are preserved. You do not need to change your plan or fund a provider.";
   if (reason.includes("wordpress_receipt_update_required")) return "Update the Pentra WordPress connector to 1.1.0 or newer, then recheck this retained delivery. Do not publish another copy.";

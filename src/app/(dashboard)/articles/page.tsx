@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { FileText, PenTool, ArrowRight, Trash2, Upload, CheckCircle2, TrendingDown } from "lucide-react";
+import { FileText, PenTool, ArrowRight, Trash2, Upload, TrendingDown } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { ArticleProgress } from "@/components/ui/article-progress";
@@ -180,7 +180,7 @@ export default function ArticlesPage() {
         <section aria-label="Owner-requested draft" className="rounded-lg border border-white/[0.06] p-4 text-sm">
           <p>Generate a researched draft for your review. Nothing publishes until you approve it.</p>
           {allowance ? <p>Each new draft uses 1 of your {allowance.limit} articles this month ({allowance.used} used). Editing a draft and requesting review again is free.</p>
-            : readiness.ownerDraft.maximumMicroUsd != null && <p>Uses your existing generation allowance, with a maximum provider budget of ${(readiness.ownerDraft.maximumMicroUsd / 1_000_000).toFixed(2)} per request, including bounded revisions.</p>}
+            : readiness.ownerDraft.maximumMicroUsd != null && <p>Counts toward your monthly article allowance.</p>}
           {readiness.ownerDraft.latest && <p role="status">Draft: {readiness.ownerDraft.latest.stage.replaceAll("_", " ")}. {readiness.ownerDraft.latest.issue}
             {readiness.ownerDraft.latest.articleId && <> <Link className="underline" href={`/articles/${readiness.ownerDraft.latest.articleId}`}>Open draft</Link></>}
           </p>}
@@ -254,12 +254,19 @@ export default function ArticlesPage() {
                       {article.title}
                     </p>
                     <p className="mt-0.5 text-[11px] text-[#565A6E] font-mono truncate sm:hidden">
-                      /{article.slug}
+                      /{article.slug.replace(/^\/+/, "")}
                     </p>
                   </div>
                 </Link>
                 <div className="flex items-center gap-1.5">
-                  <StatusBadge status={article.status} />
+                  {article.status === "revision" ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-[#0EA5E9]/[0.08] px-2 py-0.5 text-[11px] font-medium text-[#38BDF8] whitespace-nowrap">
+                      <span className="h-1.5 w-1.5 rounded-full bg-[#0EA5E9]" />
+                      Being revised
+                    </span>
+                  ) : (
+                    <StatusBadge status={article.status} />
+                  )}
                   {(article as any).decayStatus === "declining" && (
                     <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium bg-[#EF4444]/[0.08] text-[#F87171]" title={(article as any).decayReason || "Rankings declining"}>
                       <TrendingDown className="h-2.5 w-2.5" />
@@ -288,7 +295,7 @@ export default function ArticlesPage() {
                           setStatus(
                             err instanceof Error
                               ? err.message
-                              : "Publication failed its delivery or quality gate.",
+                              : "Could not publish this article. Open it to see what needs attention.",
                           );
                         }
                       }}

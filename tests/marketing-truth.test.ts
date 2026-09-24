@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-test("public Pentra copy sells only the owner-reviewed service it delivers", () => {
+test("public Pentra copy sells only what the product delivers", () => {
   const homepage = readFileSync("src/app/page.tsx", "utf8");
   const onboarding = readFileSync(
     "src/components/onboarding/setup-wizard.tsx",
@@ -12,8 +12,9 @@ test("public Pentra copy sells only the owner-reviewed service it delivers", () 
   assert.doesNotMatch(combined, /auto-refresh/i);
   assert.doesNotMatch(combined, /automatically refresh/i);
   assert.doesNotMatch(combined, /builds backlinks/i);
-  assert.doesNotMatch(homepage, /autopilot|autonomous|hero images|infographic|approval-first outreach/i);
-  assert.match(homepage, /Nothing publishes without your approval/);
+  assert.doesNotMatch(homepage, /hero images|infographic|approval-first outreach|autonomous/i);
+  assert.match(homepage, /Autopilot only publishes articles that pass the fact check/);
+  assert.match(homepage, /Shopify or Webflow yet \(coming soon\)/);
   assert.match(homepage, /Guarantee rankings or traffic/);
   assert.match(homepage, /Build backlinks or send outreach emails/);
   assert.doesNotMatch(homepage, /94%|142 keywords|2,847 words|3-5 minutes|64% of B2B teams/);
@@ -82,10 +83,24 @@ test("the upgrade screen never pretends URL parameters preselect Clerk checkout"
     "src/app/(dashboard)/upgrade/page.tsx",
     "utf8",
   );
-  assert.match(upgrade, /Choose your plan and billing period in the secure table below/);
-  assert.match(upgrade, /<PricingTable/);
+  // Checkout starts only from an explicit plan button (Clerk's CheckoutButton),
+  // and Clerk's own table remains the fallback so checkout always works.
+  assert.match(upgrade, /<CheckoutButton/);
+  assert.match(upgrade, /<PricingTable for="user" newSubscriptionRedirectUrl="\/dashboard"/);
+  assert.match(upgrade, /useState<BillingSubscriptionPlanPeriod>\("month"\)/);
+  assert.doesNotMatch(upgrade, /Enterprise/i);
   assert.doesNotMatch(upgrade, /useSearchParams|PLAN_PRICES|PLAN_LABELS/);
   assert.doesNotMatch(upgrade, /Complete checkout for|billed annually \(save/);
+  assert.doesNotMatch(upgrade, /secure table below/);
+  // In-app plan cards must match the public pricing exactly.
+  const pricing = readFileSync("src/components/landing/pricing-section.tsx", "utf8");
+  const prices = [...pricing.matchAll(/monthlyPrice: (\d+),\s*annualPrice: (\d+),/g)];
+  const allowances = [...pricing.matchAll(/(sites|articles): "([^"]+)"/g)];
+  assert.equal(prices.length, 4);
+  for (const [, monthly, annual] of prices) {
+    assert.match(upgrade, new RegExp(`monthlyPrice: ${monthly},\\s*annualPrice: ${annual},`));
+  }
+  for (const [, field, value] of allowances) assert.ok(upgrade.includes(`${field}: "${value}"`), value);
 });
 
 test("public pricing matches the enforced monthly article allowance and hides Enterprise", async () => {

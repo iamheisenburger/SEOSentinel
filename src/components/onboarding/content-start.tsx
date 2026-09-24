@@ -29,28 +29,28 @@ export function ContentStart() {
         anchorKeywords: questions.split("\n").map(s => s.trim()).filter(Boolean).slice(0, 12), publishMethod: adapter,
         autopilotEnabled: false, approvalRequired: true, inferToneNiche: false, language: "en" });
       setSiteId(id);
-    } catch { setError("Setup could not be saved. Verify your existing plan and site allowance in Billing, and check that this domain belongs to you. No paid preparation or outreach was started."); }
+    } catch { setError("We couldn't save your setup. Check that your plan allows another website (Plans & billing) and that this domain is yours. Nothing was charged."); }
     finally { setBusy(false); }
   }
-  if (siteId) return <div className="mx-auto max-w-3xl space-y-4"><h1 className="text-xl font-semibold">Finish your content setup</h1>
-    <p>Your profile is saved. Connect and verify your GitHub publishing destination, then enable drafts for your review. Nothing publishes automatically.</p>
-    <Link className="underline" href={`/sites/${siteId}?tab=settings`}>Connect GitHub in website settings</Link>
+  if (siteId) return <div className="mx-auto max-w-3xl space-y-4"><h1 className="text-xl font-semibold">Finish setting up Pentra</h1>
+    <p>Your profile is saved. Connect and verify your website, then choose Autopilot or Review first.</p>
+    <Link className="underline" href={`/sites/${siteId}?tab=settings`}>Connect your website in settings</Link>
     <ContentWorkService key={siteId} siteId={siteId} />
   </div>;
-  return <section className="mx-auto max-w-2xl space-y-4 rounded-xl border border-white/10 p-5"><h1 className="text-xl font-semibold">Start your content service</h1>
-    <p>Tell Pentra what your business does and who it serves. Connect GitHub, request a draft, review or edit it, then approve publication. No automatic schedule or outreach setup is required.</p>
+  return <section className="mx-auto max-w-2xl space-y-4 rounded-xl border border-white/10 p-5"><h1 className="text-xl font-semibold">Set up Pentra for your website</h1>
+    <p>Tell Pentra what your business does and who it serves, connect your website, and choose Autopilot or Review first. Pentra handles the research, writing, publishing and checks.</p>
     <Input label="Website domain" value={domain} onChange={e => { setDomain(e.target.value); setConfirmed(false); }} placeholder="yourbusiness.com" />
     <Input label="Business name" value={name} onChange={e => { setName(e.target.value); setConfirmed(false); }} />
     <Textarea label="Confirmed business facts" value={summary} onChange={e => { setSummary(e.target.value); setConfirmed(false); }} />
     <Textarea label="Who you serve" value={audience} onChange={e => { setAudience(e.target.value); setConfirmed(false); }} />
     <Textarea label="What your product or service does" value={product} onChange={e => { setProduct(e.target.value); setConfirmed(false); }} />
     <Textarea label="Real customer questions (one per line)" value={questions} onChange={e => { setQuestions(e.target.value); setConfirmed(false); }} />
-    <label className="block">Publishing destination<select className="block w-full rounded-lg border border-white/15 bg-[#0F1117] p-2" aria-label="Content publishing destination" value={adapter} onChange={e => { setAdapter(e.target.value); setConfirmed(false); }}><option value="github">GitHub · plain Markdown/MDX</option><option value="wordpress" disabled>WordPress · not part of this owner-reviewed release</option></select></label>
+    <label className="block">Publishing destination<select className="block w-full rounded-lg border border-white/15 bg-[#0F1117] p-2" aria-label="Content publishing destination" value={adapter} onChange={e => { setAdapter(e.target.value); setConfirmed(false); }}><option value="github">GitHub · plain Markdown/MDX</option><option value="wordpress">WordPress · install the Pentra publisher plugin</option></select></label>
     {adapter === "wordpress" && <a className="underline" href="https://github.com/iamheisenburger/SEOSentinel/blob/main/connectors/wordpress/README.md" target="_blank" rel="noreferrer">Install the WordPress connector</a>}
-    <p className="text-sm">Unsupported layouts cannot be edited automatically. Pricing, checkout, legal text and unselected pages stay protected. This does not purchase a plan or credits.</p>
-    <label className="block text-sm"><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /> These are accurate business facts, not capabilities or results Pentra should invent.</label>
-    <Button disabled={busy || !isLoaded || !userId || !confirmed || !domain.trim() || !summary.trim() || !audience.trim() || !product.trim()} onClick={save}>{busy ? "Verifying plan and saving…" : "Verify existing plan and save profile"}</Button>
-    <p><Link className="underline text-sm" href="/settings/billing">Review existing billing</Link></p>
+    <p className="text-sm text-[#8B8FA3]">Saving doesn&apos;t charge you. Pentra only adds new articles; it never changes your pricing, checkout or legal pages.</p>
+    <label className="block text-sm"><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /> These facts are accurate. Pentra writes only from them and from sources it cites.</label>
+    <Button disabled={busy || !isLoaded || !userId || !confirmed || !domain.trim() || !summary.trim() || !audience.trim() || !product.trim()} onClick={save}>{busy ? "Saving…" : "Save and continue"}</Button>
+    <p><Link className="underline text-sm" href="/upgrade">Plans & billing</Link></p>
     {error && <p role="alert">{error}</p>}
   </section>;
 }

@@ -2,12 +2,12 @@
 
 import { useAuth } from "@clerk/nextjs";
 
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
-import { Trash2, Loader2, Bell, CreditCard, ArrowUpRight, Zap, User, Mail, Shield, ExternalLink, Upload, GitBranch, Globe, Webhook, Copy, KeyRound, Check, Target, RefreshCw } from "lucide-react";
+import { Trash2, Loader2, Bell, CreditCard, ArrowUpRight, Zap, User, Mail, Shield, ExternalLink, Upload, GitBranch, Globe, Webhook, Copy, KeyRound, Check } from "lucide-react";
 import { useState } from "react";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
@@ -15,25 +15,14 @@ import { useUser, useClerk } from "@clerk/nextjs";
 import Link from "next/link";
 import { ContentWorkService } from "@/components/content-work-service";
 
+// Display names for the canonical plan tier resolved by usePlanLimits.
 const PLAN_NAMES: Record<string, string> = {
-  max_articles_3: "Free",
-  max_articles_10: "Starter",
-  max_articles_25: "Pro",
-  max_articles_60: "Scale",
-  max_articles_150: "Enterprise",
+  free: "Free",
+  starter: "Starter",
+  pro: "Pro",
+  scale: "Scale",
+  enterprise: "Enterprise",
 };
-
-function getPlanName(features: string[]): string {
-  // Pick the highest article tier feature
-  const articleFeature = features
-    .filter((f) => f.startsWith("max_articles_"))
-    .sort((a, b) => {
-      const numA = parseInt(a.split("_").pop() || "0");
-      const numB = parseInt(b.split("_").pop() || "0");
-      return numB - numA;
-    })[0];
-  return PLAN_NAMES[articleFeature] || "Free";
-}
 
 type PublishingSettingsSite = {
   _id: Id<"sites">;
@@ -120,9 +109,6 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
       <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
         <Upload className="h-4 w-4 text-[#0EA5E9]" />
         <p className="text-[13px] font-semibold text-[#EDEEF1]">Publishing</p>
-        <span className="rounded-full border border-[#0EA5E9]/20 bg-[#0EA5E9]/[0.06] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-[#38BDF8]">
-          GitHub publishing
-        </span>
         <span className="ml-auto text-[11px] text-[#565A6E]">{pubSite.domain}</span>
       </div>
       <div className="px-5 py-5">
@@ -174,7 +160,7 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
               )}
               {isWp && (
                 <>
-                  <p className="text-[12px] text-[#8B8FA3]">Growth-first requires the conditional publisher. <a className="underline" href="https://github.com/iamheisenburger/SEOSentinel/blob/main/connectors/wordpress/README.md" target="_blank" rel="noreferrer">Install the WordPress connector</a>, then save and verify this exact website.</p>
+                  <p className="text-[12px] text-[#8B8FA3]">WordPress publishing needs the Pentra plugin on your site. <a className="underline" href="https://github.com/iamheisenburger/SEOSentinel/blob/main/connectors/wordpress/README.md" target="_blank" rel="noreferrer">Follow the install steps</a>, then enter your site details below and save.</p>
                   <div className="flex flex-col gap-1.5">
                     <label className="text-[12px] font-medium text-[#8B8FA3]">WordPress URL</label>
                     <input value={wpUrl} onChange={(e) => setWpUrl(e.target.value)} placeholder="https://yoursite.com" className={inputCls} />
@@ -307,191 +293,6 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
   );
 }
 
-function OutcomeAttributionSection({ site }: { site: { _id: Id<"sites"> } }) {
-  const credential = useQuery(
-    api.outcomes.getIngestCredentialStatus,
-    site?._id ? { siteId: site._id } : "skip",
-  );
-  const rotateCredential = useAction(
-    api.actions.outcomeCredentials.rotateIngestCredential,
-  );
-  const inspectReadiness = useAction(
-    api.actions.outcomeCredentials.getIngestRuntimeReadiness,
-  );
-  const [goalKey, setGoalKey] = useState("primary_revenue");
-  const [oneTimeToken, setOneTimeToken] = useState<string | null>(null);
-  const [readiness, setReadiness] = useState<{
-    publicEndpointEnabled: boolean;
-    tenantExecutionAuthorized: boolean;
-    ready: boolean;
-    safetyContract: string;
-  } | null>(null);
-  const [rotating, setRotating] = useState(false);
-  const [checking, setChecking] = useState(false);
-  const [confirmRotation, setConfirmRotation] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const normalizedGoal = goalKey.trim().toLowerCase();
-  const validGoal = /^[a-z0-9][a-z0-9._:-]{2,63}$/.test(normalizedGoal);
-  const convexCloudUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-  const endpoint = convexCloudUrl
-    ? `${convexCloudUrl.replace(/\.convex\.cloud\/?$/, ".convex.site")}/outcomes/v1/receipts`
-    : "/outcomes/v1/receipts";
-
-  const checkReadiness = async () => {
-    setChecking(true);
-    setError(null);
-    try {
-      const next = await inspectReadiness({ siteId: site._id });
-      setReadiness({
-        publicEndpointEnabled: next.publicEndpointEnabled,
-        tenantExecutionAuthorized: next.tenantExecutionAuthorized,
-        ready: next.ready,
-        safetyContract: next.safetyContract,
-      });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Readiness check failed");
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  const issueCredential = async () => {
-    if (!validGoal) return;
-    if (credential?.configured && !confirmRotation) {
-      setConfirmRotation(true);
-      return;
-    }
-    setRotating(true);
-    setError(null);
-    try {
-      const result = await rotateCredential({
-        siteId: site._id,
-        qualifiedActionGoalKey: normalizedGoal,
-      });
-      setOneTimeToken(result.token);
-      setConfirmRotation(false);
-      const next = await inspectReadiness({ siteId: site._id });
-      setReadiness({
-        publicEndpointEnabled: next.publicEndpointEnabled,
-        tenantExecutionAuthorized: next.tenantExecutionAuthorized,
-        ready: next.ready,
-        safetyContract: next.safetyContract,
-      });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Credential rotation failed");
-    } finally {
-      setRotating(false);
-    }
-  };
-
-  return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
-      <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
-        <Target className="h-4 w-4 text-[#0EA5E9]" />
-        <p className="text-[13px] font-semibold text-[#EDEEF1]">Outcome attribution</p>
-        <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-medium ${
-          credential?.configured
-            ? "bg-[#22C55E]/[0.1] text-[#4ADE80]"
-            : "bg-white/[0.05] text-[#8B8FA3]"
-        }`}>
-          {credential?.configured ? "Credential active" : "Not connected"}
-        </span>
-      </div>
-      <div className="px-5 py-5 space-y-4">
-        <div>
-          <p className="text-[12px] leading-relaxed text-[#8B8FA3]">
-            Attribute a verified organic article landing through signup, activation, and paid conversion. The credential is for your private server only and must never be shipped to browser code.
-          </p>
-          <p className="mt-2 break-all font-mono text-[10px] text-[#565A6E]">{endpoint}</p>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
-          <div className="space-y-1.5">
-            <label className="text-[11px] font-medium text-[#8B8FA3]">Outcome goal key</label>
-            <input
-              value={goalKey}
-              onChange={(event) => {
-                setGoalKey(event.target.value);
-                setConfirmRotation(false);
-              }}
-              placeholder="primary_revenue"
-              className="w-full rounded-lg border border-white/[0.06] bg-[#090B10] px-3 py-2 text-[12px] font-mono text-[#EDEEF1] outline-none focus:border-[#0EA5E9]/50"
-            />
-            <p className="text-[10px] text-[#565A6E]">
-              All four server events must use this exact tenant-specific key.
-            </p>
-          </div>
-          <button
-            onClick={issueCredential}
-            disabled={rotating || !validGoal}
-            className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-4 text-[11px] font-medium transition disabled:opacity-50 ${
-              confirmRotation
-                ? "bg-[#F59E0B] text-black hover:bg-[#FBBF24]"
-                : "bg-[#0EA5E9] text-white hover:bg-[#38BDF8]"
-            }`}
-          >
-            {rotating ? <Loader2 className="h-3 w-3 animate-spin" /> : <KeyRound className="h-3 w-3" />}
-            {rotating
-              ? "Issuing..."
-              : confirmRotation
-                ? "Confirm rotation"
-                : credential?.configured
-                  ? "Rotate credential"
-                  : "Create credential"}
-          </button>
-        </div>
-
-        {confirmRotation && (
-          <div className="rounded-lg border border-[#F59E0B]/20 bg-[#F59E0B]/[0.04] px-3 py-2 text-[11px] text-[#FBBF24]">
-            Rotation immediately invalidates the credential currently installed on your server. Click Confirm rotation only when you are ready to replace it.
-          </div>
-        )}
-
-        {oneTimeToken && (
-          <div className="rounded-lg border border-[#F59E0B]/25 bg-[#F59E0B]/[0.04] p-3 space-y-2">
-            <p className="text-[11px] font-medium text-[#FBBF24]">Copy this server secret now. Pentra will not show it again.</p>
-            <div className="flex items-center gap-2">
-              <code className="min-w-0 flex-1 overflow-x-auto rounded bg-black/20 px-2.5 py-2 text-[10px] text-[#EDEEF1]">{oneTimeToken}</code>
-              <button
-                onClick={() => navigator.clipboard.writeText(oneTimeToken)}
-                className="inline-flex h-8 items-center gap-1 rounded-lg border border-white/[0.08] px-2.5 text-[10px] text-[#8B8FA3] hover:text-white"
-              >
-                <Copy className="h-3 w-3" /> Copy
-              </button>
-            </div>
-            <button onClick={() => setOneTimeToken(null)} className="text-[10px] text-[#8B8FA3] hover:text-white">
-              I stored it securely. Hide token.
-            </button>
-          </div>
-        )}
-
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-2.5">
-          <div className="flex-1 text-[11px] text-[#8B8FA3]">
-            {readiness
-              ? readiness.ready
-                ? `Ready on ${readiness.safetyContract}`
-                : !readiness.tenantExecutionAuthorized
-                  ? "This site is paused by its current account entitlement"
-                : readiness.publicEndpointEnabled
-                  ? "Endpoint enabled, but this site's credential is not ready"
-                  : "Endpoint remains paused by the Pentra safety gate"
-              : "Run an exact readiness check after installing the server credential."}
-          </div>
-          <button
-            onClick={checkReadiness}
-            disabled={checking}
-            className="inline-flex items-center gap-1.5 text-[10px] font-medium text-[#0EA5E9] hover:text-[#38BDF8] disabled:opacity-50"
-          >
-            {checking ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-            Check readiness
-          </button>
-        </div>
-        {error && <p className="text-[11px] text-[#EF4444]">{error}</p>}
-      </div>
-    </div>
-  );
-}
-
 export default function SettingsPage() {
   const { userId: _clerkId } = useAuth();
   const sites = useQuery(api.sites.list, _clerkId ? { clerkUserId: _clerkId } : {});
@@ -502,24 +303,48 @@ export default function SettingsPage() {
   const resetAll = useMutation(api.sites.resetAll);
   const [showReset, setShowReset] = useState(false);
   const [resetting, setResetting] = useState(false);
-  const { maxSites, maxArticles, features, isFreePlan } = usePlanLimits();
+  const [resetError, setResetError] = useState<string | null>(null);
+  const { maxSites, maxArticles: legacyMaxArticles, tier, isFreePlan } = usePlanLimits();
   const { user } = useUser();
   const clerk = useClerk();
   const { activeSite } = useActiveSite();
   const pubSite = activeSite ?? sites?.[0];
+  // Same subscription ContentWorkService already holds for this site.
+  const contentState = useQuery(
+    api.contentWork.readiness,
+    pubSite ? { siteId: pubSite._id } : "skip",
+  );
 
   const siteCount = sites?.length ?? 0;
-  const planName = getPlanName(features);
+  const planName = PLAN_NAMES[tier] ?? "Free";
 
-  // Account-wide immutable usage remains truthful across sites and deletions.
-  const articlesThisMonth = usageCount ?? 0;
+  // Growth-first sites are held to the published plan allowance of new
+  // articles; older sites keep the account-wide immutable usage ledger.
+  const growthFirst = contentState?.serviceMode === "growth_first";
+  const allowance = growthFirst ? contentState?.ownerDraft.allowance ?? null : null;
+  const maxArticles = allowance?.limit
+    ?? (growthFirst ? contentState?.plan.articlesPerMonth : undefined)
+    ?? legacyMaxArticles;
+  const articlesThisMonth = allowance?.used ?? usageCount ?? 0;
 
   const handleReset = async () => {
     setResetting(true);
+    setResetError(null);
     try {
-      await resetAll();
+      const result = await resetAll();
+      if (result && "deferred" in result && result.deferred) {
+        setResetError(
+          "Nothing was deleted. Some outreach emails still need to be checked before your data can be removed. Email pentrahelp@gmail.com and we'll sort it out.",
+        );
+        setResetting(false);
+        setShowReset(false);
+        return;
+      }
       window.location.assign("/dashboard");
     } catch {
+      setResetError(
+        "Nothing was deleted. Pentra may be publishing an article right now. Please try again in a few minutes.",
+      );
       setResetting(false);
       setShowReset(false);
     }
@@ -537,8 +362,15 @@ export default function SettingsPage() {
         <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
           <CreditCard className="h-4 w-4 text-[#0EA5E9]" />
           <p className="text-[13px] font-semibold text-[#EDEEF1]">
-            Plan & Billing
+            Plan & billing
           </p>
+          <Link
+            href="/upgrade"
+            className="ml-auto inline-flex items-center gap-1 text-[12px] font-medium text-[#0EA5E9] transition hover:text-[#38BDF8]"
+          >
+            Plans & billing
+            <ArrowUpRight className="h-3 w-3" />
+          </Link>
         </div>
         <div className="px-5 py-5">
           <div className="flex items-center justify-between">
@@ -560,7 +392,7 @@ export default function SettingsPage() {
               <p className="mt-1 text-[12px] text-[#565A6E]">
                 {siteCount} / {maxSites === 9999 ? "∞" : maxSites} site
                 {maxSites !== 1 ? "s" : ""} · {articlesThisMonth} /{" "}
-                {maxArticles} articles this month
+                {maxArticles} article{maxArticles !== 1 ? "s" : ""} this month
               </p>
             </div>
             {isFreePlan && (
@@ -616,27 +448,17 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* Manage subscription / upgrade */}
-          <div className="mt-4 flex items-center gap-3">
-            {!isFreePlan && (
-              <a
-                href="/upgrade"
-                className="inline-flex items-center gap-1.5 text-[12px] font-medium text-[#8B8FA3] hover:text-[#0EA5E9] transition"
-              >
-                Manage subscription
-                <ArrowUpRight className="h-3 w-3" />
-              </a>
-            )}
-            {!isFreePlan && (
-              <Link
-                href="/upgrade"
-                className="inline-flex items-center gap-1.5 text-[12px] font-medium text-[#8B8FA3] hover:text-[#0EA5E9] transition"
-              >
-                Change plan
-                <ArrowUpRight className="h-3 w-3" />
-              </Link>
-            )}
-          </div>
+          {/* Change plan, billing period, payment method or cancel */}
+          <p className="mt-4 text-[12px] text-[#8B8FA3]">
+            To change or cancel your plan, or update your card, go to{" "}
+            <Link
+              href="/upgrade"
+              className="font-medium text-[#0EA5E9] transition hover:text-[#38BDF8]"
+            >
+              Plans & billing
+            </Link>
+            .
+          </p>
         </div>
       </div>
 
@@ -713,10 +535,6 @@ export default function SettingsPage() {
         <PublishingSection pubSite={pubSite} />
       )}
 
-      {pubSite && (
-        <OutcomeAttributionSection site={pubSite} />
-      )}
-
       {/* Notifications */}
       <div className="rounded-xl border border-white/[0.06] bg-[#0F1117] overflow-hidden">
         <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
@@ -742,9 +560,17 @@ export default function SettingsPage() {
         </div>
         <div className="px-5 py-5">
           <p className="text-[12px] text-[#8B8FA3]">
-            This will permanently delete all your websites, articles, topics,
-            and pipeline jobs. This action cannot be undone.
+            Delete all your websites from Pentra, along with their topics,
+            articles and saved publishing connections. Pentra stops all work
+            for them right away. Pages already published on your website are
+            not removed. Your subscription is not canceled; do that in Plans
+            &amp; billing. This can&apos;t be undone.
           </p>
+          {resetError && (
+            <p role="alert" className="mt-3 text-[12px] text-[#F87171]">
+              {resetError}
+            </p>
+          )}
           {showReset ? (
             <div className="mt-4 flex items-center gap-2">
               <button
@@ -760,7 +586,7 @@ export default function SettingsPage() {
                 loading={resetting}
                 icon={<Trash2 className="h-3 w-3" />}
               >
-                Yes, Delete Everything
+                Yes, delete everything
               </Button>
             </div>
           ) : (
@@ -771,7 +597,7 @@ export default function SettingsPage() {
               onClick={() => setShowReset(true)}
               icon={<Trash2 className="h-3 w-3" />}
             >
-              Reset All Data
+              Delete all Pentra data
             </Button>
           )}
         </div>

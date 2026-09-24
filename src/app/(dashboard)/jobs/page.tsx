@@ -3,6 +3,8 @@
 import { useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { useMemo, useState } from "react";
+import Link from "next/link";
+import type { Doc } from "../../../../convex/_generated/dataModel";
 import { PageHeader } from "@/components/layout/page-header";
 import { Tabs } from "@/components/ui/tabs";
 import {
@@ -13,7 +15,6 @@ import {
   Search,
   ShieldCheck,
   GitBranch,
-  Clock,
   Activity,
   AlertCircle,
   CheckCircle2,
@@ -37,17 +38,17 @@ export default function JobsPage() {
     { id: "all", label: "All", count: jobs?.length ?? 0 },
     {
       id: "running",
-      label: "Running",
+      label: "In progress",
       count: runningCount,
     },
     {
       id: "done",
-      label: "Done",
+      label: "Finished",
       count: jobs?.filter((j) => j.status === "done").length ?? 0,
     },
     {
       id: "failed",
-      label: "Failed",
+      label: "Stopped",
       count: failedCount,
     },
   ];
@@ -77,13 +78,11 @@ export default function JobsPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="Pipeline"
+        title="Activity"
         subtitle={
           runningCount > 0
-            ? `${runningCount} job${runningCount > 1 ? "s" : ""} running`
-            : failedCount > 0
-              ? `${failedCount} failed`
-              : "All activity is up to date"
+            ? `Pentra is working on ${runningCount} task${runningCount > 1 ? "s" : ""} now.`
+            : "What Pentra has been doing for your website recently."
         }
       />
 
@@ -95,7 +94,7 @@ export default function JobsPage() {
             <span className="relative inline-flex h-2 w-2 rounded-full bg-[#0EA5E9]" />
           </span>
           <span className="text-[13px] text-[#38BDF8]">
-            Pipeline is actively processing
+            Pentra is working on your website now
           </span>
         </div>
       )}
@@ -109,11 +108,13 @@ export default function JobsPage() {
           <div className="absolute left-[19px] top-6 bottom-6 w-px bg-white/[0.04] hidden sm:block" />
 
           <div className="flex flex-col gap-0">
-            {filtered.map((job, i) => {
+            {filtered.map((job) => {
               const duration =
-                job.status === "done" || job.status === "failed"
+                job.status === "done"
                   ? getDuration(job.createdAt, job.updatedAt)
                   : null;
+              const problem = explainJobProblem(job);
+              const articleId = jobArticleId(job);
 
               return (
                 <div
@@ -148,7 +149,7 @@ export default function JobsPage() {
                   <div className="min-w-0 flex-1 pt-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="text-[13px] font-medium text-[#EDEEF1]">
-                        {jobLabel(job.type)}
+                        {jobLabel(job)}
                       </p>
                       {job.status === "done" && (
                         <CheckCircle2 className="h-3 w-3 text-[#22C55E]" />
@@ -156,11 +157,11 @@ export default function JobsPage() {
                       {job.status === "running" && (
                         <span className="flex items-center gap-1 text-[10px] text-[#0EA5E9]">
                           <span className="h-1 w-1 rounded-full bg-[#0EA5E9] animate-pulse" />
-                          running
+                          in progress
                         </span>
                       )}
                       {job.status === "failed" && (
-                        <span className="text-[10px] text-[#EF4444]">failed</span>
+                        <span className="text-[10px] text-[#F87171]">stopped</span>
                       )}
                     </div>
 
@@ -186,24 +187,43 @@ export default function JobsPage() {
                       </div>
                     )}
 
-                    {/* Error */}
-                    {job.error && (
+                    {/* What happened, in plain words, and what to do next */}
+                    {problem && (
                       <div className="mt-1.5 flex items-start gap-1.5 rounded bg-[#EF4444]/[0.04] px-2.5 py-1.5">
-                        <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-[#EF4444]" />
-                        <p className="text-[11px] text-[#F87171] break-all leading-relaxed">
-                          {friendlyError(job.error ?? "")}
-                        </p>
+                        <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-[#F87171]" />
+                        <div className="min-w-0 text-[11px] leading-relaxed">
+                          <p className="text-[#F87171]">{problem.message}</p>
+                          <p className="text-[#8B8FA3]">
+                            {problem.next}
+                            {problem.action && (
+                              <>
+                                {" "}
+                                <Link href={problem.action.href} className="underline hover:text-[#EDEEF1]">
+                                  {problem.action.label}
+                                </Link>
+                              </>
+                            )}
+                          </p>
+                        </div>
                       </div>
                     )}
 
-                    <div className="mt-1 flex items-center gap-2 text-[11px] text-[#565A6E]">
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-[#565A6E]">
                       <span>
                         {formatDistanceToNow(job.createdAt, { addSuffix: true })}
                       </span>
                       {duration && (
                         <>
                           <span className="text-white/[0.08]">·</span>
-                          <span>{duration}</span>
+                          <span>took {duration}</span>
+                        </>
+                      )}
+                      {articleId && (
+                        <>
+                          <span className="text-white/[0.08]">·</span>
+                          <Link href={`/articles/${articleId}`} className="text-[#0EA5E9] hover:text-[#38BDF8]">
+                            Open article
+                          </Link>
                         </>
                       )}
                       {job.retries != null && job.retries > 0 && (
@@ -226,8 +246,8 @@ export default function JobsPage() {
           <Zap className="mx-auto h-10 w-10 text-[#565A6E]/30" />
           <p className="mt-3 text-[13px] text-[#565A6E]">
             {activeTab !== "all"
-              ? "No jobs match this filter."
-              : "No pipeline activity yet."}
+              ? "Nothing to show here."
+              : "No activity yet. Pentra will list its work here as it happens."}
           </p>
         </div>
       )}
@@ -236,36 +256,185 @@ export default function JobsPage() {
 }
 
 
-function friendlyError(raw: string): string {
-  if (!raw) return "";
+type JobProblem = {
+  message: string;
+  next: string;
+  action?: { href: string; label: string };
+};
+
+const NOT_PUBLISHED = "Nothing was published.";
+const CONTACT = { href: "/contact", label: "Contact support" };
+const ARTICLES = { href: "/articles", label: "Go to Articles" };
+const SETTINGS = { href: "/settings", label: "Open Settings" };
+const PLANS = { href: "/upgrade", label: "See plans" };
+
+const STOPPED: JobProblem = {
+  message: `Pentra hit a problem and stopped this run. ${NOT_PUBLISHED}`,
+  next: "If this keeps happening,",
+  action: { ...CONTACT, label: "contact support." },
+};
+
+const QUALITY: JobProblem = {
+  message: `This draft did not pass Pentra's quality review. ${NOT_PUBLISHED}`,
+  next: "Read the reviewer's notes on the article, then fix or accept them.",
+};
+
+const SERVICE_UNAVAILABLE: JobProblem = {
+  message: `Pentra's writing service was unavailable. ${NOT_PUBLISHED}`,
+  next: "You don't need to do anything or change your plan.",
+};
+
+const ALLOWANCE_USED: JobProblem = {
+  message: `You've used all your articles for this month. ${NOT_PUBLISHED}`,
+  next: "Upgrade your plan or wait until next month.",
+  action: PLANS,
+};
+
+// Known stop reasons, recorded as short codes, mapped to plain explanations.
+const JOB_PROBLEMS: Record<string, JobProblem> = {
+  owner_rejected_draft: {
+    message: "You declined this draft, so it will not be published.",
+    next: "You can request a new draft whenever you like.",
+    action: ARTICLES,
+  },
+  owner_edited_draft: {
+    message: "You edited this draft, so Pentra reviewed your new version instead.",
+    next: "Your edited version is in Articles.",
+    action: ARTICLES,
+  },
+  owner_review_needed: {
+    message: "This draft is waiting for your review.",
+    next: "Open the article to approve or edit it.",
+  },
+  bounded_content_quality_exhausted: QUALITY,
+  content_quality_exhausted: QUALITY,
+  content_review_rejected: QUALITY,
+  content_recovery_attempts_exhausted: {
+    message: `Pentra tried several times but could not finish this article. ${NOT_PUBLISHED}`,
+    next: "You can request a new draft. If this keeps happening,",
+    action: { ...CONTACT, label: "contact support." },
+  },
+  job_retry_exhausted: {
+    message: `Pentra tried several times but could not finish this run. ${NOT_PUBLISHED}`,
+    next: "If this keeps happening,",
+    action: { ...CONTACT, label: "contact support." },
+  },
+  job_lease_exhausted: {
+    message: `Pentra tried several times but could not finish this run. ${NOT_PUBLISHED}`,
+    next: "If this keeps happening,",
+    action: { ...CONTACT, label: "contact support." },
+  },
+  content_model_response_invalid: {
+    message: `The writing service sent back an incomplete article. ${NOT_PUBLISHED}`,
+    next: "You can request a new draft.",
+    action: ARTICLES,
+  },
+  content_provider_credit_unavailable: SERVICE_UNAVAILABLE,
+  provider_credit_unavailable: SERVICE_UNAVAILABLE,
+  provider_balance_insufficient: SERVICE_UNAVAILABLE,
+  provider_balance_unavailable: SERVICE_UNAVAILABLE,
+  article_provider_funding_unavailable: SERVICE_UNAVAILABLE,
+  content_provider_result_ambiguous_reconciliation_required: {
+    message: `Pentra could not confirm how this run ended, so it stopped to be safe. ${NOT_PUBLISHED}`,
+    next: "If this keeps happening,",
+    action: { ...CONTACT, label: "contact support." },
+  },
+  content_publication_failed_reconciliation_required: {
+    message: "Pentra could not confirm whether this article reached your website.",
+    next: "Check your website before publishing it again. If it is missing,",
+    action: { ...CONTACT, label: "contact support." },
+  },
+  public_url_failed: {
+    message: "Pentra could not confirm that this article is live on your website.",
+    next: "Check your publishing connection.",
+    action: SETTINGS,
+  },
+  improvement_live_artifact_not_verified: {
+    message: "Pentra could not confirm the live page, so it did not change it.",
+    next: "Check that the page is live on your website.",
+  },
+  candidate_rejected_before_draft: {
+    message: `Pentra decided this topic was not a good fit and did not write it. ${NOT_PUBLISHED}`,
+    next: "No action needed.",
+  },
+  article_quota_reached: ALLOWANCE_USED,
+  article_quota_no_headroom: ALLOWANCE_USED,
+  article_provider_monthly_attempt_limit: ALLOWANCE_USED,
+};
+
+/** Plain explanation and next step for a job that stopped or is retrying.
+ * Raw error text and codes are never shown to the owner. */
+function explainJobProblem(job: Doc<"jobs">): JobProblem | null {
+  if (job.status === "done") return null;
+  const raw = (job.contentWork?.failure ?? job.error ?? "").trim();
+  if (!raw) return null;
+  const stopped = job.status === "failed";
+  const known = JOB_PROBLEMS[raw];
+  if (known) return known;
+
   const lower = raw.toLowerCase();
-  if (lower.includes("unauthorized") || lower.includes("bad credentials"))
-    return "Publishing credentials are invalid or expired. Reconnect in Settings.";
-  if (lower.includes("not found") && lower.includes("branch"))
-    return "Repository branch not found. Check your repo settings.";
-  if (lower.includes("rate limit"))
-    return "API rate limit reached. Will retry automatically.";
-  if (lower.includes("article limit"))
-    return "Monthly article limit reached. Upgrade your plan for more.";
-  if (lower.includes("site not found"))
-    return "Website was removed. This job is no longer needed.";
-  if (lower.includes("topic not found"))
-    return "Topic was deleted before the article could be generated.";
-  if (lower.includes("timeout") || lower.includes("timed out"))
-    return "Operation timed out. Will retry automatically.";
-  if (lower.includes("network") || lower.includes("fetch failed") || lower.includes("econnrefused"))
-    return "Network error. Will retry automatically.";
-  if (lower.includes("permanently killed") || lower.includes("cleaned up"))
-    return "Job was cancelled.";
-  if (lower.includes("reset from stuck"))
-    return "Job stalled and was automatically restarted.";
-  if (lower.includes("retrying after failure"))
-    return "Retrying after a previous failure.";
-  if (lower.includes("remove excess sites"))
-    return "Site limit exceeded. Remove extra sites or upgrade your plan.";
-  const cleaned = raw.replace(/^(Uncaught )?Error: /i, "").replace(/at \w+/g, "").trim();
-  if (cleaned.length > 120) return "An unexpected error occurred. Our team has been notified.";
-  return cleaned;
+  const retrying: JobProblem = {
+    message: "Pentra hit a temporary problem and is trying again.",
+    next: "No action needed.",
+  };
+  if (/content recovery \d+\/\d+ scheduled|retrying after failure/.test(lower)) {
+    return stopped ? STOPPED : retrying;
+  }
+  if (lower.includes("unauthorized") || lower.includes("bad credentials")) {
+    return {
+      message: "Pentra could not sign in to your website to publish.",
+      next: "Reconnect publishing in Settings.",
+      action: SETTINGS,
+    };
+  }
+  if (lower.includes("not found") && lower.includes("branch")) {
+    return {
+      message: "Pentra could not find the place in your repository it publishes to.",
+      next: "Check your publishing settings.",
+      action: SETTINGS,
+    };
+  }
+  if (lower.includes("article limit") || lower.includes("articles in your plan this month")) {
+    return ALLOWANCE_USED;
+  }
+  if (lower.includes("remove excess sites")) {
+    return {
+      message: "Your account has more websites than your plan allows.",
+      next: "Remove a website or upgrade your plan.",
+      action: PLANS,
+    };
+  }
+  if (lower.includes("site not found")) {
+    return { message: "This website was removed, so this run was no longer needed.", next: "No action needed." };
+  }
+  if (lower.includes("topic not found")) {
+    return {
+      message: `The topic was removed before the article was written. ${NOT_PUBLISHED}`,
+      next: "No action needed.",
+    };
+  }
+  if (lower.includes("permanently killed") || lower.includes("cleaned up")) {
+    return { message: `This run was cancelled. ${NOT_PUBLISHED}`, next: "No action needed." };
+  }
+  if (lower.includes("reset from stuck")) {
+    return stopped ? STOPPED : { message: "This run stalled, so Pentra restarted it.", next: "No action needed." };
+  }
+  if (/rate limit|timeout|timed out|network|fetch failed|econnrefused/.test(lower)) {
+    return stopped
+      ? {
+          message: `A temporary problem interrupted this run. ${NOT_PUBLISHED}`,
+          next: "If this keeps happening,",
+          action: { ...CONTACT, label: "contact support." },
+        }
+      : retrying;
+  }
+  return stopped ? STOPPED : retrying;
+}
+
+function jobArticleId(job: Doc<"jobs">): string | undefined {
+  if (job.articleId) return job.articleId;
+  const fromPayload = (job.payload as { articleId?: unknown } | undefined)?.articleId;
+  return typeof fromPayload === "string" && fromPayload ? fromPayload : undefined;
 }
 
 function JobIcon({ type, className }: { type: string; className?: string }) {
@@ -288,24 +457,26 @@ function JobIcon({ type, className }: { type: string; className?: string }) {
   }
 }
 
-function jobLabel(type: string): string {
-  switch (type) {
+function jobLabel(job: Doc<"jobs">): string {
+  switch (job.type) {
     case "onboarding":
-      return "Site crawl";
+      return "Reading your website";
     case "plan":
-      return "Topic generation";
+      return "Choosing article topics";
     case "article":
-      return "Article generation";
+      if (job.contentWork?.ownerRequest?.sourceArticleId) return "Reviewing your edits";
+      if (job.contentWork?.intent === "improve") return "Improving a page";
+      return "Writing an article";
     case "links":
-      return "Internal linking";
+      return "Adding internal links";
     case "scheduler":
-      return "Scheduler";
+      return "Planning the schedule";
     case "publish":
       return "Publishing";
     case "factcheck":
       return "Fact check";
     default:
-      return type;
+      return "Background task";
   }
 }
 

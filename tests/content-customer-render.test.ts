@@ -39,6 +39,7 @@ function render(component: string, queryState: unknown = state, outcome: unknown
         if (fn === "contentWork:readiness") return queryState;
         if (fn === "searchPerformance:contentOutcome") return outcome;
         if (fn === "selectedPages:list") return { complete: true, pages: [] };
+        if (fn === "siteHealth:latest") return null;
         assert.fail(`Unexpected query ${fn}`);
       } };
       return actual(name);
@@ -61,6 +62,18 @@ test("Owner-reviewed setup has no automatic consent or artificial overdue deadli
   const changed = render("content-work-service", { ...ready, bindingCurrent: false }).html;
   assert.match(changed, /Drafts still require your explicit publication approval/);
   assert.doesNotMatch(changed, /authorize automatic publication|Confirm changed setup and prepare fresh work/);
+});
+
+test("new customers see one clear Autopilot or Review-first choice, not delivery windows", () => {
+  const setup = render("content-work-service", { ...state, setupPending: true, serviceMode: "legacy_articles", schedule: null,
+    autopilot: { selectable: true, on: false }, plan: { tier: "starter", articlesPerMonth: 10, autopilotIntervalMs: 259_200_000 } }).html;
+  assert.match(setup, /Turn on Pentra/); assert.match(setup, /Autopilot \(recommended\)/); assert.match(setup, /Review first/);
+  assert.match(setup, /10 new articles a month/); assert.match(setup, /about one every 3 days/);
+  assert.doesNotMatch(setup, /First deadline|Hours between deadlines|buffer|fixed window/i);
+  const running = render("content-work-overview", { ...state, autopilot: { selectable: true, on: true },
+    plan: { tier: "starter", articlesPerMonth: 10, autopilotIntervalMs: 259_200_000 },
+    schedule: { ...state.schedule, paused: false, autopilotSelected: true } }).html;
+  assert.match(running, /Autopilot is on/); assert.match(running, /Switch to review first/); assert.match(running, /Site health/);
 });
 
 function renderSidebar(queryState: unknown, siteOverrides: Record<string, unknown> = {}) {
@@ -126,7 +139,7 @@ test("SLC29 synthetic overview separates upcoming, verified, organic and issues 
   const { html, calls } = render("content-work-overview");
   for (const heading of ["Upcoming work", "Verified changes", "Organic clicks", "Needs attention"]) assert.match(html, new RegExp(heading));
   assert.match(html, /Overdue/); assert.match(html, /Loading measurements/); assert.doesNotMatch(html, /0 clicks/);
-  assert.deepEqual(calls, ["contentWork:readiness"]);
+  assert.deepEqual(calls, ["contentWork:readiness", "siteHealth:latest"]);
   assert.match(html, /Refresh measurements/);
 });
 

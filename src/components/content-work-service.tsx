@@ -10,6 +10,7 @@ import { fundingCopy, money, workLabel, stageLabel, shownTime } from "./content-
 import { ExactPageControls } from "./content-work-corrections";
 import { PUBLISHER_AUTOPUBLISH_CONSENT_TEXT } from "../../convex/lib/publisherProvisioning";
 import { contentServiceStatus } from "../lib/content-service-status";
+import { AutopilotSwitch, PentraSetupChoice } from "./pentra-setup-choice";
 
 export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
   const state = useQuery(api.contentWork.readiness, { siteId });
@@ -55,25 +56,9 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     } catch { setError("The saved setup changed again. Review its current facts and exact destination before confirming. No deadline or spending history was reset."); }
     finally { setSaving(false); }
   };
-  return <section className="rounded-xl border border-white/10 p-5 space-y-4" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
-    <h2 id="content-service-heading" className="font-semibold">Content delivery service</h2>
-    <p>Website: <Link className="underline" href={`/sites/${state.siteId}?tab=settings`}>{state.destination.domain}</Link></p>
-    <p>Current contract: {state.setupPending ? "Not selected — setup is stopped" : state.schedule?.ownerReviewedOnly ? "Owner-reviewed GitHub drafts" : state.serviceMode === "growth_first" ? "Growth-first content work" : "Existing fixed-article delivery"}.</p>
-    {state.schedule?.ownerReviewedOnly && <p>Request a draft in <Link className="underline" href="/articles">Articles</Link>, review it, then explicitly publish. No automatic schedule or publication is enabled.</p>}
-    {state.serviceMode === "growth_first" && !state.schedule?.ownerReviewedOnly && <div className="space-y-2 text-sm" aria-label="Preparation and next action">
-      <p>Preparation: {state.complete ? `${state.ready}/2 ready` : "Inventory incomplete"}.</p>
-      <p>Schedule: {delivery.label}.</p>
-      <p>Next fixed deadline: {state.schedule ? shownTime(state.schedule.nextDeadlineAt, state.schedule.timezone) : "Not selected"}. {state.schedule && state.schedule.nextDeadlineAt < state.funding.checkedAt && <span role="alert">Overdue; the original deadline remains.</span>}</p>
-      {state.work.filter(w => w.failure && !w.retiredAt).map(w => <p key={w.jobId} role="alert">{w.failure}</p>)}
-      <div className="flex flex-wrap gap-2">{delivery.canPause && <Button disabled={saving} onClick={() => operate("pause")}>Pause new work</Button>}
-        {!state.bindingCurrent ? <a className="underline self-center" href="#changed-content-setup">Review changed setup</a> : delivery.canResume && <Button disabled={saving} onClick={() => operate("resume")}>Resume preparation and schedule</Button>}
-        {delivery.canRetry && <Button disabled={saving} onClick={() => operate("retry")}>{interruptedRetry ? "Retry interrupted preparation" : "Recheck existing work"}</Button>}</div>
-      <p>Pause retains ready work and spending history. A write already started must be checked before anything replaces it.</p>
-    </div>}
-    {state.funding.status !== "available" && !delivery.systemFailure && <p role="alert" className="text-sm">{fundingCopy[state.funding.status]} Available internal headroom: {money(state.funding.accountAvailableMicroUsd)}. {state.funding.independentAllowance && "Ordinary capacity cannot extend this separate validation allowance. "}This is not provider credit. <a href="#content-funding-details" className="underline">Review funding details</a>.</p>}
-    {!state.entitlement && <p role="alert">Verify your existing plan in <Link href="/settings/billing" className="underline">Billing</Link>.</p>}
-    {!state.destination.verified && <p role="alert">Verify the exact publisher in <Link href={`/sites/${siteId}?tab=settings`} className="underline">website settings</Link>.</p>}
-    {!ownerSetup && !state.schedule?.ownerReviewedOnly && <p className="text-sm">Two reviewed, distinct items prepare ahead of fixed five-minute delivery windows and replenish after delivery. Pricing, checkout, legal text and unselected pages stay protected. Publication is not evidence of SEO growth.</p>}
+  if (state.setupPending && state.autopilot?.selectable && state.plan) return <PentraSetupChoice state={state} />;
+  const newFlow = state.serviceMode === "growth_first" && Boolean(state.autopilot?.selectable) && Boolean(state.plan) && Boolean(state.schedule?.ownerReviewedOnly || state.schedule?.autopilotSelected);
+  const setupDetails = <>
     <details id="changed-content-setup" open={!state.bindingCurrent || state.serviceMode !== "growth_first"} key={state.reviewToken} className="space-y-2 text-sm">
       <summary className="cursor-pointer font-medium">{state.bindingCurrent ? "Saved business and exact destination" : "Review changed setup"}</summary>
       <h3 className="font-medium">Review your saved setup</h3>
@@ -92,6 +77,50 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
       </>}
       {state.approvalRequired && !state.schedule?.ownerReviewedOnly && <p role="alert">Automatic publication consent is not active. Review the saved publishing setup before activation.</p>}
     </details>
+  </>;
+  // Sites set up through the Autopilot / Review-first choice get a plain summary.
+  if (newFlow) {
+    const needsReview = state.work.filter(w => !w.retiredAt && (w.stage === "failed" || w.stage === "review_failed"));
+    return <section className="rounded-xl border border-white/10 p-5 space-y-4" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
+      <AutopilotSwitch siteId={siteId} reviewToken={state.reviewToken} on={Boolean(state.autopilot?.on)} intervalMs={state.plan?.autopilotIntervalMs ?? 86_400_000} />
+      <h2 id="content-service-heading" className="font-semibold">Your Pentra service</h2>
+      <p className="text-sm">Website: <Link className="underline" href={`/sites/${state.siteId}?tab=settings`}>{state.destination.domain}</Link> · {state.destination.kind === "wordpress" ? "WordPress" : "GitHub"} · {state.destination.verified ? "connected" : "not connected yet"}</p>
+      <p className="text-sm">Status: {delivery.label}. {state.plan && `Your plan includes ${state.plan.articlesPerMonth} new article${state.plan.articlesPerMonth === 1 ? "" : "s"} a month.`}</p>
+      {!state.entitlement && <p role="alert" className="text-sm">Your plan isn&apos;t active. <Link href="/upgrade" className="underline">Plans &amp; billing</Link></p>}
+      {!state.destination.verified && <p role="alert" className="text-sm">Connect and verify your website in <Link href={`/sites/${siteId}?tab=settings`} className="underline">website settings</Link>.</p>}
+      {needsReview.length > 0 && <p role="alert" className="text-sm">{needsReview.length === 1 ? "A draft needs" : `${needsReview.length} drafts need`} your review in <Link href="/articles" className="underline">Articles</Link>. Nothing was published.</p>}
+      {state.funding.status !== "available" && <p className="text-sm">{state.funding.status === "blocked"
+        ? <>Pentra has used this month&apos;s writing capacity for your plan. New articles resume next month, or <Link href="/upgrade" className="underline">upgrade</Link> for more.</>
+        : "Pentra can't start new articles right now. Your published articles are not affected."}</p>}
+      {(delivery.canPause || delivery.canResume) && <div className="flex flex-wrap gap-2">
+        {delivery.canPause && <Button size="sm" variant="secondary" disabled={saving} onClick={() => operate("pause")}>Pause Pentra</Button>}
+        {delivery.canResume && <Button size="sm" disabled={saving} onClick={() => operate("resume")}>Resume Pentra</Button>}
+      </div>}
+      {setupDetails}
+      {error && <p role="alert">{error}</p>}
+    </section>;
+  }
+  return <section className="rounded-xl border border-white/10 p-5 space-y-4" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
+    {newFlow && <AutopilotSwitch siteId={siteId} reviewToken={state.reviewToken} on={Boolean(state.autopilot?.on)} intervalMs={state.plan?.autopilotIntervalMs ?? 86_400_000} />}
+    <h2 id="content-service-heading" className="font-semibold">Content delivery service</h2>
+    <p>Website: <Link className="underline" href={`/sites/${state.siteId}?tab=settings`}>{state.destination.domain}</Link></p>
+    <p>Current contract: {state.setupPending ? "Not selected — setup is stopped" : state.schedule?.ownerReviewedOnly ? "Owner-reviewed GitHub drafts" : state.serviceMode === "growth_first" ? "Growth-first content work" : "Existing fixed-article delivery"}.</p>
+    {state.schedule?.ownerReviewedOnly && <p>Request a draft in <Link className="underline" href="/articles">Articles</Link>, review it, then explicitly publish. No automatic schedule or publication is enabled.</p>}
+    {state.serviceMode === "growth_first" && !state.schedule?.ownerReviewedOnly && <div className="space-y-2 text-sm" aria-label="Preparation and next action">
+      <p>Preparation: {state.complete ? `${state.ready}/2 ready` : "Inventory incomplete"}.</p>
+      <p>Schedule: {delivery.label}.</p>
+      <p>Next fixed deadline: {state.schedule ? shownTime(state.schedule.nextDeadlineAt, state.schedule.timezone) : "Not selected"}. {state.schedule && state.schedule.nextDeadlineAt < state.funding.checkedAt && <span role="alert">Overdue; the original deadline remains.</span>}</p>
+      {state.work.filter(w => w.failure && !w.retiredAt).map(w => <p key={w.jobId} role="alert">{w.failure}</p>)}
+      <div className="flex flex-wrap gap-2">{delivery.canPause && <Button disabled={saving} onClick={() => operate("pause")}>Pause new work</Button>}
+        {!state.bindingCurrent ? <a className="underline self-center" href="#changed-content-setup">Review changed setup</a> : delivery.canResume && <Button disabled={saving} onClick={() => operate("resume")}>Resume preparation and schedule</Button>}
+        {delivery.canRetry && <Button disabled={saving} onClick={() => operate("retry")}>{interruptedRetry ? "Retry interrupted preparation" : "Recheck existing work"}</Button>}</div>
+      <p>Pause retains ready work and spending history. A write already started must be checked before anything replaces it.</p>
+    </div>}
+    {state.funding.status !== "available" && !delivery.systemFailure && <p role="alert" className="text-sm">{fundingCopy[state.funding.status]} Available internal headroom: {money(state.funding.accountAvailableMicroUsd)}. {state.funding.independentAllowance && "Ordinary capacity cannot extend this separate validation allowance. "}This is not provider credit. <a href="#content-funding-details" className="underline">Review funding details</a>.</p>}
+    {!state.entitlement && <p role="alert">Verify your existing plan in <Link href="/settings/billing" className="underline">Billing</Link>.</p>}
+    {!state.destination.verified && <p role="alert">Verify the exact publisher in <Link href={`/sites/${siteId}?tab=settings`} className="underline">website settings</Link>.</p>}
+    {!ownerSetup && !state.schedule?.ownerReviewedOnly && <p className="text-sm">Two reviewed, distinct items prepare ahead of fixed five-minute delivery windows and replenish after delivery. Pricing, checkout, legal text and unselected pages stay protected. Publication is not evidence of SEO growth.</p>}
+    {setupDetails}
     <details id="content-funding-details" className="space-y-2 text-sm"><summary className="cursor-pointer font-medium">Funding readiness and retained spending</summary><p>{fundingCopy[state.funding.status]}</p>
       {state.funding.pricingScope === "validation_run" && <p>Model execution is enabled only for this saved validation run, not other sites. Each work item retains its original pricing and spending ceiling.</p>}
       {state.funding.pricingScope === "unavailable" && <p>Model pricing is not enabled for this site&apos;s current scope. Already prepared delivery and verification do not require new model calls.</p>}

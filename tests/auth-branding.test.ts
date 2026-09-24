@@ -56,7 +56,7 @@ test("the branded auth pages exist and carry Pentra context", () => {
     "utf8",
   );
   assert.match(shell, /Pentra/);
-  assert.match(shell, /SEO articles you approve/);
+  assert.match(shell, /Autopilot SEO/);
   assert.match(shell, /How Pentra works/);
   assert.match(shell, /AuthFormLoading/);
   assert.match(shell, /\/legal\/terms/);

@@ -162,4 +162,7 @@ crons.daily(
   {},
 );
 
+// Weekly on-page health check for sites on the content service.
+crons.weekly("site-health", { dayOfWeek: "monday", hourUTC: 7, minuteUTC: 30 }, internal.siteHealth.scheduleWeekly, {});
+
 export default crons;

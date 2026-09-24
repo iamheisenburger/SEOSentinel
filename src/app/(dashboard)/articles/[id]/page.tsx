@@ -47,6 +47,29 @@ import Link from "next/link";
 const REVIEWED_AMBIGUITY_CONFIRMATION =
   "ABANDON UNVERIFIED DELIVERY AND RETAIN AUDIT";
 
+// Reviewer notes can carry instructions and bookkeeping meant for Pentra's own
+// review steps. Hide those sentences from the owner at display time only; the
+// stored notes are unchanged.
+const INTERNAL_REVIEW_NOTE =
+  /exact[- ]artifact|review override|returned unchanged|input (?:article|markdown)|artifact ?hash|\bartifacts?\b|deterministic|bounded remediation|confidenceScore|materialDefects/i;
+
+function customerReviewNotes(notes: string | undefined): string {
+  if (!notes) return "";
+  if (/^\s*(?:final|post-editorial) fact check failed:/i.test(notes)) {
+    return "The final fact check did not finish for this draft.";
+  }
+  return notes
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => sentence.trim() && !INTERNAL_REVIEW_NOTE.test(sentence))
+    .join(" ")
+    .trim();
+}
+
+// Slugs may be stored with or without a leading slash; show exactly one.
+function displayPath(slug: string): string {
+  return `/${slug.replace(/^\/+/, "")}`;
+}
+
 function simpleMarkdownToHtml(md: string): string {
   let html = md;
   html = html.replace(/^######\s+(.+)$/gm, "<h6>$1</h6>");
@@ -411,6 +434,24 @@ export default function ArticleDetailPage() {
   const faqCount = faqSchema ? (faqSchema.mainEntity as unknown[] | undefined)?.length ?? 0 : 0;
   const hasHowTo = schemas.some((s) => s["@type"] === "HowTo");
 
+  // A draft that failed the strict publication check is never approved with
+  // the plain Approve button on owner-reviewed sites: fixes are needed first,
+  // and when only notes the owner may accept remain, "Accept notes and approve
+  // for publishing" (which re-runs the check) is the only approve action.
+  // Legacy sites keep their existing approve-then-quality-review flow.
+  const gateIssues = article.publicationGateStatus === "passed" ? [] : article.publicationGateIssues ?? [];
+  const blockingGateIssues = gateIssues.filter((issue) => !ownerWaivableIssue(issue, article, "owner"));
+  const plainApproveAllowed = gateIssues.length === 0 || (site != null && site.serviceMode !== "growth_first");
+  const reviewerNotesShown = gateIssues.length > 0 && article.status !== "published" &&
+    contentReadiness?.ownerDraft.latest?.articleId === articleId && contentReadiness.ownerDraft.latest.stage === "failed";
+  const approveHint = plainApproveAllowed ? null
+    : blockingGateIssues.length > 0
+      ? `This draft needs fixes before it can be approved.${reviewerNotesShown ? " See the reviewer notes below." : ""}`
+      : reviewerNotesShown
+        ? "Read the reviewer notes below. You can accept them to approve this draft."
+        : "This draft has not passed review yet, so it cannot be approved.";
+  const reviewNotes = customerReviewNotes(article.factCheckNotes);
+
   const handleApprove = async () => {
     setActionBusy(true);
     try {
@@ -573,15 +614,17 @@ export default function ArticleDetailPage() {
             <div className="flex flex-wrap gap-2">
               {(article.status === "draft" || article.status === "review") && (
                 <>
-                  <Button
-                    size="sm"
-                    onClick={handleApprove}
-                    loading={actionBusy}
-                    disabled={Boolean(editing)}
-                    icon={<CheckCircle2 className="h-3.5 w-3.5" />}
-                  >
-                    Approve
-                  </Button>
+                  {plainApproveAllowed && (
+                    <Button
+                      size="sm"
+                      onClick={handleApprove}
+                      loading={actionBusy}
+                      disabled={Boolean(editing)}
+                      icon={<CheckCircle2 className="h-3.5 w-3.5" />}
+                    >
+                      Approve
+                    </Button>
+                  )}
                   <Button
                     variant="danger"
                     size="sm"
@@ -592,6 +635,9 @@ export default function ArticleDetailPage() {
                   >
                     Reject
                   </Button>
+                  {approveHint && (
+                    <p className="basis-full text-xs text-[#8B8FA3]">{approveHint}</p>
+                  )}
                 </>
               )}
               {article.status === "ready" && site?.publishMethod !== "manual" && (
@@ -809,7 +855,14 @@ export default function ArticleDetailPage() {
 
       {/* Meta bar */}
       <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge status={article.status} />
+        {article.status === "revision" ? (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#0EA5E9]/[0.08] px-2 py-0.5 text-[11px] font-medium text-[#38BDF8]">
+            <span className="h-1.5 w-1.5 rounded-full bg-[#0EA5E9]" />
+            Being revised
+          </span>
+        ) : (
+          <StatusBadge status={article.status} />
+        )}
         <span className="inline-flex items-center gap-1 text-[11px] text-[#565A6E]">
           <FileText className="h-3 w-3" />
           {wc.toLocaleString()} words
@@ -825,7 +878,7 @@ export default function ArticleDetailPage() {
         </span>
         <span className="text-[11px] text-white/[0.1]">·</span>
         <span className="text-[11px] text-[#565A6E] font-mono">
-          /{article.slug}
+          {displayPath(article.slug)}
         </span>
         {article.featuredImage && (
           <>
@@ -846,7 +899,7 @@ export default function ArticleDetailPage() {
                   ? "text-[#F59E0B]"
                   : "text-[#EF4444]"
             }`}>
-              {article.factCheckScore}% fact-check
+              Fact-check score {article.factCheckScore}/100
             </span>
           </>
         )}
@@ -1082,27 +1135,16 @@ export default function ArticleDetailPage() {
       )}
 
       {/* Fact-check notes */}
-      {article.factCheckNotes && (
+      {reviewNotes && (
         <div className="rounded-lg border border-white/[0.06] bg-[#0F1117] px-4 py-3">
           <div className="flex items-center gap-2 mb-1.5">
             <ShieldCheck className="h-3.5 w-3.5 text-[#0EA5E9]" />
             <span className="text-[11px] font-semibold uppercase tracking-wider text-[#565A6E]">
               Fact-Check Notes
             </span>
-            {article.factCheckScore != null && (
-              <span className={`ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                article.factCheckScore >= 90
-                  ? "bg-[#22C55E]/[0.08] text-[#22C55E]"
-                  : article.factCheckScore >= 70
-                    ? "bg-[#F59E0B]/[0.08] text-[#F59E0B]"
-                    : "bg-[#EF4444]/[0.08] text-[#EF4444]"
-              }`}>
-                {article.factCheckScore}% confidence
-              </span>
-            )}
           </div>
           <p className="text-[13px] text-[#8B8FA3] leading-relaxed">
-            {article.factCheckNotes}
+            {reviewNotes}
           </p>
         </div>
       )}
@@ -1115,15 +1157,15 @@ export default function ArticleDetailPage() {
           <p className="text-sm text-[#8B8FA3]">Edits create a new version for review; the original stays in your history. Review may correct unsupported claims. Nothing publishes without your approval.</p>
           {contentReadiness.ownerDraft.latest.stage === "failed" && (article.publicationGateIssues?.length ?? 0) > 0 && (() => {
             const issues = article.publicationGateIssues!;
-            const mustFix = issues.filter(issue => !ownerWaivableIssue(issue, article));
-            const styleNotes = issues.filter(issue => ownerWaivableIssue(issue, article));
+            const mustFix = issues.filter(issue => !ownerWaivableIssue(issue, article, "owner"));
+            const styleNotes = issues.filter(issue => ownerWaivableIssue(issue, article, "owner"));
             return <div role="note" aria-label="Reviewer notes" className="rounded-lg border border-[#F59E0B]/20 bg-[#F59E0B]/[0.05] p-3 space-y-2">
               {mustFix.length > 0 && <>
                 <p className="text-sm font-medium text-[#F59E0B]">Fix these before requesting review</p>
                 <ul className="list-disc space-y-1 pl-5 text-sm text-[#EDEEF1]">{mustFix.slice(0, 12).map((issue, index) => <li key={index}>{issue}</li>)}</ul>
               </>}
               {styleNotes.length > 0 && <>
-                <p className="text-sm font-medium text-[#F59E0B]">{mustFix.length ? "Style notes" : "The fact check passed. Remaining reviewer notes are about style:"}</p>
+                <p className="text-sm font-medium text-[#F59E0B]">{mustFix.length ? "Notes you can accept" : "No specific errors are listed. You can accept these reviewer notes after reading the draft:"}</p>
                 <ul className="list-disc space-y-1 pl-5 text-sm text-[#EDEEF1]">{styleNotes.map((issue, index) => <li key={index}>{issue}</li>)}</ul>
               </>}
               {mustFix.length === 0 && styleNotes.length > 0 && !editing && <div className="space-y-1">
@@ -1151,7 +1193,8 @@ export default function ArticleDetailPage() {
             <textarea id="draft-markdown" value={editing.markdown} disabled={editBusy} maxLength={100000}
               onChange={event => { setEditing({ ...editing, markdown: event.target.value, requestKey: crypto.randomUUID() }); setEditError(null); }}
               className="min-h-96 w-full rounded-lg border border-white/10 bg-[#08090E] p-4 font-mono text-sm text-[#EDEEF1]" />
-            <p className="text-sm text-[#8B8FA3]">Review costs up to {contentReadiness.ownerDraft.maximumMicroUsd === null ? "an unavailable amount" : `$${(contentReadiness.ownerDraft.maximumMicroUsd / 1_000_000).toFixed(2)}`} including bounded corrections. The original URL is retained in history; this version receives a distinct unpublished URL.</p>
+            <p className="text-sm text-[#8B8FA3]">{contentReadiness.ownerDraft.maximumMicroUsd === null ? "Review is not available right now. Try again later. "
+              : contentReadiness.ownerDraft.allowance ? "Reviewing your edits is free and does not use an article from your monthly allowance. " : ""}Your edited version is saved as a new draft with its own web address; the original stays in your history.</p>
             <div className="flex gap-2">
               <Button disabled={editBusy || !editing.markdown.trim() || !editing.title.trim() || !editing.metaTitle.trim() || editing.metaDescription.trim().length < 100 ||
                 (editing.markdown === article.markdown && editing.title === article.title && editing.metaTitle === (article.metaTitle ?? article.title) && editing.metaDescription === (article.metaDescription ?? '')) || contentReadiness.ownerDraft.maximumMicroUsd === null}

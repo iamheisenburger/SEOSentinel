@@ -25,7 +25,7 @@ const bundle = build({ stdin: { contents: `
         const client={query:async(ref,args)=>{const f=window.contentFixture; const n=getFunctionName(ref);if(n!=='searchPerformance:contentOutcome')throw Error('Unexpected one-shot query '+n);f.measurementReads=(f.measurementReads??0)+1;return f.outcome??{status:'incomplete',current:null}}};
         export const useConvex=()=>client;
         export const useQuery=(ref,args)=>{const n=getFunctionName(ref); const f=window.contentFixture;
-          if(n==='contentWork:readiness')return f.state; if(n==='selectedPages:list')return {complete:true,pages:[]};
+          if(n==='contentWork:readiness')return f.state; if(n==='selectedPages:list')return {complete:true,pages:[]};if(n==='siteHealth:latest')return null;
           if(n==='searchPerformance:contentOutcome')return {status:'incomplete',current:null}; throw Error('Unexpected query '+n)};
         export const useMutation=ref=>async args=>{const f=window.contentFixture;f.calls.push({name:getFunctionName(ref),args});const r=f.response??{status:'preparing',issues:[]};if(getFunctionName(ref)==='contentWork:selectServiceMode'&&r.changed)f.state={...f.state,serviceMode:args.mode};return r};
         export const useAction=useMutation;`, resolveDir: process.cwd() };
@@ -185,11 +185,11 @@ for (const screen of ["overview", "controls", "start", "changed", "independent",
       { name: "contentWork:reconfirm", args: { siteId: state.siteId, reviewToken: "synthetic-new-binding", confirm: true } },
     ]);
   } else if (screen === "start") {
-    await expect(page.getByRole("heading", { name: "Start your content service" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Verify existing plan and save profile" })).toBeDisabled();
+    await expect(page.getByRole("heading", { name: "Set up Pentra for your website" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save and continue" })).toBeDisabled();
     await expect(page.getByLabel("Content publishing destination")).toHaveValue("github");
-    await expect(page.getByRole("option", { name: /WordPress/ })).toHaveAttribute("disabled", "");
-    await expect(page.getByText(/No automatic schedule or outreach setup is required/)).toBeVisible();
+    await expect(page.getByRole("option", { name: /WordPress/ })).not.toHaveAttribute("disabled");
+    await expect(page.getByText(/choose Autopilot or Review first/).first()).toBeVisible();
   }
   await expect(page.locator("body")).not.toContainText("synthetic-reviewed-binding");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

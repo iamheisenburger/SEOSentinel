@@ -6,11 +6,11 @@ import { CheckCircle2 } from "lucide-react";
 import { useAuth } from "@clerk/nextjs";
 
 const allFeatures = [
+  "Autopilot or review-first publishing",
   "Live web research with sources",
   "Independent fact-check review",
-  "Edit and approve every article",
-  "GitHub publishing with commit receipts",
-  "Live-page verification",
+  "Improves pages near page one",
+  "WordPress and GitHub publishing",
   "Search Console reporting",
 ];
 
@@ -21,7 +21,7 @@ const tiers = [
     name: "Free",
     monthlyPrice: 0,
     annualPrice: 0,
-    desc: "See the quality on your own site.",
+    desc: "See the quality on your own site, free.",
     sites: "1 site",
     articles: "1 article / month",
     cta: "Start free",
@@ -32,7 +32,7 @@ const tiers = [
     name: "Starter",
     monthlyPrice: 49,
     annualPrice: 39,
-    desc: "A steady publishing rhythm for one site.",
+    desc: "Autopilot for one site: an article about every 3 days.",
     sites: "1 site",
     articles: "10 articles / month",
     cta: "Choose Starter",
@@ -43,7 +43,7 @@ const tiers = [
     name: "Pro",
     monthlyPrice: 99,
     annualPrice: 79,
-    desc: "Grow several sites or publish more often.",
+    desc: "Grow up to 3 sites, almost an article a day.",
     sites: "3 sites",
     articles: "25 articles / month",
     cta: "Choose Pro",
@@ -54,7 +54,7 @@ const tiers = [
     name: "Scale",
     monthlyPrice: 199,
     annualPrice: 159,
-    desc: "For agencies and content teams.",
+    desc: "For agencies and content teams running many sites.",
     sites: "10 sites",
     articles: "60 articles / month",
     cta: "Choose Scale",
@@ -210,9 +210,9 @@ export function PricingSection() {
         {/* Bottom note */}
         <div className="mt-12 text-center">
           <p className="text-[14px] text-[#8B8FA3]">
-            Every plan includes research, fact-checking, your approval on every
-            article, GitHub publishing and live-page verification. No usage
-            charges. Cancel anytime.
+            Every plan includes Autopilot or review-first publishing, research,
+            fact-checking, page improvements and Search Console reporting. No
+            usage charges. Cancel anytime.
           </p>
           <p className="mt-2 text-[13px] text-[#565A6E]">
             Need a custom plan?{" "}

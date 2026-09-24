@@ -153,6 +153,7 @@ import type * as lib_searchPerformance from "../lib/searchPerformance.js";
 import type * as lib_seoGrowth from "../lib/seoGrowth.js";
 import type * as lib_serpAttainability from "../lib/serpAttainability.js";
 import type * as lib_siteDomainBinding from "../lib/siteDomainBinding.js";
+import type * as lib_siteHealth from "../lib/siteHealth.js";
 import type * as lib_siteJobActivity from "../lib/siteJobActivity.js";
 import type * as lib_siteSecurity from "../lib/siteSecurity.js";
 import type * as lib_smartlead from "../lib/smartlead.js";
@@ -181,6 +182,7 @@ import type * as searchPerformance from "../searchPerformance.js";
 import type * as selectedPages from "../selectedPages.js";
 import type * as seoAuthority from "../seoAuthority.js";
 import type * as seoGrowth from "../seoGrowth.js";
+import type * as siteHealth from "../siteHealth.js";
 import type * as sites from "../sites.js";
 import type * as topics from "../topics.js";
 
@@ -336,6 +338,7 @@ declare const fullApi: ApiFromModules<{
   "lib/seoGrowth": typeof lib_seoGrowth;
   "lib/serpAttainability": typeof lib_serpAttainability;
   "lib/siteDomainBinding": typeof lib_siteDomainBinding;
+  "lib/siteHealth": typeof lib_siteHealth;
   "lib/siteJobActivity": typeof lib_siteJobActivity;
   "lib/siteSecurity": typeof lib_siteSecurity;
   "lib/smartlead": typeof lib_smartlead;
@@ -364,6 +367,7 @@ declare const fullApi: ApiFromModules<{
   selectedPages: typeof selectedPages;
   seoAuthority: typeof seoAuthority;
   seoGrowth: typeof seoGrowth;
+  siteHealth: typeof siteHealth;
   sites: typeof sites;
   topics: typeof topics;
 }>;

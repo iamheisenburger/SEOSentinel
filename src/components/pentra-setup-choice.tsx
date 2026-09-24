@@ -1,0 +1,99 @@
+"use client";
+
+import { useMutation } from "convex/react";
+import { useState } from "react";
+import Link from "next/link";
+import { ConvexError } from "convex/values";
+import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
+import { Button } from "@/components/ui/button";
+import { PUBLISHER_AUTOPUBLISH_CONSENT_TEXT } from "../../convex/lib/publisherProvisioning";
+
+type SetupState = {
+  siteId: Id<"sites">;
+  reviewToken: string;
+  entitlement: boolean;
+  destination: { kind: string; domain: string; verified: boolean };
+  plan: { tier: string; articlesPerMonth: number; autopilotIntervalMs: number };
+};
+
+function rhythm(intervalMs: number) {
+  const days = intervalMs / 86_400_000;
+  if (days >= 1.5) return `about one every ${Math.round(days)} days`;
+  const hours = Math.round(intervalMs / 3_600_000);
+  return hours >= 24 ? "about one a day" : `about one every ${hours} hours`;
+}
+
+/** New-customer setup: one clear choice instead of delivery windows. */
+export function PentraSetupChoice({ state }: { state: SetupState }) {
+  const select = useMutation(api.contentWork.selectServiceMode);
+  const [choice, setChoice] = useState<"autopilot" | "review">("autopilot");
+  const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const reviewAvailable = state.destination.kind === "github";
+  const ready = state.destination.verified && state.entitlement;
+  const start = async () => {
+    setBusy(true); setError("");
+    try {
+      await select({ siteId: state.siteId, mode: "growth_first", confirmBusinessProfile: true, reviewToken: state.reviewToken,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        ...(choice === "autopilot" || !reviewAvailable ? { autopilot: true } : { ownerReviewedOnly: true }) });
+    } catch (err) {
+      setError(err instanceof ConvexError && typeof err.data === "string" ? err.data
+        : "Pentra couldn't start. Check that your website is connected and verified and your plan is active.");
+    } finally { setBusy(false); }
+  };
+  const step = (done: boolean, label: string, action?: React.ReactNode) =>
+    <li className="flex items-center gap-2"><span aria-hidden className={done ? "text-[#22C55E]" : "text-[#F59E0B]"}>{done ? "✓" : "•"}</span>
+      <span>{label}</span>{!done && action}</li>;
+  return <section aria-labelledby="pentra-setup-heading" className="space-y-5 rounded-xl border border-white/10 p-5">
+    <div>
+      <h2 id="pentra-setup-heading" className="text-lg font-semibold">Turn on Pentra</h2>
+      <p className="text-sm text-[#8B8FA3]">Your plan includes {state.plan.articlesPerMonth} new article{state.plan.articlesPerMonth === 1 ? "" : "s"} a month for {state.destination.domain}.</p>
+    </div>
+    <ul className="space-y-1 text-sm">
+      {step(true, "Business profile saved")}
+      {step(state.destination.verified, "Website connected and verified",
+        <Link className="ml-1 underline" href={`/sites/${state.siteId}?tab=settings`}>Connect your website</Link>)}
+      {step(state.entitlement, "Plan active", <Link className="ml-1 underline" href="/settings/billing">Check billing</Link>)}
+    </ul>
+    <fieldset className="grid gap-3 md:grid-cols-2">
+      <legend className="sr-only">How should Pentra work?</legend>
+      <label className={`cursor-pointer rounded-lg border p-4 ${choice === "autopilot" ? "border-[#0EA5E9]" : "border-white/10"}`}>
+        <input type="radio" name="pentra-mode" className="mr-2" checked={choice === "autopilot"} onChange={() => setChoice("autopilot")} />
+        <span className="font-medium">Autopilot (recommended)</span>
+        <p className="mt-1 text-sm text-[#8B8FA3]">Pentra researches, writes and publishes on its own, {rhythm(state.plan.autopilotIntervalMs)}. Drafts with a factual concern wait for you; everything else goes live automatically.</p>
+      </label>
+      <label className={`rounded-lg border p-4 ${reviewAvailable ? "cursor-pointer" : "opacity-50"} ${choice === "review" ? "border-[#0EA5E9]" : "border-white/10"}`}>
+        <input type="radio" name="pentra-mode" className="mr-2" disabled={!reviewAvailable} checked={choice === "review"} onChange={() => setChoice("review")} />
+        <span className="font-medium">Review first</span>
+        <p className="mt-1 text-sm text-[#8B8FA3]">{reviewAvailable ? "Pentra drafts; you read, edit and approve every article before it goes live." : "Available for GitHub sites. WordPress sites run on Autopilot."}</p>
+      </label>
+    </fieldset>
+    {(choice === "autopilot" || !reviewAvailable) && <p className="text-xs text-[#8B8FA3]">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>}
+    <label className="block text-sm"><input type="checkbox" className="mr-2" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+      My business details are accurate. Pentra writes only from these facts and its cited research.</label>
+    <Button disabled={!ready || !confirmed || busy} loading={busy} onClick={start}>Start Pentra</Button>
+    {!ready && <p className="text-sm text-[#8B8FA3]">Finish the steps above to start.</p>}
+    {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
+  </section>;
+}
+
+/** Autopilot on/off for sites set up through the new flow. */
+export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs }: { siteId: Id<"sites">; reviewToken: string; on: boolean; intervalMs: number }) {
+  const setAutopilot = useMutation(api.contentWork.setAutopilot);
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  return <div className="flex flex-wrap items-center gap-3 rounded-lg border border-white/10 p-4">
+    <div className="flex-1">
+      <p className="font-medium">Autopilot is {on ? "on" : "off"}</p>
+      <p className="text-sm text-[#8B8FA3]">{on ? `Pentra publishes ${rhythm(intervalMs)}. Drafts with a factual concern wait for you in Articles.`
+        : "Every article waits for your approval in Articles."}</p>
+    </div>
+    <Button size="sm" variant={on ? "secondary" : "primary"} loading={busy} onClick={async () => {
+      setBusy(true); setError("");
+      try { await setAutopilot({ siteId, enabled: !on, reviewToken }); }
+      catch (err) { setError(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Couldn't change Autopilot. Refresh and try again."); }
+      finally { setBusy(false); }
+    }}>{on ? "Switch to review first" : "Turn on Autopilot"}</Button>
+    {error && <p role="alert" className="w-full text-sm text-red-400">{error}</p>}
+  </div>;
+}

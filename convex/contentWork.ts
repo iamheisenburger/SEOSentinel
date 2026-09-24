@@ -22,7 +22,8 @@ import { contentFunding, contentIssue } from "./lib/contentCustomer";
 import { assertSafeImprovement } from "./lib/contentSelection";
 import { authorizedWorkPage, chooseImprovement, enrollVerifiedCreation, selectionConnection } from "./selectedPages";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
-import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint } from "./articles";
+import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes } from "./articles";
+import { AUTOPILOT_ACCEPTANCE } from "./lib/articleQuality";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
 import { auditResultHash, contradictoryContentAudit, inconsistentAuditFeedback, internalContentProcessingError, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
@@ -32,6 +33,17 @@ export const MAX_CONTENT_RECOVERIES = 3;
 /** Public plan allowance of NEW owner-requested drafts per UTC month (edits and
  * re-reviews of a draft are free). Matches the published pricing table. */
 export const OWNER_DRAFTS_PER_MONTH = { free: 1, starter: 10, pro: 25, scale: 60, enterprise: 150 } as const;
+/** Autopilot publishing rhythm derived from the plan's monthly articles:
+ * spread evenly over 30 days, never more often than every 12 hours. */
+export function autopilotIntervalMs(articlesPerMonth: number) {
+  return Math.max(12 * 3_600_000, Math.floor((30 * 86_400_000) / Math.max(1, articlesPerMonth)));
+}
+async function accountPlan(ctx: QueryCtx | MutationCtx, site: Doc<"sites">) {
+  const entitlement = site.userId ? await ctx.db.query("account_plan_entitlements").withIndex("by_user", q => q.eq("userId", site.userId!)).unique() : null;
+  const tier = resolvePlanFromFeatures(entitlement?.planFeatures ?? site.planFeatures ?? []).tier;
+  const articlesPerMonth = OWNER_DRAFTS_PER_MONTH[tier] as number;
+  return { tier, articlesPerMonth, autopilotIntervalMs: autopilotIntervalMs(articlesPerMonth) };
+}
 /** New owner drafts used this UTC month across the account's sites, against
  * the plan allowance. Null for the scoped owner validation grant. */
 async function ownerDraftAllowance(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, validationScoped: boolean) {
@@ -408,9 +420,18 @@ export const reconfirm = mutation({ args: { siteId: v.id("sites"), reviewToken: 
  * deadline by toggling mode. Migration and rollback drain unresolved work. */
 export const selectServiceMode = mutation({
   args: { siteId: v.id("sites"), mode: v.union(v.literal("legacy_articles"), v.literal("growth_first")),
-    confirmBusinessProfile: v.boolean(), ownerReviewedOnly: v.optional(v.boolean()), authorizeAutomaticPublication: v.optional(v.boolean()), reviewToken: v.optional(v.string()), timezone: v.optional(v.string()), firstDeadlineAt: v.optional(v.number()), intervalMs: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    let site = await requireOwner(ctx, args.siteId);
+    confirmBusinessProfile: v.boolean(), ownerReviewedOnly: v.optional(v.boolean()), authorizeAutomaticPublication: v.optional(v.boolean()), reviewToken: v.optional(v.string()), timezone: v.optional(v.string()), firstDeadlineAt: v.optional(v.number()), intervalMs: v.optional(v.number()),
+    autopilot: v.optional(v.boolean()) },
+  handler: async (ctx, rawArgs) => {
+    let site = await requireOwner(ctx, rawArgs.siteId);
+    // New-customer Autopilot: consent to automatic publication with a rhythm
+    // derived from the plan; the customer never chooses windows or intervals.
+    if (rawArgs.autopilot && (rawArgs.mode !== "growth_first" || rawArgs.ownerReviewedOnly || !site.contentSetupRequestedAt || site.contentSchedule)) {
+      throw new Error("Autopilot setup is for a new website connection; existing contracts remain unchanged");
+    }
+    const plan = rawArgs.autopilot ? await accountPlan(ctx, site) : null;
+    const args = plan ? { ...rawArgs, authorizeAutomaticPublication: true, intervalMs: plan.autopilotIntervalMs,
+      firstDeadlineAt: Date.now() + 24 * 3_600_000 } : rawArgs;
     if ((site.serviceMode ?? "legacy_articles") === args.mode) return { changed: false, status: "completed" as const };
     if (args.ownerReviewedOnly && (args.mode !== "growth_first" || args.authorizeAutomaticPublication ||
       !site.contentSetupRequestedAt || site.contentSchedule || site.publishMethod !== "github")) {
@@ -514,6 +535,7 @@ export const selectServiceMode = mutation({
     } : {}), contentSchedule: {
       validationAuthorizationId: site.contentSchedule?.validationAuthorizationId,
       ...(args.ownerReviewedOnly ? { ownerReviewedOnly: true } : {}),
+      ...(plan ? { autopilotSelectedAt: Date.now() } : {}),
       selectedAt: Date.now(), profileHash: confirmedContentProfileHash(site), connectionHash: contentConnectionHash(site),
       ...(args.authorizeAutomaticPublication === true ? { autopublishConsentAt: Date.now() } : {}),
       // Owner-reviewed work has no promised slot; these inert schedule fields
@@ -524,6 +546,35 @@ export const selectServiceMode = mutation({
     return { changed: true };
   },
 });
+
+/** Switch a new-customer site between "Review first" and Autopilot. Existing
+ * contracts that were not created through the new setup are never changed. */
+export const setAutopilot = mutation({ args: { siteId: v.id("sites"), enabled: v.boolean(), reviewToken: v.string() },
+  handler: async (ctx, args) => {
+    const site = await requireOwner(ctx, args.siteId), s = site.contentSchedule;
+    if (site.serviceMode !== "growth_first" || !s || !site.contentSetupRequestedAt || (!s.ownerReviewedOnly && !s.autopilotSelectedAt)) {
+      throw new ConvexError("This site's service can't be switched here.");
+    }
+    if (args.reviewToken !== contentConsentToken(site)) throw new ConvexError("Your saved setup changed. Refresh and try again.");
+    if (args.enabled) {
+      if (!s.ownerReviewedOnly) return { changed: false };
+      if (!contentConnectionComplete(site) || !publisherDestinationReceiptVerified({ site })) throw new ConvexError("Connect and verify your website first.");
+      if (!(await contentEntitlementAuthorized(ctx, site))) throw new ConvexError("Your plan needs to be active in Billing first.");
+      const plan = await accountPlan(ctx, site);
+      const { ownerReviewedOnly: _omit, ...rest } = s; void _omit;
+      await ctx.db.patch(site._id, { approvalRequired: false, autopilotEnabled: true, autopilotRolloutMode: "warm",
+        contentSchedule: { ...rest, autopilotSelectedAt: Date.now(), autopublishConsentAt: Date.now(), active: false, paused: false,
+          intervalMs: plan.autopilotIntervalMs, nextDeadlineAt: Date.now() + 24 * 3_600_000,
+          profileHash: confirmedContentProfileHash(site), connectionHash: contentConnectionHash(site) }, updatedAt: Date.now() });
+      await wake(ctx, site._id);
+      return { changed: true };
+    }
+    if (s.ownerReviewedOnly) return { changed: false };
+    const { autopublishConsentAt: _consent, ...keep } = s; void _consent;
+    await ctx.db.patch(site._id, { approvalRequired: true, autopilotEnabled: false,
+      contentSchedule: { ...keep, ownerReviewedOnly: true, active: false, paused: true }, updatedAt: Date.now() });
+    return { changed: true };
+  } });
 
 export const readiness = query({
   args: { siteId: v.id("sites") },
@@ -547,9 +598,11 @@ export const readiness = query({
       entitlement: await contentEntitlementAuthorized(ctx, site), enabled: Boolean(site.autopilotEnabled), approvalRequired: Boolean(site.approvalRequired),
       bindingCurrent,
       reconciliation: { needed: reconciliation.needed, staleItems: reconciliation.stale.length, issues: reconciliation.issues },
-      schedule: s ? { ownerReviewedOnly: Boolean(s.ownerReviewedOnly), active: s.active, paused: s.paused, nextDeadlineAt: s.nextDeadlineAt, intervalMs: s.intervalMs, timezone: s.timezone ?? "UTC" } : null,
+      schedule: s ? { ownerReviewedOnly: Boolean(s.ownerReviewedOnly), autopilotSelected: Boolean(s.autopilotSelectedAt), active: s.active, paused: s.paused, nextDeadlineAt: s.nextDeadlineAt, intervalMs: s.intervalMs, timezone: s.timezone ?? "UTC" } : null,
       funding: { ...await contentFunding(ctx, site, pricing?.budgetMicroUsd),
         pricingScope: !pricing ? "unavailable" as const : pricing.validationAuthorizationId ? "validation_run" as const : "ordinary" as const },
+      plan: await accountPlan(ctx, site),
+      autopilot: { selectable: Boolean(site.contentSetupRequestedAt), on: Boolean(s && !s.ownerReviewedOnly && site.autopilotEnabled && !site.approvalRequired) },
       ownerDraft: { maximumMicroUsd: pricing?.budgetMicroUsd ?? null,
         allowance: pricing ? await ownerDraftAllowance(ctx, site, Boolean(pricing.validationAuthorizationId)) : null,
         latest: jobs.filter(j => j.contentWork?.ownerRequest).sort((a, b) => b.createdAt - a.createdAt).slice(0, 1).map(j => ({
@@ -936,6 +989,18 @@ export const advance = internalMutation({
     if (failed) return reviseFailedWork(ctx, site, failed);
     // A failed delivery slot cannot silently mint unlimited replacement jobs.
     const failedSlot = work.find(j => j.contentWork!.stage === "failed" && j.contentWork!.deadlineAt === schedule.nextDeadlineAt);
+    // Only sites that chose Autopilot in the new setup continue past a parked
+    // draft; older contracts keep their failed slot exactly as recorded.
+    if (failedSlot && schedule.autopilotSelectedAt && failedSlot.contentWork!.failure === "bounded_content_quality_exhausted" &&
+      failedSlot.articleId && failedSlot.contentWork!.intent === "create") {
+      // Autopilot never stalls on a draft the reviewer would not pass: the
+      // retained draft and its notes wait for the owner, the missed slot stays
+      // recorded on that job, and the schedule continues with the next slot.
+      await ctx.db.patch(siteId, { contentSchedule: { ...schedule, nextDeadlineAt: schedule.nextDeadlineAt + schedule.intervalMs },
+        updatedAt: Date.now() });
+      await wake(ctx, siteId);
+      return { scheduled: 0, mode: "content_slot_parked", blockers: ["owner_review_needed"] };
+    }
     if (failedSlot) return { scheduled: 0, mode: "content_failed_slot", blockers: [failedSlot.contentWork!.failure ?? "content_work_failed"] };
     if (waiting.length >= 2) return { scheduled: 0, mode: "buffer_full" };
     const pricing = await pricingConfiguration(ctx, site);
@@ -987,10 +1052,26 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">, r
     if (!rejected || rejected.siteId !== job.siteId) throw new Error("Content rejection crossed tenant boundary");
     await quarantineUnpublishedArticle(ctx, job.articleId, rejectionIssues);
   }
-  const article = await ctx.db.get(job.articleId), cw = job.contentWork;
+  let article = await ctx.db.get(job.articleId);
+  const cw = job.contentWork;
   if (!article || article.siteId !== job.siteId) throw new Error("Content work artifact crossed tenant boundary");
   let stage: NonNullable<Doc<"jobs">["contentWork"]>["stage"] = article.status === "published" ? (article.publicUrlStatus === "verified" ? "verified" : "verify")
     : isSealedReady(article) ? "ready" : "review_failed";
+  // On a site whose owner consented to automatic publication, a new article
+  // whose fact check passed and whose only remaining notes are style notes is
+  // accepted by autopilot instead of spending more revisions chasing a score.
+  if (stage === "review_failed" && !cw.ownerRequest && cw.intent === "create" && !rejectionIssues?.length) {
+    const site = await ctx.db.get(job.siteId!);
+    if (site && site.serviceMode === "growth_first" && site.autopilotEnabled && !site.approvalRequired &&
+      site.contentSchedule && !site.contentSchedule.ownerReviewedOnly && site.contentSchedule.autopilotSelectedAt &&
+      site.contentSchedule.autopublishConsentAt && article.status !== "published" && !article.publicationAttemptedAt) {
+      const accepted = await sealAcceptedReviewNotes(ctx, site, article, AUTOPILOT_ACCEPTANCE);
+      if (accepted.sealed) {
+        article = (await ctx.db.get(job.articleId))!;
+        if (isSealedReady(article)) stage = "ready";
+      }
+    }
+  }
   let selectedFailure: string | undefined = rejectionIssues?.length ? "content_review_rejected" : undefined;
   if (stage === "ready" && cw.intent === "improve") {
     const site = await ctx.db.get(job.siteId!);

@@ -15,6 +15,7 @@ export default defineSchema({
       timezone: v.optional(v.string()),
       autopublishConsentAt: v.optional(v.number()),
       ownerReviewedOnly: v.optional(v.boolean()),
+      autopilotSelectedAt: v.optional(v.number()),
     })),
     userId: v.optional(v.string()), // Clerk user ID
     domain: v.string(),
@@ -1589,6 +1590,16 @@ export default defineSchema({
   // is instead an additive, receipt-verified revision chained to the exact
   // external artifact it observed. Base/next snapshots preserve rollback and
   // forensic evidence without mutating publication history.
+  // Deterministic on-page health checks of a customer's important pages.
+  site_health_checks: defineTable({
+    siteId: v.id("sites"),
+    checkedAt: v.number(),
+    score: v.number(),
+    pages: v.array(v.object({ url: v.string(), status: v.number(), title: v.optional(v.string()),
+      issues: v.array(v.object({ code: v.string(), severity: v.union(v.literal("critical"), v.literal("warning")), message: v.string() })) })),
+    error: v.optional(v.string()),
+  }).index("by_site_checked", ["siteId", "checkedAt"]),
+
   published_article_revisions: defineTable({
     contentWorkJobId: v.optional(v.id("jobs")),
     selectedPageId: v.optional(v.id("pages")),
