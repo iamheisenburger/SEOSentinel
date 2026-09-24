@@ -18,6 +18,8 @@ export function ContentStart() {
   const [siteId, setSiteId] = useState<Id<"sites"> | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [domain, setDomain] = useState(""), [name, setName] = useState(""), [summary, setSummary] = useState(""), [audience, setAudience] = useState(""), [product, setProduct] = useState(""), [questions, setQuestions] = useState("");
   const [adapter, setAdapter] = useState("github"), [confirmed, setConfirmed] = useState(false);
+  const [ctaUrl, setCtaUrl] = useState(""), [ctaText, setCtaText] = useState("");
+  const ctaValid = !ctaUrl.trim() || /^https:\/\/[^\s<>"'()[\]]{3,300}$/.test(ctaUrl.trim());
   const prefillSite = useAction(api.actions.onboardingPrefill.prefill);
   const [filling, setFilling] = useState(false), [fillNote, setFillNote] = useState("");
   async function fillFromWebsite() {
@@ -28,6 +30,7 @@ export function ContentStart() {
       const keep = (current: string, next: string) => current.trim() ? current : next;
       setName(v => keep(v, found.name)); setSummary(v => keep(v, found.summary)); setProduct(v => keep(v, found.product));
       setAudience(v => keep(v, found.audience)); setQuestions(v => keep(v, found.questions.join("\n")));
+      setCtaUrl(v => keep(v, found.ctaUrl)); setCtaText(v => keep(v, found.ctaText));
       setConfirmed(false);
       setFillNote(`Filled in from ${found.host}. Check every detail and correct anything that isn't right before saving.`);
     } catch (err) {
@@ -44,6 +47,7 @@ export function ContentStart() {
         siteName: name.trim(), siteSummary: summary.trim(), niche: summary.trim(), blogTheme: product.trim(),
         targetAudienceSummary: audience.trim(), productUsage: product.trim(), painPoints: questions.split("\n").map(s => s.trim()).filter(Boolean).slice(0, 12),
         anchorKeywords: questions.split("\n").map(s => s.trim()).filter(Boolean).slice(0, 12), publishMethod: adapter,
+        ...(ctaUrl.trim() ? { ctaUrl: ctaUrl.trim(), ctaText: ctaText.trim().slice(0, 60) || "Get started" } : {}),
         autopilotEnabled: false, approvalRequired: true, inferToneNiche: false, language: "en" });
       setSiteId(id);
     } catch { setError("We couldn't save your setup. Check that your plan allows another website (Plans & billing) and that this domain is yours. Nothing was charged."); }
@@ -64,11 +68,15 @@ export function ContentStart() {
     <Textarea label="Who you serve" value={audience} onChange={e => { setAudience(e.target.value); setConfirmed(false); }} />
     <Textarea label="What your product or service does" value={product} onChange={e => { setProduct(e.target.value); setConfirmed(false); }} />
     <Textarea label="Real customer questions (one per line)" value={questions} onChange={e => { setQuestions(e.target.value); setConfirmed(false); }} />
+    <Input label="Where should readers go to become customers? (optional)" value={ctaUrl} onChange={e => { setCtaUrl(e.target.value); setConfirmed(false); }} placeholder="https://yourbusiness.com/book" />
+    {ctaUrl.trim() && <Input label="Button text" value={ctaText} onChange={e => setCtaText(e.target.value)} placeholder="Book a visit" />}
+    {!ctaValid && <p role="alert" className="text-sm">Use a full link that starts with https://</p>}
+    <p className="text-sm text-[#8B8FA3]">Each article ends with one clear next step to this page. Leave it empty to link to your homepage.</p>
     <label className="block">Publishing destination<select className="block w-full rounded-lg border border-white/15 bg-[#0F1117] p-2" aria-label="Content publishing destination" value={adapter} onChange={e => { setAdapter(e.target.value); setConfirmed(false); }}><option value="github">GitHub · plain Markdown/MDX</option><option value="wordpress">WordPress · install the Pentra publisher plugin</option></select></label>
     {adapter === "wordpress" && <p className="text-sm"><a className="underline" href="/pentra-wordpress-plugin.zip" download>Download the Pentra WordPress plugin (ZIP)</a>. In WordPress go to Plugins → Add New → Upload Plugin, choose the ZIP and activate it. You&apos;ll connect it in the next step.</p>}
     <p className="text-sm text-[#8B8FA3]">Saving doesn&apos;t charge you. Pentra only adds new articles; it never changes your pricing, checkout or legal pages.</p>
     <label className="block text-sm"><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /> These facts are accurate. Pentra writes only from them and from sources it cites.</label>
-    <Button disabled={busy || !isLoaded || !userId || !confirmed || !domain.trim() || !summary.trim() || !audience.trim() || !product.trim()} onClick={save}>{busy ? "Saving…" : "Save and continue"}</Button>
+    <Button disabled={busy || !isLoaded || !userId || !confirmed || !ctaValid || !domain.trim() || !summary.trim() || !audience.trim() || !product.trim()} onClick={save}>{busy ? "Saving…" : "Save and continue"}</Button>
     <p><Link className="underline text-sm" href="/upgrade">Plans & billing</Link></p>
     {error && <p role="alert">{error}</p>}
   </section>;

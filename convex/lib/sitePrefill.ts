@@ -3,12 +3,13 @@
  * Pure and deterministic (no model call, no cost). The owner still reviews
  * and confirms every fact before Pentra writes from it. */
 
-export type BusinessPrefill = { name: string; summary: string; product: string; audience: string; questions: string[] };
+export type BusinessPrefill = { name: string; summary: string; product: string; audience: string; questions: string[]; ctaText: string; ctaUrl: string };
 
 const decode = (value: string) => value
   .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;|&apos;|&rsquo;|&lsquo;/g, "'")
   .replace(/&ldquo;|&rdquo;/g, '"').replace(/&ndash;/g, "–").replace(/&mdash;/g, "—").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-  .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code))).replace(/\s+/g, " ").trim();
+  .replace(/&#x([0-9a-f]{1,6});/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+  .replace(/&#(\d{1,7});/g, (_, code) => String.fromCodePoint(Number(code))).replace(/\s+/g, " ").trim();
 
 const text = (html: string) => decode(html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
   .replace(/<[^>]+>/g, " "));
@@ -34,7 +35,27 @@ export function normalizePrefillHost(input: string): string | null {
   return host;
 }
 
-export function extractBusinessPrefill(html: string): BusinessPrefill {
+const CTA_TEXT = /^(?:get started|start (?:free|now|(?:your |a )?free trial)|sign up(?: free)?|try (?:it )?(?:for )?free|book (?:a |an |your )?[a-z ]{0,20}|schedule (?:a |your )?[a-z ]{0,20}|request (?:a )?(?:demo|quote|consultation)|get (?:a )?(?:quote|demo|estimate)|contact us|shop now|buy now|join (?:now|free))$/i;
+
+/** The site's own primary call to action (signup, booking, quote), on the same site, over HTTPS. */
+function primaryCta(html: string, host: string): { ctaText: string; ctaUrl: string } {
+  const base = `https://${host}/`, bare = host.replace(/^www\./, "");
+  for (const m of html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
+    const label = text(m[2]).replace(/[→›»]+$/, "").trim();
+    const href = /\bhref\s*=\s*["']([^"']+)["']/i.exec(m[1])?.[1];
+    if (!href || !CTA_TEXT.test(label)) continue;
+    try {
+      const url = new URL(decode(href), base);
+      const sameSite = url.hostname === bare || url.hostname.endsWith(`.${bare}`);
+      if (url.protocol === "https:" && sameSite && url.href.length <= 300 && !/[\s<>"'()[\]]/.test(url.href)) {
+        return { ctaText: label.length <= 40 ? label.replace(/^./, c => c.toUpperCase()) : "Get started", ctaUrl: url.href };
+      }
+    } catch { /* ignore malformed links */ }
+  }
+  return { ctaText: "", ctaUrl: "" };
+}
+
+export function extractBusinessPrefill(html: string, host = ""): BusinessPrefill {
   const title = decode(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "");
   const parts = title.split(/\s+[|–—:·-]\s+/).map(s => s.trim()).filter(Boolean);
   const name = clip(meta(html, "og:site_name") || meta(html, "application-name") ||
@@ -42,15 +63,19 @@ export function extractBusinessPrefill(html: string): BusinessPrefill {
   const paragraphs = tagTexts(html, "p").filter(p => p.length >= 60);
   const summary = clip(meta(html, "description") || meta(html, "og:description") || paragraphs[0] || "", 400);
   const h1 = tagTexts(html, "h1")[0] ?? "";
-  const h2s = tagTexts(html, "h2").filter(h => h.length >= 3 && h.length <= 80 && !h.endsWith("?")).slice(0, 4);
+  const GENERIC = /^(?:how it works|what you get|features?|pricing|(?:simple,? )?(?:transparent )?pricing|plans?|questions|faqs?|frequently asked questions|testimonials|reviews|about(?: us)?|contact(?: us)?|get started|why (?:choose )?us|blog|latest (?:posts|articles|news)|our (?:team|story)|resources|newsletter|subscribe)\.?$/i;
+  const h2s = tagTexts(html, "h2").filter(h => h.length >= 3 && h.length <= 80 && !h.endsWith("?") && !GENERIC.test(h)).slice(0, 4);
   const product = clip([h1 && h1 !== summary ? h1.replace(/[.!]$/, "") + "." : "", h2s.length ? `Includes: ${h2s.join("; ")}.` : ""]
     .filter(Boolean).join(" ") || (paragraphs[1] ?? ""), 400);
-  const forMatch = /\bfor ((?:small |local |growing )?[a-z][a-z &,'-]{3,60}?)(?=[.!,;:]|\s+(?:who|that|to|in|with)\b|$)/i
+  const forMatch = /\bfor ((?:small |local |growing )?[a-z][a-z &,'-]{3,60}?)(?=\s*(?:[.!,;:|–—]|-\s)|\s+(?:who|that|to|in|with)\b|\s*$)/i
     .exec([h1, summary, title].join(". "));
-  const audience = forMatch ? clip(forMatch[1].replace(/^./, c => c.toUpperCase()), 120) : "";
+  const who = forMatch?.[1].trim() ?? "";
+  // "for your website" / "for the web" describe a thing, not the people served.
+  const audience = who && !/^(?:you|your|my|our|the|a|an|this|that|every|all|free|more|less|less than|only|just)\b/i.test(who) &&
+    !/\b(?:website|site|web|business(?:es)? like yours|free)$/i.test(who) ? clip(who.replace(/^./, c => c.toUpperCase()), 120) : "";
   const seen = new Set<string>();
   const questions = ["h2", "h3", "h4", "summary", "dt", "button"].flatMap(tag => tagTexts(html, tag))
     .filter(q => q.endsWith("?") && q.length >= 12 && q.length <= 160)
     .filter(q => { const key = q.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; }).slice(0, 8);
-  return { name, summary, product, audience, questions };
+  return { name, summary, product, audience, questions, ...(host ? primaryCta(html, host) : { ctaText: "", ctaUrl: "" }) };
 }

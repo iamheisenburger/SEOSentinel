@@ -68,7 +68,8 @@ export function AuthShell({
               </span>
             </div>
 
-            <h1 className="mt-7 max-w-lg text-[clamp(2.25rem,5vw,4.35rem)] font-bold leading-[1.02] tracking-[-0.045em]">
+            {/* The Clerk form owns the page's single h1 ("Create your account" / "Sign in"). */}
+            <p className="mt-7 max-w-lg text-[clamp(2.25rem,5vw,4.35rem)] font-bold leading-[1.02] tracking-[-0.045em]">
               {isSignIn ? (
                 <>
                   Your next article is
@@ -80,7 +81,7 @@ export function AuthShell({
                   <span className="block text-[#565A6E]">on autopilot.</span>
                 </>
               )}
-            </h1>
+            </p>
 
             <p className="mt-5 max-w-lg text-[15px] leading-7 text-[#8B8FA3] sm:text-[16px]">
               {isSignIn

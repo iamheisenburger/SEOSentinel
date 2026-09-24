@@ -47,3 +47,10 @@ test("robots.txt that blocks everything is found, and declared sitemaps are read
   assert.deepEqual(sitemapIndexChildren(`<sitemapindex><sitemap><loc>https://acme.example/posts.xml</loc></sitemap><sitemap><loc>https://evil.example/x.xml</loc></sitemap></sitemapindex>`, "acme.example"), ["https://acme.example/posts.xml"]);
   assert.deepEqual(sitemapIndexChildren("<urlset></urlset>", "acme.example"), []);
 });
+
+test("titles are measured after decoding HTML entities", () => {
+  const html = `<html><head><title>Sales Automation Chat Widget: A Practical Buyer&#x27;s Guide | LeadPilot</title></head><body><h1>x</h1></body></html>`;
+  const result = analyzePageHealth({ url: "https://acme.example/", status: 200, html });
+  assert.equal(result.title, "Sales Automation Chat Widget: A Practical Buyer's Guide | LeadPilot");
+  assert.ok(result.issues.find(i => i.code === "title_long")!.message.includes("67 characters"));
+});

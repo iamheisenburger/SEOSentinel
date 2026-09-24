@@ -80,7 +80,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
   </>;
   // Sites set up through the Autopilot / Review-first choice get a plain summary.
   if (newFlow) {
-    const needsReview = state.work.filter(w => !w.retiredAt && (w.stage === "failed" || w.stage === "review_failed") && !(state.published ?? []).some(a => a.articleId === w.articleId));
+    const needsReview = state.work.filter(w => !w.retiredAt && (w.stage === "failed" || w.stage === "review_failed") && !w.superseded && !(state.published ?? []).some(a => a.articleId === w.articleId));
     return <section className="rounded-xl border border-white/10 p-5 space-y-4" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
       <AutopilotSwitch siteId={siteId} reviewToken={state.reviewToken} on={Boolean(state.autopilot?.on)} intervalMs={state.plan?.autopilotIntervalMs ?? 86_400_000} />
       <h2 id="content-service-heading" className="font-semibold">Your Pentra service</h2>

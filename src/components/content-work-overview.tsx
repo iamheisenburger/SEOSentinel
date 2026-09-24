@@ -45,9 +45,10 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
         <ul className="space-y-2 text-sm">{verified.filter(w => !(state.published ?? []).some(a => a.articleId === w.articleId)).map(w => <li key={w.jobId}>{workLabel(w)}{w.articleId && <> · <Link className="underline" href={`/articles/${w.articleId}`}>View article</Link></>}{w.publishedAt && <p>Published {shownTime(w.publishedAt, zone)}</p>}{w.verifiedAt && <p>Verified {shownTime(w.verifiedAt, zone)}</p>}</li>)}</ul>
       </section>
     </div>
+    {simple && <UpcomingTopics siteId={siteId} />}
     <OrganicOutcome key={siteId} siteId={siteId} simple={simple} />
     <SiteHealth siteId={siteId} />
-    {(!simple || !state.entitlement || !state.destination.verified || !state.bindingCurrent || state.funding.status !== "available" || state.work.some(w => w.failure && !w.retiredAt && !(state.published ?? []).some(a => a.articleId === w.articleId))) &&
+    {(!simple || !state.entitlement || !state.destination.verified || !state.bindingCurrent || state.funding.status !== "available" || state.work.some(w => w.failure && !w.retiredAt && !w.superseded && !(state.published ?? []).some(a => a.articleId === w.articleId))) &&
     <section className="rounded-xl border border-white/10 p-5 space-y-2"><h2 className="font-medium">Needs attention</h2>
       {!state.entitlement && <p role="alert">Verify your existing plan in <Link href="/settings/billing" className="underline">Billing</Link>.</p>}
       {!state.destination.verified && <p role="alert">Publishing destination verification required.</p>}
@@ -58,7 +59,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
           : "Pentra can't start new articles right now. Your published articles are not affected."
         : state.funding.reason ?? fundingCopy[state.funding.status]}</p>}
       {!state.complete && !simple && <p role="alert">Work history is incomplete. No clean-health claim is possible.</p>}
-      {state.work.filter(w => w.failure && !w.retiredAt && !(state.published ?? []).some(a => a.articleId === w.articleId)).map(w => simple
+      {state.work.filter(w => w.failure && !w.retiredAt && !w.superseded && !(state.published ?? []).some(a => a.articleId === w.articleId)).map(w => simple
         ? <p role="alert" key={w.jobId}>{workLabel(w)}: {w.failure} {w.articleId && <Link className="underline" href={`/articles/${w.articleId}`}>Open draft</Link>}</p>
         : <div role="alert" key={w.jobId}>{workLabel(w)}: {w.failure} <details><summary>Technical details</summary>{w.jobId}{w.technicalReason && <p>{w.technicalReason}</p>}</details></div>)}
       {!simple && <p className="text-sm">Delivery acceptance and organic growth are separate. A successful API response alone is not verification.</p>}
@@ -92,6 +93,20 @@ function OrganicOutcome({ siteId, simple = false }: { siteId: Id<"sites">; simpl
       {result.cohorts === null ? <p>New-page inventory is incomplete.</p> : !result.cohorts.length ? <p>No newly published pages in this window.</p> : <ul>{result.cohorts.map(p => <li key={p.articleId}>{p.title}: {p.clicks === null ? "Awaiting a complete post-publication day" : `${p.clicks} clicks since ${p.start}`}</li>)}</ul>}
     </>}
     {!simple && <p className="text-sm">Observed clicks do not prove Pentra caused the change. Monitoring without an edit is not a completed improvement.</p>}
+  </section>;
+}
+
+/** What Autopilot will write next, so a hands-off customer can see and steer it. */
+function UpcomingTopics({ siteId }: { siteId: Id<"sites"> }) {
+  const topics = useQuery(api.topics.listBySite, { siteId });
+  const next = (topics ?? []).filter(t => !["used", "queued", "cannibalizing", "disqualified"].includes(t.status ?? ""))
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0)).slice(0, 3);
+  return <section className="rounded-xl border border-white/10 p-5 space-y-2" aria-labelledby="upcoming-topics-heading">
+    <h2 id="upcoming-topics-heading" className="font-medium">Coming up next</h2>
+    {topics === undefined ? <p className="text-sm">Loading…</p> : next.length === 0
+      ? <p className="text-sm">Pentra is researching topics your customers search for. They&apos;ll appear here.</p>
+      : <ol className="list-decimal space-y-1 pl-5 text-sm">{next.map(t => <li key={t._id}>{t.label} <span className="text-[#8B8FA3]">· “{t.primaryKeyword}”</span></li>)}</ol>}
+    <Link className="text-sm underline" href="/plan">See or change all topics</Link>
   </section>;
 }
 

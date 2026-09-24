@@ -1600,6 +1600,12 @@ export default defineSchema({
     error: v.optional(v.string()),
   }).index("by_site_checked", ["siteId", "checkedAt"]),
 
+  // Onboarding "Fill in from my website" requests, kept only for throttling.
+  site_prefill_requests: defineTable({
+    userId: v.string(),
+    requestedAt: v.number(),
+  }).index("by_user_requested", ["userId", "requestedAt"]),
+
   published_article_revisions: defineTable({
     contentWorkJobId: v.optional(v.id("jobs")),
     selectedPageId: v.optional(v.id("pages")),

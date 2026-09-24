@@ -591,6 +591,17 @@ export const readiness = query({
     } catch { /* Incomplete destination is actionable readiness, not a query crash. */ }
     const reconciliation = await reviewChangedSetup(ctx, site, jobs);
     const pricing = await pricingConfiguration(ctx, site);
+    // Every live article on the current domain, however it was approved.
+    const publishedRows = (await ctx.db.query("articles").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published"))
+      .order("desc").take(20)).filter(a => articleMatchesCurrentDomain(site, a));
+    const publishedTopics = new Set(publishedRows.map(a => a.topicId).filter(Boolean));
+    // A parked draft whose topic the owner has since published (usually as an
+    // edited version) is resolved for the owner; the miss itself stays recorded.
+    const supersededJobs = new Set<string>();
+    for (const j of jobs.filter(j => j.contentWork?.stage === "failed" && j.articleId && !j.contentWork.ownerRequest).slice(0, 20)) {
+      const draft = await ctx.db.get(j.articleId!);
+      if (draft && draft.status !== "published" && draft.topicId && publishedTopics.has(draft.topicId)) supersededJobs.add(j._id);
+    }
     return { siteId, setupPending: Boolean(site.contentSetupRequestedAt && !site.serviceMode), serviceMode: site.serviceMode ?? "legacy_articles", reviewToken: contentConsentToken(site),
       profile: { name: site.siteName ?? site.domain, summary: site.siteSummary ?? "", audience: site.targetAudienceSummary ?? "", productUsage: site.productUsage ?? "", offerings: site.keyFeatures ?? [] },
       destination: { kind: site.publishMethod ?? "manual", domain: site.domain, repository: site.publishMethod === "github" ? `${site.repoOwner ?? ""}/${site.repoName ?? ""}` : null,
@@ -608,10 +619,7 @@ export const readiness = query({
         latest: jobs.filter(j => j.contentWork?.ownerRequest).sort((a, b) => b.createdAt - a.createdAt).slice(0, 1).map(j => ({
           jobId: j._id, articleId: j.articleId, stage: j.contentWork!.stage, issue: contentIssue(j.contentWork!.failure),
         }))[0] ?? null },
-      // Every live article on the current domain, however it was approved.
-      published: (await ctx.db.query("articles").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published"))
-        .order("desc").take(20)).filter(a => articleMatchesCurrentDomain(site, a))
-        .sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0)).slice(0, 5)
+      published: [...publishedRows].sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0)).slice(0, 5)
         .map(a => ({ articleId: a._id, title: a.title ?? a.slug ?? "Article", publishedAt: a.publishedAt ?? null,
           verified: a.publicUrlStatus === "verified", url: a.publicUrlStatus === "verified" && a.publicUrl?.startsWith("https://") ? a.publicUrl : null })),
       complete: jobs.length <= LIMIT, ready: jobs.filter(j => j.contentWork?.stage === "ready" && !j.contentWork.ownerRequest && j.contentWork.retiredAt === undefined &&
@@ -633,7 +641,9 @@ export const readiness = query({
         technicalReason: internalContentProcessingError(j.contentWork!.failure ?? j.error) ? j.contentWork!.failure ?? "legacy_semantic_audit_processing_error" : null,
         retiredAt: j.contentWork!.retiredAt,
         publishedAt: j.contentWork!.publishedAt, verifiedAt: j.contentWork!.verifiedAt, creditRetry,
-        failure: rejectedReview ? "Review handling has been repaired. Resume to recheck this retained work within its existing revision and spending limits. The article has not been approved."
+        superseded: supersededJobs.has(j._id),
+        failure: supersededJobs.has(j._id) ? "Replaced by your edited version of this article, which is now live. The missed slot stays on record."
+          : rejectedReview ? "Review handling has been repaired. Resume to recheck this retained work within its existing revision and spending limits. The article has not been approved."
           : creditRetry ? "Pentra has restored generation for this interrupted work. You can retry it once; the original deadline and earlier attempt remain recorded."
           : contentIssue(j.contentWork!.failure ?? j.error) }; }) };
   },

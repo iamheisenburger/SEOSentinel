@@ -147,6 +147,8 @@ function MarkdownRenderer({ markdown }: { markdown: string }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          // The page already renders the article title as its only h1.
+          h1: ({ children }) => <h2>{children}</h2>,
           a: ({ href, children }) => {
             const safe = href?.startsWith("/") || href?.startsWith("https://");
             return safe ? <a href={href}>{children}</a> : <>{children}</>;

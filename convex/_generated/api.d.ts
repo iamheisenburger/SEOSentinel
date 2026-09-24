@@ -188,6 +188,7 @@ import type * as selectedPages from "../selectedPages.js";
 import type * as seoAuthority from "../seoAuthority.js";
 import type * as seoGrowth from "../seoGrowth.js";
 import type * as siteHealth from "../siteHealth.js";
+import type * as sitePrefill from "../sitePrefill.js";
 import type * as sites from "../sites.js";
 import type * as topics from "../topics.js";
 
@@ -378,6 +379,7 @@ declare const fullApi: ApiFromModules<{
   seoAuthority: typeof seoAuthority;
   seoGrowth: typeof seoGrowth;
   siteHealth: typeof siteHealth;
+  sitePrefill: typeof sitePrefill;
   sites: typeof sites;
   topics: typeof topics;
 }>;

@@ -25,7 +25,7 @@ const bundle = build({ stdin: { contents: `
         const client={query:async(ref,args)=>{const f=window.contentFixture; const n=getFunctionName(ref);if(n!=='searchPerformance:contentOutcome')throw Error('Unexpected one-shot query '+n);f.measurementReads=(f.measurementReads??0)+1;return f.outcome??{status:'incomplete',current:null}}};
         export const useConvex=()=>client;
         export const useQuery=(ref,args)=>{const n=getFunctionName(ref); const f=window.contentFixture;
-          if(n==='contentWork:readiness')return f.state; if(n==='selectedPages:list')return {complete:true,pages:[]};if(n==='siteHealth:latest')return null;
+          if(n==='contentWork:readiness')return f.state; if(n==='selectedPages:list')return {complete:true,pages:[]};if(n==='siteHealth:latest')return null;if(n==='topics:listBySite')return [];
           if(n==='searchPerformance:contentOutcome')return {status:'incomplete',current:null}; throw Error('Unexpected query '+n)};
         export const useMutation=ref=>async args=>{const f=window.contentFixture;f.calls.push({name:getFunctionName(ref),args});const r=f.response??{status:'preparing',issues:[]};if(getFunctionName(ref)==='contentWork:selectServiceMode'&&r.changed)f.state={...f.state,serviceMode:args.mode};return r};
         export const useAction=useMutation;`, resolveDir: process.cwd() };

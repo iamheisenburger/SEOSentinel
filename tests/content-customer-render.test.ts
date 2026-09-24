@@ -40,6 +40,10 @@ function render(component: string, queryState: unknown = state, outcome: unknown
         if (fn === "searchPerformance:contentOutcome") return outcome;
         if (fn === "selectedPages:list") return { complete: true, pages: [] };
         if (fn === "siteHealth:latest") return null;
+        if (fn === "topics:listBySite") return [
+          { _id: "t1", label: "Irrigation valve inspection checklist", primaryKeyword: "irrigation valve inspection", status: "planned", priority: 90 },
+          { _id: "t2", label: "Already written topic", primaryKeyword: "written", status: "used", priority: 99 },
+        ];
         assert.fail(`Unexpected query ${fn}`);
       } };
       return actual(name);
@@ -74,6 +78,8 @@ test("new customers see one clear Autopilot or Review-first choice, not delivery
     plan: { tier: "starter", articlesPerMonth: 10, autopilotIntervalMs: 259_200_000 },
     schedule: { ...state.schedule, paused: false, autopilotSelected: true } }).html;
   assert.match(running, /Autopilot is on/); assert.match(running, /Switch to review first/); assert.match(running, /Site health/);
+  assert.match(running, /Coming up next/); assert.match(running, /Irrigation valve inspection checklist/); assert.doesNotMatch(running, /Already written topic/);
+  assert.doesNotMatch(running, /Ready buffer|Fixed window|original deadline/);
 });
 
 function renderSidebar(queryState: unknown, siteOverrides: Record<string, unknown> = {}) {

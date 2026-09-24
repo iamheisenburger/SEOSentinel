@@ -3325,6 +3325,12 @@ export const upsert = mutation({
 
     const domain = normalizedAuthorityDomain(args.domain);
     if (!domain) throw new Error("Enter a valid website domain");
+    if (args.contentSetup === true && args.ctaUrl !== undefined && !/^https:\/\/[^\s<>"'()[\]]{3,300}$/.test(args.ctaUrl)) {
+      throw new Error("The next-step link must be a full https:// address");
+    }
+    if (args.contentSetup === true && args.ctaText !== undefined && (args.ctaText.length > 60 || /[<>[\]()]/.test(args.ctaText))) {
+      throw new Error("Keep the button text short and plain");
+    }
     const currentSite = args.id ? await requireSiteOwner(ctx, args.id) : null;
     if (
       args.publishMethod &&
@@ -3955,6 +3961,7 @@ const SITE_DELETION_STAGES = [
   "seo_growth_goals",
   "search_page_daily",
   "search_performance",
+  "site_health_checks",
   "autopilot_alerts",
   "autopilot_health",
   "autopilot_runs",
@@ -4659,6 +4666,8 @@ async function deletionRowsForStage(
       return ctx.db.query("search_page_daily").withIndex("by_site_date", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "search_performance":
       return ctx.db.query("search_performance").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "site_health_checks":
+      return ctx.db.query("site_health_checks").withIndex("by_site_checked", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "autopilot_alerts":
       return ctx.db.query("autopilot_alerts").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "autopilot_health":
