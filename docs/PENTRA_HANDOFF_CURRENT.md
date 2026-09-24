@@ -36,6 +36,16 @@ is connected. Do not replay the old exhausted jobs or reset their accounting.
 Previous release fa4448dc82ced4789fea803cbedc7f8222366cef hosted CI35788352839
 is confirmed successful. Current candidate is not deployed or accepted yet.
 
+Candidate `c541cc5`: final local regression 1,827 tests / 1,826 pass / zero
+failures / one existing skip. Type-check, build, additive schema, secret scan,
+dependency audit and Convex dry-run pass. Lint has zero errors and the same 157
+warnings. Browser regression has 36 pass and two authenticated skips; signed-in
+production Articles and Settings were inspected separately, not substituted for
+fresh delivery acceptance. Production mutation/deployment is the next step.
+The September24 exact-site audit records validation consumed ceilings of
+$2.500000 Pentra + $3.182076 LeadPilot, against the same $20 cumulative allowance.
+These are accounting consumption, not a claim of measured cash expenditure.
+
 ## Current: September22 direct execution (supersedes supervisor instructions below)
 
 Work here in `.claude/assignment24`; do not restart the old task or automation.
