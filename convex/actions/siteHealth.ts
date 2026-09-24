@@ -4,10 +4,24 @@ import { action, internalAction, type ActionCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { ConvexError, v } from "convex/values";
 import type { Id } from "../_generated/dataModel";
-import { analyzePageHealth, healthScore, robotsTxtFindings, sitemapIndexChildren, sitemapUrls, type PageHealthResult } from "../lib/siteHealth";
+import { analyzePageHealth, healthScore, robotsTxtFindings, sitemapIndexChildren, sitemapUrls, speedFindings, type PageHealthResult } from "../lib/siteHealth";
+import { safeFetchPublicText } from "../lib/safeOutbound";
 import { fetchPage } from "../lib/fetchPage";
 
 const MAX_PAGES = 10, MIN_INTERVAL_MS = 10 * 60_000;
+const PSI_FIELDS = "lighthouseResult.categories.performance.score,lighthouseResult.audits.largest-contentful-paint.numericValue,lighthouseResult.audits.cumulative-layout-shift.numericValue";
+
+/** Google PageSpeed Insights (mobile) for one URL. Optional API key; any
+ * error or quota limit simply skips the speed pass. */
+async function pageSpeed(url: string): Promise<unknown> {
+  const params = new URLSearchParams({ url, strategy: "mobile", category: "performance", fields: PSI_FIELDS });
+  if (process.env.PAGESPEED_API_KEY) params.set("key", process.env.PAGESPEED_API_KEY);
+  try {
+    const response = await safeFetchPublicText(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${params}`,
+      { expectedHost: "www.googleapis.com", maxRedirects: 0, maxBytes: 200_000, timeoutMs: 60_000, headers: { Accept: "application/json" } });
+    return JSON.parse(response.text);
+  } catch { return null; }
+}
 
 async function runCheck(ctx: ActionCtx, siteId: Id<"sites">, userId?: string) {
   const site = await ctx.runQuery(internal.siteHealth.siteForCheck, { siteId, userId });
@@ -36,6 +50,7 @@ async function runCheck(ctx: ActionCtx, siteId: Id<"sites">, userId?: string) {
     const page = await fetchPage(url);
     results.push(analyzePageHealth({ url, status: page.status, finalUrl: page.finalUrl, html: page.html, robotsHeader: page.robots }));
   }
+  if (results[0] && results[0].status === 200) results[0].issues.push(...speedFindings(await pageSpeed(home)));
   if (results[0] && results[0].status > 0) {
     if (robots.blocksAll) results[0].issues.unshift({ code: "robots_blocks_all", severity: "critical",
       message: "Your robots.txt tells Google not to crawl any page on this site, so nothing can rank." });

@@ -80,9 +80,10 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
   </>;
   // Sites set up through the Autopilot / Review-first choice get a plain summary.
   if (newFlow) {
-    const needsReview = state.work.filter(w => !w.retiredAt && (w.stage === "failed" || w.stage === "review_failed") && !w.superseded && !(state.published ?? []).some(a => a.articleId === w.articleId));
+    const needsReview = state.work.filter(w => !w.retiredAt && (w.stage === "failed" || w.stage === "review_failed") && !w.superseded && !w.parked && !(state.published ?? []).some(a => a.articleId === w.articleId));
     return <section className="rounded-xl border border-white/10 p-5 space-y-4" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
-      <AutopilotSwitch siteId={siteId} reviewToken={state.reviewToken} on={Boolean(state.autopilot?.on)} intervalMs={state.plan?.autopilotIntervalMs ?? 86_400_000} />
+      <AutopilotSwitch siteId={siteId} reviewToken={state.reviewToken} on={Boolean(state.autopilot?.on)} intervalMs={state.plan?.autopilotIntervalMs ?? 86_400_000}
+        reviewAvailable={state.autopilot?.reviewAvailable ?? true} paused={Boolean(state.schedule?.paused)} />
       <h2 id="content-service-heading" className="font-semibold">Your Pentra service</h2>
       <p className="text-sm">Website: <Link className="underline" href={`/sites/${state.siteId}?tab=settings`}>{state.destination.domain}</Link> · {state.destination.kind === "wordpress" ? "WordPress" : "GitHub"} · {state.destination.verified ? "connected" : "not connected yet"}</p>
       <p className="text-sm">Status: {delivery.label}. {state.plan && `Your plan includes ${state.plan.articlesPerMonth} new article${state.plan.articlesPerMonth === 1 ? "" : "s"} a month.`}</p>
@@ -101,7 +102,8 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     </section>;
   }
   return <section className="rounded-xl border border-white/10 p-5 space-y-4" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
-    {newFlow && <AutopilotSwitch siteId={siteId} reviewToken={state.reviewToken} on={Boolean(state.autopilot?.on)} intervalMs={state.plan?.autopilotIntervalMs ?? 86_400_000} />}
+    {newFlow && <AutopilotSwitch siteId={siteId} reviewToken={state.reviewToken} on={Boolean(state.autopilot?.on)} intervalMs={state.plan?.autopilotIntervalMs ?? 86_400_000}
+      reviewAvailable={state.autopilot?.reviewAvailable ?? true} paused={Boolean(state.schedule?.paused)} />}
     <h2 id="content-service-heading" className="font-semibold">Content delivery service</h2>
     <p>Website: <Link className="underline" href={`/sites/${state.siteId}?tab=settings`}>{state.destination.domain}</Link></p>
     <p>Current contract: {state.setupPending ? "Not selected — setup is stopped" : state.schedule?.ownerReviewedOnly ? "Owner-reviewed GitHub drafts" : state.serviceMode === "growth_first" ? "Growth-first content work" : "Existing fixed-article delivery"}.</p>

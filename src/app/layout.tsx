@@ -25,7 +25,7 @@ export const metadata: Metadata = {
     template: "%s | Pentra",
   },
   description:
-    "Add your website and Pentra takes it from there: researched, fact-checked articles published on a schedule, improvements to pages near page one, and Search Console reporting.",
+    "Add your website and Pentra takes it from there: researched, fact-checked articles published on schedule, pages improved, and results in Search Console.",
   metadataBase: new URL("https://pentra.dev"),
   openGraph: {
     title: "Pentra — Autopilot SEO for your website",

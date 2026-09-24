@@ -2,7 +2,7 @@ type ServiceState = {
   serviceMode?: string; enabled?: boolean; bindingCurrent?: boolean; entitlement?: boolean; approvalRequired?: boolean;
   schedule?: { paused: boolean; active: boolean; ownerReviewedOnly?: boolean; autopilotSelected?: boolean } | null; ready?: number; complete?: boolean;
   autopilot?: { selectable?: boolean } | null;
-  work?: ReadonlyArray<{ stage: string; retiredAt?: number; systemFailure?: boolean; creditRetry?: unknown }>;
+  work?: ReadonlyArray<{ stage: string; retiredAt?: number; systemFailure?: boolean; creditRetry?: unknown; parked?: boolean }>;
 };
 
 /** One customer-facing interpretation for sidebar, overview and settings.
@@ -13,7 +13,7 @@ export function contentServiceStatus(state: ServiceState | null | undefined) {
   const paused = Boolean(state?.schedule?.paused);
   const status = !state ? "loading" : state.serviceMode !== "growth_first" ? "legacy"
     : state.bindingCurrent === false ? "changed" : state.schedule?.ownerReviewedOnly ? "owner_reviewed" : systemFailure ? "failed" : paused ? "paused"
-    : work.some(w => w.stage === "failed" && !w.creditRetry) ? "failed"
+    : work.some(w => w.stage === "failed" && !w.creditRetry && !w.parked) ? "failed"
     : state.schedule?.active ? "active" : (state.ready ?? 0) >= 2 ? "ready" : "preparing";
   const label = { loading: "Checking delivery status", legacy: state?.enabled !== false ? "Autopilot on" : "Manual",
     changed: "Stopped — review changed setup", failed: paused ? "Delivery paused" : "Delivery needs attention", paused: "Paused",

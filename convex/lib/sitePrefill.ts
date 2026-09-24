@@ -5,11 +5,12 @@
 
 export type BusinessPrefill = { name: string; summary: string; product: string; audience: string; questions: string[]; ctaText: string; ctaUrl: string };
 
+const safeCodePoint = (code: number) => Number.isInteger(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
 const decode = (value: string) => value
   .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;|&apos;|&rsquo;|&lsquo;/g, "'")
   .replace(/&ldquo;|&rdquo;/g, '"').replace(/&ndash;/g, "–").replace(/&mdash;/g, "—").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-  .replace(/&#x([0-9a-f]{1,6});/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
-  .replace(/&#(\d{1,7});/g, (_, code) => String.fromCodePoint(Number(code))).replace(/\s+/g, " ").trim();
+  .replace(/&#x([0-9a-f]{1,6});/gi, (_, hex) => safeCodePoint(parseInt(hex, 16)))
+  .replace(/&#(\d{1,7});/g, (_, code) => safeCodePoint(Number(code))).replace(/\s+/g, " ").trim();
 
 const text = (html: string) => decode(html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
   .replace(/<[^>]+>/g, " "));
@@ -65,7 +66,7 @@ export function extractBusinessPrefill(html: string, host = ""): BusinessPrefill
   const h1 = tagTexts(html, "h1")[0] ?? "";
   const GENERIC = /^(?:how it works|what you get|features?|pricing|(?:simple,? )?(?:transparent )?pricing|plans?|questions|faqs?|frequently asked questions|testimonials|reviews|about(?: us)?|contact(?: us)?|get started|why (?:choose )?us|blog|latest (?:posts|articles|news)|our (?:team|story)|resources|newsletter|subscribe)\.?$/i;
   const h2s = tagTexts(html, "h2").filter(h => h.length >= 3 && h.length <= 80 && !h.endsWith("?") && !GENERIC.test(h)).slice(0, 4);
-  const product = clip([h1 && h1 !== summary ? h1.replace(/[.!]$/, "") + "." : "", h2s.length ? `Includes: ${h2s.join("; ")}.` : ""]
+  const product = clip([h1 && h1 !== summary ? h1.replace(/[.!]$/, "") + "." : "", h2s.length ? `Includes: ${h2s.map(h => h.replace(/[.!]+$/, "")).join("; ")}.` : ""]
     .filter(Boolean).join(" ") || (paragraphs[1] ?? ""), 400);
   const forMatch = /\bfor ((?:small |local |growing )?[a-z][a-z &,'-]{3,60}?)(?=\s*(?:[.!,;:|–—]|-\s)|\s+(?:who|that|to|in|with)\b|\s*$)/i
     .exec([h1, summary, title].join(". "));

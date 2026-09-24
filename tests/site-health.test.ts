@@ -54,3 +54,22 @@ test("titles are measured after decoding HTML entities", () => {
   assert.equal(result.title, "Sales Automation Chat Widget: A Practical Buyer's Guide | LeadPilot");
   assert.ok(result.issues.find(i => i.code === "title_long")!.message.includes("67 characters"));
 });
+
+test("speed findings come only from real PageSpeed data", async () => {
+  const { speedFindings } = await import("../convex/lib/siteHealth.ts");
+  const slow = speedFindings({ lighthouseResult: { categories: { performance: { score: 0.42 } },
+    audits: { "largest-contentful-paint": { numericValue: 5200 }, "cumulative-layout-shift": { numericValue: 0.02 } } } });
+  assert.deepEqual(slow.map(i => [i.code, i.severity]), [["speed_poor", "critical"], ["lcp_slow", "critical"]]);
+  assert.match(slow[0].message, /42\/100/);
+  assert.deepEqual(speedFindings({ lighthouseResult: { categories: { performance: { score: 0.97 } }, audits: {} } }), []);
+  assert.deepEqual(speedFindings(null), []);
+  assert.deepEqual(speedFindings({ error: { code: 429 } }), []);
+});
+
+test("a Googlebot group overrides a blocking * group, and bad entities never crash", async () => {
+  const { robotsTxtFindings } = await import("../convex/lib/siteHealth.ts");
+  assert.equal(robotsTxtFindings("User-agent: *\nDisallow: /\n\nUser-agent: Googlebot\nDisallow:\n").blocksAll, false);
+  assert.equal(robotsTxtFindings("User-agent: Googlebot\nUser-agent: Bingbot\nDisallow: /\n").blocksAll, true);
+  const odd = analyzePageHealth({ url: "https://acme.example/", status: 200, html: "<title>A &#1114112; B &#x110000; title here</title>" });
+  assert.equal(odd.title, "A B title here");
+});

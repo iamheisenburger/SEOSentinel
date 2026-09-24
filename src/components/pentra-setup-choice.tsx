@@ -61,7 +61,7 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
       <label className={`cursor-pointer rounded-lg border p-4 ${choice === "autopilot" ? "border-[#0EA5E9]" : "border-white/10"}`}>
         <input type="radio" name="pentra-mode" className="mr-2" checked={choice === "autopilot"} onChange={() => setChoice("autopilot")} />
         <span className="font-medium">Autopilot (recommended)</span>
-        <p className="mt-1 text-sm text-[#8B8FA3]">Pentra researches, writes and publishes on its own, {rhythm(state.plan.autopilotIntervalMs)}. Drafts with a factual concern wait for you; everything else goes live automatically.</p>
+        <p className="mt-1 text-sm text-[#8B8FA3]">Pentra researches, writes and publishes on its own, {rhythm(state.plan.autopilotIntervalMs)}. Drafts it isn&apos;t confident about are held back, never published; everything else goes live automatically.</p>
       </label>
       <label className={`rounded-lg border p-4 ${reviewAvailable ? "cursor-pointer" : "opacity-50"} ${choice === "review" ? "border-[#0EA5E9]" : "border-white/10"}`}>
         <input type="radio" name="pentra-mode" className="mr-2" disabled={!reviewAvailable} checked={choice === "review"} onChange={() => setChoice("review")} />
@@ -79,21 +79,23 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
 }
 
 /** Autopilot on/off for sites set up through the new flow. */
-export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs }: { siteId: Id<"sites">; reviewToken: string; on: boolean; intervalMs: number }) {
+export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAvailable = true, paused = false }:
+  { siteId: Id<"sites">; reviewToken: string; on: boolean; intervalMs: number; reviewAvailable?: boolean; paused?: boolean }) {
   const setAutopilot = useMutation(api.contentWork.setAutopilot);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   return <div className="flex flex-wrap items-center gap-3 rounded-lg border border-white/10 p-4">
     <div className="flex-1">
-      <p className="font-medium">Autopilot is {on ? "on" : "off"}</p>
-      <p className="text-sm text-[#8B8FA3]">{on ? `Pentra publishes ${rhythm(intervalMs)}. Drafts with a factual concern wait for you in Articles.`
+      <p className="font-medium">Autopilot is {on ? (paused ? "paused" : "on") : "off"}</p>
+      <p className="text-sm text-[#8B8FA3]">{on ? paused ? "No new articles start while paused. Resume from Service settings."
+        : `Pentra publishes ${rhythm(intervalMs)}. Drafts it isn't confident about are held back and never published.`
         : "Every article waits for your approval in Articles."}</p>
     </div>
-    <Button size="sm" variant={on ? "secondary" : "primary"} loading={busy} onClick={async () => {
+    {(!on || reviewAvailable) && <Button size="sm" variant={on ? "secondary" : "primary"} loading={busy} onClick={async () => {
       setBusy(true); setError("");
       try { await setAutopilot({ siteId, enabled: !on, reviewToken }); }
       catch (err) { setError(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Couldn't change Autopilot. Refresh and try again."); }
       finally { setBusy(false); }
-    }}>{on ? "Switch to review first" : "Turn on Autopilot"}</Button>
+    }}>{on ? "Switch to review first" : "Turn on Autopilot"}</Button>}
     {error && <p role="alert" className="w-full text-sm text-red-400">{error}</p>}
   </div>;
 }

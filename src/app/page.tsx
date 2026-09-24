@@ -114,7 +114,7 @@ function HowItWorks() {
 /* ─── What you get ─────────────────────────────── */
 
 const features = [
-  { icon: ShieldCheck, title: "Set-and-forget publishing", desc: "Autopilot publishes on your plan's schedule. Drafts with a factual concern wait for you instead of going live." },
+  { icon: ShieldCheck, title: "Set-and-forget publishing", desc: "Autopilot publishes on your plan's schedule. A draft that doesn't pass the fact check is held back and never goes live." },
   { icon: Search, title: "Live web research", desc: "Every article is researched on the live web. Factual claims link to the sources they came from." },
   { icon: CheckCircle2, title: "Independent fact-check", desc: "A separate review checks each claim against the evidence before anything is published." },
   { icon: Building2, title: "Written about your business", desc: "Articles use only the business facts you confirmed, with a clear next step to your signup, booking or checkout page." },
@@ -172,7 +172,7 @@ const faqs = [
   },
   {
     q: "Is Autopilot safe for my brand?",
-    a: "Autopilot only publishes articles that pass the fact check. Drafts with a factual concern wait for you with the reviewer's notes. You can switch to Review first at any time, so nothing publishes without your approval.",
+    a: "Autopilot only publishes articles that pass the fact check. A draft that doesn't pass is held back, never published, and the schedule moves on. You can pause Pentra at any time, and on GitHub-based sites you can switch to Review first so nothing publishes without your approval.",
   },
   {
     q: "Will Pentra make things up about my business?",

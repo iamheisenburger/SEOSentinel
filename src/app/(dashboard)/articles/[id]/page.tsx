@@ -1165,8 +1165,10 @@ export default function ArticleDetailPage() {
                 <ul className="list-disc space-y-1 pl-5 text-sm text-[#EDEEF1]">{mustFix.slice(0, 12).map((issue, index) => <li key={index}>{issue}</li>)}</ul>
               </>}
               {styleNotes.length > 0 && <>
-                <p className="text-sm font-medium text-[#F59E0B]">{mustFix.length ? "Notes you can accept" : "No specific errors are listed. You can accept these reviewer notes after reading the draft:"}</p>
+                <p className="text-sm font-medium text-[#F59E0B]">{mustFix.length ? "Notes you can accept" : article.claimEvidenceStatus === "failed" ? "You can accept these reviewer notes after checking the draft:" : "No specific errors are listed. You can accept these reviewer notes after reading the draft:"}</p>
                 <ul className="list-disc space-y-1 pl-5 text-sm text-[#EDEEF1]">{styleNotes.map((issue, index) => <li key={index}>{issue}</li>)}</ul>
+                {article.claimEvidenceStatus === "failed" && styleNotes.includes("Strict publication requires a completed claim-to-evidence audit.") &&
+                  <p className="text-sm text-[#F59E0B]">The reviewer could not match every claim to a source. Check each number and specific claim against its source before accepting.</p>}
               </>}
               {mustFix.length === 0 && styleNotes.length > 0 && !editing && <div className="space-y-1">
                 <Button size="sm" loading={actionBusy} onClick={async () => {

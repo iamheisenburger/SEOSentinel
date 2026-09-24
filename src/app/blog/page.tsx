@@ -1,26 +1,37 @@
-"use client";
-
-import { useQuery } from "convex/react";
-import { api } from "../../../convex/_generated/api";
+import type { Metadata } from "next";
+import { headers } from "next/headers";
 import Link from "next/link";
-import { LandingNav } from "@/components/layout/landing-nav";
 import { Clock, ArrowRight } from "lucide-react";
 import { format } from "date-fns";
-import { useState, useEffect } from "react";
+import { api } from "../../../convex/_generated/api";
+import { LandingNav } from "@/components/layout/landing-nav";
+import { convexHttp } from "@/lib/convexHttpClient";
 
-function useDomain() {
-  const [domain, setDomain] = useState("");
-  useEffect(() => {
-    setDomain(window.location.hostname.replace(/^www\./, ""));
-  }, []);
-  return domain;
+// Server-rendered so search engines see every article link in the HTML.
+export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Blog",
+  description: "Practical guides on SEO, content and winning customers from Google and AI answers, researched and fact-checked with Pentra.",
+};
+
+async function requestDomain(): Promise<string> {
+  const requestHeaders = await headers();
+  const host = requestHeaders.get("x-forwarded-host")?.split(",", 1)[0]?.trim() || requestHeaders.get("host")?.trim();
+  for (const candidate of [host, process.env.NEXT_PUBLIC_SITE_URL?.trim()]) {
+    if (!candidate) continue;
+    try {
+      const url = new URL(/^https?:\/\//.test(candidate) ? candidate : `https://${candidate}`);
+      if (url.hostname) return url.hostname.toLowerCase().replace(/^www\./, "");
+    } catch { /* try the next candidate */ }
+  }
+  return "pentra.dev";
 }
 
-export default function BlogIndex() {
-  const domain = useDomain();
-  const articles = useQuery(api.blog.listPublishedByDomain, domain ? {
-    domain,
-  } : "skip");
+export default async function BlogIndex() {
+  let articles: Awaited<ReturnType<typeof convexHttp.query<typeof api.blog.listPublishedByDomain>>> | null = null;
+  try { articles = await convexHttp.query(api.blog.listPublishedByDomain, { domain: await requestDomain() }); }
+  catch { articles = null; }
 
   return (
     <div className="min-h-screen bg-[#08090E]">
@@ -31,22 +42,12 @@ export default function BlogIndex() {
           Blog
         </h1>
         <p className="mt-2 text-[15px] text-[#8B8FA3]">
-          Insights on SEO, content strategy, and AI-powered publishing.
+          Practical guides on SEO, content and getting customers from Google and AI answers. Every article is
+          researched on the live web and fact-checked before it is published.
         </p>
 
-        {articles === undefined && (
-          <div className="mt-12 flex flex-col gap-6">
-            {[...Array(4)].map((_, i) => (
-              <div
-                key={i}
-                className="rounded-xl border border-white/[0.06] bg-[#0F1117] p-6 animate-pulse"
-              >
-                <div className="h-5 w-2/3 rounded bg-white/[0.04]" />
-                <div className="mt-3 h-3 w-full rounded bg-white/[0.03]" />
-                <div className="mt-2 h-3 w-4/5 rounded bg-white/[0.03]" />
-              </div>
-            ))}
-          </div>
+        {articles === null && (
+          <p className="mt-16 text-center text-[15px] text-[#565A6E]">Articles could not be loaded. Please refresh.</p>
         )}
 
         {articles && articles.length === 0 && (

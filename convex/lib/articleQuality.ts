@@ -82,13 +82,16 @@ export function preservedResearchEvidenceSnapshot(
  * (editorial 80–84) when the fact check itself passed. Safety, metadata,
  * rendering, word-count and evidence-for-numbers checks are never waivable. */
 export const AUTOPILOT_ACCEPTANCE = "pentra-autopilot";
-export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number }, actor: "owner" | "autopilot" = "owner"): boolean {
+export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number; claimEvidenceStatus?: string }, actor: "owner" | "autopilot" = "owner"): boolean {
   const editorial = /^Editorial quality score is (\d+); strict minimum is 85\.$/.exec(issue);
   if (editorial) return Number(editorial[1]) >= (actor === "owner" ? 70 : 80);
   if (issue === PENDING_INTERNAL_LINK_ISSUE) return true;
   const factual = /^Fact-check score is (\d+); strict minimum is 85\.$/.exec(issue);
   if (factual) return actor === "owner" && Number(factual[1]) >= 70;
   if (issue === "Strict publication requires a completed claim-to-evidence audit.") {
+    // A failed audit means some claim could not be matched to its source:
+    // only the owner, reading the draft, may accept that; autopilot never does.
+    if (actor === "autopilot" && article.claimEvidenceStatus === "failed") return false;
     return (article.factCheckScore ?? 0) >= (actor === "owner" ? 70 : 85);
   }
   return false;
@@ -1724,7 +1727,7 @@ export function evaluatePublicationQuality(
       for (let index = issues.length - 1; index >= 0; index--) {
         if (waiver.issues.includes(issues[index]) &&
           ownerWaivableIssue(issues[index], article, waiver.userId === AUTOPILOT_ACCEPTANCE ? "autopilot" : "owner")) {
-          warnings.push(`Owner accepted reviewer note: ${issues[index]}`);
+          warnings.push(`${waiver.userId === AUTOPILOT_ACCEPTANCE ? "Autopilot" : "Owner"} accepted reviewer note: ${issues[index]}`);
           issues.splice(index, 1);
         }
       }

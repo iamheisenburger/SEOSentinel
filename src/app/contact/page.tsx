@@ -5,7 +5,7 @@ import { LandingNav } from "@/components/layout/landing-nav";
 
 export const metadata: Metadata = {
   title: "Contact",
-  description: "Get in touch with the Pentra team.",
+  description: "Questions about Pentra, your plan or your website? Email the Pentra team at pentrahelp@gmail.com and we'll help.",
 };
 
 export default function ContactPage() {

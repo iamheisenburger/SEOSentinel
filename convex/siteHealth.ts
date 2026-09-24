@@ -26,7 +26,7 @@ export const latest = query({ args: { siteId: v.id("sites") }, handler: async (c
 
 /** Weekly checks for sites on the content service. Bounded fan-out. */
 export const scheduleWeekly = internalMutation({ args: {}, handler: async (ctx) => {
-  const sites = await ctx.db.query("sites").take(500);
+  const sites = await ctx.db.query("sites").order("desc").take(500); // newest first
   let scheduled = 0;
   for (const site of sites) {
     if (site.serviceMode !== "growth_first" || !site.contentSchedule || site.deletionStatus) continue;

@@ -22,8 +22,9 @@ export type PageHealthResult = {
   issues: PageHealthIssue[];
 };
 
-const decode = (value: string) => value.replace(/&#x([0-9a-f]{1,6});/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
-  .replace(/&#(\d{1,7});/g, (_, code) => String.fromCodePoint(Number(code))).replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+const safeCodePoint = (code: number) => Number.isInteger(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+const decode = (value: string) => value.replace(/&#x([0-9a-f]{1,6});/gi, (_, hex) => safeCodePoint(parseInt(hex, 16)))
+  .replace(/&#(\d{1,7});/g, (_, code) => safeCodePoint(Number(code))).replace(/&quot;/g, '"').replace(/&apos;/g, "'")
   .replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 
 function metaContent(html: string, name: string): string | null {
@@ -121,7 +122,9 @@ export function healthScore(results: PageHealthResult[]) {
  * sitemaps does it declare? Only the `*` and Googlebot groups matter here. */
 export function robotsTxtFindings(txt: string): { blocksAll: boolean; sitemaps: string[] } {
   const sitemaps: string[] = [];
-  let agents: string[] = [], inRules = false, blocksAll = false, allowsRoot = false, relevant = false;
+  type Group = { agents: string[]; disallowAll: boolean; allowRoot: boolean };
+  const groups: Group[] = [];
+  let current: Group | null = null, inRules = false;
   for (const raw of txt.split(/\r?\n/)) {
     const line = raw.replace(/#.*$/, "").trim();
     const m = /^([A-Za-z-]+)\s*:\s*(.*)$/.exec(line);
@@ -129,17 +132,20 @@ export function robotsTxtFindings(txt: string): { blocksAll: boolean; sitemaps: 
     const key = m[1].toLowerCase(), value = m[2].trim();
     if (key === "sitemap") { if (/^https:\/\//i.test(value)) sitemaps.push(value); continue; }
     if (key === "user-agent") {
-      if (inRules) { agents = []; inRules = false; }
-      agents.push(value.toLowerCase());
-      relevant = agents.some(a => a === "*" || a === "googlebot");
+      if (!current || inRules) { current = { agents: [], disallowAll: false, allowRoot: false }; groups.push(current); inRules = false; }
+      current.agents.push(value.toLowerCase());
       continue;
     }
+    if (!current) continue;
     inRules = true;
-    if (!relevant) continue;
-    if (key === "disallow" && value === "/") blocksAll = true;
-    if (key === "allow" && (value === "/" || value === "/$")) allowsRoot = true;
+    if (key === "disallow" && value === "/") current.disallowAll = true;
+    if (key === "allow" && (value === "/" || value === "/$")) current.allowRoot = true;
   }
-  return { blocksAll: blocksAll && !allowsRoot, sitemaps: sitemaps.slice(0, 5) };
+  // Google obeys its own group when one exists, otherwise the * group.
+  const google = groups.filter(g => g.agents.includes("googlebot"));
+  const applicable = google.length ? google : groups.filter(g => g.agents.includes("*"));
+  const blocksAll = applicable.length > 0 && applicable.some(g => g.disallowAll) && !applicable.some(g => g.allowRoot);
+  return { blocksAll, sitemaps: sitemaps.slice(0, 5) };
 }
 
 /** Child sitemaps listed by a sitemap index on the same host. */
@@ -154,4 +160,24 @@ export function sitemapIndexChildren(xml: string, siteHost: string, limit = 3): 
     if (out.length >= limit) break;
   }
   return out;
+}
+
+/** Speed pass from a PageSpeed Insights (mobile) response trimmed with
+ * `fields`. Missing data yields no findings: never invent a speed problem. */
+export function speedFindings(psi: unknown): PageHealthIssue[] {
+  const result = (psi as { lighthouseResult?: { categories?: { performance?: { score?: unknown } };
+    audits?: Record<string, { numericValue?: unknown } | undefined> } } | null)?.lighthouseResult;
+  const issues: PageHealthIssue[] = [];
+  const score = typeof result?.categories?.performance?.score === "number" ? Math.round(result.categories.performance.score * 100) : null;
+  const lcp = result?.audits?.["largest-contentful-paint"]?.numericValue;
+  const cls = result?.audits?.["cumulative-layout-shift"]?.numericValue;
+  if (score !== null && score < 50) issues.push({ code: "speed_poor", severity: "critical",
+    message: `Your homepage is slow on mobile (Google speed score ${score}/100). Slow pages rank lower and lose visitors.` });
+  else if (score !== null && score < 90) issues.push({ code: "speed_fair", severity: "warning",
+    message: `Your homepage could be faster on mobile (Google speed score ${score}/100).` });
+  if (typeof lcp === "number" && lcp > 2500) issues.push({ code: "lcp_slow", severity: lcp > 4000 ? "critical" : "warning",
+    message: `The main content takes ${(lcp / 1000).toFixed(1)}s to appear on mobile; Google recommends under 2.5s.` });
+  if (typeof cls === "number" && cls > 0.1) issues.push({ code: "layout_shift", severity: "warning",
+    message: `The page jumps around while loading (layout shift ${cls.toFixed(2)}; aim for under 0.1).` });
+  return issues;
 }

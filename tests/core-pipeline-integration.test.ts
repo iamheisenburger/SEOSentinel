@@ -1003,6 +1003,48 @@ test("SLC61 new customers choose Autopilot with a plan-derived rhythm and can sw
   f.assertOffline();
 });
 
+test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly allowance and WordPress cannot switch to review first", async t => {
+  await t.test("reenable_keeps_prepared_slot", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    f.setIdentity(saved.userId);
+    let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+    const slot = f.get(site.id)!.contentSchedule.nextDeadlineAt, interval = f.get(site.id)!.contentSchedule.intervalMs;
+    f.add("jobs", { siteId: site.id, type: "article", status: "done", createdAt: f.now(), updatedAt: f.now(), payload: {},
+      contentWork: { intent: "create", stage: "ready", deadlineAt: slot, windowStartAt: slot - 300_000, revisions: 0, replacements: 0,
+        discardedArticleIds: [], providerCalls: [] } });
+    r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:setAutopilot", { siteId: site.id, enabled: false, reviewToken: r.reviewToken });
+    f.setTime(f.now() + 3 * 3_600_000);
+    r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:setAutopilot", { siteId: site.id, enabled: true, reviewToken: r.reviewToken });
+    assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, slot, "the prepared article keeps its slot");
+    assert.equal(f.get(site.id)!.contentSchedule.intervalMs, interval);
+    f.get(site.id)!.publishMethod = "wordpress";
+    r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    assert.equal(r.autopilot.reviewAvailable, false);
+    await assert.rejects(f.invoke("contentWork:setAutopilot", { siteId: site.id, enabled: false, reviewToken: r.reviewToken }), /GitHub sites/);
+    assert.equal(f.get(site.id)!.contentSchedule.ownerReviewedOnly, undefined);
+    f.setIdentity(null); f.assertOffline();
+  });
+  await t.test("monthly_allowance", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const entitlement = f.tables.account_plan_entitlements.find(e => e.userId === f.get(f.sites[0].id)!.userId)!;
+    Object.assign(entitlement, { planFeatures: ["max_sites_1", "max_articles_3"], maxSites: 1, maxArticles: 3 });
+    f.get(f.sites[0].id)!.planFeatures = ["max_sites_1", "max_articles_3"];
+    const site = await selectGrowth(f);
+    Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_fill");
+    const firstJob = f.tables.jobs.find(j => j.contentWork)!;
+    Object.assign(firstJob, { status: "done" }); firstJob.contentWork.stage = "ready"; // prepared, waiting for its slot
+    const second = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal(second.mode, "quota_reached", "the free plan's one article this month is already started");
+    assert.equal(f.tables.jobs.filter(j => j.contentWork).length, 1);
+    f.assertOffline();
+  });
+});
+
 test("SLC54 owner draft completes two fresh approved publication cycles without changing the paused cadence", async () => {
   const f = await scopedPricingFixture();
   for (const s of f.sites.slice(0, 2)) f.get(s.id)!.contentSchedule.paused = true;
@@ -3355,6 +3397,12 @@ test("SLC60 autopilot accepts style-only notes and never stalls on a draft the r
     assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline + f.get(site.id)!.contentSchedule.intervalMs);
     assert.equal(f.get(failed._id)!.contentWork.failure, "bounded_content_quality_exhausted", "the missed slot stays recorded");
     assert.ok(f.get(failed.articleId), "the draft is retained for the owner");
+    f.setIdentity(f.get(site.id)!.userId);
+    const readiness = await f.invoke("contentWork:readiness", { siteId: site.id });
+    const item = readiness.work.find((w: { jobId: string }) => w.jobId === failed._id);
+    assert.equal(item.parked, true); assert.match(item.failure, /held this draft back/);
+    await assert.rejects(f.invoke("articles:acceptOwnerReviewNotes", { articleId: failed.articleId, artifactHash: "any" }));
+    f.setIdentity(null);
     f.assertOffline();
   });
   await t.test("existing_contracts_keep_their_failed_slot", async () => {

@@ -3238,9 +3238,12 @@ export const acceptOwnerReviewNotes = mutation({
     const jobs = await ctx.db.query("jobs").withIndex("by_site_article", q => q.eq("siteId", article.siteId).eq("articleId", articleId)).take(21);
     // Owner-requested drafts, and automatic drafts parked for the owner after
     // bounded review, can both be accepted by the site owner.
-    const job = jobs.find(j => j.contentWork && j.contentWork.retiredAt === undefined &&
-      ["failed", "review_failed"].includes(j.contentWork.stage) &&
-      (j.contentWork.ownerRequest ? j.contentWork.ownerRequest.userId === site.userId : j.contentWork.intent === "create"));
+    // Only a finished (bounded) review can be accepted; an in-progress revision
+    // still owns its spend reservation. Autopilot-setup sites skip parked
+    // automatic drafts and continue, so those are not re-offered for delivery.
+    const job = jobs.find(j => j.contentWork && j.contentWork.retiredAt === undefined && j.contentWork.stage === "failed" &&
+      (j.contentWork.ownerRequest ? j.contentWork.ownerRequest.userId === site.userId
+        : j.contentWork.intent === "create" && !site.contentSchedule?.autopilotSelectedAt));
     if (!job?.contentWork || jobs.length > 20) throw new ConvexError("Only a reviewed draft for this site can be accepted.");
     const result = await sealAcceptedReviewNotes(ctx, site, article, site.userId!);
     if (!result.sealed && result.blocking.length > 0) throw new ConvexError(`Fix these before publishing: ${result.blocking.join(" ")}`);

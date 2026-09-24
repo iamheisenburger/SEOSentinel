@@ -61,6 +61,19 @@ async function ownerDraftAllowance(ctx: QueryCtx | MutationCtx, site: Doc<"sites
   return { tier, used, limit: OWNER_DRAFTS_PER_MONTH[tier] as number };
 }
 const LIMIT = 1000;
+/** New articles started this UTC month across the account's sites: automatic
+ * creations plus new owner drafts (edits of an existing draft do not count). */
+async function accountArticlesThisMonth(ctx: QueryCtx | MutationCtx, site: Doc<"sites">) {
+  const now = new Date(), monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  let used = 0;
+  for (const owned of await ctx.db.query("sites").withIndex("by_user", q => q.eq("userId", site.userId!)).take(LIMIT)) {
+    const siteJobs = await ctx.db.query("jobs").withIndex("by_site_content_deadline", q =>
+      q.eq("siteId", owned._id).gte("contentWork.deadlineAt", monthStart)).take(LIMIT);
+    used += siteJobs.filter(j => j.contentWork && j.contentWork.intent === "create" && j.createdAt >= monthStart &&
+      (j.contentWork.ownerRequest ? !j.contentWork.ownerRequest.sourceArticleId : j.contentWork.retiredAt === undefined)).length;
+  }
+  return { used, nextMonthStart: Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1) };
+}
 async function pricingConfiguration(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, job?: Doc<"jobs">) {
   // Deployment-owned pricing is deliberately absent by default. Selection is
   // consent, not activation. An optional selector enables only the immutable
@@ -562,14 +575,21 @@ export const setAutopilot = mutation({ args: { siteId: v.id("sites"), enabled: v
       if (!(await contentEntitlementAuthorized(ctx, site))) throw new ConvexError("Your plan needs to be active in Billing first.");
       const plan = await accountPlan(ctx, site);
       const { ownerReviewedOnly: _omit, ...rest } = s; void _omit;
+      // Automatic work prepared before a switch keeps its slots: resume the
+      // schedule at the earliest unfinished one instead of orphaning it.
+      const unfinished = (await jobsForSite(ctx, site._id)).filter(j => j.contentWork && !j.contentWork.ownerRequest &&
+        j.contentWork.retiredAt === undefined && !["verified", "failed"].includes(j.contentWork.stage))
+        .map(j => j.contentWork!.deadlineAt).sort((a, b) => a - b);
       await ctx.db.patch(site._id, { approvalRequired: false, autopilotEnabled: true, autopilotRolloutMode: "warm",
         contentSchedule: { ...rest, autopilotSelectedAt: Date.now(), autopublishConsentAt: Date.now(), active: false, paused: false,
-          intervalMs: plan.autopilotIntervalMs, nextDeadlineAt: Date.now() + 24 * 3_600_000,
+          intervalMs: unfinished.length ? s.intervalMs : plan.autopilotIntervalMs,
+          nextDeadlineAt: unfinished.length ? unfinished[0] : Date.now() + 24 * 3_600_000,
           profileHash: confirmedContentProfileHash(site), connectionHash: contentConnectionHash(site) }, updatedAt: Date.now() });
       await wake(ctx, site._id);
       return { changed: true };
     }
     if (s.ownerReviewedOnly) return { changed: false };
+    if (site.publishMethod !== "github") throw new ConvexError("Review first is available for GitHub sites. You can pause Pentra instead.");
     const { autopublishConsentAt: _consent, ...keep } = s; void _consent;
     await ctx.db.patch(site._id, { approvalRequired: true, autopilotEnabled: false,
       contentSchedule: { ...keep, ownerReviewedOnly: true, active: false, paused: true }, updatedAt: Date.now() });
@@ -595,6 +615,10 @@ export const readiness = query({
     const publishedRows = (await ctx.db.query("articles").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published"))
       .order("desc").take(20)).filter(a => articleMatchesCurrentDomain(site, a));
     const publishedTopics = new Set(publishedRows.map(a => a.topicId).filter(Boolean));
+    // On sites set up with Autopilot, a draft the reviewer would not pass is
+    // skipped (the schedule continues); it needs no action from the owner.
+    const parkedByAutopilot = (j: Doc<"jobs">) => Boolean(s?.autopilotSelectedAt && !j.contentWork?.ownerRequest && j.contentWork?.intent === "create" &&
+      j.contentWork.stage === "failed" && j.contentWork.failure === "bounded_content_quality_exhausted");
     // A parked draft whose topic the owner has since published (usually as an
     // edited version) is resolved for the owner; the miss itself stays recorded.
     const supersededJobs = new Set<string>();
@@ -613,7 +637,8 @@ export const readiness = query({
       funding: { ...await contentFunding(ctx, site, pricing?.budgetMicroUsd),
         pricingScope: !pricing ? "unavailable" as const : pricing.validationAuthorizationId ? "validation_run" as const : "ordinary" as const },
       plan: await accountPlan(ctx, site),
-      autopilot: { selectable: Boolean(site.contentSetupRequestedAt), on: Boolean(s && !s.ownerReviewedOnly && site.autopilotEnabled && !site.approvalRequired) },
+      autopilot: { selectable: Boolean(site.contentSetupRequestedAt), on: Boolean(s && !s.ownerReviewedOnly && site.autopilotEnabled && !site.approvalRequired),
+        reviewAvailable: site.publishMethod === "github" },
       ownerDraft: { maximumMicroUsd: pricing?.budgetMicroUsd ?? null,
         allowance: pricing ? await ownerDraftAllowance(ctx, site, Boolean(pricing.validationAuthorizationId)) : null,
         latest: jobs.filter(j => j.contentWork?.ownerRequest).sort((a, b) => b.createdAt - a.createdAt).slice(0, 1).map(j => ({
@@ -642,7 +667,9 @@ export const readiness = query({
         retiredAt: j.contentWork!.retiredAt,
         publishedAt: j.contentWork!.publishedAt, verifiedAt: j.contentWork!.verifiedAt, creditRetry,
         superseded: supersededJobs.has(j._id),
+        parked: parkedByAutopilot(j),
         failure: supersededJobs.has(j._id) ? "Replaced by your edited version of this article, which is now live. The missed slot stays on record."
+          : parkedByAutopilot(j) ? "Pentra held this draft back because its fact check wasn't confident enough. It won't be published; your schedule continued with the next article."
           : rejectedReview ? "Review handling has been repaired. Resume to recheck this retained work within its existing revision and spending limits. The article has not been approved."
           : creditRetry ? "Pentra has restored generation for this interrupted work. You can retry it once; the original deadline and earlier attempt remain recorded."
           : contentIssue(j.contentWork!.failure ?? j.error) }; }) };
@@ -1028,6 +1055,17 @@ export const advance = internalMutation({
       priority: 1, status: "planned", notes: improvement.reason, createdAt: Date.now(), updatedAt: Date.now(),
     })) : await chooseTopic(ctx, site);
     if (!topic) return { scheduled: 0, mode: "content_inputs_exhausted" };
+    // Autopilot honours the plan's monthly article allowance across the whole
+    // account. When it is used up, the next article waits for the new month.
+    if (schedule.autopilotSelectedAt && !improvement && site.userId) {
+      const plan = await accountPlan(ctx, site), month = await accountArticlesThisMonth(ctx, site);
+      if (month.used >= plan.articlesPerMonth) {
+        if (waiting.length === 0 && schedule.nextDeadlineAt < month.nextMonthStart + 12 * 3_600_000) {
+          await ctx.db.patch(siteId, { contentSchedule: { ...schedule, nextDeadlineAt: month.nextMonthStart + 12 * 3_600_000 }, updatedAt: Date.now() });
+        }
+        return { scheduled: 0, mode: "quota_reached", blockers: ["plan_monthly_articles_reached"] };
+      }
+    }
     const deadlineAt = schedule.nextDeadlineAt + waiting.length * schedule.intervalMs;
     if (work.some(j => j.contentWork!.deadlineAt === deadlineAt)) return { scheduled: 0, mode: "content_failed_slot" };
     const budgetRequest = { siteId, userId: site.userId!, purpose: "content_work" as const,

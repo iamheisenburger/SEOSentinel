@@ -127,7 +127,7 @@ export function AuthShell({
 
               <div className="flex items-center gap-2 border-t border-white/[0.05] px-5 py-3 text-[11px] text-[#8B8FA3]">
                 <ShieldCheck className="h-3.5 w-3.5 text-[#22C55E]" />
-                Drafts with a factual concern always wait for you.
+                Drafts that don&apos;t pass the fact check never go live.
               </div>
             </div>
           </div>
