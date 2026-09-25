@@ -133,7 +133,7 @@ results"; "by tonight i want a ready end to end pentra that is ready for distrib
   blocks whose URL is among the returned results; source pages are fetched (safeFetchPublicText) and only strict
   evidence (.gov/.edu/academic/official docs) becomes article sources, so many niches still get zero sources and
   the article is written from confirmed facts. A 400/403 refusal is recorded and never blocks the article.
-  Kill switch: Convex env PENTRA_CONTENT_WEB_RESEARCH=off.
+  P41: research is OFF unless Convex env PENTRA_CONTENT_WEB_RESEARCH=on (see the P32–P41 section for why).
 - Cadence: a failed Autopilot slot (skippable failure, nothing published) gets ONE replacement job (new topic, own
   reservation, trigger `content_slot:<deadline>:replacement`) when ≥1h remains; a circuit breaker stops
   replacements after 2 failures in the last 3 finished jobs. The replaced job counts once in the monthly allowance.
@@ -155,13 +155,130 @@ results"; "by tonight i want a ready end to end pentra that is ready for distrib
   from /blog, /contact and article pages.
 
 Known gaps after P31 (honest):
-- pentra.dev's own blog has 121 articles; roughly 80 of them sit in about 13 groups that target the same searches
+- [DONE Sep 25, a53dff1: 63 duplicates now redirect to 25 kept articles.] pentra.dev's own blog has 121 articles; roughly 80 of them sit in about 13 groups that target the same searches
   (content refresh, content gaps, keyword clustering, rank monitoring, AI content generators…), several with
   2024/2025 in the title. Consolidating each group into one strong page with 301s would help; owner decision
   (published articles are preserved until then).
 - No per-article featured image or author byline on customer sites; no YouTube embeds (deliberately: automatic
   video picks are often irrelevant). Pentra's own blog has BlogPosting/FAQPage/Breadcrumb JSON-LD.
 - Owner-edited drafts still publish at "<slug>-edited" URLs.
+
+### Sep 25 (P32–P41): why the two test sites had poor results, and what changed
+Owner (chat): "it is literally pentra's job to deliver results… fix whatever you have to"; "system + results = success".
+
+Diagnosis (GSC UI in the owner's Chrome + read-only `organicDiagnostics.snapshot`, one site, aggregates only):
+- pentra.dev had a discovery problem, not only a content problem:
+  - Google last read the sitemap on Mar 21 (submitted Mar 15, 12 pages discovered), so most articles were never found.
+  - Nothing on the homepage linked to articles.
+  - The homepage had no canonical, and www answered with a 307. Google picked www.pentra.dev and reported "Duplicate
+    without user-selected canonical".
+  - Unknown paths returned 200 through the blog rewrite (soft 404s).
+  - About 80 of 121 articles sat in about 13 near-duplicate groups.
+  - The domain is young and has no links.
+- LeadPilot is indexed (about 66 of 72 pages) but ranks on pages 3–8 for broad, hard keywords. It needs winnable
+  keywords and links, not indexing fixes.
+
+Shipped (Convex + Vercel):
+- d21ca6b: topic titles keep their own casing (src/lib/topic-title.ts).
+- 5b23f87: `organicDiagnostics.snapshot` internalQuery (read-only; no OAuth material; one tenant).
+- b3c5d24:
+  - Dashboard `SearchProgress`: impressions, average position, pages seen by Google, indexed x of y, and a
+    sitemap line. It leads clicks, so a new site sees progress before clicks arrive.
+  - src/proxy.ts: on pentra.dev an unknown first path segment gets a real 404.
+  - Homepage "Latest guides" section with crawlable links (revalidate 3600).
+- d0b5670: `gscSync.submitAutopilotSitemapIfNeeded`.
+  - Runs for an Autopilot site with the webmasters scope when any published article is "URL is unknown to Google" or
+    "Discovered - currently not indexed".
+  - At most once per 14 days. It discovers the sitemap from robots.txt on the same host, else uses /sitemap.xml.
+  - A 403 is recorded as `not_permitted` and never revokes the connection.
+  - It fired for both sites at the 12:30Z sync on Sep 25.
+- a53dff1:
+  - pentra.dev consolidation (src/lib/pentra-consolidation.ts): 63 duplicate slugs now 308 to 25 kept articles.
+    Articles stay unchanged in Convex; only pentra.dev stops serving them. Blog index, sitemap and homepage skip them.
+  - Topic choice prefers searched, winnable keywords: opportunity = log10(1+volume)*12 − difficulty*0.8.
+  - Keyword research never adds a keyword with difficulty above 45.
+- 466d0e8: IndexNow key file (public/0a621f060525be9f5b4d3bff6cb849b1.txt) and scripts/indexnow-submit.mjs.
+- 462aeef:
+  - Explicit homepage canonical (https://pentra.dev/). Canonicals on contact, legal and the blog index.
+  - /pricing sends a permanent redirect to /#pricing.
+  - Weekly site health for EVERY customer now checks discovery: home_canonical_missing, soft_404 and
+    host_redirect_temporary (the other host answering 302/303/307).
+- P41:
+  - Web research is now OPT-IN (Convex env `PENTRA_CONTENT_WEB_RESEARCH=on`; unset means off).
+  - Autopilot never picks or adds a topic that names one of the site's listed competitors (site.competitors).
+    SLC62 covers this.
+- P42: a short one-word competitor brand ("copy.ai", "seo.ai") matches only its full name. Otherwise everyday
+  keywords such as "ad copy" or "seo audit" would be skipped. SLC62 covers this too.
+
+Why research was switched off (regression found and rolled back the same day):
+- From 11:09Z every pentra.dev draft was blocked, so its slots stayed empty.
+- In research-evidence mode the claim-to-evidence audit asks every general sentence to match a source excerpt
+  word for word. Normal author guidance failed it: fact check 29 on uncited rules of thumb ("5–8 competitors",
+  "every quarter"), and editorial 78–84 against a minimum of 85.
+- One topic came straight from keyword research: "semrush keyword research tool", a competitor's brand search.
+- Before turning research back on:
+  - Make the audit treat hedged author guidance the way confirmed-facts mode does.
+  - Prove it on isolated fixtures with at least 3 consecutive drafts passing the gate.
+
+- P44 (for every customer):
+  - Weekly site health has a new article discovery pass:
+    - `articles_missing_from_sitemap` (critical): a live article (its own URL answers 200, published more than 24h
+      ago) is not in the site's sitemap. Pentra reads the whole sitemap (index plus up to 20 child sitemaps). When
+      it can't read all of it, it makes no finding. Articles that permanently redirect never count.
+    - `newest_article_not_linked` (warning): the newest article (published more than 1h ago) is not linked from
+      any of these: the homepage, its parent listing page, or a /blog, /news or similar page the homepage links to.
+  - Topics: when no researched keyword is left, Autopilot writes a customer question the owner confirmed (a
+    painPoints line ending in "?"). Only after that does it use "A practical guide to <feature>".
+
+Rules learned from pentra.dev and LeadPilot (Sep 25). Do not repeat these, for any customer:
+1. Publishing is not the job; being found is. Pentra checks that every article Google should find:
+   - is live;
+   - is in the sitemap;
+   - is linked from a crawlable page;
+   - has a sitemap Google has actually read, with automatic resubmission when articles are unknown.
+   Anything missing shows up in site health and on the dashboard.
+2. One address per page:
+   - The homepage canonical is declared.
+   - www and non-www redirect permanently (301/308).
+   - Unknown URLs return a real 404.
+   Site health flags each of these for every customer.
+3. A young site writes for keywords it can win: searched keywords first, easy before big, difficulty above 45
+   never, and never a competitor's brand search. With no researched keyword left, it writes the owner's confirmed
+   customer questions, not feature names.
+4. One article per search intent. The intent-conflict check blocks near-duplicates. pentra.dev's roughly 80
+   duplicates came from the old engine and are consolidated.
+5. Measure leading signals: pages seen by Google, indexed x of y, impressions and average position. Clicks come
+   last.
+6. Never ship a writing-pipeline change to production without first proving it on isolated fixtures with
+   consecutive drafts passing the publish gate. The Sep 25 web-research change blocked every pentra.dev draft for
+   about two hours. It was caught in the dashboard and rolled back the same day.
+
+Done in the owner's Chrome (Sep 25):
+- GSC → URL Inspection → Request indexing for:
+  - https://pentra.dev/ (13:3xZ, after the canonical fix went live)
+  - https://pentra.dev/blog
+  - automate-seo-article-writing-at-scale
+  - automated-seo-workflow-complete-guide
+  - ai-content-generator-seo-automated-article-writing
+  - keyword-clustering-strategy-organize-by-intent
+  - how-to-detect-seo-content-gaps-website
+  - article-refresh-strategy-guide
+- IndexNow: 62 pentra.dev URLs submitted (HTTP 202) with scripts/indexnow-submit.mjs.
+- Vercel: www.pentra.dev (project seo-sentinel) and www.leadpilot.chat (project lead-pilot) now redirect 308 to
+  the apex.
+- pentra.dev business facts re-saved without the web-research claims (Settings → Edit business facts). Saving
+  re-confirms them and starts the next article.
+
+Owner actions still open:
+- Bing Webmaster Tools: sign in once at bing.com/webmasters (the first sign-in creates an account, which Cowork may
+  not do). Then use "Import from Google Search Console" for both sites.
+- Links: pentra.dev and LeadPilot need a few real links, from directories, communities where the owner already
+  posts, and launch sites. No content change replaces that for a young domain.
+
+How to measure (dashboard → Search progress, or `organicDiagnostics.snapshot`):
+- Week 1–2: pages seen and indexed x of y should rise. The sitemap line should show Google reading it again.
+- Week 2–6: impressions rise first, then average position improves on the kept articles.
+- Clicks follow. Judge LeadPilot by queries with a position under 20, not by total clicks.
 
 ### What Autopilot articles do NOT have (found Sep 24 night; public copy corrected in P26)
 - [FIXED in P31: bounded live web research now runs inside the audited provider; see the P31 section.] Before P31:
@@ -206,7 +323,7 @@ show up live, suspect the cache first: rename the file or redeploy without the b
 
 Next (not done):
 - (Done in P31) Bounded live web research + citations inside the audited content provider
-- Per-article featured images on customer sites; consolidating pentra.dev's duplicate article groups (owner decision)
+- Per-article featured images on customer sites (pentra.dev's duplicate groups were consolidated Sep 25)
 - Structured data on customer sites (MDX frontmatter faq/schema field or WordPress plugin JSON-LD)
 - Direct Shopify/Webflow publishers (paste covers them today)
 - customer email notifications (no transactional email provider configured)
