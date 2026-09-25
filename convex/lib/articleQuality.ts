@@ -687,13 +687,16 @@ function referencesNamedProduct(value: string, productEvidence: string): boolean
   return identities.some((identity) => normalized.includes(identity));
 }
 
+// "not a guarantee" is a caveat, not a promotional promise.
+const NEGATED_GUARANTEE_PATTERN = /\b(?:not|no|never|without|isn't|is not|aren't|are not|can't|cannot|can not|doesn't|does not|don't|do not|won't|will not)\s+(?:an?\s+|any\s+)?guarantee(?:d|s)?\b/gi;
+
 function hasEvidenceClaimSignal(value: string, productEvidence: string): boolean {
   return (
     inlineCitationNumbers(value).length > 0 ||
     EVIDENCE_REQUIRED_NUMBER_PATTERN.test(value) ||
     FACTUAL_CLAIM_PATTERN.test(value) ||
     hasExternalSystemAssertion(value) ||
-    HYPE_PATTERN.test(value) ||
+    HYPE_PATTERN.test(value.replace(NEGATED_GUARANTEE_PATTERN, "")) ||
     QUANTIFIED_OUTCOME_PATTERN.test(value) ||
     referencesNamedProduct(value, productEvidence) ||
     /\b(?:chatbots?|platforms?|software|tools?|automation)\b[^\n.!?]{0,100}\b(?:improves?|increases?|reduces?|saves?|boosts?|drives?|generates?|converts?)\b/i.test(value)

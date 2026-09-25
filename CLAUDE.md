@@ -200,7 +200,7 @@ Enforced via Clerk feature keys synced to Convex `planFeatures` on each site.
 
 | Plan | Price | Sites | Articles/mo |
 |------|-------|-------|-------------|
-| Free | $0 | 1 | 1 |
+| Free | $0 | 1 | 3 |
 | Starter | $49 ($39/mo annual) | 1 | 10 |
 | Pro | $99 ($79/mo annual) | 3 | 25 |
 | Scale | $199 ($159/mo annual) | 10 | 60 |

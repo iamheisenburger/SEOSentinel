@@ -125,6 +125,9 @@ function normalizeAnchor(value: string): string | null {
   return anchor;
 }
 
+const DANGLING_ANCHOR_END = new Set(["a", "an", "the", "and", "or", "but", "for", "to", "of", "in", "on", "at", "by",
+  "with", "from", "your", "our", "their", "its", "how", "what", "why", "when", "vs", "versus"]);
+
 /**
  * Produce deterministic, human-readable anchor candidates from an exact
  * destination title/keyword set. The injector still proves that the selected
@@ -136,7 +139,14 @@ export function preferredInternalLinkAnchorCandidates(
 ): string[] {
   const candidates: string[] = [];
   const seen = new Set<string>();
-  for (const seed of [title, ...keywords]) {
+  // A title's own headline (before its colon) reads as a complete anchor; a
+  // word-count cut must never leave "…for SEO: A" or end on a dangling word.
+  const headline = title.includes(":") ? title.slice(0, title.indexOf(":")).trim() : "";
+  const complete = (phrase: string) => {
+    const last = phrase.split(" ").at(-1)?.replace(/[^\p{L}\p{N}]+$/gu, "").toLowerCase() ?? "";
+    return !/:\s*\S*$/.test(phrase) && !DANGLING_ANCHOR_END.has(last);
+  };
+  for (const seed of [...(headline ? [headline] : []), title, ...keywords]) {
     const words = seed.trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
     for (let length = Math.min(8, words.length); length >= 2; length -= 1) {
       for (let start = 0; start + length <= words.length; start += 1) {
@@ -148,6 +158,7 @@ export function preferredInternalLinkAnchorCandidates(
             .filter(Boolean)
             .join(" "),
         ]) {
+          if (!complete(phrase)) continue;
           const anchor = normalizeAnchor(phrase);
           const key = anchor?.toLowerCase();
           if (!anchor || !key || seen.has(key)) continue;

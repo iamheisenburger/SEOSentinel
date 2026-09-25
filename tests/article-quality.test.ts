@@ -2240,3 +2240,21 @@ test("the claim ledger judges claim sentences, not the advice around them", () =
   assert.equal(result.passed, false, "every claim-bearing sentence is still checked on its own");
   assert.ok(result.issues.join("\n").includes("Harbor doubles organic traffic within 30 days"));
 });
+
+test("a caveat that something is not guaranteed is kept; a guarantee is still a claim", async () => {
+  const { pruneUnsupportedEvidenceSentences } = await import("../convex/lib/articleQuality.ts");
+  const productEvidence = "Name: Harbor\nHarbor writes articles from confirmed business facts.";
+  const productEvidenceHash = sha256Hex(productEvidence);
+  const caveat = "This is a conditional diagnostic, not a guarantee: thin results on page one suggest an opportunity, but verify the pattern in your own niche first.";
+  assert.deepEqual(pruneUnsupportedEvidenceSentences({ markdown: caveat, productEvidence, productEvidenceHash }).removed, []);
+  assert.deepEqual(pruneUnsupportedEvidenceSentences({ markdown: "Rankings aren't guaranteed, so treat any estimate as a starting point.", productEvidence, productEvidenceHash }).removed, []);
+  assert.deepEqual(pruneUnsupportedEvidenceSentences({ markdown: "This method is guaranteed to rank your pages.", productEvidence, productEvidenceHash }).removed,
+    ["This method is guaranteed to rank your pages."]);
+});
+
+test("related-reading anchors are complete phrases, never cut mid-title", async () => {
+  const { preferredInternalLinkAnchorCandidates } = await import("../convex/lib/internalLinks.ts");
+  assert.equal(preferredInternalLinkAnchorCandidates("How to Automate Keyword Research for SEO: A Practical Guide")[0], "How to Automate Keyword Research for SEO");
+  const long = preferredInternalLinkAnchorCandidates("Why Small Businesses Lose Visitors Before They Ever Become Leads Today")[0];
+  assert.ok(!/\b(?:a|the|for|to|of|and)$/i.test(long) && long.split(" ").length <= 8, long);
+});
