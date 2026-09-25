@@ -2303,3 +2303,57 @@ test("related-reading anchors are complete phrases, never cut mid-title", async 
     assert.equal(ledger("In this hypothetical example, not a real case, revenue grew 40% in 3 months.").passed, false);
   });
 }
+
+// --- Definitions, gerunds and conditionals (overnight Sep 25, P53) ---
+// The same replay showed advice blocked by verbs and nouns that only look like
+// attributions: a research tool that "helps you find" terms, "finding structure
+// in noise", "a single figure, an average, or a range", a condition about how
+// a score is built, a "whether … over the past 12 months" checklist item, and
+// the sentence after a hypothetical label that says none of it is real.
+{
+  const productEvidence = "Name: Acme\n\nSummary: Acme sells scheduling software for clinics.";
+  const ledger = (claim: string) => validateClaimEvidenceLedger({
+    markdown: claim,
+    sources: [],
+    researchEvidence: "",
+    productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [{ claim, supported: true, citationNumbers: [], reason: "Definition or reader guidance." }],
+  });
+
+  test("definitions, gerunds, formats and conditions are not attributions", () => {
+    for (const claim of [
+      "A keyword research tool helps you find and prioritize terms before you write; a rank tracker monitors where your published pages already stand for those terms over time.",
+      "At its core, a keyword research tool does three things: it suggests related search terms based on a word or topic you enter, and it gives you a rough sense of demand.",
+      "A messy list of phrases is a better starting point than a clean one, because clustering is a process of finding structure in noise.",
+      "Different tools can present the result differently: a single figure, an average, or a range.",
+      "If a tool's competition score comes from an ad auction, treat it as a signal of advertiser demand, and check the actual results page before relying on it.",
+      "Whether the line is flat, rising, or seasonal over the past 12 months.",
+      "When they don't agree, treat that disagreement itself as a finding worth investigating.",
+      "No company, tool, or result described in it is real, and nothing about it should be treated as evidence of how any specific product performs.",
+    ]) {
+      const result = ledger(claim);
+      assert.equal(result.passed, true, `${claim}\n${result.issues.join("\n")}`);
+    }
+  });
+
+  test("real attributions, statistics and platform mechanics still need evidence", () => {
+    for (const claim of [
+      "Research shows that long articles rank higher.",
+      "Our research found that clinics lose half their leads overnight.",
+      "The data suggests buyers compare three vendors before calling.",
+      "The data support a weekly publishing schedule.",
+      "Our findings indicate that short pages convert better.",
+      "The key finding is that clinics answer the phone less on Mondays.",
+      "The average clinic loses leads when nobody answers the phone.",
+      "If you publish weekly, rankings depend on how many backlinks each page has.",
+      "Whether you like it or not, 73% of buyers read reviews first.",
+      "None of the clinics we studied are real customers, yet 40% of them doubled bookings.",
+      "No other tool is real competition for Acme's calendar sync.",
+      "Whether or not you agree, rankings depend on how many backlinks a page has.",
+      "Whether you publish weekly, rankings depend on how many backlinks a page has.",
+    ]) {
+      assert.equal(ledger(claim).passed, false, claim);
+    }
+  });
+}

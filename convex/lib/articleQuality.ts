@@ -329,8 +329,13 @@ export function countDifferentiationSignals(
 // factual assertion. Require an attribution/assertion ("evidence shows...",
 // "evidence that/of...") while the independent citation, numeric, outcome,
 // and named-product checks below continue to guard facts embedded in advice.
+// A finding is claimed by "the/our finding(s)" or "findings", not by the verb
+// "finding structure in noise". A research TOOL that "helps you find" terms is
+// a definition; "research shows/found/suggests" is an attribution, so the
+// window form needs a finite verb (the bare "data show/support" form must be
+// adjacent). "An average, or a range" names a format, not a statistic.
 const FACTUAL_CLAIM_PATTERN =
-  /\b(?:according to|stud(?:y|ies)|survey|dataset|findings?)\b|\bon average\b|\b(?:the|an) average\b(?! (?:position|rank(?:ing)?|order|score|value|price|cost))|\baverage (?:of )?\d|\bmajority of (?:users|people|buyers|customers|visitors|businesses|companies|sites|websites|marketers|searchers|shoppers|consumers|founders|teams|americans|adults)\b|(?<!\bnot )\bevidence\s+(?:that|of)\b|\b(?:study|survey|report|data|evidence|research)\b[^\n.!?]{0,40}\b(?:shows?|found|finds?|indicates?|reports?|supports?|suggests?|demonstrates?|confirms?)\b|\b(?:shows?|found|indicates?)\s+that\b/i;
+  /\b(?:according to|stud(?:y|ies)|survey|dataset|findings)\b|\b(?:the|a|this|one|key|main|our|their|its) finding\b(?!\s+(?:worth|to investigate))|\bon average\b|\b(?:the|an) average\b(?=\s+[a-z])(?!\s+(?:position|rank(?:ing)?|order|score|value|price|cost)\b)|\baverage (?:of )?\d|\bmajority of (?:users|people|buyers|customers|visitors|businesses|companies|sites|websites|marketers|searchers|shoppers|consumers|founders|teams|americans|adults)\b|(?<!\bnot )\bevidence\s+(?:that|of)\b|\b(?:study|survey|report|data|evidence|research(?!\s+(?:tools?|process|workflow|method|phase|stage|step)\b))\b[^\n.!?]{0,40}\b(?:shows|showed|found|finds|indicates|indicated|reports|reported|supports|supported|suggests|suggested|demonstrates|demonstrated|confirms|confirmed)\b|\b(?:data|evidence|research)\s+(?:show|support|suggest|indicate|confirm|demonstrate)\b|\b(?:shows?|found|indicates?)\s+that\b/i;
 
 /**
  * Pentra publishes plain Markdown, never executable MDX.  Keep this deliberately
@@ -553,9 +558,12 @@ function hasExternalSystemAssertion(value: string): boolean {
     const subject = absence ? plain.slice(0, absence.index).trim() : "";
     const negativeAssertion = !!subject && !/^please$/i.test(subject) &&
       !/\b(?:you|your|we|our|if|unless|whether|may|might|could|would)\b/i.test(subject);
+    // "If a tool's score comes from an ad auction, treat it as…" states a
+    // condition, not how the platform works; the main clause is still checked.
+    const mainClause = plain.replace(/^(?:if|unless|whether)\b[^,;]{0,160},\s*/i, "");
     return negativeAssertion ||
       /\b(?:no|neither)\s+(?:\w+[ -]){0,4}(?:documentation|reports?|analytics|measurements?|metrics?|data)\s+(?:is|are)\s+(?:available|published|provided|disclosed)\b/i.test(plain) ||
-      /\b(?:autocomplete|suggestions?|rankings?|search results?|filters?|categor(?:y|ies)|scores?|recommendations?|visibility)\b[^\n.!?;]{0,80}\b(?:comes? from|(?:is|are) (?:based on|derived from)|determines?|controls?|depends? on)\b/i.test(plain);
+      /\b(?:autocomplete|suggestions?|rankings?|search results?|filters?|categor(?:y|ies)|scores?|recommendations?|visibility)\b[^\n.!?;]{0,80}\b(?:comes? from|(?:is|are) (?:based on|derived from)|determines?|controls?|depends? on)\b/i.test(mainClause);
   });
 }
 
@@ -652,6 +660,13 @@ function isHypotheticalDisclaimer(sentence: string): boolean {
     HYPE_PATTERN.test(plain) ||
     QUANTIFIED_OUTCOME_PATTERN.test(plain)
   ) return false;
+  // "No company, tool, or result described in it is real, and nothing about
+  // it should be treated as evidence…": denying that an example is real is a
+  // disclaimer too, even in the sentence after the one that says "hypothetical".
+  if (
+    /\b(?:no|none of the)\b[^.!?]{0,80}\b(?:is|are) real(?=\s*(?:[,.;:—–-]|and\b|or\b|$))/i.test(plain) ||
+    /\bnot (?:a |an )?real (?:case|company|companies|business|customer|client|example|result|person|people|brand|product)\b/i.test(plain)
+  ) return true;
   return /\b(?:hypothetical|illustrative|illustration|for illustration|made[- ]up|fictional|invented)\b/i.test(plain) &&
     /\b(?:not (?:a |an )?(?:real|actual|documented|verified)|is (?:a )?hypothetical|are (?:all )?(?:hypothetical|illustrative)|labeled|labelled|to illustrate|for illustration)\b/i.test(plain);
 }
@@ -679,6 +694,13 @@ function isReaderInstructionSentence(sentence: string, productEvidence: string):
       /\b(?:offers?|provides?|includes?|supports?|automates?|publishes?|crawls?|detects?|generates?|integrates?|connects?|tracks?|monitors?|analy[sz]es?|creates?|increases?|improves?|reduces?|saves?)\b/i.test(plain))
   ) return false;
   if (checklist) return /^(?:we|our|i|my|you|your|the team|someone|each|every|there is|there's|a|an|at least)\b/i.test(plain);
+  // "Whether the line is flat, rising, or seasonal over the past 12 months."
+  // is an item on the reader's checklist; it asserts nothing.
+  // A leading "whether …, <main clause>" still asserts the main clause.
+  if (
+    /^whether\b/i.test(plain) && !/\?\s*$/.test(plain) && !/\bor not\b/i.test(plain) &&
+    !/,\s*(?:\S+\s+){0,2}(?:is|are|was|were|has|have|had|will|can|does|do|did|ranks?|depends?|shows?|comes?|determines?|controls?)\b/i.test(plain)
+  ) return true;
   return READER_INSTRUCTION_VERB.test(plain);
 }
 
