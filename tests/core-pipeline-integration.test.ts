@@ -1115,11 +1115,15 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     assert.ok(f.get(site.id)!.contentSchedule.topicsReplenishedAt);
     assert.equal(f.tables.jobs.filter(j => j.contentWork).length, 0, "no article starts on an unsearched topic while research runs");
     await f.invoke("contentWork:addResearchedTopics", { siteId: site.id, keywords: [
-      { keyword: `${keyword} pricing guide`, searchVolume: 480, difficulty: 14, difficultyMeasured: true }] });
-    assert.equal(f.get(site.id)!.contentSchedule.topicsReplenishAdded, 1);
+      { keyword: `${keyword} pricing guide`, searchVolume: 480, difficulty: 14, difficultyMeasured: true },
+      { keyword: `${keyword} pricing comparison`, searchVolume: 9900, difficulty: 79, difficultyMeasured: true }] });
+    assert.equal(f.get(site.id)!.contentSchedule.topicsReplenishAdded, 1, "keywords out of reach are not added");
     const unsearched = f.add("topic_clusters", { ...f.tables.topic_clusters.find(t => t.siteId === site.id)!, _id: undefined,
       primaryKeyword: "a completely different owner question", label: "A completely different owner question", status: "planned", priority: 99,
       searchVolume: undefined, createdAt: f.now(), updatedAt: f.now() });
+    const outOfReach = f.add("topic_clusters", { ...f.tables.topic_clusters.find(t => t.siteId === site.id)!, _id: undefined,
+      primaryKeyword: "an entirely separate head term", label: "An entirely separate head term", status: "planned", priority: 98,
+      searchVolume: 9900, keywordDifficulty: 79, keywordDifficultyMeasured: true, createdAt: f.now(), updatedAt: f.now() });
     const started = await f.invoke("contentWork:advance", { siteId: site.id });
     assert.notEqual(started.mode, "topics_researching");
     const job = f.tables.jobs.find(j => j.contentWork && j.siteId === site.id)!;
@@ -1127,6 +1131,7 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     const chosen = f.get(job.payload.topicId)!;
     assert.equal(chosen.primaryKeyword, `${keyword} pricing guide`, "a searched keyword beats a higher-priority unsearched one");
     assert.notEqual(job.payload.topicId, unsearched);
+    assert.notEqual(job.payload.topicId, outOfReach, "a keyword a small site cannot rank for is not preferred");
     f.assertOffline();
   });
   await t.test("empty_keyword_research_falls_back_without_missing_the_slot", async () => {

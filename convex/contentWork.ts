@@ -99,6 +99,8 @@ function replacementsHealthy(work: Doc<"jobs">[]) {
   return finished.filter(j => j.contentWork!.stage === "failed").length < 2;
 }
 const TOPIC_REPLENISH_INTERVAL_MS = 3 * 86_400_000, TOPIC_REPLENISH_BUDGET_MICRO_USD = 1_000_000;
+/** Keywords above this difficulty are out of reach for most small sites; research asks for this bound too. */
+const WINNABLE_KEYWORD_DIFFICULTY = 45;
 /** Research that found no new keyword is not repeated for a week. */
 const TOPIC_REPLENISH_EMPTY_BACKOFF_MS = 7 * 86_400_000;
 /** An Autopilot article waits for fresh keyword research only while its slot is at least this far away. */
@@ -972,7 +974,7 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
     ![...covered, ...pageCoverage, ...excludedIntents].some(c => contentIntentConflicts(t, c)));
   // Keywords people measurably search for come first; within each group the
   // stored priority orders the work. Absence remains absent in storage.
-  const searched = (t: Doc<"topic_clusters">) => (t.searchVolume ?? 0) > 0;
+  const searched = (t: Doc<"topic_clusters">) => (t.searchVolume ?? 0) > 0 && (t.keywordDifficulty ?? 0) <= WINNABLE_KEYWORD_DIFFICULTY;
   planned.sort((a, b) => Number(searched(b)) - Number(searched(a)) || (b.priority ?? 0) - (a.priority ?? 0));
   if (preferredId) return planned.find(t => t._id === preferredId) ?? null;
   if (options.demandOnly) return planned.find(searched) ?? null;
@@ -1155,7 +1157,7 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
     for (const k of [...keywords].sort((a, b) => b.searchVolume - a.searchVolume)) {
       if (added >= 15) break;
       const keyword = k.keyword.trim().toLowerCase().replace(/\s+/g, " ");
-      if (keyword.split(" ").length < 2 || keyword.length > 80) continue;
+      if (keyword.split(" ").length < 2 || keyword.length > 80 || k.difficulty > WINNABLE_KEYWORD_DIFFICULTY) continue;
       const proposal = { primaryKeyword: keyword, label: keyword.replace(/^./, c => c.toUpperCase()) };
       if (!evaluateTopicBusinessFit({ keyword, label: proposal.label, ...signals }).eligible) continue;
       if (taken.some(t => contentIntentConflicts(proposal, t))) continue;
