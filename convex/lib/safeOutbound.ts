@@ -316,6 +316,17 @@ export async function safeRequestPublicHttps(
   return { url: target.url.href, ...response };
 }
 
+/** One pinned GET without following redirects: the status and Location only
+ * (used to tell permanent from temporary redirects). */
+export async function safePublicRedirectStatus(input: string, timeoutMs = 8_000): Promise<{ status: number; location: string | null }> {
+  const target = await resolvePinnedPublicUrl(input);
+  const response = await requestPinnedText(target, { maxRedirects: 0, maxBytes: 512_000, timeoutMs,
+    allowedContentTypes: [/^text\/html(?:;|$)/i, /^text\/plain(?:;|$)/i, /^application\/xhtml\+xml(?:;|$)/i],
+    headers: { "User-Agent": "PentraSiteHealth/1.0 (+https://pentra.dev)" } });
+  const header = response.headers.location;
+  return { status: response.status, location: (Array.isArray(header) ? header[0] : header) ?? null };
+}
+
 /**
  * Fetch untrusted public text with a DNS-pinned TLS socket. Every redirect is
  * separately parsed, resolved, checked, and pinned before another connection.

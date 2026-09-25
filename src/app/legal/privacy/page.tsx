@@ -5,6 +5,7 @@ import { Radar, ArrowLeft } from "lucide-react";
 export const metadata: Metadata = {
   title: "Privacy Policy",
   description: "Pentra privacy policy. How we collect, use, and protect your data.",
+  alternates: { canonical: "https://pentra.dev/legal/privacy" },
 };
 
 export default function PrivacyPolicyPage() {

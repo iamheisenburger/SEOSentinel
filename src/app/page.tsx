@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowRight, Check, Radar } from "lucide-react";
 import { LandingNav } from "@/components/layout/landing-nav";
@@ -11,6 +12,9 @@ import { servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
 
 // The latest guides are linked from the homepage so search engines find new articles quickly.
 export const revalidate = 3600;
+
+// Declared so Google indexes https://pentra.dev/ rather than choosing the www host.
+export const metadata: Metadata = { alternates: { canonical: "https://pentra.dev/" } };
 
 /* Design: a dark, product-led page. Near-black canvas, precise sans type,
  * hairline structure instead of card grids, the product itself as the imagery.

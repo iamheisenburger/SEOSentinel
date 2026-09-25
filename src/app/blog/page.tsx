@@ -11,10 +11,14 @@ import { servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
 // Server-rendered so search engines see every article link in the HTML.
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "SEO and content guides",
-  description: "Practical guides on SEO, content and winning customers from Google and AI answers, written and fact-checked by Pentra.",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const domain = await requestDomain();
+  return {
+    title: "SEO and content guides",
+    description: "Practical guides on SEO, content and winning customers from Google and AI answers, written and fact-checked by Pentra.",
+    alternates: { canonical: `https://${domain}/blog` },
+  };
+}
 
 async function requestDomain(): Promise<string> {
   const requestHeaders = await headers();

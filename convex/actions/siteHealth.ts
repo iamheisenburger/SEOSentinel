@@ -4,8 +4,8 @@ import { action, internalAction, type ActionCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { ConvexError, v } from "convex/values";
 import type { Id } from "../_generated/dataModel";
-import { analyzePageHealth, healthScore, robotsTxtFindings, sitemapIndexChildren, sitemapUrls, speedFindings, type PageHealthResult } from "../lib/siteHealth";
-import { safeFetchPublicText } from "../lib/safeOutbound";
+import { analyzePageHealth, discoveryFindings, healthScore, robotsTxtFindings, sitemapIndexChildren, sitemapUrls, speedFindings, type PageHealthResult } from "../lib/siteHealth";
+import { safeFetchPublicText, safePublicRedirectStatus } from "../lib/safeOutbound";
 import { fetchPage } from "../lib/fetchPage";
 
 const MAX_PAGES = 10, MIN_INTERVAL_MS = 10 * 60_000;
@@ -46,8 +46,10 @@ async function runCheck(ctx: ActionCtx, siteId: Id<"sites">, userId?: string) {
   }
   for (const url of site.knownUrls) if (urls.length < MAX_PAGES && url.startsWith("https://") && !urls.includes(url)) urls.push(url);
   const results: PageHealthResult[] = [];
+  let homeHtml = "";
   for (const url of urls.slice(0, MAX_PAGES)) {
     const page = await fetchPage(url);
+    if (url === home) homeHtml = page.html;
     results.push(analyzePageHealth({ url, status: page.status, finalUrl: page.finalUrl, html: page.html, robotsHeader: page.robots, ctaUrl: site.ctaUrl }));
   }
   if (results[0] && results[0].status === 200) results[0].issues.push(...speedFindings(await pageSpeed(home)));
@@ -59,6 +61,13 @@ async function runCheck(ctx: ActionCtx, siteId: Id<"sites">, userId?: string) {
       message: `Your robots.txt stops ${robots.aiBlocked.join(", ")} from reading this site, so they can't cite it in AI answers.` });
     if (!sitemapFound) results[0].issues.push({ code: "sitemap_missing", severity: "warning",
       message: "No sitemap found at /sitemap.xml or in robots.txt. A sitemap helps Google find new articles quickly." });
+    // Discovery pass: canonical homepage, real 404s and a permanent www redirect.
+    const missing = await fetchPage(`https://${host}/pentra-health-check-${Date.now().toString(36)}-missing`);
+    const alternate = host.startsWith("www.") ? host.slice(4) : `www.${host}`;
+    let alternateHost: { status: number; location: string | null } | null = null;
+    try { alternateHost = await safePublicRedirectStatus(`https://${alternate}/`); } catch { alternateHost = null; }
+    results[0].issues.push(...discoveryFindings({ homeUrl: home, homeHtml, homeStatus: results[0].status,
+      missingPageStatus: missing.status, alternateHost }));
   }
   const pages = results.map(r => ({ url: r.url, status: r.status, ...(r.title ? { title: r.title.slice(0, 200) } : {}), issues: r.issues }));
   const score = healthScore(results);

@@ -93,3 +93,17 @@ test("AI answer engines blocked by robots.txt are named; training-only bots are 
   assert.deepEqual(robotsTxtFindings("User-agent: *\nDisallow: /\n\nUser-agent: Googlebot\nAllow: /\n\nUser-agent: Bingbot\nAllow: /\n").aiBlocked,
     ["ChatGPT search", "ChatGPT", "Perplexity", "Claude search"]);
 });
+
+test("discovery findings: missing homepage canonical, soft 404s and a temporary www redirect", async () => {
+  const { discoveryFindings } = await import("../convex/lib/siteHealth.ts");
+  const codes = (input: Parameters<typeof discoveryFindings>[0]) => discoveryFindings(input).map(issue => issue.code);
+  assert.deepEqual(codes({ homeUrl: "https://example.com/", homeStatus: 200, homeHtml: "<html><head><title>x</title></head></html>",
+    missingPageStatus: 200, alternateHost: { status: 307, location: "https://example.com/" } }),
+    ["home_canonical_missing", "soft_404", "host_redirect_temporary"]);
+  assert.deepEqual(codes({ homeUrl: "https://example.com/", homeStatus: 200, homeHtml: '<link rel="canonical" href="https://example.com/">',
+    missingPageStatus: 404, alternateHost: { status: 308, location: "https://example.com/" } }), []);
+  assert.deepEqual(codes({ homeUrl: "https://example.com/", homeStatus: 200, homeHtml: '<link rel="canonical" href="/">',
+    missingPageStatus: null, alternateHost: { status: 307, location: "https://elsewhere.example/" } }), [], "a redirect to another site is not ours to judge");
+  assert.match(discoveryFindings({ homeUrl: "https://www.example.com/", homeStatus: 200, homeHtml: '<link rel="canonical" href="/">',
+    missingPageStatus: 404, alternateHost: { status: 302, location: "https://www.example.com/" } })[0].message, /non-www address/);
+});

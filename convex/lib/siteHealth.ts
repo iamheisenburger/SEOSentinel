@@ -118,6 +118,34 @@ export function analyzePageHealth(page: PageHealthInput): PageHealthResult {
   return { url: page.url, status: page.status, title: cleanTitle, metaDescription: description, h1Count, wordCount, internalLinkCount, issues };
 }
 
+/** Site-level discovery checks learned from real sites whose articles Google
+ * never found: a missing homepage canonical lets Google pick another host,
+ * a temporary www redirect keeps both hosts alive, and a "soft 404" (a normal
+ * page for an address that doesn't exist) wastes a young site's crawl. */
+export function discoveryFindings(input: {
+  homeUrl: string; homeHtml: string; homeStatus: number;
+  missingPageStatus: number | null;
+  alternateHost: { status: number; location: string | null } | null;
+}): PageHealthIssue[] {
+  const issues: PageHealthIssue[] = [];
+  if (input.homeStatus === 200 && !canonicalHref(input.homeHtml)) {
+    issues.push({ code: "home_canonical_missing", severity: "warning",
+      message: "Your homepage doesn't declare its preferred address (a canonical tag), so Google may index another version of it, such as the www address." });
+  }
+  if (input.missingPageStatus !== null && input.missingPageStatus >= 200 && input.missingPageStatus < 300) {
+    issues.push({ code: "soft_404", severity: "warning",
+      message: "Addresses that don't exist on your site show a normal page instead of a \"not found\" error. Google wastes its visits on them and may trust the site less." });
+  }
+  const alt = input.alternateHost;
+  if (alt && (alt.status === 302 || alt.status === 303 || alt.status === 307) && alt.location) {
+    let sameSite = false;
+    try { sameSite = new URL(alt.location, input.homeUrl).host.replace(/^www\./, "") === new URL(input.homeUrl).host.replace(/^www\./, ""); } catch { sameSite = false; }
+    if (sameSite) issues.push({ code: "host_redirect_temporary", severity: "warning",
+      message: `Your ${new URL(input.homeUrl).host.startsWith("www.") ? "non-www" : "www"} address redirects with a temporary redirect (HTTP ${alt.status}). Make it permanent (301 or 308) so Google treats one address as your site.` });
+  }
+  return issues;
+}
+
 /** Sitemap <loc> URLs on the same host, first-party only, bounded. */
 export function sitemapUrls(xml: string, siteHost: string, limit = 10): string[] {
   const host = siteHost.replace(/^www\./, "").toLowerCase();
