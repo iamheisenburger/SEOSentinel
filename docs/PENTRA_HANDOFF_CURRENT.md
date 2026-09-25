@@ -88,8 +88,12 @@ Open owner items:
 2. A real paid test checkout.
 3. Optional `PAGESPEED_API_KEY`.
 
-Releases today (main): c2df08d, 26b72fc, 05b8297, 6d32437, cbd748c, 844cd99, 272d5aa, e038517,
-97155dd, 2da6fec, a82b2bd, b33c42c, then P13 (see git log).
+Releases Sep 24 (main, PDT times): c2df08d · 26b72fc public launch 05:36 · 05b8297 · 6d32437 · 844cd99 Autopilot one-choice
+setup 09:55 · 272d5aa · e038517 · 97155dd · 2da6fec · a82b2bd · b33c42c · 9510d9b (P13 holds) · 4c1ad2d · 551246b
+(P15 cadence) · 7164cec (P17 first-article go-live) · f0ab58b · c805528 (P20 new landing) · 049ff08 (P21 product UI) ·
+6bfe3dd (P23 auth + typography module) · 1b28617 (P24/25 stylesheet rename) · 70e36cd (P26 truthful claims, FAQ
+schema, Geist) · 0c5defa (P27) · Sep 25: 56f4ea4 (P28 incomplete-response park, Convex) · 0d31478 (P29).
+Autopilot publish commits on main: cbd748c, b875227 (pentra.dev articles).
 
 Working model:
 - Cowork (cloud) edits code and runs tests.
