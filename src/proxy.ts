@@ -6,7 +6,7 @@ import {
 } from "next/server";
 
 const PUBLIC_EXACT_ROUTES = new Set([
-  "/", "/pricing", "/contact", "/beta", "/api/webhooks/clerk-billing",
+  "/", "/pricing", "/contact", "/beta", "/x-reply", "/api/webhooks/clerk-billing",
   "/api/github/callback", "/api/gsc/callback",
   "/api/outreach/gmail/callback", "/sitemap.xml", "/robots.txt",
 ]);
@@ -57,7 +57,7 @@ const clerkAppMiddleware = clerkMiddleware(async (auth, request) => {
   const knownPrefixes = new Set([
     "dashboard", "settings", "articles", "jobs", "sites", "plan", "upgrade",
     "pricing", "contact", "beta", "legal", "sign-in", "sign-up", "api", "_next", "blog",
-    "analytics", "backlinks", "unsubscribe", "e2e-acceptance",
+    "analytics", "backlinks", "unsubscribe", "e2e-acceptance", "x-reply",
   ]);
   const pathParts = pathname.split("/").filter(Boolean);
   // Pentra's own site uses /blog/[slug]; an unknown path there is a real 404,
