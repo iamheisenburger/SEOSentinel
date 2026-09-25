@@ -443,22 +443,15 @@ function citationBoundClaimSegments(value: string, citation: number): string[] {
 }
 
 function namedEntities(value: string): string[] {
+  // Capitalized only because they open a sentence or heading: never part of a
+  // name. "What Pentra adds" names Pentra, not a product called "What Pentra".
   const sentenceLeadIns = new Set([
-    "after",
-    "as",
-    "because",
-    "before",
-    "if",
-    "once",
-    "per",
-    "the",
-    "try",
-    "using",
-    "when",
-    "where",
-    "while",
-    "with",
-    "without",
+    "a", "after", "also", "although", "an", "and", "as", "at", "because", "before", "both", "but", "by",
+    "each", "either", "even", "every", "for", "from", "here", "how", "if", "in", "instead", "into", "it",
+    "its", "just", "like", "many", "most", "my", "neither", "no", "not", "now", "of", "on", "once", "only",
+    "or", "our", "per", "since", "so", "some", "that", "the", "their", "then", "there", "these", "they",
+    "this", "those", "though", "to", "today", "try", "unless", "unlike", "until", "using", "we", "what",
+    "when", "where", "whether", "which", "while", "who", "why", "with", "without", "yet", "you", "your",
   ]);
   return [
     ...value.matchAll(
@@ -739,6 +732,24 @@ export function evidenceRequiredParagraphs(
     );
 }
 
+/** The first-party snapshot supports a claim only with shared wording and
+ * every number and named phrase present. A mixed paragraph can contain
+ * transitions, advice and own-product facts, so each platform-mechanics or
+ * absence assertion needs its own exact product authority: shared vocabulary
+ * or one genuine own-product sentence cannot launder an unrelated assertion.
+ * The caller verifies the snapshot's hash. */
+function productEvidenceSupportsClaim(claim: string, productEvidence: string): boolean {
+  return overlapRatio(claim, productEvidence) >= 0.3 &&
+    exactClaimDetailsPresent(claim, productEvidence) &&
+    claimSentenceSegments(claim)
+      .filter(hasExternalSystemAssertion)
+      .every((sentence) =>
+        referencesNamedProduct(sentence, productEvidence) &&
+        overlapRatio(sentence, productEvidence) >= 0.3 &&
+        exactClaimDetailsPresent(sentence, productEvidence),
+      );
+}
+
 export function validateClaimEvidenceLedger(args: {
   markdown: string;
   sources: PublicationSource[];
@@ -752,21 +763,7 @@ export function validateClaimEvidenceLedger(args: {
     !!args.productEvidenceHash &&
     sha256Hex(args.productEvidence) === args.productEvidenceHash;
   const productSnapshotSupports = (claim: string) =>
-    productSnapshotValid &&
-    overlapRatio(claim, args.productEvidence) >= 0.3 &&
-    exactClaimDetailsPresent(claim, args.productEvidence) &&
-    // A mixed paragraph can contain transitions, advice, and own-product
-    // facts. Preserve its existing evidence matching, but require exact
-    // product authority for each platform-mechanics/absence assertion.
-    // Shared vocabulary or one genuine own-product sentence cannot launder
-    // an unrelated platform assertion through the whole paragraph.
-    claimSentenceSegments(claim)
-      .filter(hasExternalSystemAssertion)
-      .every((sentence) =>
-        referencesNamedProduct(sentence, args.productEvidence) &&
-        overlapRatio(sentence, args.productEvidence) >= 0.3 &&
-        exactClaimDetailsPresent(sentence, args.productEvidence),
-      );
+    productSnapshotValid && productEvidenceSupportsClaim(claim, args.productEvidence);
   const paragraphs = evidenceRequiredParagraphs(
     args.markdown,
     args.productEvidence,
@@ -864,15 +861,26 @@ export function validateClaimEvidenceLedger(args: {
           `Claim ledger entry ${index + 1} contains ${uncitedEvidenceClaims.length} uncited factual sentence(s) without matched first-party evidence. Uncited text: ${excerpts.join("; ")}.`,
         );
       }
-    } else {
-      if (
-        !productSnapshotSupports(entry.claim) &&
-        requiresClaimEvidence(entry.claim, args.productEvidence)
-      ) {
+    } else if (
+      !productSnapshotSupports(entry.claim) &&
+      requiresClaimEvidence(entry.claim, args.productEvidence)
+    ) {
+      // Judge the sentences that make a claim, not the paragraph around them:
+      // advice or transitions beside a supported product fact must not dilute
+      // it into a failure, and every claim-bearing sentence is still checked
+      // on its own. A signal only the whole paragraph carries stays strict.
+      const claimSentences = claimSentenceSegments(entry.claim)
+        .filter((sentence) => requiresClaimEvidence(sentence, args.productEvidence));
+      const unsupportedSentences = claimSentences.length > 0
+        ? claimSentences.filter((sentence) => !productSnapshotSupports(sentence))
+        : [entry.claim];
+      if (unsupportedSentences.length > 0) {
         issues.push(
           `Supported claim ledger entry ${index + 1} ("${entry.claim.slice(0, 220)}") has neither a matched source excerpt nor a valid matched first-party evidence snapshot. ` +
           (productSnapshotValid
-            ? sourceClaimMismatchDiagnostic(entry.claim, args.productEvidence, "Product claim")
+            ? unsupportedSentences.slice(0, 3)
+              .map((sentence) => sourceClaimMismatchDiagnostic(sentence, args.productEvidence, "Product claim"))
+              .join(" ")
             : "The first-party snapshot is missing or its content hash is invalid; prose editing cannot repair that provenance failure."),
         );
       }
@@ -1226,6 +1234,78 @@ export function removeUncitedQuantifiedSentences(markdown: string): string {
         .trimEnd();
     })
     .join("\n");
+}
+
+/** Sentences a findings-only fact check listed as unverified, as persisted in
+ * the article's fact-check notes («…» delimited). */
+export function unverifiedClaimsFromFactCheckNotes(notes: string | undefined): string[] {
+  return [...(notes ?? "").matchAll(/Unverified claim: «([^»]{12,2000})»/g)].map((match) => match[1].trim());
+}
+
+const REWRITE_NEEDED_DEFECT = /Material editorial defect|does not deterministically match preserved excerpt|cites \[\d+\]|cites missing source|inline citation|require at least two|^Article (?:is too thin|is overlong|body is missing|title is missing|contains)|^Meta (?:description|title)|^Title or meta description|Raw HTML|executable MDX|inline image|Featured image|YouTube|javascript URL|script tag|iframe|malformed|^Invalid/i;
+const EVIDENCE_DEFECT = /claim-to-evidence|claim ledger|claim-ledger|Evidence-required paragraph|Fact-check score is \d+|Editorial quality score is \d+(?:\.\d+)?; strict minimum|quantified outcome|operational claim|Uncited evidence defect|Unsupported claim \d+|deterministic evidence defect|Unverified claim/i;
+
+/** True when a failed review's remaining defects are all evidence defects
+ * on uncited claims: removing the named sentences repairs them, so no paid
+ * rewrite is needed. Cited-source mismatches and any editorial, length or
+ * format defect still get the model repair. */
+export function onlyEvidenceDefects(defects: string[]): boolean {
+  return defects.some((defect) => EVIDENCE_DEFECT.test(defect)) &&
+    !defects.some((defect) => REWRITE_NEEDED_DEFECT.test(defect.trim()));
+}
+
+/**
+ * Apply the claim-evidence rule before any paid review: an uncited sentence
+ * that makes a checkable claim (a number, statistic, named third party,
+ * platform mechanic or product fact) and is not supported by the hash-bound
+ * first-party snapshot is removed. Advice, questions, transitions and
+ * supported product facts are kept. Removal only deletes text, so it can never
+ * add an unsupported claim, and the reviewers still audit the exact result.
+ * Headings, tables, code and source rows are never edited.
+ */
+export function pruneUnsupportedEvidenceSentences(args: {
+  markdown: string;
+  productEvidence: string;
+  productEvidenceHash?: string;
+}): { markdown: string; removed: string[] } {
+  const productValid = !!args.productEvidenceHash && sha256Hex(args.productEvidence) === args.productEvidenceHash;
+  const supported = (text: string) => productValid && productEvidenceSupportsClaim(text, args.productEvidence);
+  const removed: string[] = [];
+  let insideFence = false;
+  const lines = args.markdown.split("\n").map((line) => {
+    if (/^\s*```/.test(line)) { insideFence = !insideFence; return line; }
+    if (insideFence || !line.trim() || /^\s*(?:#|\||<!--)/.test(line) || /^\s*[-*]\s+https?:\/\//i.test(line) ||
+      isSourceBibliographyEntry(line)) return line;
+    if (inlineCitationNumbers(line).length === 0 && !requiresClaimEvidence(line, args.productEvidence)) return line;
+    if (supported(line)) return line;
+    const prefix = line.match(/^(\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+|>\s*)?)/)?.[0] ?? "";
+    const sentences = line.slice(prefix.length).split(/(?<=[.!?])\s+(?=[A-Z*"'\[])/);
+    const kept = sentences.filter((sentence) => {
+      const drop = inlineCitationNumbers(sentence).length === 0 &&
+        requiresClaimEvidence(sentence, args.productEvidence) && !supported(sentence);
+      if (drop) removed.push(sentence.trim());
+      return !drop;
+    }).join(" ").trim();
+    // A list item or paragraph whose only content was unsupported goes away;
+    // a bold lead-in left without its sentence goes with it.
+    return kept && !/^(?:\*\*[^*]+\*\*|__[^_]+__)[:.]?$/.test(kept) ? `${prefix}${kept}` : "";
+  });
+  // Drop headings whose whole section was removed.
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const heading = /^(#{1,6})\s/.exec(lines[i]);
+    if (heading) {
+      let j = i + 1;
+      while (j < lines.length && !lines[j].trim()) j++;
+      const next = j < lines.length ? /^(#{1,6})\s/.exec(lines[j]) : null;
+      if (j >= lines.length || (next && next[1].length <= heading[1].length)) {
+        if (removed.length) continue;
+      }
+    }
+    out.push(lines[i]);
+  }
+  const markdown = out.join("\n").replace(/\n{3,}/g, "\n\n").trim() + (args.markdown.endsWith("\n") ? "\n" : "");
+  return { markdown: removed.length ? markdown : args.markdown, removed };
 }
 
 /**

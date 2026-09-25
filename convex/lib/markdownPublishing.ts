@@ -34,3 +34,19 @@ export function stripLeadingDocumentTitle(
   }
   return lines.join("\n").trim();
 }
+
+/**
+ * A published page has one H1: the template renders the article title. Make a
+ * leading body H1 the exact title (so publishing strips it) and demote any
+ * other H1 to H2. Code fences are untouched. Deterministic and text-preserving.
+ */
+export function normalizeArticleHeadings(markdown: string, title: string): string {
+  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+  const first = lines.findIndex((line) => line.trim().length > 0);
+  let insideFence = false;
+  return lines.map((line, index) => {
+    if (/^\s*```/.test(line)) { insideFence = !insideFence; return line; }
+    if (insideFence || !/^#\s+\S/.test(line)) return line;
+    return index === first && title.trim() ? `# ${title.trim()}` : `#${line}`;
+  }).join("\n");
+}

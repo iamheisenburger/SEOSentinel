@@ -1419,6 +1419,29 @@ test("sentence-opening lead-ins do not become phantom named entities", () => {
   assert.equal(result.passed, true, result.issues.join("\n"));
 });
 
+test("question words, pronouns and conjunctions opening a sentence are not part of a product name", () => {
+  const productEvidence = "Name: Pentra\nPentra writes articles from confirmed business facts, runs an independent fact check and publishes to WordPress or GitHub.";
+  for (const claim of [
+    "What Pentra adds is writing articles from confirmed business facts, with an independent fact check before it publishes to WordPress or GitHub.",
+    "This Pentra workflow writes articles from confirmed business facts and runs an independent fact check before it publishes to WordPress or GitHub.",
+    "And Pentra publishes to WordPress or GitHub after an independent fact check of articles written from confirmed business facts.",
+  ]) {
+    const result = validateClaimEvidenceLedger({
+      markdown: claim, sources: [], researchEvidence: "", productEvidence, productEvidenceHash: sha256Hex(productEvidence),
+      claimEvidence: [{ claim, citationNumbers: [], supported: true, reason: "The hashed first-party snapshot states these product facts." }],
+    });
+    assert.equal(result.passed, true, result.issues.join("\n"));
+  }
+  // A real multi-word name is still checked: an unproven product alias fails.
+  const alias = "Pentra Studio writes articles from confirmed business facts and runs an independent fact check before it publishes to WordPress or GitHub.";
+  const aliasResult = validateClaimEvidenceLedger({
+    markdown: alias, sources: [], researchEvidence: "", productEvidence, productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [{ claim: alias, citationNumbers: [], supported: true, reason: "The auditor asserts the snapshot supports this." }],
+  });
+  assert.equal(aliasResult.passed, false);
+  assert.ok(aliasResult.issues.join("\n").includes('named phrase absent from excerpt: "pentra studio"'));
+});
+
 test("source mismatch feedback identifies the exact cited sentence and failed evidence detail", () => {
   for (const brand of ["Harbor", "Cedar"]) {
     const excerpt = `${brand} Metrics reports clicks, impressions, and average position. ` +
@@ -2150,4 +2173,70 @@ test("generation and both recovery selection points share the non-regression rul
   assert.equal((pipeline.slice(0, recoveryStart).match(/articleReviewImprovesWithoutRegression\(\{/g) ?? []).length, 1);
   assert.equal((pipeline.slice(recoveryStart).match(/articleReviewImprovesWithoutRegression\(\{/g) ?? []).length, 2);
   assert.match(pipeline, /!recoveryBaseline \|\| postAuditPass <= 1/);
+});
+
+test("pre-review pruning removes unsupported checkable claims and keeps advice, supported product facts and structure", async () => {
+  const { pruneUnsupportedEvidenceSentences, onlyEvidenceDefects, unverifiedClaimsFromFactCheckNotes } = await import("../convex/lib/articleQuality.ts");
+  const productEvidence = "Name: Harbor\nDomain: harbor.example\nHarbor writes articles from confirmed business facts and publishes them to WordPress.";
+  const productEvidenceHash = sha256Hex(productEvidence);
+  const markdown = [
+    "# Choosing a keyword",
+    "",
+    "Start with the questions your customers already ask. Harbor writes articles from confirmed business facts and publishes them to WordPress. Most teams see 43% more traffic within 30 days.",
+    "",
+    "## Numbers to ignore",
+    "",
+    "Pages that rank in positions 8 to 15 get 80% of clicks.",
+    "",
+    "## A checklist",
+    "",
+    "- Write down what your customers call the problem.",
+    "- Teams that do this convert 3x more visitors.",
+    "",
+    "| Step | Why |",
+    "| --- | --- |",
+    "| 1 | 40% faster |",
+    "",
+  ].join("\n");
+  const { markdown: pruned, removed } = pruneUnsupportedEvidenceSentences({ markdown, productEvidence, productEvidenceHash });
+  assert.deepEqual(removed, [
+    "Most teams see 43% more traffic within 30 days.",
+    "Pages that rank in positions 8 to 15 get 80% of clicks.",
+    "Teams that do this convert 3x more visitors.",
+  ]);
+  assert.match(pruned, /Start with the questions your customers already ask\. Harbor writes articles from confirmed business facts and publishes them to WordPress\.\n/,
+    "advice and the supported product fact stay, word for word");
+  assert.doesNotMatch(pruned, /## Numbers to ignore/, "a heading whose whole section was unsupported goes with it");
+  assert.match(pruned, /- Write down what your customers call the problem\.\n\n\| Step \| Why \|/, "list items and tables keep their structure; tables are never edited");
+  assert.equal(pruneUnsupportedEvidenceSentences({ markdown: "Start with your customers' own words.\n", productEvidence, productEvidenceHash }).removed.length, 0);
+  // Without a valid first-party snapshot hash, a product claim is not supported and is removed.
+  assert.deepEqual(pruneUnsupportedEvidenceSentences({ markdown: "Harbor publishes to WordPress in 5 minutes.", productEvidence, productEvidenceHash: "0".repeat(64) }).removed,
+    ["Harbor publishes to WordPress in 5 minutes."]);
+
+  assert.equal(onlyEvidenceDefects(["Editorial quality score is 84; strict minimum is 85.", "Strict publication requires a completed claim-to-evidence audit.",
+    "Existing draft exact-prose audit: 84/100.", "Body text is well-grounded and restrained."]), true, "evidence defects alone are repaired by removal");
+  assert.equal(onlyEvidenceDefects(["Editorial quality score is 80; strict minimum is 85.", "Material editorial defect 1: The introduction repeats the title."]), false,
+    "an editorial defect still gets the model repair");
+  assert.equal(onlyEvidenceDefects(["Article is too thin (1100 words; minimum 1200).", "Fact-check score is 80; strict minimum is 85."]), false);
+  assert.equal(onlyEvidenceDefects(["Existing draft exact-prose audit: 90/100."]), false, "no evidence defect, nothing to repair by removal");
+  assert.equal(onlyEvidenceDefects(["Strict publication requires a completed claim-to-evidence audit.",
+    "Deterministic claim-ledger defect 1: Claim ledger entry 1 does not deterministically match preserved excerpt [1] (example.gov)."]), false,
+    "a cited sentence that doesn't match its source still gets the model repair");
+  assert.deepEqual(unverifiedClaimsFromFactCheckNotes("Checked. Unverified claim: «Most teams see 43% more traffic.» Unverified claim: «Rankings depend on 200 factors.» Deterministic numeric evidence scan passed."),
+    ["Most teams see 43% more traffic.", "Rankings depend on 200 factors."]);
+});
+
+test("the claim ledger judges claim sentences, not the advice around them", () => {
+  const productEvidence = "Name: Harbor\nHarbor writes articles from confirmed business facts and publishes them to WordPress.";
+  const check = (claim: string) => validateClaimEvidenceLedger({
+    markdown: claim, sources: [], researchEvidence: "", productEvidence, productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [{ claim, citationNumbers: [], supported: true, reason: "The auditor asserts the snapshot supports this paragraph." }],
+  });
+  const mixed = "If your team struggles to publish every week, start by listing the questions customers ask on sales calls and grouping them by topic before you write anything. " +
+    "Harbor writes articles from confirmed business facts and publishes them to WordPress.";
+  assert.equal(check(mixed).passed, true, check(mixed).issues.join("\n"));
+  const unsupported = mixed + " Harbor doubles organic traffic within 30 days.";
+  const result = check(unsupported);
+  assert.equal(result.passed, false, "every claim-bearing sentence is still checked on its own");
+  assert.ok(result.issues.join("\n").includes("Harbor doubles organic traffic within 30 days"));
 });

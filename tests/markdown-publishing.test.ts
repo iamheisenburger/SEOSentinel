@@ -32,3 +32,12 @@ test("handles blank lines and simple inline Markdown in a matching title", () =>
     "Body.",
   );
 });
+
+test("an article body keeps exactly one H1, and it is the title publishing strips", async () => {
+  const { normalizeArticleHeadings } = await import("../convex/lib/markdownPublishing.ts");
+  const markdown = "# What Is a KW Research Tool?\n\nIntro.\n\n# A second top-level heading\n\n```\n# not a heading\n```\n\n## Kept";
+  const normalized = normalizeArticleHeadings(markdown, "What Is a KW Research Tool? A Plain-English Guide");
+  assert.equal(normalized, "# What Is a KW Research Tool? A Plain-English Guide\n\nIntro.\n\n## A second top-level heading\n\n```\n# not a heading\n```\n\n## Kept");
+  assert.equal(stripLeadingDocumentTitle(normalized, "What Is a KW Research Tool? A Plain-English Guide").startsWith("Intro."), true);
+  assert.equal(normalizeArticleHeadings("Intro without a title.\n\n# Section", "T"), "Intro without a title.\n\n## Section");
+});

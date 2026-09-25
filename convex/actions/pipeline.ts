@@ -47,12 +47,16 @@ import {
   repairDanglingStructuredIntroductions,
   removeUncitedQuantifiedSentences,
   removeUnsupportedClaimSentences,
+  pruneUnsupportedEvidenceSentences,
+  unverifiedClaimsFromFactCheckNotes,
+  onlyEvidenceDefects,
   removeUnverifiedInlineCitations,
   selectReviewedProductImage,
   STRICT_PUBLICATION_MIN_WORDS,
   uncitedEvidenceRequiredParagraphs,
   validateClaimEvidenceLedger,
 } from "../lib/articleQuality";
+import { normalizeArticleHeadings } from "../lib/markdownPublishing";
 import {
   PUBLICATION_AUDIT_VERSION,
   publicationArtifactHash,
@@ -1636,12 +1640,23 @@ async function factCheckArticle(
   const effectiveBannedNames = bannedNames.filter(
     (name) => name.trim().toLowerCase() !== normalizedProductName,
   );
-  const reviewed = await callClaudeStructured({
+  // Autopilot keeps the reviewed article byte-for-byte and repairs it in a
+  // separate step, so its fact check returns findings only: echoing the whole
+  // article back was the single largest waste of paid output tokens.
+  const findingsOnly = contentProviderActive();
+  const reviewed = await callClaudeStructured<{
+    markdown?: string; notes?: string; confidenceScore?: number; claimCount?: number; verifiedCount?: number;
+    unverifiedClaims?: string[]; citations?: { url: string; title?: string }[];
+  }>({
     system: UNTRUSTED_EVIDENCE_INSTRUCTION + "\n\nYou are a fact-checking editor. Review the article against provided sources and score factual accuracy.\n\n" +
     "CRITICAL RULES:\n" +
-    "1. The 'markdown' field MUST contain the FULL article — same article, with only factual corrections applied.\n" +
+    (findingsOnly
+      ? "1. Do NOT return the article. Return only your findings.\n" +
+        "2. 'unverifiedClaims' lists every externally verifiable factual claim you could not verify, each copied exactly as one complete sentence from the article. It must contain claimCount - verifiedCount entries. Never list advice, questions or expressly hypothetical illustrations.\n" +
+        "3. The article will be repaired by removing exactly the sentences you list, so list only sentences that are genuinely unsupported.\n"
+      : "1. The 'markdown' field MUST contain the FULL article — same article, with only factual corrections applied.\n" +
     "2. Do NOT add fact-check summaries or editorial commentary into the markdown.\n" +
-    "3. Do NOT shorten or truncate the article. Return the complete article.\n" +
+    "3. Do NOT shorten or truncate the article. Return the complete article.\n") +
     "4. Product features, pricing, integrations, and capabilities ARE factual claims. Keep them only when directly supported by the supplied product evidence; otherwise remove the unsupported proposition, not merely soften its wording.\n" +
     "5. Correct or remove unsupported third-party statistics, attributed quotes, benchmarks, dates, and factual claims. Never invent replacement evidence.\n" +
     "6. A direct quotation is allowed only when its exact language appears in a supplied source. Otherwise paraphrase without quotation marks.\n" +
@@ -1657,18 +1672,25 @@ async function factCheckArticle(
     "12. Every operational number, range, timeline, threshold, duration, score, volume, percentage, price, or quantified outcome MUST have direct support in the supplied evidence. Cite external evidence using its matching numbered inline citation [n]; first-party product evidence is unnumbered and must never receive a fabricated citation. Otherwise remove the number. Calling it a best practice, example, framework, or rule of thumb is not an exemption.\n" +
     "13. Any invented scenario must be explicitly labelled hypothetical. Its names, numbers, timelines, dialogue, and results are illustration only and cannot support a factual conclusion.\n" +
     "14. Before returning, scan the complete markdown for every digit and currency symbol. Verify each factual use against supplied evidence or remove it. Step numbers and source citation markers are the only structural exceptions.\n" +
-    "15. Submit the complete corrected article and review metadata through the review_article tool." +
-    (contentProviderActive() ? "\nEXACT-ARTIFACT REVIEW OVERRIDE: This workflow retains the input article unchanged until a separate targeted revision. Return the input markdown unchanged. Score confidenceScore, claimCount and verifiedCount against that exact input, not a proposed correction. Describe needed factual corrections in notes; do not silently remove or rewrite them. Count externally verifiable assertions, not advice, questions or expressly hypothetical illustrations, while still assessing factual assertions embedded within them." : ""),
+    (findingsOnly
+      ? "15. Submit your review metadata through the review_article tool." +
+        "\nEXACT-ARTIFACT REVIEW OVERRIDE: This workflow retains the input article unchanged until a separate targeted revision. Score confidenceScore, claimCount and verifiedCount against that exact input, not a proposed correction. Describe needed factual corrections in notes and list unsupported sentences in unverifiedClaims; do not rewrite them. Count externally verifiable assertions, not advice, questions or expressly hypothetical illustrations, while still assessing factual assertions embedded within them."
+      : "15. Submit the complete corrected article and review metadata through the review_article tool."),
     userMessage: `Sources to validate against: ${JSON.stringify(
       sources ?? [],
     )}\n\nResearch evidence gathered from the cited sources:\n${researchEvidence || "No research summary supplied."}\n\nFirst-party product evidence:\n${productEvidence || "No first-party product evidence supplied."}\n\nArticle to review:\n${markdown}`,
     toolName: "review_article",
-    toolDescription: "Submit the complete corrected article and its factual review metadata.",
+    toolDescription: findingsOnly
+      ? "Submit the factual review findings for the exact input article."
+      : "Submit the complete corrected article and its factual review metadata.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
-        markdown: { type: "string", description: "The complete corrected Markdown article." },
+        ...(findingsOnly
+          ? { unverifiedClaims: { type: "array", items: { type: "string" },
+            description: "Each unverified externally verifiable claim, copied exactly as one sentence from the article." } }
+          : { markdown: { type: "string", description: "The complete corrected Markdown article." } }),
         notes: { type: "string", description: "A concise reviewer summary." },
         confidenceScore: { type: "number" },
         claimCount: { type: "number" },
@@ -1687,7 +1709,7 @@ async function factCheckArticle(
         },
       },
       required: [
-        "markdown",
+        findingsOnly ? "unverifiedClaims" : "markdown",
         "notes",
         "confidenceScore",
         "claimCount",
@@ -1696,11 +1718,14 @@ async function factCheckArticle(
       ],
     },
     outputSchema: z.object({
-      markdown: z.string(),
+      markdown: findingsOnly ? z.string().optional() : z.string(),
+      unverifiedClaims: z.array(z.string().max(2000)).max(60).optional(),
       notes: z.string().optional(),
-      confidenceScore: z.number().min(0).max(100).optional(),
-      claimCount: z.number().int().min(0).optional(),
-      verifiedCount: z.number().int().min(0).optional(),
+      // Findings are the whole result of an Autopilot fact check: an empty or
+      // score-less response is invalid, never a silent pass.
+      confidenceScore: findingsOnly ? z.number().min(0).max(100) : z.number().min(0).max(100).optional(),
+      claimCount: findingsOnly ? z.number().int().min(0) : z.number().int().min(0).optional(),
+      verifiedCount: findingsOnly ? z.number().int().min(0) : z.number().int().min(0).optional(),
       citations: z
         .array(
           z.object({
@@ -1710,17 +1735,18 @@ async function factCheckArticle(
         )
         .optional(),
     }),
-    maxTokens: 16384,
+    maxTokens: findingsOnly ? 4096 : 16384,
   });
   const citationSafeMarkdown = removeUnverifiedInlineCitations(
-    contentProviderActive() ? markdown : reviewed.markdown,
+    findingsOnly ? markdown : reviewed.markdown ?? markdown,
     sources?.length ?? 0,
   );
   return {
     ...reviewed,
     confidenceScore: normalizedFactCheckConfidence(reviewed),
+    unverifiedClaims: findingsOnly ? reviewed.unverifiedClaims ?? [] : [],
     markdown:
-      contentProviderActive() ? markdown : (sources?.length ?? 0) === 0
+      findingsOnly ? markdown : (sources?.length ?? 0) === 0
         ? removeUncitedQuantifiedSentences(citationSafeMarkdown)
         : citationSafeMarkdown,
   };
@@ -7118,7 +7144,18 @@ async function reviewExistingArticleHandler(
       stats: ReturnType<typeof calculateArticleStats>;
     } | undefined;
     const initialRecoveryNotes: string[] = [];
-    if (incrementRevision && storedDefects.length > 0) {
+    // Autopilot repairs evidence defects by removing the exact sentences the
+    // previous review named (unsupported ledger claims, unverified fact-check
+    // claims). Deleting text cannot add a claim, costs nothing, and converges;
+    // a model rewrite is only needed for editorial defects.
+    const evidenceRepairOnly = contentProviderActive() && incrementRevision && onlyEvidenceDefects(storedDefects);
+    if (contentProviderActive() && incrementRevision) {
+      reviewMarkdown = removeUnsupportedClaimSentences(reviewMarkdown, [
+        ...(article.claimEvidence ?? []).filter((entry) => !entry.supported).map((entry) => entry.claim),
+        ...unverifiedClaimsFromFactCheckNotes(article.factCheckNotes),
+      ]);
+    }
+    if (incrementRevision && storedDefects.length > 0 && !evidenceRepairOnly) {
       // A stored score is not a current proof. Audit the existing length-valid
       // draft against this review's exact evidence before the first editor
       // can replace it. This consumes one of the later remediation passes,
@@ -7170,6 +7207,11 @@ async function reviewExistingArticleHandler(
       reviewMarkdown = remediated.markdown;
     }
 
+    if (contentProviderActive()) {
+      reviewMarkdown = pruneUnsupportedEvidenceSentences({
+        markdown: normalizeArticleHeadings(reviewMarkdown, article.title), productEvidence, productEvidenceHash,
+      }).markdown;
+    }
     let reviewed = await factCheckArticle(
       reviewMarkdown,
       sources,
@@ -7785,6 +7827,7 @@ async function reviewExistingArticleHandler(
       factCheckScore: reviewedConfidenceScore,
       factCheckNotes: [
         reviewed.notes,
+        ...(reviewed.unverifiedClaims ?? []).map((claim) => `Unverified claim: «${claim.replace(/[«»]/g, "")}»`),
         evidenceDefects.length > 0
           ? `${evidenceDefects.length} deterministic evidence defect(s) remain.`
           : "Deterministic numeric evidence scan passed.",
