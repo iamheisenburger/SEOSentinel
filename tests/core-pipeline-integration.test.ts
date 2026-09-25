@@ -1101,6 +1101,13 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     const stamped = f.get(site.id)!.contentSchedule.topicsReplenishedAt;
     assert.ok(stamped, "keyword research is scheduled");
     assert.equal(f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan").length, 1, "research spend is reserved within the limits");
+    // The reservation is closed at DataForSEO's reported cost, never held forever.
+    const research = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && r.purpose === "topic_plan")!;
+    await f.invoke("contentWork:closeTopicResearchReservation", { siteId: site.id, reservationId: research._id, sent: true, actualMicroUsd: 5_000_000 });
+    assert.equal(f.get(research._id)!.settledAt, undefined, "a reported cost above the reservation is never rounded down into a receipt");
+    await f.invoke("contentWork:closeTopicResearchReservation", { siteId: site.id, reservationId: research._id, sent: true, actualMicroUsd: 231_400 });
+    assert.equal(f.get(research._id)!.settledMicroUsd, 231_400);
+    assert.equal(f.get(research._id)!.settlementReason, "verified_provider_receipt_actual_cost");
     assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "content_inputs_exhausted");
     assert.equal(f.get(site.id)!.contentSchedule.topicsReplenishedAt, stamped, "research runs at most every three days");
     const keyword = slcBusinesses[0].keywords[0];
@@ -1344,6 +1351,11 @@ test("SLC67 the owner edits business facts: saving re-confirms, old prepared wor
   r = await f.invoke("contentWork:readiness", { siteId: site.id });
   const facts = { summary: "A family dental practice offering check-ups and whitening.", audience: "Families nearby",
     productUsage: "Book a check-up or whitening appointment online.", offerings: ["Check-ups", "Whitening", "Check-ups"], questions: ["How long does whitening last?"] };
+  const topicBase = { ...f.tables.topic_clusters.find(t => t.siteId === site.id)!, _id: undefined, createdAt: f.now(), updatedAt: f.now(), priority: 1, secondaryKeywords: [] };
+  const oldFeatureTopic = f.add("topic_clusters", { ...topicBase, primaryKeyword: "valve inspection reminder scheduling", label: "A practical guide to valve inspection reminder scheduling",
+    status: "planned", searchVolume: undefined, notes: "Confirmed first-party reader question. Search forecasts are unknown." });
+  const researchedTopic = f.add("topic_clusters", { ...topicBase, primaryKeyword: "teeth whitening at home", label: "Teeth whitening at home",
+    status: "planned", searchVolume: 900, keywordDifficulty: 20, notes: "Researched keyword (search demand from DataForSEO) for the confirmed business." });
   await assert.rejects(f.invoke("contentWork:updateBusinessFacts", { siteId: site.id, reviewToken: r.reviewToken, confirm: false, ...facts }), /Confirm/);
   await assert.rejects(f.invoke("contentWork:updateBusinessFacts", { siteId: site.id, reviewToken: "stale", confirm: true, ...facts }), /changed/);
   await assert.rejects(f.invoke("contentWork:updateBusinessFacts", { siteId: site.id, reviewToken: r.reviewToken, confirm: true, ...facts, audience: " " }), /required/);
@@ -1353,6 +1365,8 @@ test("SLC67 the owner edits business facts: saving re-confirms, old prepared wor
   assert.equal(updated.siteSummary, facts.summary); assert.deepEqual(updated.keyFeatures, ["Check-ups", "Whitening"]);
   assert.deepEqual(updated.painPoints, ["How long does whitening last?"]);
   assert.ok(f.get(oldReady._id)!.contentWork.retiredAt, "work prepared from the old facts is set aside, not published");
+  assert.equal(f.get(oldFeatureTopic), null, "a planned topic copied from a fact the owner removed is dropped");
+  assert.ok(f.get(researchedTopic), "a researched search keyword stays");
   assert.equal(updated.autopilotEnabled, true); assert.equal(updated.approvalRequired, false);
   r = await f.invoke("contentWork:readiness", { siteId: site.id });
   assert.equal(r.bindingCurrent, true); assert.equal(r.autopilot.on, true); assert.equal(r.profile.summary, facts.summary);

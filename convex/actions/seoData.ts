@@ -11,6 +11,7 @@
  */
 
 import { z } from "zod";
+import { AsyncLocalStorage } from "node:async_hooks";
 import OpenAI from "openai";
 import { orderDiscoveryByWinnability } from "../lib/winnableDiscovery.ts";
 import { dataForSeoLanguageCode } from "../lib/dataForSeoLocale.ts";
@@ -196,10 +197,42 @@ function createBoundedSeoDiagnosticOpenAI(apiKey: string): OpenAI {
   });
 }
 
+/** Totals DataForSEO's own reported cost for every request made inside
+ * `meterDataForSeoCost`, so a bounded reservation can be settled at the real
+ * amount. A request that failed after it was sent may still have been billed:
+ * that makes the total uncertain, and the caller must not settle it. */
+type DataForSeoCostMeter = { usd: number; uncertain: boolean };
+const dataForSeoCostMeter = new AsyncLocalStorage<DataForSeoCostMeter>();
+export async function meterDataForSeoCost<T>(run: () => Promise<T>): Promise<{ result: T; usd: number; uncertain: boolean }> {
+  const meter: DataForSeoCostMeter = { usd: 0, uncertain: false };
+  const result = await dataForSeoCostMeter.run(meter, run);
+  return { result, usd: meter.usd, uncertain: meter.uncertain };
+}
+
 async function dataForSEORequest(
   endpoint: string,
   body: any[],
   timeoutMs = 20_000,
+): Promise<any> {
+  const meter = dataForSeoCostMeter.getStore();
+  try {
+    const data = await dataForSEORequestUnmetered(endpoint, body, timeoutMs);
+    if (meter) {
+      if (typeof data?.cost === "number" && Number.isFinite(data.cost) && data.cost >= 0) meter.usd += data.cost;
+      else meter.uncertain = true;
+    }
+    return data;
+  } catch (error) {
+    // Credentials missing means nothing was sent; anything else may have been billed.
+    if (meter && !(error instanceof Error && error.message === "DataForSEO credentials not configured")) meter.uncertain = true;
+    throw error;
+  }
+}
+
+async function dataForSEORequestUnmetered(
+  endpoint: string,
+  body: any[],
+  timeoutMs: number,
 ): Promise<any> {
   const creds = getDataForSEOCredentials();
   if (!creds) throw new Error("DataForSEO credentials not configured");

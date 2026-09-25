@@ -11,7 +11,7 @@ import { resolvePlanFromFeatures, cadenceFitsOperationalLimit, targetCadenceOpti
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
 import { inspectSharedProviderBudget, reserveSharedProviderBudget, settleSharedProviderReservation, releaseSharedProviderReservation } from "./lib/providerSpendReservation";
 import { contentValidationBinding } from "./lib/providerBudgetAuthorization";
-import { planCheckpointTopicExecutionLocked } from "./lib/planCandidateCheckpoint";
+import { planCheckpointTopicDeletionLocked, planCheckpointTopicExecutionLocked } from "./lib/planCandidateCheckpoint";
 import { terminalContentFeasibility } from "./lib/topicLifecycle";
 import type { CadenceScheduleResult } from "./lib/autopilotRunOutcome";
 import { liveAutopilotReadiness, publicationDestinationBlockers } from "./lib/autopilotReadiness";
@@ -508,11 +508,33 @@ export const updateBusinessFacts = mutation({
     if (!summary || !audience || !productUsage) throw new ConvexError("Business facts, who you serve and what you sell are all required.");
     await ctx.db.patch(site._id, { siteSummary: summary, targetAudienceSummary: audience, productUsage,
       keyFeatures: list(args.offerings, 12), painPoints: list(args.questions, 12), updatedAt: Date.now() });
+    await removeTopicsFromOldFacts(ctx, (await ctx.db.get(site._id))!);
     const updated = (await ctx.db.get(site._id))!, token = contentConsentToken(updated);
     const result = await confirmChangedSetup(ctx, updated, token);
     await followUpEditedFacts(ctx, updated, token, result, 1);
     return result;
   } });
+
+/** Topics Pentra copied from the owner's facts (a feature or question, not a
+ * researched search) are only valid while those facts are. When the owner
+ * edits their facts, planned ones built from removed facts are dropped so
+ * Autopilot never writes about something the business no longer says it does.
+ * Researched keywords, queued/used topics and paid-plan checkpoints stay. */
+async function removeTopicsFromOldFacts(ctx: MutationCtx, site: Doc<"sites">) {
+  if (site.publicationLeaseOwner) return; // topics are locked while a publication outcome is unresolved
+  const anchors = new Set(tenantDiscoveryAnchors([...(site.anchorKeywords ?? []), ...(site.keyFeatures ?? []),
+    ...(site.painPoints ?? []), site.productUsage], 40));
+  const questions = new Set((site.painPoints ?? []).map(q => q.trim().replace(/\s+/g, " ")));
+  const signals = tenantTopicBusinessSignals(site);
+  const fits = (t: Doc<"topic_clusters">) => evaluateTopicBusinessFit({ keyword: t.primaryKeyword, label: t.label, ...signals }).eligible;
+  const topics = await ctx.db.query("topic_clusters").withIndex("by_site", q => q.eq("siteId", site._id)).take(LIMIT);
+  for (const topic of topics) {
+    if (!["planned", "pending"].includes(topic.status ?? "planned") || planCheckpointTopicDeletionLocked(topic)) continue;
+    const fromFeature = topic.notes?.startsWith("Confirmed first-party reader question") && (!anchors.has(topic.primaryKeyword) || !fits(topic));
+    const fromQuestion = topic.notes?.startsWith("A customer question the owner confirmed") && !questions.has(topic.label);
+    if (fromFeature || fromQuestion) await ctx.db.delete(topic._id);
+  }
+}
 
 /** A worker that is mid-article when the owner saves new facts only delays the
  * confirmation. Retry the owner's confirmation of these exact facts (same token)
@@ -1179,6 +1201,26 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
     site.productUsage, site.niche, site.blogTheme], 12);
   return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds };
 } });
+
+/** Close Autopilot's keyword-research reservation: settled at the provider's
+ * reported cost, or released when nothing was sent. Before this, every run held its full $1 of daily/monthly room forever. */
+export const closeTopicResearchReservation = internalMutation({ args: { siteId: v.id("sites"),
+  reservationId: v.id("provider_spend_reservations"), sent: v.boolean(), actualMicroUsd: v.number() },
+  handler: async (ctx, { siteId, reservationId, sent, actualMicroUsd }) => {
+    const reservation = await ctx.db.get(reservationId);
+    if (!reservation || reservation.siteId !== siteId || reservation.purpose !== "topic_plan" ||
+      reservation.settledAt !== undefined || reservation.releasedAt !== undefined) return;
+    if (!sent) {
+      await releaseSharedProviderReservation(ctx, { reservationId, siteId, purpose: "topic_plan",
+        reason: "plan_cancelled_before_execution", timestamp: Date.now() });
+      return;
+    }
+    const actual = Math.max(0, Math.round(actualMicroUsd));
+    // A reported cost above the reservation is never rounded down into a receipt: the hold stays.
+    if (!Number.isSafeInteger(actual) || actual > reservation.reservedMicroUsd) return;
+    await settleSharedProviderReservation(ctx, { reservationId, siteId, purpose: "topic_plan",
+      actualMicroUsd: actual, reason: "verified_provider_receipt_actual_cost", timestamp: Date.now() });
+  } });
 
 /** Add researched keywords as planned topics: business-fit only, never a
  * duplicate of an existing topic, page or article intent. */

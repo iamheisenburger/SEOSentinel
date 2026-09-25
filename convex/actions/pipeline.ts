@@ -4707,8 +4707,11 @@ async function handleArticle(
 
   // ── Build existing article keywords for anti-cannibalization ──
   const existingArticles = await ctx.runQuery(internal.articles.listBySiteInternal, { siteId });
+  // Only pages that are (or are about to be) live compete with this one; a
+  // discarded draft's keywords must not block a topic or bloat every prompt.
   const existingArticleKeywords = existingArticles
-    .filter((a: any) => a.metaKeywords?.length)
+    .filter((a: any) => a.metaKeywords?.length && ["published", "ready"].includes(a.status))
+    .slice(0, 80)
     .map((a: any) => ({ title: a.title, keywords: a.metaKeywords }));
   const existingKwSummary = existingArticleKeywords.length > 0
     ? existingArticleKeywords.map((a: any) => a.keywords.join(", ")).join("; ")
