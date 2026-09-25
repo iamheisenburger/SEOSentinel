@@ -14,9 +14,12 @@ const PUBLIC_ROUTE_PREFIXES = [
   "/legal", "/sign-in", "/sign-up", "/unsubscribe", "/blog",
 ];
 
+// Search-engine verification files in public/ (e.g. the IndexNow key) are public by design.
+const PUBLIC_VERIFICATION_FILE = /^\/[a-f0-9]{32}\.txt$/;
+
 function isPublicRoute(request: NextRequest): boolean {
   const pathname = request.nextUrl.pathname;
-  return PUBLIC_EXACT_ROUTES.has(pathname) || PUBLIC_ROUTE_PREFIXES.some(
+  return PUBLIC_EXACT_ROUTES.has(pathname) || PUBLIC_VERIFICATION_FILE.test(pathname) || PUBLIC_ROUTE_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
   );
 }

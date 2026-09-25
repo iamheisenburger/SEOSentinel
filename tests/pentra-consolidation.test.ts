@@ -26,3 +26,13 @@ test("consolidated slugs redirect permanently and leave the sitemap, the blog in
     assert.match(readFileSync(file, "utf8"), /servedOnItsOwnUrl\(/, file);
   }
 });
+
+test("the IndexNow key file is public and matches its script", () => {
+  const script = readFileSync("scripts/indexnow-submit.mjs", "utf8");
+  const key = /const KEY = "([a-f0-9]{32})"/.exec(script)?.[1];
+  assert.ok(key);
+  assert.equal(readFileSync(`public/${key}.txt`, "utf8").trim(), key);
+  const proxy = readFileSync("src/proxy.ts", "utf8");
+  assert.ok(new RegExp(/PUBLIC_VERIFICATION_FILE = \/(.+)\/;/.exec(proxy)![1].replace(/\\\//g, "/")).test(`/${key}.txt`));
+});
+
