@@ -3617,6 +3617,32 @@ test("SLC60 autopilot accepts style-only notes and never stalls on a draft the r
     f.setIdentity(null);
     f.assertOffline();
   });
+  await t.test("incomplete_provider_response_parks_for_autopilot", async () => {
+    for (const withDraft of [true, false]) {
+      const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], quality: "low", budgetMicroUsd: 2_000_000 });
+      const site = await selectGrowth(f);
+      f.get(site.id)!.contentSchedule.autopilotSelectedAt = START;
+      await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "failed"));
+      const failed = f.tables.jobs.find(j => j.contentWork?.stage === "failed")!;
+      // The same terminal state a truncated/invalid structured provider response leaves behind.
+      failed.contentWork.failure = "content_model_response_invalid";
+      if (!withDraft) failed.articleId = undefined;
+      const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+      assert.equal(failed.contentWork.deadlineAt, deadline);
+      const result = await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+      assert.equal(result.mode, "content_slot_parked", `withDraft=${withDraft}`);
+      assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline + f.get(site.id)!.contentSchedule.intervalMs);
+      assert.equal(f.get(failed._id)!.contentWork.failure, "content_model_response_invalid", "the miss stays recorded");
+      assert.equal(f.get(failed._id)!.contentWork.deadlineAt, deadline, "the failed job keeps its original deadline");
+      assert.equal(f.tables.articles.filter(a => a.status === "published").length, 0);
+      f.setIdentity(f.get(site.id)!.userId);
+      const readiness = await f.invoke("contentWork:readiness", { siteId: site.id });
+      const item = readiness.work.find((w: { jobId: string }) => w.jobId === failed._id);
+      assert.equal(item.parked, true); assert.match(item.failure, /incomplete response.*schedule continued/);
+      f.setIdentity(null);
+      f.assertOffline();
+    }
+  });
   await t.test("existing_contracts_keep_their_failed_slot", async () => {
     const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], quality: "low", budgetMicroUsd: 2_000_000 });
     const site = await selectGrowth(f);

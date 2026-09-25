@@ -72,6 +72,10 @@ async function ownerDraftAllowance(ctx: QueryCtx | MutationCtx, site: Doc<"sites
   return { tier, used, limit: OWNER_DRAFTS_PER_MONTH[tier] as number };
 }
 const LIMIT = 1000;
+/** Terminal outcomes an Autopilot site moves past without the owner: nothing was
+ * published and no external write is uncertain. The failed job keeps its missed
+ * deadline, attempts and spending; the schedule continues with the next slot. */
+const AUTOPILOT_SKIPPABLE_FAILURES = new Set(["bounded_content_quality_exhausted", "content_model_response_invalid"]);
 const TOPIC_REPLENISH_INTERVAL_MS = 3 * 86_400_000, TOPIC_REPLENISH_BUDGET_MICRO_USD = 1_000_000;
 /** New articles started this UTC month across the account's sites: automatic
  * creations plus new owner drafts (edits of an existing draft do not count). */
@@ -691,7 +695,7 @@ export const readiness = query({
     // On sites set up with Autopilot, a draft the reviewer would not pass is
     // skipped (the schedule continues); it needs no action from the owner.
     const parkedByAutopilot = (j: Doc<"jobs">) => Boolean(s?.autopilotSelectedAt && !j.contentWork?.ownerRequest && j.contentWork?.intent === "create" &&
-      j.contentWork.stage === "failed" && j.contentWork.failure === "bounded_content_quality_exhausted");
+      j.contentWork.stage === "failed" && AUTOPILOT_SKIPPABLE_FAILURES.has(j.contentWork.failure ?? ""));
     // A parked draft whose topic the owner has since published (usually as an
     // edited version) is resolved for the owner; the miss itself stays recorded.
     const supersededJobs = new Set<string>();
@@ -757,7 +761,9 @@ export const readiness = query({
         superseded: supersededJobs.has(j._id),
         parked: parkedByAutopilot(j),
         failure: supersededJobs.has(j._id) ? "Replaced by your edited version of this article, which is now live. The missed slot stays on record."
-          : parkedByAutopilot(j) ? "Pentra held this draft back because its fact check wasn't confident enough. It won't be published; your schedule continued with the next article."
+          : parkedByAutopilot(j) ? j.contentWork!.failure === "content_model_response_invalid"
+            ? "Pentra's writing service returned an incomplete response for this article, so nothing was published. Your schedule continued with the next article."
+            : "Pentra held this draft back because its fact check wasn't confident enough. It won't be published; your schedule continued with the next article."
           : rejectedReview ? "Review handling has been repaired. Resume to recheck this retained work within its existing revision and spending limits. The article has not been approved."
           : creditRetry ? "Pentra has restored generation for this interrupted work. You can retry it once; the original deadline and earlier attempt remain recorded."
           : contentIssue(j.contentWork!.failure ?? j.error) }; }) };
@@ -1171,11 +1177,13 @@ export const advance = internalMutation({
     const failedSlot = work.find(j => j.contentWork!.stage === "failed" && j.contentWork!.deadlineAt === schedule.nextDeadlineAt);
     // Only sites that chose Autopilot in the new setup continue past a parked
     // draft; older contracts keep their failed slot exactly as recorded.
-    if (failedSlot && schedule.autopilotSelectedAt && failedSlot.contentWork!.failure === "bounded_content_quality_exhausted" &&
-      failedSlot.articleId && failedSlot.contentWork!.intent === "create") {
-      // Autopilot never stalls on a draft the reviewer would not pass: the
-      // retained draft and its notes wait for the owner, the missed slot stays
-      // recorded on that job, and the schedule continues with the next slot.
+    const failure = failedSlot?.contentWork!.failure ?? "";
+    if (failedSlot && schedule.autopilotSelectedAt && !failedSlot.contentWork!.ownerRequest && AUTOPILOT_SKIPPABLE_FAILURES.has(failure) &&
+      (failedSlot.articleId || failure === "content_model_response_invalid") && failedSlot.contentWork!.intent === "create") {
+      // Autopilot never stalls on a draft the reviewer would not pass, or on a
+      // provider response that was incomplete (nothing was published): any
+      // retained draft waits for the owner, the missed slot stays recorded on
+      // that job, and the schedule continues with the next slot.
       await ctx.db.patch(siteId, { contentSchedule: { ...schedule, nextDeadlineAt: schedule.nextDeadlineAt + schedule.intervalMs },
         updatedAt: Date.now() });
       await wake(ctx, siteId);
