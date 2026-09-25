@@ -1134,6 +1134,9 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     const unsearched = f.add("topic_clusters", { ...f.tables.topic_clusters.find(t => t.siteId === site.id)!, _id: undefined,
       primaryKeyword: "a completely different owner question", label: "A completely different owner question", status: "planned", priority: 99,
       searchVolume: undefined, createdAt: f.now(), updatedAt: f.now() });
+    const harder = f.add("topic_clusters", { ...f.tables.topic_clusters.find(t => t.siteId === site.id)!, _id: undefined,
+      primaryKeyword: "a much broader searched phrase", label: "A much broader searched phrase", status: "planned", priority: 97,
+      searchVolume: 1000, keywordDifficulty: 40, keywordDifficultyMeasured: true, createdAt: f.now(), updatedAt: f.now() });
     const outOfReach = f.add("topic_clusters", { ...f.tables.topic_clusters.find(t => t.siteId === site.id)!, _id: undefined,
       primaryKeyword: "an entirely separate head term", label: "An entirely separate head term", status: "planned", priority: 98,
       searchVolume: 9900, keywordDifficulty: 79, keywordDifficultyMeasured: true, createdAt: f.now(), updatedAt: f.now() });
@@ -1145,6 +1148,7 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     assert.equal(chosen.primaryKeyword, `${keyword} pricing guide`, "a searched keyword beats a higher-priority unsearched one");
     assert.notEqual(job.payload.topicId, unsearched);
     assert.notEqual(job.payload.topicId, outOfReach, "a keyword a small site cannot rank for is not preferred");
+    assert.notEqual(job.payload.topicId, harder, "480 searches at difficulty 14 beat 1,000 at difficulty 40");
     f.assertOffline();
   });
   await t.test("empty_keyword_research_falls_back_without_missing_the_slot", async () => {

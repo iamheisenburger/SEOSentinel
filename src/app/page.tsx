@@ -7,6 +7,7 @@ import { RunLog } from "@/components/landing/run-log";
 import { AnswerPanel, ControlPanel, HealthPanel, RankingsPanel, SourcesPanel } from "@/components/landing/panels";
 import { convexHttp } from "@/lib/convexHttpClient";
 import { api } from "../../convex/_generated/api";
+import { servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
 
 // The latest guides are linked from the homepage so search engines find new articles quickly.
 export const revalidate = 3600;
@@ -373,7 +374,7 @@ async function LatestGuides() {
   let articles: { _id: string; title: string; slug: string; createdAt: number }[] = [];
   try {
     articles = (await convexHttp.query(api.blog.listPublishedByDomain, { domain: "pentra.dev" }))
-      .filter(article => article.slug).sort((a, b) => b.createdAt - a.createdAt).slice(0, 6);
+      .filter(article => article.slug && servedOnItsOwnUrl("pentra.dev", article.slug)).sort((a, b) => b.createdAt - a.createdAt).slice(0, 6);
   } catch { articles = []; }
   if (articles.length === 0) return null;
   return (

@@ -975,7 +975,12 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
   // Keywords people measurably search for come first; within each group the
   // stored priority orders the work. Absence remains absent in storage.
   const searched = (t: Doc<"topic_clusters">) => (t.searchVolume ?? 0) > 0 && (t.keywordDifficulty ?? 0) <= WINNABLE_KEYWORD_DIFFICULTY;
-  planned.sort((a, b) => Number(searched(b)) - Number(searched(a)) || (b.priority ?? 0) - (a.priority ?? 0));
+  // Among searched keywords, a young site wins easy ones first: difficulty
+  // weighs more than raw volume (e.g. 100 searches at difficulty 10 beats
+  // 1,000 searches at difficulty 40).
+  const opportunity = (t: Doc<"topic_clusters">) => Math.log10(1 + (t.searchVolume ?? 0)) * 12 - (t.keywordDifficulty ?? 0) * 0.8;
+  planned.sort((a, b) => Number(searched(b)) - Number(searched(a)) ||
+    (searched(a) && searched(b) ? opportunity(b) - opportunity(a) : 0) || (b.priority ?? 0) - (a.priority ?? 0));
   if (preferredId) return planned.find(t => t._id === preferredId) ?? null;
   if (options.demandOnly) return planned.find(searched) ?? null;
   if (planned[0]) return planned[0];

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import Link from "next/link";
 import { cache } from "react";
 import ReactMarkdown from "react-markdown";
@@ -12,6 +12,7 @@ import { LandingNav } from "@/components/layout/landing-nav";
 import { convexHttp } from "@/lib/convexHttpClient";
 import "./article-content.css";
 import { articleFaq } from "@/lib/article-faq";
+import { consolidatedTarget } from "@/lib/pentra-consolidation";
 
 export const dynamic = "force-dynamic";
 
@@ -178,6 +179,8 @@ export async function generateMetadata({
   params,
 }: BlogPostPageProps): Promise<Metadata> {
   const [{ slug }, domain] = await Promise.all([params, getRequestDomain()]);
+  const merged = consolidatedTarget(domain, slug);
+  if (merged) permanentRedirect(`/blog/${merged}`);
   const article = await getPublishedArticle(domain, slug);
 
   if (!article) {
@@ -219,6 +222,9 @@ export async function generateMetadata({
 
 export default async function BlogPost({ params }: BlogPostPageProps) {
   const [{ slug }, domain] = await Promise.all([params, getRequestDomain()]);
+  // A consolidated duplicate on pentra.dev permanently points to its group's article.
+  const merged = consolidatedTarget(domain, slug);
+  if (merged) permanentRedirect(`/blog/${merged}`);
   const article = await getPublishedArticle(domain, slug);
   if (!article) notFound();
 

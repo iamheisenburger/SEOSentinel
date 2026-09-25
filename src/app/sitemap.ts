@@ -1,6 +1,7 @@
 import type { MetadataRoute } from "next";
 import { convexHttp } from "@/lib/convexHttpClient";
 import { api } from "../../convex/_generated/api";
+import { servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
 
 // A build-time outage must not freeze an incomplete sitemap until redeploy.
 // Read current publication/domain state; never cache revoked URLs as truth.
@@ -43,7 +44,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const result = await convexHttp.query(api.blog.listPublishedSlugs, { domain });
   const urlStructure = result.urlStructure ?? "/blog/[slug]";
 
-  const blogPages = result.articles.map((article: { slug: string; updatedAt?: number }) => {
+  const blogPages = result.articles.filter((article: { slug: string }) => servedOnItsOwnUrl(domain, article.slug)).map((article: { slug: string; updatedAt?: number }) => {
     // Build URL respecting the site's configured URL structure.
     const path = urlStructure.replace(/\[slug\]/i, article.slug);
     return {
