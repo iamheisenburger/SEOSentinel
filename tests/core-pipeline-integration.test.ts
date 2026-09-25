@@ -63,6 +63,7 @@ function articlePayload(keyword: string) {
 export function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean;
   growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
   longManagedPage?: boolean; gscFixture?: boolean; omitDraftTitle?: boolean; convexSerialization?: boolean;
+  gscSitemap?: { robots?: string; submitStatus?: number; submitted: string[] };
   auditResponse?: (audit: Fields, request: Fields) => unknown;
   remediationNote?: string;
   emptyReviewResponse?: boolean;
@@ -88,6 +89,18 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       assert.equal(url.pathname, "/token"); assert.equal(init.method, "POST");
       assert.equal(new URLSearchParams(String(init.body)).get("refresh_token"), "synthetic-only-refresh");
       return json({ access_token: "synthetic-refreshed-token", expires_in: 3600 });
+    }
+    if (options.gscSitemap && businesses.some(b => b.domain === url.hostname) && url.pathname === "/robots.txt") {
+      return options.gscSitemap.robots === undefined ? new Response("missing", { status: 404, headers: { "content-type": "text/plain" } })
+        : new Response(options.gscSitemap.robots, { headers: { "content-type": "text/plain" } });
+    }
+    if (options.gscFixture && options.gscSitemap && url.origin === "https://www.googleapis.com" && decodeURIComponent(url.pathname).includes("/sitemaps/")) {
+      const sitemapUrl = decodeURIComponent(url.pathname.split("/sitemaps/")[1]);
+      if (init.method === "PUT") {
+        if (options.gscSitemap.submitStatus) return new Response("{}", { status: options.gscSitemap.submitStatus });
+        options.gscSitemap.submitted.push(sitemapUrl); return new Response(null, { status: 204 });
+      }
+      return json({ path: sitemapUrl, lastSubmitted: "2026-09-08T00:00:00Z", isPending: true, errors: "0", warnings: "0" });
     }
     if (options.gscFixture && url.origin === "https://www.googleapis.com") {
       const business = businesses.find(b => decodeURIComponent(url.pathname).includes(`sc-domain:${b.domain}/`));
@@ -4381,6 +4394,46 @@ test("SLC39 daily measurement persists both modes and owners without paid legacy
     assert.equal(f.tables.search_performance.filter(r => r.siteId === site.id).length, 28);
   }
   assert.equal(f.tables.provider_spend_reservations.length, 0); assert.equal(f.modelCalls.length, 0); f.assertOffline();
+});
+
+test("SLC69 Autopilot sends the sitemap to Search Console when Google has not found its articles", async t => {
+  const prepare = async (gscSitemap: { robots?: string; submitStatus?: number; submitted: string[] }, coverage?: string) => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], noPricing: true, gscFixture: true, gscSitemap });
+    const site = await selectGrowth(f), stored = f.get(site.id)!;
+    Object.assign(stored, { gscRefreshToken: "synthetic-only-refresh", gscScopes: "openid email https://www.googleapis.com/auth/webmasters" });
+    if (coverage) f.add("article_summaries", { siteId: site.id, slug: "unfound-guide", title: "Unfound guide", status: "published", publicUrlStatus: "verified",
+      publishedAt: START - 5 * 86_400_000, createdAt: START - 5 * 86_400_000, articleCreatedAt: START - 5 * 86_400_000, gscCoverageState: coverage,
+      gscIndexVerdict: "NEUTRAL", gscInspectedAt: f.now() - 3_600_000, gscInspectionProperty: stored.gscProperty,
+      gscInspectionConnectionRevision: Number.isSafeInteger(stored.gscConnectionRevision) ? stored.gscConnectionRevision : 0 });
+    return { f, site };
+  };
+  await t.test("declared_sitemap_is_submitted_once", async () => {
+    const gscSitemap = { robots: "User-agent: *\nAllow: /\nSitemap: https://reservoir.example/sitemap_index.xml\nSitemap: https://elsewhere.example/other.xml", submitted: [] as string[] };
+    const { f, site } = await prepare(gscSitemap, "URL is unknown to Google");
+    const result = await f.invoke("actions/gscSync:syncSiteInternal", { siteId: site.id });
+    assert.deepEqual(result.sitemap, { status: "pending", sitemapUrl: "https://reservoir.example/sitemap_index.xml" });
+    assert.deepEqual(gscSitemap.submitted, ["https://reservoir.example/sitemap_index.xml"], "only the site's own declared sitemap");
+    assert.equal(f.get(site.id)!.gscSitemapStatus, "pending"); assert.ok(f.get(site.id)!.gscSitemapSubmittedAt);
+    f.setIdentity(f.get(site.id)!.userId);
+    const outcome = await f.invoke("searchPerformance:contentOutcome", { siteId: site.id });
+    assert.equal(outcome.sitemap?.status, "pending", JSON.stringify(outcome.status)); f.setIdentity(null);
+    await f.invoke("actions/gscSync:syncSiteInternal", { siteId: site.id });
+    assert.equal(gscSitemap.submitted.length, 1, "not resubmitted within two weeks");
+    f.assertOffline();
+  });
+  await t.test("indexed_sites_are_left_alone_and_refusals_keep_the_connection", async () => {
+    const quiet = { robots: "Sitemap: https://reservoir.example/sitemap.xml", submitted: [] as string[] };
+    const indexed = await prepare(quiet, "Submitted and indexed");
+    assert.equal((await indexed.f.invoke("actions/gscSync:syncSiteInternal", { siteId: indexed.site.id })).sitemap, undefined);
+    assert.equal(quiet.submitted.length, 0);
+    const refused = { submitStatus: 403, submitted: [] as string[] };
+    const restricted = await prepare(refused, "Discovered - currently not indexed");
+    const result = await restricted.f.invoke("actions/gscSync:syncSiteInternal", { siteId: restricted.site.id });
+    assert.deepEqual(result.sitemap, { status: "not_permitted", sitemapUrl: "https://reservoir.example/sitemap.xml" });
+    assert.equal(restricted.f.get(restricted.site.id)!.gscSitemapStatus, "not_permitted");
+    assert.ok(restricted.f.get(restricted.site.id)!.gscAccessToken, "a refused sitemap submission never disconnects Search Console");
+    indexed.f.assertOffline(); restricted.f.assertOffline();
+  });
 });
 
 test("SLC39 stale micro-seed handoffs cannot demote the migrated rollout or schedule old planning", async () => {

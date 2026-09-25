@@ -147,7 +147,8 @@ function OrganicOutcome({ siteId, simple = false }: { siteId: Id<"sites">; simpl
         {delta !== null && <span className={`rounded-full px-2 py-0.5 text-[12px] ${delta >= 0 ? "bg-[#22C55E]/10 text-[#22C55E]" : "bg-[#F59E0B]/10 text-[#F59E0B]"}`}>{delta >= 0 ? "+" : ""}{delta} vs previous</span>}
         {result.delayed && <span className="text-[12px] text-[#8A8F98]">Data is delayed.</span>}
       </div>
-      <SearchProgress current={result.current} previousImpressions={result.previous?.impressions ?? null} index={"index" in result ? result.index : null} />
+      <SearchProgress current={result.current} previousImpressions={result.previous?.impressions ?? null} index={"index" in result ? result.index : null}
+        sitemap={"sitemap" in result ? result.sitemap : null} />
       {"daily" in result && result.daily && result.daily.length >= 28 && <ClicksChart daily={result.daily} />}
       <p className={BODY}>{result.previous ? `Previous complete window: ${clicks(result.previous.clicks)} (${result.previous.start}–${result.previous.end}); change ${result.current.clicks - result.previous.clicks >= 0 ? "+" : ""}${result.current.clicks - result.previous.clicks}.` : "No complete previous window; no comparison is shown."}</p>
       {!simple && <p className="text-[13px] text-[#8A8F98]">Property: {result.property}. Search Console calendar dates. New-page cohorts start on the first full day after publication.</p>}
@@ -160,9 +161,10 @@ function OrganicOutcome({ siteId, simple = false }: { siteId: Id<"sites">; simpl
 }
 
 /** Leading indicators: Google shows pages (impressions, position) and indexes them before they earn clicks. */
-export function SearchProgress({ current, previousImpressions, index }: {
+export function SearchProgress({ current, previousImpressions, index, sitemap }: {
   current: { impressions?: number; position?: number | null; pagesSeen?: number };
   previousImpressions: number | null; index: { checked: number; indexed: number } | null;
+  sitemap?: { submittedAt: number; status: string; url: string | null } | null;
 }) {
   if (current.impressions === undefined) return null;
   const change = previousImpressions === null ? null : current.impressions - previousImpressions;
@@ -184,6 +186,9 @@ export function SearchProgress({ current, previousImpressions, index }: {
       </div>)}
     </dl>
     <p className="text-[12px] text-[#62666D]">Impressions and positions move first. Clicks follow once pages reach page one.</p>
+    {sitemap && (sitemap.status === "not_permitted" || sitemap.status === "failed"
+      ? <p className="text-[12px] text-[#F2994A]">Google hasn&apos;t found some of your articles and Pentra couldn&apos;t send your sitemap{sitemap.status === "not_permitted" ? " (your Search Console access doesn't allow it)" : ""}. In Search Console, open Sitemaps and submit {sitemap.url ?? "sitemap.xml"}.</p>
+      : <p className="text-[12px] text-[#8A8F98]">Google hadn&apos;t found some of your articles, so Pentra sent your sitemap to Search Console on {new Date(sitemap.submittedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}.</p>)}
   </div>;
 }
 

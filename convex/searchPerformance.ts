@@ -90,7 +90,8 @@ export const contentOutcome = query({ args: { siteId: v.id("sites") }, handler: 
     delayed: through < addSearchConsoleDays(searchConsoleDate(Date.now()), -3),
     current: { start: currentStart, end: through, clicks: sum(currentStart, through), impressions: currentImpressions, position, pagesSeen },
     previous: complete(previousStart, previousEnd) ? { start: previousStart, end: previousEnd, clicks: sum(previousStart, previousEnd),
-      impressions: impressionsIn(previousStart, previousEnd) } : null, index, cohorts };
+      impressions: impressionsIn(previousStart, previousEnd) } : null, index, cohorts,
+    sitemap: site.gscSitemapSubmittedAt ? { submittedAt: site.gscSitemapSubmittedAt, status: site.gscSitemapStatus ?? "unknown", url: site.gscSitemapUrl ?? null } : null };
 } });
 
 function completeCurrentGscRows<Row>(
@@ -1192,6 +1193,40 @@ export const recordUrlInspection = internalMutation({
         articleUpdatedAt: Date.now(),
       });
     }
+  },
+});
+
+/** Current-connection URL Inspection coverage states of the site's published articles (strings only). */
+export const publishedCoverageStatesInternal = internalQuery({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site || !siteExecutionActive(site)) return [];
+    const published = await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "published")).take(1001);
+    return published.filter(row => articleMatchesCurrentDomain(site, row) && row.gscCoverageState && gscInspectionMatchesCurrentConnection(site, row))
+      .map(row => row.gscCoverageState!);
+  },
+});
+
+/** Receipt of an Autopilot sitemap submission, bound to the current Search Console connection. */
+export const recordAutopilotSitemapSubmission = internalMutation({
+  args: {
+    siteId: v.id("sites"),
+    expectedCanonicalDomain: v.string(),
+    expectedDomainRevision: v.number(),
+    expectedConnectionRevision: v.number(),
+    expectedProperty: v.string(),
+    submittedAt: v.number(),
+    sitemapUrl: v.string(),
+    status: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId);
+    if (!site || !(await siteExecutionAuthorized(ctx, site))) throw new Error("Site not found");
+    assertCurrentGscDomainBinding(site, args.expectedCanonicalDomain, args.expectedDomainRevision,
+      args.expectedConnectionRevision, args.expectedProperty);
+    await ctx.db.patch(site._id, { gscSitemapSubmittedAt: args.submittedAt, gscSitemapUrl: args.sitemapUrl.slice(0, 500),
+      gscSitemapStatus: args.status.slice(0, 40), updatedAt: Date.now() });
   },
 });
 

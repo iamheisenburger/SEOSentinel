@@ -19,6 +19,7 @@ import {
   type GscSearchAnalyticsRow,
 } from "../lib/gscSearchAnalytics";
 import { isSeoGrowthActuationEligible } from "../lib/seoGrowth";
+import { safeFetchPublicText } from "../lib/safeOutbound";
 import { hardGscOAuthFailure } from "../lib/oneSetupCanonical.ts";
 import {
   gscConnectionMatchesCurrentDomain,
@@ -28,6 +29,9 @@ import {
 } from "../lib/siteDomainBinding";
 
 const GSC_HTTP_TIMEOUT_MS = 20_000;
+/** An Autopilot site whose articles Google has not found gets its sitemap sent at most this often. */
+const AUTOPILOT_SITEMAP_RESUBMIT_MS = 14 * 24 * 60 * 60 * 1000;
+const UNDISCOVERED_COVERAGE = new Set(["URL is unknown to Google", "Discovered - currently not indexed"]);
 
 type DomainBoundGscSite = Doc<"sites"> & {
   canonicalDomainRevision?: number;
@@ -151,6 +155,7 @@ type GscSyncResult = {
     checked: number;
     failed: number;
   };
+  sitemap?: { status: string; sitemapUrl?: string };
 };
 
 type SitemapSubmissionResult = {
@@ -277,6 +282,62 @@ async function submitAndVerifySitemap(
     errors: Number(data.errors ?? 0),
     warnings: Number(data.warnings ?? 0),
   };
+}
+
+/** The site's own declared sitemap (robots.txt "Sitemap:" on the same host), else /sitemap.xml. */
+async function discoverSitemapUrl(domain: string): Promise<string> {
+  const fallback = sitemapUrlForDomain(domain);
+  const origin = new URL(fallback).origin, host = new URL(fallback).hostname.replace(/^www\./, "");
+  try {
+    const robots = await safeFetchPublicText(`${origin}/robots.txt`, { timeoutMs: 8_000, maxBytes: 200_000, sameHostRedirects: true });
+    for (const line of robots.text.split(/\r?\n/)) {
+      const match = /^\s*sitemap\s*:\s*(\S+)/i.exec(line);
+      if (!match) continue;
+      try {
+        const url = new URL(match[1]);
+        if (url.protocol === "https:" && url.hostname.replace(/^www\./, "") === host) return url.href;
+      } catch { /* ignore a malformed line */ }
+    }
+  } catch { /* robots.txt unavailable: use the conventional location */ }
+  return fallback;
+}
+
+/** Autopilot sites (the content engine) get the discovery help older sites got
+ * from the growth controller: when Search Console reports that published
+ * articles are unknown to Google, Pentra submits the site's sitemap. A refused
+ * submission (for example a restricted Search Console user) is recorded and
+ * never disconnects Search Console. */
+async function submitAutopilotSitemapIfNeeded(
+  ctx: ActionCtx,
+  site: Doc<"sites">,
+  accessToken: string,
+  gscProperty: string,
+): Promise<{ status: string; sitemapUrl?: string } | null> {
+  if (site.serviceMode !== "growth_first" || !site.contentSchedule) return null;
+  if (!site.gscScopes?.split(/\s+/).includes("https://www.googleapis.com/auth/webmasters")) return null;
+  if (site.gscSitemapSubmittedAt && site.gscSitemapSubmittedAt > Date.now() - AUTOPILOT_SITEMAP_RESUBMIT_MS) return null;
+  const coverage: string[] = await ctx.runQuery(internal.searchPerformance.publishedCoverageStatesInternal, { siteId: site._id });
+  if (!coverage.some(state => UNDISCOVERED_COVERAGE.has(state))) return null;
+  const binding = currentGscBinding(site);
+  const sitemapUrl = await discoverSitemapUrl(site.domain);
+  let status = "failed";
+  try {
+    const result = await submitAndVerifySitemap(accessToken, gscProperty, sitemapUrl, () => assertCurrentGscConnection(ctx, site));
+    status = result.isPending ? "pending" : (result.errors ?? 0) > 0 ? "errors" : "processed";
+  } catch (error) {
+    status = error instanceof GscAuthorizationError ? "not_permitted" : "failed";
+  }
+  await ctx.runMutation(internal.searchPerformance.recordAutopilotSitemapSubmission, {
+    siteId: site._id,
+    expectedCanonicalDomain: binding.canonicalDomain,
+    expectedDomainRevision: binding.domainRevision,
+    expectedConnectionRevision: binding.connectionRevision,
+    expectedProperty: binding.property,
+    submittedAt: Date.now(),
+    sitemapUrl,
+    status,
+  });
+  return { status, sitemapUrl };
 }
 
 async function fetchSearchAnalyticsPage(
@@ -931,6 +992,12 @@ async function syncSiteGSC(
     }
     throw error;
   }
+  let sitemap: { status: string; sitemapUrl?: string } | null = null;
+  try {
+    sitemap = await submitAutopilotSitemapIfNeeded(ctx, site, accessToken, gscProperty);
+  } catch {
+    console.error("Autopilot sitemap submission check failed for one tenant");
+  }
   const receipt = await ctx.runMutation(
     internal.sites.markGscReceiptVerifiedInternal,
     {
@@ -946,5 +1013,6 @@ async function syncSiteGSC(
     ...recent,
     backfillScheduled,
     inspections,
+    ...(sitemap ? { sitemap } : {}),
   };
 }

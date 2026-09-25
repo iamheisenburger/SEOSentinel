@@ -171,6 +171,10 @@ export default defineSchema({
     gscConnectionRevision: v.optional(v.number()),
     gscEmail: v.optional(v.string()),
     gscScopes: v.optional(v.string()),
+    // Autopilot sitemap submission to Search Console (when articles are unknown to Google).
+    gscSitemapSubmittedAt: v.optional(v.number()),
+    gscSitemapUrl: v.optional(v.string()),
+    gscSitemapStatus: v.optional(v.string()),
     gscConnectedAt: v.optional(v.number()),
     // A canonical Search Console receipt is separate from merely retaining an
     // OAuth token. The generation fences late failures from an older grant;
