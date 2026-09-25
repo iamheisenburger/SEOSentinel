@@ -124,8 +124,48 @@ Working model:
 - Topic inventory is low but not empty (pentra.dev 2 available, LeadPilot 3); automatic replenishment runs when a
   site runs out.
 
+### Sep 25 (P31): results work and distribution readiness
+Owner (chat, 09:20Z): "do whatever you must for pentra to be a GREAT PROVEN end to end working product that delivers
+results"; "by tonight i want a ready end to end pentra that is ready for distribution regardless".
+- Web research: Autopilot and owner drafts run bounded Anthropic web search (web_search_20250305, max 3 searches)
+  inside the audited content receipt (logical key `<replacements>:<phase>:web_research`; ceiling = 40k input tokens
+  per search + max_tokens + $0.01 per search). Citations come only from structured web_search_result_location
+  blocks whose URL is among the returned results; source pages are fetched (safeFetchPublicText) and only strict
+  evidence (.gov/.edu/academic/official docs) becomes article sources, so many niches still get zero sources and
+  the article is written from confirmed facts. A 400/403 refusal is recorded and never blocks the article.
+  Kill switch: Convex env PENTRA_CONTENT_WEB_RESEARCH=off.
+- Cadence: a failed Autopilot slot (skippable failure, nothing published) gets ONE replacement job (new topic, own
+  reservation, trigger `content_slot:<deadline>:replacement`) when ≥1h remains; a circuit breaker stops
+  replacements after 2 failures in the last 3 finished jobs. The replaced job counts once in the monthly allowance.
+- Topics: Autopilot prefers planned topics with measured search volume (DataForSEO). When none is left it starts
+  keyword research (≤ every 3 days; 7 days after an empty result; $1 reservation; only if the article still fits
+  the account budget afterwards) and waits for it only while the slot is ≥90 min away, else falls back to a
+  confirmed-business question. Mode `topics_researching`. Previously the anchor fallback ("A practical guide to
+  <feature>") ran BEFORE any research, which is how feature-name topics like "niche detection" got published.
+- Business facts editor (Settings → service → "Edit business facts", mutation contentWork.updateBusinessFacts):
+  saving re-confirms, sets aside work prepared from the old facts, Autopilot stays on.
+- Free plan: 3 articles a month (OWNER_DRAFTS_PER_MONTH.free = 3; copy updated). Code default free provider cap
+  $7.50, but the Convex env PENTRA_PROVIDER_LIMITS value wins: OWNER must set accountMonthlyMicroUsd.free to
+  7500000 or free accounts stop after one article.
+- Distribution: /beta page (10 websites, Starter free for 60 days; public route, in knownPrefixes), hero pill links
+  to it, site-wide social image public/og.png. Beta access is granted by the owner in Clerk: private metadata
+  `"pentraPlanFeatures": ["max_sites_1", "max_articles_10"]` (exact canonical bundle; remove the key to end it).
+  The upgrade page then shows "You have Starter access from Pentra at no charge".
+- Landing: "What Pentra does not do (yet)" section removed (owner request); header links are "/#…" so they work
+  from /blog, /contact and article pages.
+
+Known gaps after P31 (honest):
+- pentra.dev's own blog has 121 articles; roughly 80 of them sit in about 13 groups that target the same searches
+  (content refresh, content gaps, keyword clustering, rank monitoring, AI content generators…), several with
+  2024/2025 in the title. Consolidating each group into one strong page with 301s would help; owner decision
+  (published articles are preserved until then).
+- No per-article featured image or author byline on customer sites; no YouTube embeds (deliberately: automatic
+  video picks are often irrelevant). Pentra's own blog has BlogPosting/FAQPage/Breadcrumb JSON-LD.
+- Owner-edited drafts still publish at "<slug>-edited" URLs.
+
 ### What Autopilot articles do NOT have (found Sep 24 night; public copy corrected in P26)
-- No live web research and no citations. pipeline.ts skips SERP analysis and webResearch whenever
+- [FIXED in P31: bounded live web research now runs inside the audited provider; see the P31 section.] Before P31:
+  no live web research and no citations. pipeline.ts skipped SERP analysis and webResearch whenever
   contentProviderActive() (the audited content provider allows no optional paid service). Articles are written
   only from the confirmed business facts, and the strict fact check strips/blocks anything unsupported, so they
   read cautious ("a hypothesis worth testing…"). Landing, pricing, upgrade, blog intro and JSON-LD no longer claim
@@ -165,7 +205,8 @@ now lives in src/app/pentra.css (renamed) and article typography in its own rout
 show up live, suspect the cache first: rename the file or redeploy without the build cache.
 
 Next (not done):
-- Bounded live web research + citations inside the audited content provider (see above; owner cost decision)
+- (Done in P31) Bounded live web research + citations inside the audited content provider
+- Per-article featured images on customer sites; consolidating pentra.dev's duplicate article groups (owner decision)
 - Structured data on customer sites (MDX frontmatter faq/schema field or WordPress plugin JSON-LD)
 - Direct Shopify/Webflow publishers (paste covers them today)
 - customer email notifications (no transactional email provider configured)
