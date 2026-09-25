@@ -18,6 +18,8 @@ export default defineSchema({
       autopilotSelectedAt: v.optional(v.number()),
       // Last automatic keyword research for an Autopilot site whose topics ran out.
       topicsReplenishedAt: v.optional(v.number()),
+      // New topics that research added (0 backs off the next attempt).
+      topicsReplenishAdded: v.optional(v.number()),
     })),
     userId: v.optional(v.string()), // Clerk user ID
     domain: v.string(),
@@ -1259,6 +1261,8 @@ export default defineSchema({
       failure: v.optional(v.string()),
       retiredAt: v.optional(v.number()),
       retiredForReviewToken: v.optional(v.string()),
+      // Autopilot: this job is the single replacement for a failed job's slot.
+      replacesJobId: v.optional(v.id("jobs")),
     })),
     siteId: v.optional(v.id("sites")),
     canonicalDomain: v.optional(v.string()),

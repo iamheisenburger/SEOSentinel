@@ -1,5 +1,5 @@
 "use node";
-import { contentProviderActive, contentProviderPromptTime, contentStructuredCall, withContentProvider } from "./contentWorkProvider";
+import { contentProviderActive, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
 class ContentQualityRejection extends Error {}
 
 import { internal } from "../_generated/api";
@@ -4563,6 +4563,46 @@ async function handleArticle(
       const msg = err instanceof Error ? err.message : "unknown";
       console.error(`Web research failed (continuing without): ${msg}`);
     }
+  } else if (topic && contentProviderActive() && contentWebResearchEnabled() && !selectedWork?.job.contentWork?.editTarget) {
+    // Autopilot research runs inside the audited content provider: one bounded
+    // web search call on the same job, reservation and receipt. Only text the
+    // API attributes to a page becomes evidence, and strict source rules apply.
+    try {
+      const found = await contentResearchCall({
+        system: [
+          "You research sources for a fact-checked article. Use web search to find authoritative primary sources:",
+          "government (.gov), academic (.edu, journals, PubMed, arXiv), standards bodies, and official documentation",
+          "(for example Google Search Central for search topics). Avoid blogs, vendor marketing, forums, social media and news aggregators.",
+          "Then write a short research brief of the facts most useful to the article. Quote only what the sources say; do not add facts of your own.",
+        ].join(" "),
+        userMessage: [
+          `Article topic: ${topic.label}`,
+          `Primary search: ${topic.primaryKeyword}`,
+          topic.secondaryKeywords?.length ? `Related searches: ${topic.secondaryKeywords.slice(0, 6).join(", ")}` : "",
+          site.targetCountry ? `Readers are in: ${site.targetCountry}` : "",
+          `Do not research ${site.siteName ?? site.domain} itself or its competitors; research the subject for its readers.`,
+        ].filter(Boolean).join("\n"),
+        maxUses: 3,
+      });
+      const competitorDomains = (site.competitors ?? []).map((c: string) => c.replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase());
+      const candidates = found.sources.filter(source => !competitorDomains.some(d => source.url.toLowerCase().includes(d)));
+      const strict = strictEvidenceSources(candidates);
+      researchSources = strict.accepted.map(source => {
+        const excerpt = (source.excerpt ?? source.excerpts.join(" … ")).slice(0, 2500);
+        return { url: source.url, ...(source.title ? { title: source.title } : {}), excerpt, contentHash: sha256Hex(excerpt), capturedAt: contentProviderPromptTime() };
+      }).filter(source => source.excerpt.length >= 160).slice(0, 8);
+      if (strict.rejected.length) researchQualityNotes.push(`Excluded ${strict.rejected.length} secondary or vendor-authored source(s) from strict evidence.`);
+      researchContext = researchSources.length ? [
+        "Strict evidence mode is active. Only the preserved source excerpts below may support external factual claims.",
+        "PRESERVED SOURCE EXCERPTS (citation order):",
+        ...researchSources.map((source, index) =>
+          `[${index + 1}] ${source.title ?? "Untitled source"}\nURL: ${source.url}\nCONTENT HASH: ${source.contentHash}\nEXCERPT: ${source.excerpt}`),
+      ].join("\n\n").slice(0, 30000) : "";
+      console.log(`Autopilot research: ${found.searches} searches, ${found.sources.length} cited pages, ${researchSources.length} strict sources`);
+    } catch (err) {
+      researchQualityNotes.push(`Web research unavailable for this article: ${err instanceof Error ? err.message.slice(0, 200) : "unknown"}`);
+      console.error(`Autopilot web research failed (continuing without): ${err instanceof Error ? err.message : "unknown"}`);
+    }
   }
 
   // ── Step 1b: YouTube Video Search (graceful degradation) ──
@@ -8621,6 +8661,8 @@ export const autopilotTick = internalAction({
       cadence_micro_seed_continuation:
         "Another non-overlapping candidate from the paid cadence receipt entered measured evidence review.",
       buffer_fill: "A strict-quality buffer candidate was queued.",
+      buffer_replacement: "A fresh article was queued for a failed Autopilot slot.",
+      topics_researching: "Researching keywords people search for before the next article.",
       cadence_generation: "A cadence article candidate was queued.",
       cadence_revision:
         "Safe new-page space was exhausted; one strict, receipt-bound existing article revision was queued at the cadence boundary.",

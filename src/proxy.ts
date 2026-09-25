@@ -6,7 +6,7 @@ import {
 } from "next/server";
 
 const PUBLIC_EXACT_ROUTES = new Set([
-  "/", "/pricing", "/contact", "/api/webhooks/clerk-billing",
+  "/", "/pricing", "/contact", "/beta", "/api/webhooks/clerk-billing",
   "/api/github/callback", "/api/gsc/callback",
   "/api/outreach/gmail/callback", "/sitemap.xml", "/robots.txt",
 ]);
@@ -53,7 +53,7 @@ const clerkAppMiddleware = clerkMiddleware(async (auth, request) => {
   // This supports any urlStructure (e.g. /articles/[slug], /posts/[slug])
   const knownPrefixes = new Set([
     "dashboard", "settings", "articles", "jobs", "sites", "plan", "upgrade",
-    "pricing", "contact", "legal", "sign-in", "sign-up", "api", "_next", "blog",
+    "pricing", "contact", "beta", "legal", "sign-in", "sign-up", "api", "_next", "blog",
     "analytics", "backlinks", "unsubscribe", "e2e-acceptance",
   ]);
   const pathParts = pathname.split("/").filter(Boolean);

@@ -68,7 +68,8 @@ export const PROVIDER_ACCOUNT_DAILY_CEILING_MICRO_USD =
   SHARED_PROVIDER_DAILY_CEILING_MICRO_USD -
   PROVIDER_OTHER_ACCOUNTS_DAILY_RESERVE_MICRO_USD;
 export const PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD = Object.freeze({
-  free: 2_500_000,
+  // Free includes three articles a month; each reserves its $2.50 budget.
+  free: 7_500_000,
   starter: 5_000_000,
   pro: 10_000_000,
   scale: 20_000_000,
@@ -165,7 +166,7 @@ export type ProviderAccountCapacityDecision =
  * PENTRA_PROVIDER_LIMITS on the Convex deployment, e.g.
  * {"fleetMonthlyMicroUsd":400000000,"fleetDailyMicroUsd":40000000,
  *  "accountDailyMicroUsd":20000000,
- *  "accountMonthlyMicroUsd":{"free":2500000,"starter":20000000,"pro":50000000,"scale":120000000}}
+ *  "accountMonthlyMicroUsd":{"free":7500000,"starter":20000000,"pro":50000000,"scale":120000000}}
  * Absent or invalid values keep the audited defaults above. */
 type ProviderLimitOverrides = { fleetMonthlyMicroUsd?: number; fleetDailyMicroUsd?: number;
   accountDailyMicroUsd?: number; accountMonthlyMicroUsd?: Partial<Record<CanonicalPlanTier, number>> };

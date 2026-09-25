@@ -6,10 +6,11 @@ import { UserButton, useAuth } from "@clerk/nextjs";
 import { useState } from "react";
 
 const navLinks = [
-  { label: "Features", href: "#features" },
-  { label: "How it works", href: "#pipeline" },
-  { label: "Pricing", href: "#pricing" },
-  { label: "FAQ", href: "#faq" },
+  // Absolute "/#…" so the links also work from /blog, /contact and articles.
+  { label: "Features", href: "/#features" },
+  { label: "How it works", href: "/#pipeline" },
+  { label: "Pricing", href: "/#pricing" },
+  { label: "FAQ", href: "/#faq" },
   { label: "Blog", href: "/blog" },
   { label: "Contact", href: "/contact" },
 ];
@@ -34,7 +35,7 @@ export function LandingNav() {
           {/* Desktop nav */}
           <div className="hidden md:flex items-center gap-8">
             {navLinks.map((link) => (
-              link.href.startsWith("/") ? (
+              link.href.startsWith("/") && !link.href.includes("#") ? (
                 <Link
                   key={link.label}
                   href={link.href}
@@ -97,7 +98,7 @@ export function LandingNav() {
       {mobileOpen && (
         <div className="md:hidden border-t border-white/[0.04] bg-[#08090A]/95 backdrop-blur-xl px-6 py-4 space-y-3">
           {navLinks.map((link) => (
-            link.href.startsWith("/") ? (
+            link.href.startsWith("/") && !link.href.includes("#") ? (
               <Link
                 key={link.label}
                 href={link.href}

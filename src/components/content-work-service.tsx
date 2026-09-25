@@ -2,6 +2,7 @@
 
 import { useAction, useMutation, useQuery } from "convex/react";
 import { useState } from "react";
+import { ConvexError } from "convex/values";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
@@ -104,6 +105,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
           {delivery.canPause && <Button size="sm" variant="secondary" disabled={saving} onClick={() => operate("pause")}>Pause Pentra</Button>}
           {delivery.canResume && <Button size="sm" disabled={saving} onClick={() => operate("resume")}>Resume Pentra</Button>}
         </div>}
+        <BusinessFactsEditor siteId={siteId} reviewToken={state.reviewToken} profile={state.profile} questions={state.profile.questions ?? []} />
         <div className="border-t border-white/[0.04] pt-4 [&_summary]:text-[#D0D6E0]">{setupDetails}</div>
         {error && <p role="alert" className="text-[#EB5757]">{error}</p>}
       </div>
@@ -210,3 +212,50 @@ function EditablePageSelection({ siteId }: { siteId: Id<"sites"> }) {
     </>}
   </div>;
 }
+
+/** The facts Pentra writes from, editable by the owner. Saving is the owner's
+ * re-confirmation: work prepared from the old facts is retired and Autopilot
+ * continues from the new ones. */
+function BusinessFactsEditor({ siteId, reviewToken, profile, questions }: { siteId: Id<"sites">; reviewToken: string;
+  profile: { summary: string; audience: string; productUsage: string; offerings: string[] }; questions: string[] }) {
+  const save = useMutation(api.contentWork.updateBusinessFacts);
+  const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [message, setMessage] = useState("");
+  const [summary, setSummary] = useState(profile.summary), [audience, setAudience] = useState(profile.audience);
+  const [product, setProduct] = useState(profile.productUsage), [offerings, setOfferings] = useState(profile.offerings.join("\n"));
+  const [asked, setAsked] = useState(questions.join("\n")), [confirmed, setConfirmed] = useState(false);
+  const field = "block w-full rounded-lg border border-white/[0.1] bg-[#08090A] px-3 py-2 text-[13px] text-[#F7F8F8] focus:border-white/30 focus:outline-none";
+  const label = "block space-y-1.5 text-[12px] font-medium text-[#8A8F98]";
+  if (!open) return <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/[0.06] px-4 py-3">
+    <p className="text-[13px] text-[#8A8F98]">Pentra writes only from your confirmed business facts. Keep them current.</p>
+    <Button size="sm" variant="secondary" onClick={() => { setOpen(true); setMessage(""); }}>Edit business facts</Button>
+  </div>;
+  const lines = (value: string) => value.split("\n").map(line => line.trim()).filter(Boolean);
+  return <form className="space-y-3 rounded-lg border border-white/[0.08] p-4" onSubmit={async e => {
+    e.preventDefault(); if (!confirmed) return;
+    setBusy(true); setMessage("");
+    try {
+      const result = await save({ siteId, reviewToken, confirm: true, summary, audience, productUsage: product, offerings: lines(offerings), questions: lines(asked) });
+      setMessage(result.status === "unchanged" ? "Nothing changed." : result.status === "waiting"
+        ? `Saved. ${result.issues.map(issue => issue.action).join(" ")}` : "Saved. Pentra now writes from these facts; anything prepared from the old ones won't be published.");
+      if (result.status !== "waiting") { setOpen(false); setConfirmed(false); }
+    } catch (err) {
+      setMessage(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Couldn't save. Refresh and try again.");
+    } finally { setBusy(false); }
+  }}>
+    <p className="text-[14px] font-medium text-[#F7F8F8]">Business facts</p>
+    <label className={label}>What your business is and does<textarea className={field} rows={4} value={summary} onChange={e => { setSummary(e.target.value); setConfirmed(false); }} /></label>
+    <label className={label}>Who you serve<textarea className={field} rows={2} value={audience} onChange={e => { setAudience(e.target.value); setConfirmed(false); }} /></label>
+    <label className={label}>What your product or service does<textarea className={field} rows={3} value={product} onChange={e => { setProduct(e.target.value); setConfirmed(false); }} /></label>
+    <label className={label}>What you offer (one per line)<textarea className={field} rows={5} value={offerings} onChange={e => { setOfferings(e.target.value); setConfirmed(false); }} /></label>
+    <label className={label}>Real customer questions (one per line)<textarea className={field} rows={3} value={asked} onChange={e => { setAsked(e.target.value); setConfirmed(false); }} /></label>
+    <label className="flex items-start gap-2 text-[13px] text-[#D0D6E0]"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#F7F8F8]" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+      These facts are accurate. Pentra writes only from them.</label>
+    <div className="flex flex-wrap gap-2">
+      <Button size="sm" type="submit" disabled={!confirmed || busy || !summary.trim() || !audience.trim() || !product.trim()} loading={busy}>Save facts</Button>
+      <Button size="sm" variant="secondary" type="button" onClick={() => setOpen(false)}>Cancel</Button>
+    </div>
+    <p className="text-[12px] text-[#62666D]">Articles already prepared from the old facts are set aside, never published. Your schedule and spending history stay as they are.</p>
+    {message && <p role="status" className="text-[13px] text-[#8A8F98]">{message}</p>}
+  </form>;
+}
+

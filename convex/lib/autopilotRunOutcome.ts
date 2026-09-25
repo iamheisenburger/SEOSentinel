@@ -44,6 +44,8 @@ export const SCHEDULER_RUN_OUTCOME_HEALTH = {
   topic_replenishment: "waiting",
   cadence_micro_seed_continuation: "waiting",
   buffer_fill: "waiting",
+  buffer_replacement: "waiting",
+  topics_researching: "waiting",
   cadence_generation: "waiting",
   cadence_revision: "waiting",
   idle: "waiting",

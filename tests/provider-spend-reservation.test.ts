@@ -46,13 +46,13 @@ test("simultaneously exhausted daily and monthly windows report the monthly bloc
 
 test("every canonical plan has its exact account-level monthly provider ceiling", () => {
   assert.deepEqual(PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD, {
-    free: 2_500_000,
+    free: 7_500_000,
     starter: 5_000_000,
     pro: 10_000_000,
     scale: 20_000_000,
     enterprise: 28_000_000,
   });
-  assert.equal(providerAccountMonthlyCeilingMicroUsd("free"), 2_500_000);
+  assert.equal(providerAccountMonthlyCeilingMicroUsd("free"), 7_500_000);
   assert.equal(providerAccountMonthlyCeilingMicroUsd("starter"), 5_000_000);
   assert.equal(providerAccountMonthlyCeilingMicroUsd("pro"), 10_000_000);
   assert.equal(providerAccountMonthlyCeilingMicroUsd("scale"), 20_000_000);

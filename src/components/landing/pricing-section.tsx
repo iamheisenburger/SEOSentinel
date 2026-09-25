@@ -24,7 +24,7 @@ const tiers = [
     annualPrice: 0,
     desc: "See the quality on your own site, free.",
     sites: "1 site",
-    articles: "1 article / month",
+    articles: "3 articles / month",
     cta: "Start free",
     plan: "free",
     featured: false,

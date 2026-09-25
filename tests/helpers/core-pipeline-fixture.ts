@@ -124,7 +124,9 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
       Response, Request, Headers, AbortSignal, AbortController, Blob,
       fetch: transport, setTimeout, clearTimeout, structuredClone,
       console: Object.fromEntries(["log", "warn", "error", "info"].map(level => [level, (...values: unknown[]) => logs.push(values.map(String).join(" "))])),
-      process: { env: { ANTHROPIC_API_KEY: "synthetic-only", OPENAI_API_KEY: "synthetic-only", DATAFORSEO_LOGIN: "synthetic-only", DATAFORSEO_PASSWORD: "synthetic-only", ...environment } },
+      process: { env: { ANTHROPIC_API_KEY: "synthetic-only", OPENAI_API_KEY: "synthetic-only", DATAFORSEO_LOGIN: "synthetic-only", DATAFORSEO_PASSWORD: "synthetic-only",
+        // Autopilot web research is on in production; fixtures opt in explicitly so existing call sequences stay exact.
+        PENTRA_CONTENT_WEB_RESEARCH: "off", ...environment } },
     });
     modules.set(name, runtime.exports); return runtime.exports;
   }

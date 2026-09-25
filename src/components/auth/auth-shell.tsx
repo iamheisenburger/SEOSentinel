@@ -66,7 +66,7 @@ export function AuthShell({
             <p className="mt-5 max-w-[30rem] text-[15px] leading-7 text-[#8A8F98]">
               {isSignIn
                 ? "Review your drafts, approve what is ready, and see how published pages perform."
-                : "Add your website, connect it once, and Pentra researches, writes and publishes on your plan's schedule. Your first article is free."}
+                : "Add your website, connect it once, and Pentra researches, writes and publishes on your plan's schedule. The Free plan includes 3 articles a month."}
             </p>
 
             <div className="mt-12 border-t border-white/[0.08] pt-6">

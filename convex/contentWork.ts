@@ -32,7 +32,7 @@ export const CONTENT_DELIVERY_WINDOW_MS = 5 * 60_000;
 export const MAX_CONTENT_RECOVERIES = 3;
 /** Public plan allowance of NEW owner-requested drafts per UTC month (edits and
  * re-reviews of a draft are free). Matches the published pricing table. */
-export const OWNER_DRAFTS_PER_MONTH = { free: 1, starter: 10, pro: 25, scale: 60, enterprise: 150 } as const;
+export const OWNER_DRAFTS_PER_MONTH = { free: 3, starter: 10, pro: 25, scale: 60, enterprise: 150 } as const;
 /** Autopilot publishing rhythm derived from the plan's monthly articles:
  * spread evenly over 30 days, never more often than every 12 hours. */
 export function autopilotIntervalMs(articlesPerMonth: number) {
@@ -75,8 +75,55 @@ const LIMIT = 1000;
 /** Terminal outcomes an Autopilot site moves past without the owner: nothing was
  * published and no external write is uncertain. The failed job keeps its missed
  * deadline, attempts and spending; the schedule continues with the next slot. */
-const AUTOPILOT_SKIPPABLE_FAILURES = new Set(["bounded_content_quality_exhausted", "content_model_response_invalid"]);
+const AUTOPILOT_SKIPPABLE_FAILURES = new Set(["bounded_content_quality_exhausted", "content_model_response_invalid", "candidate_rejected_before_draft"]);
+/** Autopilot keeps the cadence: a failed slot gets one fresh article (a new
+ * topic, a new job and its own reservation) when there is still this much time
+ * before the slot. The failed job stays on record; nothing is reset. */
+const AUTOPILOT_REPLACEMENT_LEAD_MS = 60 * 60_000;
+function autopilotReplaceable(job: Doc<"jobs">) {
+  const cw = job.contentWork;
+  return Boolean(cw && cw.stage === "failed" && cw.intent === "create" && !cw.ownerRequest && cw.retiredAt === undefined &&
+    !cw.replacesJobId && AUTOPILOT_SKIPPABLE_FAILURES.has(cw.failure ?? ""));
+}
+/** A content job's reservation is bound to its slot; a slot replacement has its own. */
+function contentSlotTriggerMatches(trigger: string, cw: { deadlineAt: number; replacesJobId?: Id<"jobs"> }) {
+  return trigger === `content_slot:${cw.deadlineAt}${cw.replacesJobId ? ":replacement" : ""}` ||
+    trigger.startsWith(`content_slot:${cw.deadlineAt}:remaining_window:`);
+}
+/** Two failures among the last three finished Autopilot articles means
+ * something systematic is wrong: stop spending on replacements (slots still
+ * park) so the owner and support see it instead of paying for repeats. */
+function replacementsHealthy(work: Doc<"jobs">[]) {
+  const finished = work.filter(j => j.contentWork!.intent === "create" && ["verified", "failed"].includes(j.contentWork!.stage))
+    .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 3);
+  return finished.filter(j => j.contentWork!.stage === "failed").length < 2;
+}
 const TOPIC_REPLENISH_INTERVAL_MS = 3 * 86_400_000, TOPIC_REPLENISH_BUDGET_MICRO_USD = 1_000_000;
+/** Research that found no new keyword is not repeated for a week. */
+const TOPIC_REPLENISH_EMPTY_BACKOFF_MS = 7 * 86_400_000;
+/** An Autopilot article waits for fresh keyword research only while its slot is at least this far away. */
+const TOPIC_RESEARCH_WAIT_MARGIN_MS = 90 * 60_000;
+/** Autopilot writes for searched keywords: when none is left, research new
+ * ones for the confirmed business (bounded spend, at most every few days). */
+async function startTopicResearchIfDue(ctx: MutationCtx, site: Doc<"sites">, articleBudgetMicroUsd: number) {
+  const schedule = site.contentSchedule;
+  if (!schedule?.autopilotSelectedAt || !site.userId) return false;
+  const interval = schedule.topicsReplenishAdded === 0 ? TOPIC_REPLENISH_EMPTY_BACKOFF_MS : TOPIC_REPLENISH_INTERVAL_MS;
+  if (Date.now() - (schedule.topicsReplenishedAt ?? 0) < interval) return false;
+  const request = { siteId: site._id, userId: site.userId, purpose: "topic_plan" as const, trigger: `autopilot_topics:${Math.floor(Date.now() / TOPIC_REPLENISH_INTERVAL_MS)}`,
+    reservedMicroUsd: TOPIC_REPLENISH_BUDGET_MICRO_USD, timestamp: Date.now() };
+  // Research only when the account can still afford the article after it: the cadence comes first.
+  const room = await inspectSharedProviderBudget(ctx, { ...request, reservedMicroUsd: TOPIC_REPLENISH_BUDGET_MICRO_USD + articleBudgetMicroUsd });
+  if (!room.ok) return false;
+  const reserved = await reserveSharedProviderBudget(ctx, request);
+  // A refused reservation spends nothing; try again on the next check.
+  if (!reserved.ok) return false;
+  const next = { ...schedule, topicsReplenishedAt: Date.now() };
+  delete next.topicsReplenishAdded;
+  await ctx.db.patch(site._id, { contentSchedule: next, updatedAt: Date.now() });
+  await ctx.scheduler.runAfter(0, internal.actions.growthTopics.replenish, { siteId: site._id, reservationId: reserved.reservationId });
+  return true;
+}
 /** New articles started this UTC month across the account's sites: automatic
  * creations plus new owner drafts (edits of an existing draft do not count). */
 async function accountArticlesThisMonth(ctx: QueryCtx | MutationCtx, site: Doc<"sites">) {
@@ -85,7 +132,9 @@ async function accountArticlesThisMonth(ctx: QueryCtx | MutationCtx, site: Doc<"
   for (const owned of await ctx.db.query("sites").withIndex("by_user", q => q.eq("userId", site.userId!)).take(LIMIT)) {
     const siteJobs = await ctx.db.query("jobs").withIndex("by_site_content_deadline", q =>
       q.eq("siteId", owned._id).gte("contentWork.deadlineAt", monthStart)).take(LIMIT);
-    used += siteJobs.filter(j => j.contentWork && j.contentWork.intent === "create" && j.createdAt >= monthStart &&
+    // A failed Autopilot slot that got a replacement counts once (the replacement).
+    const replaced = new Set(siteJobs.map(j => j.contentWork?.replacesJobId).filter(Boolean));
+    used += siteJobs.filter(j => j.contentWork && j.contentWork.intent === "create" && j.createdAt >= monthStart && !replaced.has(j._id) &&
       (j.contentWork.ownerRequest ? !j.contentWork.ownerRequest.sourceArticleId : j.contentWork.retiredAt === undefined)).length;
   }
   return { used, nextMonthStart: Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1) };
@@ -151,7 +200,7 @@ export async function hasContentWorkProviderBudget(ctx: MutationCtx, site: Doc<"
   const receipt = job.providerSpendReservationId ? await ctx.db.get(job.providerSpendReservationId) : null;
   if (!receipt || receipt.siteId !== site._id || receipt.userId !== site.userId || receipt.purpose !== "content_work" ||
     receipt.releasedAt !== undefined || receipt.settledAt !== undefined || receipt.reservedMicroUsd <= 0 ||
-    !(receipt.trigger === `content_slot:${cw.deadlineAt}` || receipt.trigger.startsWith(`content_slot:${cw.deadlineAt}:remaining_window:`))) return false;
+    !contentSlotTriggerMatches(receipt.trigger, cw)) return false;
   try { for (const call of cw.providerCalls) if (call.creditRecovery?.requestedAt !== undefined) await retainedCreditEvidence(ctx, job, call); }
   catch { return false; }
   const costs = cw.providerCalls.map(c => c.actualMicroUsd ?? c.ceilingMicroUsd);
@@ -226,7 +275,7 @@ async function creditRecoveryAuthority(ctx: MutationCtx, site: Doc<"sites">, job
     .reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
   if (!receipt || receipt.siteId !== site._id || receipt.userId !== site.userId || receipt.purpose !== "content_work" ||
     receipt.releasedAt !== undefined || receipt.settledAt !== undefined || receipt.reservedMicroUsd !== cw.budgetMicroUsd - prior ||
-    !(receipt.trigger === `content_slot:${cw.deadlineAt}` || receipt.trigger.startsWith(`content_slot:${cw.deadlineAt}:remaining_window:`))) {
+    !contentSlotTriggerMatches(receipt.trigger, cw)) {
     throw new Error("Interrupted content reservation changed");
   }
   // Separately funded runs account for the original hold across all dates.
@@ -417,8 +466,58 @@ async function closePristineSetupLease(ctx: MutationCtx, site: Doc<"sites">) {
  * It reuses normal terminal accounting and new-work admission, not new credit. */
 export const reconfirm = mutation({ args: { siteId: v.id("sites"), reviewToken: v.string(), confirm: v.boolean() },
   handler: async (ctx, args) => {
-    const site = await requireOwner(ctx, args.siteId), schedule = site.contentSchedule;
+    const site = await requireOwner(ctx, args.siteId);
     if (!args.confirm || args.reviewToken !== contentConsentToken(site)) throw new Error("Review and explicitly confirm the current saved setup first");
+    return confirmChangedSetup(ctx, site, args.reviewToken);
+  } });
+
+/** The owner edits the business facts Pentra writes from and confirms them in
+ * one step. The edit is the owner's explicit re-confirmation, so it runs the
+ * same changed-setup review as `reconfirm`: work prepared from the old facts is
+ * retired (kept on record, never published), spending history and missed
+ * deadlines stay as they are, and the schedule continues from the new facts. */
+export const updateBusinessFacts = mutation({
+  args: { siteId: v.id("sites"), reviewToken: v.string(), confirm: v.boolean(), summary: v.string(), audience: v.string(),
+    productUsage: v.string(), offerings: v.array(v.string()), questions: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const site = await requireOwner(ctx, args.siteId);
+    if (!args.confirm) throw new ConvexError("Confirm that these facts are accurate before saving.");
+    if (args.reviewToken !== contentConsentToken(site)) throw new ConvexError("Your saved setup changed. Refresh and try again.");
+    if (site.serviceMode !== "growth_first" || !site.contentSchedule) throw new ConvexError("Finish setting up Pentra for this website first.");
+    const text = (value: string, max: number) => value.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim().slice(0, max);
+    const list = (values: string[], max: number) => [...new Set(values.map(value => text(value, 200)).filter(Boolean))].slice(0, max);
+    const summary = text(args.summary, 2000), audience = text(args.audience, 1000), productUsage = text(args.productUsage, 2000);
+    if (!summary || !audience || !productUsage) throw new ConvexError("Business facts, who you serve and what you sell are all required.");
+    await ctx.db.patch(site._id, { siteSummary: summary, targetAudienceSummary: audience, productUsage,
+      keyFeatures: list(args.offerings, 12), painPoints: list(args.questions, 12), updatedAt: Date.now() });
+    const updated = (await ctx.db.get(site._id))!, token = contentConsentToken(updated);
+    const result = await confirmChangedSetup(ctx, updated, token);
+    await followUpEditedFacts(ctx, updated, token, result, 1);
+    return result;
+  } });
+
+/** A worker that is mid-article when the owner saves new facts only delays the
+ * confirmation. Retry the owner's confirmation of these exact facts (same token)
+ * once that worker's lease has ended, a bounded number of times; anything that
+ * needs the owner (connection, billing, deliveries) still waits for them. */
+async function followUpEditedFacts(ctx: MutationCtx, site: Doc<"sites">, reviewToken: string,
+  result: { status: string; issues: SetupIssue[] }, attempt: number) {
+  if (result.status !== "waiting" || attempt > 6 || !result.issues.length || !result.issues.every(issue => issue.code === "worker")) return;
+  const until = Math.max(Date.now(), ...result.issues.map(issue => issue.until ?? 0));
+  await ctx.scheduler.runAt(until + 60_000, internal.contentWork.confirmEditedFacts, { siteId: site._id, reviewToken, attempt: attempt + 1 });
+}
+
+export const confirmEditedFacts = internalMutation({ args: { siteId: v.id("sites"), reviewToken: v.string(), attempt: v.number() },
+  handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId);
+    // Facts or destination changed again since the owner confirmed: their confirmation no longer applies.
+    if (!site || contentConsentToken(site) !== args.reviewToken || site.serviceMode !== "growth_first" || !site.contentSchedule) return;
+    const result = await confirmChangedSetup(ctx, site, args.reviewToken);
+    await followUpEditedFacts(ctx, site, args.reviewToken, result, args.attempt);
+  } });
+
+async function confirmChangedSetup(ctx: MutationCtx, site: Doc<"sites">, reviewToken: string) {
+    const schedule = site.contentSchedule;
     if (site.serviceMode !== "growth_first" || !schedule) throw new Error("Choose the content service first");
     const jobs = await jobsForSite(ctx, site._id), review = await reviewChangedSetup(ctx, site, jobs);
     if (!review.needed) return { status: "unchanged" as const, retired: 0, issues: [] as SetupIssue[] };
@@ -430,7 +529,7 @@ export const reconfirm = mutation({ args: { siteId: v.id("sites"), reviewToken: 
     if (review.issues.length) return { status: "waiting" as const, retired: 0, issues: review.issues };
     for (const job of review.stale) {
       await ctx.db.patch(job._id, { status: "failed", nextAttemptAt: undefined, workerToken: undefined, heartbeatAt: undefined, leaseExpiresAt: undefined,
-        contentWork: { ...job.contentWork!, retiredAt: Date.now(), retiredForReviewToken: args.reviewToken }, updatedAt: Date.now() });
+        contentWork: { ...job.contentWork!, retiredAt: Date.now(), retiredForReviewToken: reviewToken }, updatedAt: Date.now() });
       const retired = (await ctx.db.get(job._id))!;
       await archiveRetiredContentArtifact(ctx, retired);
       await closeRetiredContentAccounting(ctx, retired);
@@ -443,7 +542,7 @@ export const reconfirm = mutation({ args: { siteId: v.id("sites"), reviewToken: 
       ...(review.pristineLease ? { publicationLeaseOwner: undefined, publicationLeaseExpiresAt: undefined } : {}), updatedAt: Date.now() });
     if (!schedule.ownerReviewedOnly) await wake(ctx, site._id);
     return { status: "preparing" as const, retired: review.stale.length, issues: [] as SetupIssue[] };
-  } });
+}
 
 /** Stage 1 interface. No customer can opt in implicitly or rewrite an existing
  * deadline by toggling mode. Migration and rollback drain unresolved work. */
@@ -714,7 +813,7 @@ export const readiness = query({
       if (title) upcomingTitles.set(j._id, title);
     }
     return { siteId, setupPending: Boolean(site.contentSetupRequestedAt && !site.serviceMode), serviceMode: site.serviceMode ?? "legacy_articles", reviewToken: contentConsentToken(site),
-      profile: { name: site.siteName ?? site.domain, summary: site.siteSummary ?? "", audience: site.targetAudienceSummary ?? "", productUsage: site.productUsage ?? "", offerings: site.keyFeatures ?? [] },
+      profile: { name: site.siteName ?? site.domain, summary: site.siteSummary ?? "", audience: site.targetAudienceSummary ?? "", productUsage: site.productUsage ?? "", offerings: site.keyFeatures ?? [], questions: site.painPoints ?? [] },
       destination: { kind: site.publishMethod ?? "manual", domain: site.domain, repository: site.publishMethod === "github" ? `${site.repoOwner ?? ""}/${site.repoName ?? ""}` : null,
         branch: site.repoDefaultBranch ?? null, contentDirectory: directory, verified },
       entitlement: await contentEntitlementAuthorized(ctx, site), enabled: Boolean(site.autopilotEnabled), approvalRequired: Boolean(site.approvalRequired),
@@ -848,7 +947,7 @@ export const control = mutation({ args: { siteId: v.id("sites"), action: v.union
   } });
 
 async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: Id<"topic_clusters">,
-  excludedIntents: { primaryKeyword: string; label?: string }[] = []) {
+  excludedIntents: { primaryKeyword: string; label?: string }[] = [], options: { demandOnly?: boolean } = {}) {
   const topics = await takeCurrentDomainTopics(ctx, site, LIMIT + 1);
   if (topics.length > LIMIT) throw new Error("Topic inventory is incomplete");
   const signals = tenantTopicBusinessSignals(site);
@@ -871,9 +970,12 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
   const planned = topics.filter(t => ["planned", "pending"].includes(t.status ?? "planned") && fit(t) &&
     !planCheckpointTopicExecutionLocked(t) && !terminalContentFeasibility(t.contentFeasibilityStatus) &&
     ![...covered, ...pageCoverage, ...excludedIntents].some(c => contentIntentConflicts(t, c)));
-  // Optional forecasts order work only. Absence remains absent in storage.
-  planned.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+  // Keywords people measurably search for come first; within each group the
+  // stored priority orders the work. Absence remains absent in storage.
+  const searched = (t: Doc<"topic_clusters">) => (t.searchVolume ?? 0) > 0;
+  planned.sort((a, b) => Number(searched(b)) - Number(searched(a)) || (b.priority ?? 0) - (a.priority ?? 0));
   if (preferredId) return planned.find(t => t._id === preferredId) ?? null;
+  if (options.demandOnly) return planned.find(searched) ?? null;
   if (planned[0]) return planned[0];
   const anchors = tenantDiscoveryAnchors([...(site.anchorKeywords ?? []), ...(site.keyFeatures ?? []),
     ...(site.painPoints ?? []), site.productUsage], 40);
@@ -945,7 +1047,7 @@ export const requestDraft = mutation({
     const allowance = args.edit ? null : await ownerDraftAllowance(ctx, site, Boolean(pricing.validationAuthorizationId));
     if (allowance && allowance.used >= allowance.limit) {
       throw new ConvexError(allowance.tier === "free"
-        ? "Your free article for this month is used. Choose a plan in Billing to keep publishing."
+        ? `Your ${allowance.limit} free articles for this month are used. Choose a plan in Billing to keep publishing, or wait until the 1st.`
         : `You've used all ${allowance.limit} articles in your plan this month. Upgrade in Billing or wait until the 1st.`);
     }
     const topic = source?.topicId ? await ctx.db.get(source.topicId) : await chooseTopic(ctx, site, args.topicId);
@@ -1065,7 +1167,9 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
         createdAt: Date.now(), updatedAt: Date.now() });
       taken.push(proposal); added++;
     }
-    if (added > 0) await wake(ctx, siteId);
+    // Record the outcome (an empty result backs off) and let a waiting slot continue either way.
+    if (site.contentSchedule) await ctx.db.patch(siteId, { contentSchedule: { ...site.contentSchedule, topicsReplenishAdded: added }, updatedAt: Date.now() });
+    await wake(ctx, siteId);
     return { added };
   } });
 
@@ -1178,8 +1282,11 @@ export const advance = internalMutation({
     // Only sites that chose Autopilot in the new setup continue past a parked
     // draft; older contracts keep their failed slot exactly as recorded.
     const failure = failedSlot?.contentWork!.failure ?? "";
-    if (failedSlot && schedule.autopilotSelectedAt && !failedSlot.contentWork!.ownerRequest && AUTOPILOT_SKIPPABLE_FAILURES.has(failure) &&
-      (failedSlot.articleId || failure === "content_model_response_invalid") && failedSlot.contentWork!.intent === "create") {
+    const replaceNextSlot = Boolean(failedSlot && schedule.autopilotSelectedAt && autopilotReplaceable(failedSlot) && waiting.length === 0 &&
+      !work.some(j => j.contentWork!.replacesJobId === failedSlot._id) && replacementsHealthy(work) &&
+      failedSlot.contentWork!.deadlineAt - Date.now() >= AUTOPILOT_REPLACEMENT_LEAD_MS);
+    if (failedSlot && !replaceNextSlot && schedule.autopilotSelectedAt && !failedSlot.contentWork!.ownerRequest && AUTOPILOT_SKIPPABLE_FAILURES.has(failure) &&
+      (failedSlot.articleId || failure !== "bounded_content_quality_exhausted") && failedSlot.contentWork!.intent === "create") {
       // Autopilot never stalls on a draft the reviewer would not pass, or on a
       // provider response that was incomplete (nothing was published): any
       // retained draft waits for the owner, the missed slot stays recorded on
@@ -1189,31 +1296,29 @@ export const advance = internalMutation({
       await wake(ctx, siteId);
       return { scheduled: 0, mode: "content_slot_parked", blockers: ["owner_review_needed"] };
     }
-    if (failedSlot) return { scheduled: 0, mode: "content_failed_slot", blockers: [failedSlot.contentWork!.failure ?? "content_work_failed"] };
+    if (failedSlot && !replaceNextSlot) return { scheduled: 0, mode: "content_failed_slot", blockers: [failedSlot.contentWork!.failure ?? "content_work_failed"] };
     if (waiting.length >= 2) return { scheduled: 0, mode: "buffer_full" };
     const pricing = await pricingConfiguration(ctx, site);
     if (!pricing) return { scheduled: 0, mode: "content_pricing_unavailable" };
     const improvement = await chooseImprovement(ctx, site, work);
-    const topic = improvement ? await ctx.db.get(await ctx.db.insert("topic_clusters", {
+    let topic = improvement ? await ctx.db.get(await ctx.db.insert("topic_clusters", {
       siteId, planningCanonicalDomain: siteCanonicalDomain(site)!, planningDomainRevision: siteCanonicalDomainRevision(site),
       primaryKeyword: improvement.question, label: improvement.page.editable!.title, secondaryKeywords: [], intent: "informational",
       priority: 1, status: "planned", notes: improvement.reason, createdAt: Date.now(), updatedAt: Date.now(),
-    })) : await chooseTopic(ctx, site);
-    if (!topic) {
-      // Autopilot never runs dry: research new keywords for the confirmed
-      // business at most every three days, within the ordinary spend limits.
-      if (schedule.autopilotSelectedAt && site.userId && Date.now() - (schedule.topicsReplenishedAt ?? 0) >= TOPIC_REPLENISH_INTERVAL_MS) {
-        const request = { siteId, userId: site.userId, purpose: "topic_plan" as const, trigger: `autopilot_topics:${Math.floor(Date.now() / TOPIC_REPLENISH_INTERVAL_MS)}`,
-          reservedMicroUsd: TOPIC_REPLENISH_BUDGET_MICRO_USD, timestamp: Date.now() };
-        const reserved = await reserveSharedProviderBudget(ctx, request);
-        // A refused reservation spends nothing; try again on the next check.
-        if (reserved.ok) {
-          await ctx.db.patch(siteId, { contentSchedule: { ...schedule, topicsReplenishedAt: Date.now() }, updatedAt: Date.now() });
-          await ctx.scheduler.runAfter(0, internal.actions.growthTopics.replenish, { siteId, reservationId: reserved.reservationId });
-        }
+    })) : await chooseTopic(ctx, site, undefined, [], { demandOnly: Boolean(schedule.autopilotSelectedAt) });
+    if (!improvement && !topic && schedule.autopilotSelectedAt) {
+      // No searched keyword is left: research new ones for the confirmed
+      // business (within the ordinary spend limits). When the slot allows, the
+      // article waits for that research; the cadence never does.
+      const researching = await startTopicResearchIfDue(ctx, site, pricing.budgetMicroUsd);
+      if (researching && !replaceNextSlot && schedule.nextDeadlineAt - Date.now() >= TOPIC_RESEARCH_WAIT_MARGIN_MS) {
+        await ctx.scheduler.runAfter(10 * 60_000, internal.autopilot.dispatchSiteFollowup, {
+          siteId, trigger: "content_work", reason: "content_work_stage_changed" });
+        return { scheduled: 0, mode: "topics_researching" };
       }
-      return { scheduled: 0, mode: "content_inputs_exhausted" };
+      topic = await chooseTopic(ctx, site);
     }
+    if (!topic) return { scheduled: 0, mode: "content_inputs_exhausted" };
     // Autopilot honours the plan's monthly article allowance across the whole
     // account. When it is used up, the next article waits for the new month.
     if (schedule.autopilotSelectedAt && !improvement && site.userId) {
@@ -1240,9 +1345,12 @@ export const advance = internalMutation({
       if (rhythm !== schedule.intervalMs || nextDeadlineAt !== schedule.nextDeadlineAt) slot = { ...schedule, intervalMs: rhythm, nextDeadlineAt };
     }
     const deadlineAt = slot.nextDeadlineAt + waiting.length * slot.intervalMs;
-    if (work.some(j => j.contentWork!.deadlineAt === deadlineAt)) return { scheduled: 0, mode: "content_failed_slot" };
+    const atDeadline = work.filter(j => j.contentWork!.deadlineAt === deadlineAt);
+    const replacing = schedule.autopilotSelectedAt && !improvement && atDeadline.length === 1 && autopilotReplaceable(atDeadline[0]) &&
+      replacementsHealthy(work) && deadlineAt - Date.now() >= AUTOPILOT_REPLACEMENT_LEAD_MS ? atDeadline[0] : null;
+    if (atDeadline.length && !replacing) return { scheduled: 0, mode: "content_failed_slot" };
     const budgetRequest = { siteId, userId: site.userId!, purpose: "content_work" as const,
-      trigger: `content_slot:${deadlineAt}`, reservedMicroUsd: pricing.budgetMicroUsd, timestamp: Date.now() };
+      trigger: `content_slot:${deadlineAt}${replacing ? ":replacement" : ""}`, reservedMicroUsd: pricing.budgetMicroUsd, timestamp: Date.now() };
     let budget = await inspectSharedProviderBudget(ctx, budgetRequest);
     if (!budget.ok && await closeFinishedContentHolds(ctx, site) > 0) budget = await inspectSharedProviderBudget(ctx, budgetRequest);
     if (!budget.ok) return { scheduled: 0, mode: "content_budget_exhausted", blockers: [budget.reason], budgetBlocker: budget };
@@ -1258,6 +1366,7 @@ export const advance = internalMutation({
           editTarget: improvement.editTarget } : {}),
         stage: "prepare", deadlineAt, windowStartAt: deadlineAt - CONTENT_DELIVERY_WINDOW_MS,
         profileHash: schedule.profileHash, connectionHash: schedule.connectionHash, revisions: 0, replacements: 0,
+        ...(replacing ? { replacesJobId: replacing._id } : {}),
         discardedArticleIds: [], budgetMicroUsd, pricing: price, providerCalls: [] }, createdAt: Date.now(), updatedAt: Date.now() });
     // The provisional job and its receipt commit together. The preceding read
     // uses the same transaction; an unexpected denial rolls back both.
@@ -1266,7 +1375,7 @@ export const advance = internalMutation({
     await ctx.db.patch(jobId, { providerSpendReservationId: reserved.reservationId });
     await ctx.db.patch(topic._id, { status: "queued", updatedAt: Date.now() });
     if (improvement) await ctx.db.patch(improvement.page._id, { editable: { ...improvement.page.editable!, lastWorkJobId: jobId } });
-    return { scheduled: 1, mode: "buffer_fill", activeJobId: jobId };
+    return { scheduled: 1, mode: replacing ? "buffer_replacement" : "buffer_fill", activeJobId: jobId };
   },
 });
 
@@ -1485,7 +1594,7 @@ export const beginProviderCall = internalMutation({
     const priorConsumed = cw.providerCalls.filter(c => c.reservationId && c.reservationId !== receipt!._id)
       .reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
     if (receipt.reservedMicroUsd !== cw.budgetMicroUsd - priorConsumed ||
-      !(receipt.trigger === `content_slot:${cw.deadlineAt}` || receipt.trigger.startsWith(`content_slot:${cw.deadlineAt}:remaining_window:`))) {
+      !contentSlotTriggerMatches(receipt.trigger, cw)) {
       throw new Error("Content provider reservation unavailable: work envelope binding changed");
     }
     const used = cw.providerCalls.reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
@@ -1547,7 +1656,9 @@ export const recordProviderRejection = internalMutation({
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId), cw = job?.contentWork, call = cw?.providerCalls.find(c => c.key === args.key);
     const known = (args.status === 400 && args.code === "provider_credit_unavailable") ||
-      (args.status === 429 && args.code === "rate_limit_error") || ([503, 529].includes(args.status) && args.code === "overloaded_error");
+      (args.status === 429 && args.code === "rate_limit_error") || ([503, 529].includes(args.status) && args.code === "overloaded_error") ||
+      // A web research request the API rejects outright (e.g. search not enabled for the account).
+      ([400, 403].includes(args.status) && ["invalid_request_error", "permission_error"].includes(args.code) && args.key.includes(":web_research:"));
     if (!known || (args.code === "provider_credit_unavailable" && !validProviderRequestId(args.requestId)) ||
       !job || job.status !== "running" || job.workerToken !== args.workerToken || (job.leaseExpiresAt ?? 0) <= Date.now() ||
       !cw || !call || call.state === "completed") throw new Error("Content rejection receipt invalid; original ceiling retained");

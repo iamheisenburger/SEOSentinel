@@ -44,7 +44,7 @@ const TIERS: Tier[] = [
     annualPrice: 0,
     desc: "See the quality on your own site, free.",
     sites: "1 site",
-    articles: "1 article / month",
+    articles: "3 articles / month",
     featured: false,
     aliases: ["free", "free_user", "free-user", "free plan"],
   },
@@ -241,6 +241,9 @@ export default function UpgradePage() {
     ? { kind: "unknown" }
     : resolveCurrentPlan(subscription.data?.subscriptionItems);
   const managedByPentra = entitlement.isPlanLoaded && !TIERS.some(t => t.key === entitlement.tier) && clerkCurrent.kind !== "paid";
+  // Beta testers get a paid plan's limits from Pentra without a Clerk subscription.
+  const grantedTier = entitlement.isPlanLoaded && clerkCurrent.kind === "free"
+    ? TIERS.find(t => t.key === entitlement.tier && t.key !== "free") ?? null : null;
   const current: CurrentPlan = managedByPentra ? { kind: "unknown" } : clerkCurrent;
   const onPaidPlan = current.kind === "paid" || current.kind === "custom";
   const upcomingItem = subscription.data?.subscriptionItems.find(
@@ -264,6 +267,11 @@ export default function UpgradePage() {
         <div className="min-w-0 text-[13px] text-[#8A8F98]">
           {managedByPentra ? (
             <p>You&apos;re on a <span className="font-semibold text-[#F7F8F8]">custom plan</span> set up by Pentra. Email us to change it.</p>
+          ) : grantedTier ? (
+            <p>
+              You have <span className="font-semibold text-[#F7F8F8]">{grantedTier.name}</span> access from Pentra at no charge:{" "}
+              {grantedTier.articles.replace(" / month", " a month")} on {grantedTier.sites}. You won&apos;t be billed unless you choose a plan.
+            </p>
           ) : current.kind === "unknown" ? (
             subscriptionLoading ? (
               <Skeleton className="h-4 w-64" />
@@ -273,7 +281,7 @@ export default function UpgradePage() {
           ) : current.kind === "free" ? (
             <p>
               You&apos;re on the <span className="font-semibold text-[#F7F8F8]">Free</span> plan:
-              1 article a month on 1 site.
+              3 articles a month on 1 site.
             </p>
           ) : (
             <>
@@ -374,14 +382,14 @@ export default function UpgradePage() {
           const showAnnual = !isFree && cardPeriod === "annual";
           const price = showAnnual ? tier.annualPrice : tier.monthlyPrice;
           const isCurrent =
-            (isFree && current.kind === "free") ||
+            (isFree && current.kind === "free" && !grantedTier) ||
             (current.kind === "paid" && current.tier.key === tier.key);
           const samePeriod =
             current.kind === "paid" && current.item.planPeriod === cardPeriod;
 
           let action: ReactNode = null;
           if (isFree) {
-            if (current.kind === "free") {
+            if (current.kind === "free" && !grantedTier) {
               action = (
                 <Button variant="secondary" size="md" className="w-full" disabled>
                   Current plan

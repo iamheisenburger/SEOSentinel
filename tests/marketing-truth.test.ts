@@ -14,9 +14,10 @@ test("public Pentra copy sells only what the product delivers", () => {
   assert.doesNotMatch(combined, /builds backlinks/i);
   assert.doesNotMatch(homepage, /hero images|infographic|approval-first outreach|autonomous/i);
   assert.match(homepage, /Autopilot only publishes articles that pass the fact check/);
-  assert.match(homepage, /Shopify or Webflow yet \(coming soon\)/);
-  assert.match(homepage, /Guarantee rankings or traffic/);
-  assert.match(homepage, /Build backlinks or send outreach emails/);
+  // Limits are stated where buyers ask about them (FAQ), not as a "does not do" list.
+  assert.match(homepage, /automatic publishing there is coming soon/);
+  assert.match(homepage, /No one can honestly guarantee rankings/);
+  assert.doesNotMatch(homepage, /backlink/i);
   assert.doesNotMatch(homepage, /94%|142 keywords|2,847 words|3-5 minutes|64% of B2B teams/);
 });
 
@@ -112,7 +113,7 @@ test("public pricing matches the enforced monthly article allowance and hides En
   const allowance = /OWNER_DRAFTS_PER_MONTH = \{ free: (\d+), starter: (\d+), pro: (\d+), scale: (\d+),/.exec(contentWork);
   assert.ok(allowance);
   const [, free, starter, pro, scale] = allowance;
-  assert.match(pricing, new RegExp(`articles: "${free} article / month"`));
+  assert.match(pricing, new RegExp(`articles: "${free} articles? / month"`));
   for (const count of [starter, pro, scale]) assert.match(pricing, new RegExp(`articles: "${count} articles / month"`));
   assert.doesNotMatch(pricing, /Enterprise|Unlimited/);
 });
@@ -129,3 +130,17 @@ test("legacy direct refresh authenticates and fails before unmetered providers",
   assert.match(block, /audited recovery and revision workflow/);
   assert.doesNotMatch(block, /openai|anthropic|messages\.create|responses\.create/);
 });
+
+test("founding beta page promises only the Starter plan's real allowance and no results", () => {
+  const beta = readFileSync("src/app/beta/page.tsx", "utf8");
+  const contentWork = readFileSync("convex/contentWork.ts", "utf8");
+  const starter = /OWNER_DRAFTS_PER_MONTH = \{ free: \d+, starter: (\d+),/.exec(contentWork)?.[1];
+  assert.ok(starter);
+  assert.match(beta, new RegExp(`${starter} articles a month on 1 website`));
+  assert.match(beta, /not a guaranteed traffic spike/);
+  assert.doesNotMatch(beta, /guarantee(?!d traffic spike)/i);
+  const proxy = readFileSync("src/proxy.ts", "utf8");
+  assert.match(proxy, /"\/beta"/, "the beta page is public");
+  assert.match(proxy, /"contact", "beta"/, "the beta page is never rewritten to the blog");
+});
+

@@ -73,7 +73,8 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   githubReadUnavailable?: () => boolean;
   wordpress?: { username: string; password: string; transport: (url: URL, init: RequestInit) => Promise<Response> };
   failedOptionalSource?: boolean; liveCorrupt?: "canonical" | "body" | "title";
-  evidence?: { sources: Array<{ url: string; title: string; text: string }>; failed?: string[]; brief?: string; competitor?: string } } = {}) {
+  evidence?: { sources: Array<{ url: string; title: string; text: string }>; failed?: string[]; brief?: string; competitor?: string };
+  webResearch?: { citations: Array<{ url: string; title: string; cited_text: string }>; searches?: number; error?: { status: number; type: string } } } = {}) {
   const modelCalls: Fields[] = [];
   const businesses = options.businesses ?? defaultBusinesses;
   let publisherFailuresRemaining = options.publisherFailures ?? 0;
@@ -102,6 +103,17 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       assert.equal(url.pathname, "/v1/messages");
       const body = JSON.parse(String(init.body)); modelCalls.push(body);
       const text = String(body.messages[0].content), tool = body.tools?.[0]?.name;
+      if (tool === "web_search") {
+        assert.equal(body.tools[0].type, "web_search_20250305"); assert.ok(body.tools[0].max_uses <= 5);
+        const research = options.webResearch;
+        if (!research) throw new Error("Unexpected web research call");
+        if (research.error) return json({ type: "error", error: { type: research.error.type, message: "Synthetic web research refusal" } }, research.error.status);
+        return json({ id: `synthetic-message-${modelCalls.length}`, type: "message", role: "assistant", model: body.model, stop_reason: "end_turn", stop_sequence: null,
+          usage: { input_tokens: 1200, output_tokens: 150, server_tool_use: { web_search_requests: research.searches ?? 1 } },
+          content: [{ type: "server_tool_use", id: "srvtoolu_synthetic", name: "web_search", input: { query: "synthetic" } },
+            { type: "web_search_tool_result", tool_use_id: "srvtoolu_synthetic", content: research.citations.map(c => ({ type: "web_search_result", url: c.url, title: c.title, encrypted_content: "synthetic", page_age: null })) },
+            ...research.citations.map(c => ({ type: "text", text: `${c.cited_text} `, citations: [{ type: "web_search_result_location", url: c.url, title: c.title, encrypted_index: "synthetic", cited_text: c.cited_text }] }))] });
+      }
       await options.providerBarrier?.(tool);
       if (options.providerError && options.providerError.tool === tool) {
         const requestId = options.providerError.requestId === undefined ? `req_synthetic${String(modelCalls.length).padStart(8, "0")}` : options.providerError.requestId;
@@ -116,7 +128,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       let value: unknown;
       if (tool === "submit_article") {
         assert.ok(keyword); const article = articlePayload(keyword);
-        if (options.growthFirst && !options.quality) {
+        if (options.growthFirst && !options.quality && !(options.webResearch && !options.webResearch.error)) {
           article.markdown = article.markdown.replace("The synthetic field register contains an observation label and a review note [1].", "").split("## Sources")[0].trim();
           article.sources = [];
         }
@@ -269,7 +281,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       url: `https://guide${i}.example/${body.keyword.replaceAll(" ", "-")}`, title: `Practical guide to ${body.keyword}`, description: `A workflow for ${body.keyword}` })) }];
     else assert.fail(`Unexpected DataForSEO route ${url.pathname}`);
     return json({ status_code: 20000, cost: 0.001, tasks: [{ id: `synthetic-${f.trace.length}`, status_code: 20000, cost: 0.001, result }] });
-  }, { ...(options.growthFirst && !options.noPricing ? { PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ model: "mocked-content-model", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1, budgetMicroUsd: options.budgetMicroUsd ?? 500_000 }) } : {}),
+  }, { ...(options.webResearch ? { PENTRA_CONTENT_WEB_RESEARCH: "on" } : {}), ...(options.growthFirst && !options.noPricing ? { PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ model: "mocked-content-model", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1, budgetMicroUsd: options.budgetMicroUsd ?? 500_000 }) } : {}),
     ...(options.gscFixture ? { GSC_CLIENT_ID: "synthetic-client", GSC_CLIENT_SECRET: "synthetic-client-secret" } : {}) }, { serializeValues: options.convexSerialization });
   const sites = businesses.map(b => {
     const owner = `synthetic-owner-${b.domain}`;
@@ -903,10 +915,17 @@ test("SLC57 public plans cap new drafts per month before any paid call", async (
   assert.equal(job.contentWork.stage, "ready", diagnostic(f));
   await f.invoke("actions/pipeline:publishApproved", { siteId: site.id, articleId: job.articleId });
   await pumpUntil(f, () => f.get(job.articleId)!.publicUrlStatus === "verified");
+  // Free includes three new articles a month: two more earlier this month use the rest.
+  for (const key of ["free-plan-second-article", "free-plan-third-article"]) {
+    const prior = structuredClone(f.get(first.jobId)!);
+    prior._id = `${first.jobId}-${key}`;
+    prior.contentWork.ownerRequest = { ...prior.contentWork.ownerRequest, requestKey: key };
+    f.tables.jobs.push(prior);
+  }
   const calls = f.modelCalls.length;
-  await assert.rejects(f.invoke("contentWork:requestDraft", { ...base, requestKey: "free-plan-second-article" }), /free article for this month is used/);
+  await assert.rejects(f.invoke("contentWork:requestDraft", { ...base, requestKey: "free-plan-fourth-article" }), /3 free articles for this month are used/);
   assert.equal(f.modelCalls.length, calls, "a rejected request makes no paid call");
-  assert.equal(f.tables.jobs.filter(j => j.contentWork?.ownerRequest).length, 1);
+  assert.equal(f.tables.jobs.filter(j => j.contentWork?.ownerRequest).length, 3);
   f.assertOffline();
 });
 
@@ -1065,11 +1084,11 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     f.get(site.id)!.contentSchedule.profileHash = confirmedContentProfileHash(f.get(site.id)! as never);
     for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
     const first = await f.invoke("contentWork:advance", { siteId: site.id });
-    assert.equal(first.mode, "content_inputs_exhausted");
+    assert.equal(first.mode, "topics_researching", "the slot waits for keyword research while it has time");
     const stamped = f.get(site.id)!.contentSchedule.topicsReplenishedAt;
     assert.ok(stamped, "keyword research is scheduled");
     assert.equal(f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan").length, 1, "research spend is reserved within the limits");
-    await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "content_inputs_exhausted");
     assert.equal(f.get(site.id)!.contentSchedule.topicsReplenishedAt, stamped, "research runs at most every three days");
     const keyword = slcBusinesses[0].keywords[0];
     const added = await f.invoke("contentWork:addResearchedTopics", { siteId: site.id, keywords: [
@@ -1078,6 +1097,73 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
       { keyword: "x", searchVolume: 10, difficulty: 1, difficultyMeasured: true } ] });
     assert.equal(added.added, 1, "only a business-fit, multi-word keyword becomes a topic");
     assert.ok(f.tables.topic_clusters.some(t => t.siteId === site.id && t.status === "planned" && t.primaryKeyword === `${keyword} checklist`.toLowerCase()));
+    f.assertOffline();
+  });
+  await t.test("autopilot_writes_for_searched_keywords_first", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    f.setIdentity(saved.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+    f.setIdentity(null);
+    for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+    const keyword = slcBusinesses[0].keywords[0].toLowerCase();
+    // Nothing searched is left: research starts and the article waits for it while the slot allows.
+    f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 5 * 3_600_000;
+    const waitingForResearch = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal(waitingForResearch.mode, "topics_researching");
+    assert.ok(f.get(site.id)!.contentSchedule.topicsReplenishedAt);
+    assert.equal(f.tables.jobs.filter(j => j.contentWork).length, 0, "no article starts on an unsearched topic while research runs");
+    await f.invoke("contentWork:addResearchedTopics", { siteId: site.id, keywords: [
+      { keyword: `${keyword} pricing guide`, searchVolume: 480, difficulty: 14, difficultyMeasured: true }] });
+    assert.equal(f.get(site.id)!.contentSchedule.topicsReplenishAdded, 1);
+    const unsearched = f.add("topic_clusters", { ...f.tables.topic_clusters.find(t => t.siteId === site.id)!, _id: undefined,
+      primaryKeyword: "a completely different owner question", label: "A completely different owner question", status: "planned", priority: 99,
+      searchVolume: undefined, createdAt: f.now(), updatedAt: f.now() });
+    const started = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.notEqual(started.mode, "topics_researching");
+    const job = f.tables.jobs.find(j => j.contentWork && j.siteId === site.id)!;
+    assert.ok(job, JSON.stringify(started));
+    const chosen = f.get(job.payload.topicId)!;
+    assert.equal(chosen.primaryKeyword, `${keyword} pricing guide`, "a searched keyword beats a higher-priority unsearched one");
+    assert.notEqual(job.payload.topicId, unsearched);
+    f.assertOffline();
+  });
+  await t.test("empty_keyword_research_falls_back_without_missing_the_slot", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    f.setIdentity(saved.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+    f.setIdentity(null);
+    for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+    f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 5 * 3_600_000;
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "topics_researching");
+    const reservations = f.tables.provider_spend_reservations.filter(x => x.siteId === site.id && x.purpose === "topic_plan").length;
+    await f.invoke("contentWork:addResearchedTopics", { siteId: site.id, keywords: [] });
+    assert.equal(f.get(site.id)!.contentSchedule.topicsReplenishAdded, 0);
+    const next = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.notEqual(next.mode, "topics_researching", "the cadence continues with a confirmed business question");
+    assert.ok(f.tables.jobs.some(j => j.contentWork && j.siteId === site.id), JSON.stringify(next));
+    assert.equal(f.tables.provider_spend_reservations.filter(x => x.siteId === site.id && x.purpose === "topic_plan").length, reservations,
+      "empty research is not repeated right away");
+    f.assertOffline();
+  });
+  await t.test("research_never_costs_the_article", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    f.setIdentity(saved.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+    f.setIdentity(null);
+    for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+    f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 5 * 3_600_000;
+    // The account can afford one more article but not the article plus keyword research.
+    f.restartRuntime({ PENTRA_PROVIDER_LIMITS: JSON.stringify({ accountMonthlyMicroUsd: { enterprise: r.ownerDraft.maximumMicroUsd + 500_000 } }) });
+    const result = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.notEqual(result.mode, "topics_researching");
+    assert.equal(f.tables.provider_spend_reservations.filter(x => x.siteId === site.id && x.purpose === "topic_plan").length, 0);
+    assert.ok(f.tables.jobs.some(j => j.contentWork && j.siteId === site.id), JSON.stringify(result));
     f.assertOffline();
   });
   await t.test("monthly_allowance", async () => {
@@ -1091,9 +1177,15 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     const firstJob = f.tables.jobs.find(j => j.contentWork)!;
     Object.assign(firstJob, { status: "done" }); firstJob.contentWork.stage = "ready"; // prepared, waiting for its slot
     f.get(site.id)!.contentSchedule.active = true; // already live; this synthetic draft has no sealed artifact to activate on
+    // Free includes three articles a month; two more were already published this month.
+    for (const n of [1, 2]) {
+      const earlier = structuredClone(firstJob);
+      earlier._id = `${firstJob._id}-earlier-${n}`; earlier.contentWork.stage = "verified";
+      f.tables.jobs.push(earlier);
+    }
     const second = await f.invoke("contentWork:advance", { siteId: site.id });
-    assert.equal(second.mode, "quota_reached", "the free plan's one article this month is already started");
-    assert.equal(f.tables.jobs.filter(j => j.contentWork).length, 1);
+    assert.equal(second.mode, "quota_reached", "the free plan's three articles this month are already started");
+    assert.equal(f.tables.jobs.filter(j => j.contentWork).length, 3);
     f.assertOffline();
   });
 });
@@ -1166,6 +1258,9 @@ test("SLC65 Autopilot follows the customer's cadence, starts right away, and nev
   assert.equal(r.plan.cadencePerWeek, 21); assert.equal(r.plan.autopilotIntervalMs, 8 * 3_600_000, "21 a week is one every 8 hours");
   // A slot a day away with nothing prepared is pulled in: the next article starts now.
   f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 22 * 3_600_000;
+  // Searched keywords are ready.
+  await f.invoke("contentWork:addResearchedTopics", { siteId: site.id, keywords: [
+    { keyword: `${slcBusinesses[0].keywords[0]} pricing guide`, searchVolume: 480, difficulty: 14, difficultyMeasured: true }] });
   f.setIdentity(null);
   const start = f.now();
   assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_fill");
@@ -1203,6 +1298,91 @@ test("SLC66 an Autopilot site goes live with its first reviewed article, even wh
   assert.equal(delivered.mode, "buffer_delivery", JSON.stringify(delivered));
   assert.equal(f.get(site.id)!.contentSchedule.active, true);
   assert.equal(f.get(first._id)!.contentWork.stage, "publish");
+  f.assertOffline();
+});
+
+test("SLC67 the owner edits business facts: saving re-confirms, old prepared work is set aside, Autopilot continues", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.siteId === site.id && j.contentWork?.stage === "ready"), 200, START + 6 * 3_600_000);
+  const oldReady = f.tables.jobs.find(j => j.siteId === site.id && j.contentWork?.stage === "ready")!;
+  f.setIdentity(saved.userId);
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  const facts = { summary: "A family dental practice offering check-ups and whitening.", audience: "Families nearby",
+    productUsage: "Book a check-up or whitening appointment online.", offerings: ["Check-ups", "Whitening", "Check-ups"], questions: ["How long does whitening last?"] };
+  await assert.rejects(f.invoke("contentWork:updateBusinessFacts", { siteId: site.id, reviewToken: r.reviewToken, confirm: false, ...facts }), /Confirm/);
+  await assert.rejects(f.invoke("contentWork:updateBusinessFacts", { siteId: site.id, reviewToken: "stale", confirm: true, ...facts }), /changed/);
+  await assert.rejects(f.invoke("contentWork:updateBusinessFacts", { siteId: site.id, reviewToken: r.reviewToken, confirm: true, ...facts, audience: " " }), /required/);
+  const result = await f.invoke("contentWork:updateBusinessFacts", { siteId: site.id, reviewToken: r.reviewToken, confirm: true, ...facts });
+  assert.equal(result.status, "preparing", JSON.stringify(result));
+  const updated = f.get(site.id)!;
+  assert.equal(updated.siteSummary, facts.summary); assert.deepEqual(updated.keyFeatures, ["Check-ups", "Whitening"]);
+  assert.deepEqual(updated.painPoints, ["How long does whitening last?"]);
+  assert.ok(f.get(oldReady._id)!.contentWork.retiredAt, "work prepared from the old facts is set aside, not published");
+  assert.equal(updated.autopilotEnabled, true); assert.equal(updated.approvalRequired, false);
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  assert.equal(r.bindingCurrent, true); assert.equal(r.autopilot.on, true); assert.equal(r.profile.summary, facts.summary);
+  f.setIdentity("unrelated-fixture-owner");
+  await assert.rejects(f.invoke("contentWork:updateBusinessFacts", { siteId: site.id, reviewToken: r.reviewToken, confirm: true, ...facts }));
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.siteId === site.id && j._id !== oldReady._id && j.contentWork?.stage === "ready" && !j.contentWork.retiredAt), 200, f.now() + 6 * 3_600_000);
+  f.assertOffline();
+});
+
+test("SLC68 Autopilot researches on the live web inside the content receipt and cites only strict, API-attributed sources", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], webResearch: { searches: 2, citations: [
+    { url: "https://records.example.gov/specification", title: "Synthetic register specification", cited_text: "The synthetic field register contains an observation label and a review note." },
+    { url: "https://methods.example.edu/review", title: "Synthetic review methods", cited_text: "Review methods describe how an observation label and a review note are checked." },
+    { url: "https://someblog.example.com/opinion", title: "A blog opinion", cited_text: "Blogs are not strict evidence for this article's claims." },
+  ] }, evidence: { sources: [
+    { url: "https://records.example.gov/specification", title: "Synthetic register specification", text: "Section 2. The synthetic field register contains an observation label and a review note. Each entry records who observed the item, when it was observed and which reviewer checked the note before the entry is closed. Entries without a reviewer remain open." },
+    { url: "https://methods.example.edu/review", title: "Synthetic review methods", text: "Methods. Review methods describe how an observation label and a review note are checked. A second person compares the label with the original observation and records any disagreement in the note before approval." },
+  ] } });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.siteId === site.id && ["ready", "failed"].includes(j.contentWork?.stage)), 200, START + 6 * 3_600_000);
+  const job = f.tables.jobs.find(j => j.siteId === site.id && j.contentWork?.providerCalls.length)!;
+  const research = job.contentWork.providerCalls.find((c: { logicalKey: string }) => c.logicalKey.endsWith(":web_research"));
+  assert.ok(research, "one research call on the same job");
+  assert.equal(research.state, "completed");
+  assert.equal(research.actualMicroUsd, 1200 + 150 + 2 * 10_000, "tokens plus the per-search fee are on the receipt");
+  assert.ok(research.ceilingMicroUsd >= research.actualMicroUsd);
+  assert.deepEqual(research.result.sources.map((s: { url: string }) => s.url), ["https://records.example.gov/specification", "https://methods.example.edu/review", "https://someblog.example.com/opinion"]);
+  const writer = f.modelCalls.find(c => c.tools[0].name === "submit_article")!;
+  const prompt = String(writer.messages[0].content);
+  assert.match(prompt, /records\.example\.gov\/specification/); assert.doesNotMatch(prompt, /someblog\.example\.com/, "secondary sources never become evidence");
+  assert.equal(f.modelCalls.filter(c => c.tools[0].name === "web_search").length,
+    f.tables.jobs.flatMap(j => j.siteId === site.id ? j.contentWork?.providerCalls ?? [] : []).filter((c: { logicalKey: string }) => c.logicalKey.endsWith(":web_research")).length,
+    "every research request is on a receipt");
+  const ready = f.tables.jobs.find(j => j.siteId === site.id && j.contentWork?.stage === "ready");
+  assert.ok(ready, JSON.stringify(f.tables.jobs.filter(j => j.siteId === site.id).map(j => ({ stage: j.contentWork?.stage, failure: j.contentWork?.failure,
+    issues: j.articleId ? f.get(j.articleId)?.publicationGateIssues : null, notes: j.articleId ? f.get(j.articleId)?.factCheckNotes : null, error: j.error }))));
+  const article = f.get(ready.articleId)!;
+  assert.deepEqual((article.sources ?? []).map((s: { url: string }) => s.url), ["https://records.example.gov/specification", "https://methods.example.edu/review"], "the article cites only the strict sources");
+  assert.match(article.markdown, /\[1\]/, "the claim carries its numbered citation");
+  f.assertOffline();
+});
+
+test("SLC68b a web research refusal never blocks the article; it is written from confirmed facts", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], webResearch: { citations: [], error: { status: 400, type: "invalid_request_error" } } });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.siteId === site.id && ["ready", "failed"].includes(j.contentWork?.stage)), 200, START + 6 * 3_600_000);
+  assert.ok(f.tables.jobs.some(j => j.siteId === site.id && j.contentWork?.stage === "ready"),
+    JSON.stringify(f.tables.jobs.filter(j => j.siteId === site.id).map(j => ({ stage: j.contentWork?.stage, failure: j.contentWork?.failure, error: j.error, calls: j.contentWork?.providerCalls.map((c: Fields) => [c.logicalKey, c.state]) }))));
+  const researchCalls = f.tables.jobs.flatMap(j => j.siteId === site.id ? j.contentWork?.providerCalls ?? [] : []).filter((c: { logicalKey: string }) => c.logicalKey.endsWith(":web_research"));
+  assert.equal(f.modelCalls.filter(c => c.tools[0].name === "web_search").length, researchCalls.length, "research is attempted once per draft topic, never looped");
+  assert.ok(researchCalls.every((c: { state: string }) => c.state === "rejected"), "a definitive refusal is recorded as refused, not left uncertain");
   f.assertOffline();
 });
 
@@ -3642,6 +3822,37 @@ test("SLC60 autopilot accepts style-only notes and never stalls on a draft the r
       f.setIdentity(null);
       f.assertOffline();
     }
+  });
+  await t.test("failed_slot_gets_one_replacement_when_time_allows", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], quality: "low", budgetMicroUsd: 2_000_000 });
+    const site = await selectGrowth(f);
+    f.get(site.id)!.contentSchedule.autopilotSelectedAt = START;
+    await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "failed"));
+    const failed = f.tables.jobs.find(j => j.contentWork?.stage === "failed")!;
+    // The failure happened well before its slot: there is time to write a fresh article for it.
+    const deadline = f.now() + 3 * 3_600_000, schedule = f.get(site.id)!.contentSchedule;
+    Object.assign(failed.contentWork, { deadlineAt: deadline, windowStartAt: deadline - 300_000 });
+    schedule.nextDeadlineAt = deadline;
+    const first = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal(first.mode, "buffer_replacement", JSON.stringify(first));
+    const replacement = f.get(first.activeJobId)!;
+    assert.equal(replacement.contentWork.replacesJobId, failed._id);
+    assert.equal(replacement.contentWork.deadlineAt, deadline, "the replacement takes the same slot");
+    assert.equal(f.get(failed._id)!.contentWork.failure, "bounded_content_quality_exhausted", "the failed job stays on record");
+    assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline, "the slot is kept, not skipped");
+    // A replacement that also fails is not replaced again: the slot parks when due.
+    await pumpUntil(f, () => f.get(replacement._id)!.contentWork.stage === "failed");
+    assert.equal(f.get(replacement._id)!.contentWork.failure, "bounded_content_quality_exhausted",
+      "the replacement really ran (its own reservation, paid calls and review), it did not fail on admission");
+    assert.ok(f.get(replacement._id)!.contentWork.providerCalls.length > 0);
+    const again = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.notEqual(again.mode, "buffer_replacement");
+    assert.equal(f.tables.jobs.filter(j => j.contentWork?.replacesJobId).length, 1);
+    f.setTime(Math.max(f.now(), deadline));
+    const due = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.ok([again.mode, due.mode].includes("content_slot_parked"), JSON.stringify({ again, due }));
+    assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline + f.get(site.id)!.contentSchedule.intervalMs, "the schedule moved on to the next slot");
+    f.assertOffline();
   });
   await t.test("existing_contracts_keep_their_failed_slot", async () => {
     const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], quality: "low", budgetMicroUsd: 2_000_000 });

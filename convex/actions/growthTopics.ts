@@ -21,7 +21,7 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
     } catch { found = []; }
     const keywords = found.slice(0, 60).map(k => ({ keyword: k.keyword, searchVolume: Math.max(0, Math.round(k.searchVolume || 0)),
       difficulty: Math.max(0, Math.min(100, Math.round(k.difficulty || 0))), difficultyMeasured: Boolean(k.difficultyMeasured) }));
-    if (keywords.length === 0) return { added: 0 };
+    // Always report back (even empty) so a waiting Autopilot slot continues.
     const result: { added: number } = await ctx.runMutation(internal.contentWork.addResearchedTopics, { siteId, keywords });
     return result;
   } });

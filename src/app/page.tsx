@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Check, Minus, Radar } from "lucide-react";
+import { ArrowRight, Check, Radar } from "lucide-react";
 import { LandingNav } from "@/components/layout/landing-nav";
 import { PricingSection } from "@/components/landing/pricing-section";
 import { ProductFrame } from "@/components/landing/product-frame";
@@ -28,9 +28,9 @@ function Hero() {
   return (
     <section className="relative overflow-hidden pt-32 md:pt-44">
       <div className={WRAP}>
-        <p className="animate-fade-in-up flex items-center gap-2 text-[13px] text-[#8A8F98]">
-          <span className="h-1.5 w-1.5 rounded-full bg-[#4CB782]" />Autopilot SEO for your website
-        </p>
+        <Link href="/beta" className="animate-fade-in-up inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.02] px-3 py-1 text-[13px] text-[#8A8F98] transition hover:border-white/[0.14] hover:text-white">
+          <span className="h-1.5 w-1.5 rounded-full bg-[#4CB782]" />Founding beta: 10 websites get Starter free for 60 days <span aria-hidden>→</span>
+        </Link>
         <h1 className="animate-fade-in-up mt-6 max-w-[15ch] text-[clamp(2.6rem,6.4vw,5rem)] font-semibold leading-[1.02] tracking-[-0.04em] [text-wrap:balance]"
           style={{ animationDelay: "0.05s" }}>
           More customers from Google and AI answers.
@@ -43,7 +43,7 @@ function Hero() {
         <div className="animate-fade-in-up mt-9 flex flex-wrap items-center gap-x-6 gap-y-4" style={{ animationDelay: "0.18s" }}>
           <PrimaryCta>Start free</PrimaryCta>
           <a href="#pipeline" className="text-[15px] font-medium text-[#D0D6E0] transition hover:text-white">See how it works <span aria-hidden>→</span></a>
-          <span className="text-[13px] text-[#62666D]">1 free article · No credit card</span>
+          <span className="text-[13px] text-[#62666D]">3 free articles a month · No credit card</span>
         </div>
       </div>
       <div className={`${WRAP} animate-fade-in-up mt-16 md:mt-20`} style={{ animationDelay: "0.25s" }}>
@@ -217,35 +217,6 @@ function Platforms() {
   );
 }
 
-/* ─── Honesty ──────────────────────────────────── */
-
-const LIMITS = [
-  "Publish a draft that failed its fact check. It is held back.",
-  "Guarantee rankings or traffic. Search results take time and depend on many factors.",
-  "Build backlinks or send outreach emails.",
-  "Publish automatically to Shopify or Webflow yet (coming soon). On those sites Pentra writes and you paste each article in.",
-];
-
-function Honesty() {
-  return (
-    <section className="border-t border-white/[0.06] py-24 md:py-32">
-      <div className={`${WRAP} grid gap-10 lg:grid-cols-[1fr_1.4fr]`}>
-        <div>
-          <p className={EYEBROW}>Straight answers</p>
-          <h2 className="mt-4 text-[clamp(1.75rem,3.4vw,2.6rem)] font-semibold leading-[1.08] tracking-[-0.03em]">What Pentra does not do (yet)</h2>
-        </div>
-        <ul className="border-t border-white/[0.06]">
-          {LIMITS.map(line => (
-            <li key={line} className="flex gap-4 border-b border-white/[0.06] py-5 text-[15px] leading-relaxed text-[#8A8F98]">
-              <Minus className="mt-1 h-4 w-4 shrink-0 text-[#62666D]" />{line}
-            </li>
-          ))}
-        </ul>
-      </div>
-    </section>
-  );
-}
-
 /* ─── FAQ ──────────────────────────────────────── */
 
 const faqs = [
@@ -314,7 +285,7 @@ function FinalCTA() {
         <h2 className="max-w-[16ch] text-[clamp(2.2rem,5vw,4rem)] font-semibold leading-[1.02] tracking-[-0.04em] [text-wrap:balance]">
           Add your website. Pentra handles the rest.
         </h2>
-        <p className="mt-6 max-w-[34rem] text-[17px] leading-relaxed text-[#8A8F98]">Setup takes a few minutes. Your first article is free, and you can pause or switch to Review first any time.</p>
+        <p className="mt-6 max-w-[34rem] text-[17px] leading-relaxed text-[#8A8F98]">Setup takes a few minutes. Free includes 3 articles a month, and you can pause or switch to Review first any time.</p>
         <div className="mt-9 flex flex-wrap items-center gap-6">
           <PrimaryCta>Get started free</PrimaryCta>
           <a href="#pricing" className="text-[15px] font-medium text-[#D0D6E0] transition hover:text-white">See pricing <span aria-hidden>→</span></a>
@@ -404,7 +375,6 @@ export default function LandingPage() {
       <FeatureRows />
       <Platforms />
       <PricingSection />
-      <Honesty />
       <FAQ />
       <FinalCTA />
       <Footer />
