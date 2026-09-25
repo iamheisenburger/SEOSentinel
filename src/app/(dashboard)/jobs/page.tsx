@@ -330,7 +330,7 @@ const JOB_PROBLEMS: Record<string, JobProblem> = {
   },
   content_model_response_invalid: {
     message: `The writing service sent back an incomplete article. ${NOT_PUBLISHED}`,
-    next: "You can request a new draft.",
+    next: "On Autopilot, the schedule simply moves on to the next article. You can also request a new draft.",
     action: ARTICLES,
   },
   content_provider_credit_unavailable: SERVICE_UNAVAILABLE,

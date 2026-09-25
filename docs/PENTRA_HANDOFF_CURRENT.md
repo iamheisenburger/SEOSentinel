@@ -106,6 +106,20 @@ Working model:
   about 23:07Z Sep 25.
 - Account usage after these: 14 of 150 monthly articles (all sites). Health: pentra.dev 100/100, LeadPilot 96/100.
 
+### Overnight (Sep 25, 03:00Z check)
+- P28 (56f4ea4, Convex deployed): Autopilot now also moves past content_model_response_invalid (an incomplete
+  provider response; nothing published). Before this, one such job on pentra.dev showed "Needs your review" and
+  would have stalled the schedule when its slot (most likely Sep 26 23:07Z) came due. The miss stays recorded on the
+  job; no replacement job is minted for that slot. Quality parks (bounded_content_quality_exhausted) unchanged.
+- OWNER ACTION: pentra.dev's saved business profile (Settings → Saved business and exact destination) still says
+  "AI-powered article writing with web research", "94% accuracy", "Backlink building automation" and automatic
+  refresh of declining articles. Autopilot writes pentra.dev articles from that profile, so edit it to what Pentra
+  does today and retire the queued topic "A practical guide to AI-powered article writing with web research".
+  (Editing the profile needs the owner's re-confirmation; Cowork/Code did not touch it.) The three drafts queued
+  tonight were scanned read-only: none repeats those claims.
+- Topic inventory is low but not empty (pentra.dev 2 available, LeadPilot 3); automatic replenishment runs when a
+  site runs out.
+
 ### What Autopilot articles do NOT have (found Sep 24 night; public copy corrected in P26)
 - No live web research and no citations. pipeline.ts skips SERP analysis and webResearch whenever
   contentProviderActive() (the audited content provider allows no optional paid service). Articles are written
