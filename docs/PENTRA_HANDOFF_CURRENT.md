@@ -134,6 +134,7 @@ results"; "by tonight i want a ready end to end pentra that is ready for distrib
   evidence (.gov/.edu/academic/official docs) becomes article sources, so many niches still get zero sources and
   the article is written from confirmed facts. A 400/403 refusal is recorded and never blocks the article.
   P41: research is OFF unless Convex env PENTRA_CONTENT_WEB_RESEARCH=on (see the P32–P41 section for why).
+  P45 (Sep 25): the quality gate repairs uncited-evidence defects by removing the sentences instead of blocking (see P45–P47).
 - Cadence: a failed Autopilot slot (skippable failure, nothing published) gets ONE replacement job (new topic, own
   reservation, trigger `content_slot:<deadline>:replacement`) when ≥1h remains; a circuit breaker stops
   replacements after 2 failures in the last 3 finished jobs. The replaced job counts once in the monthly allowance.
@@ -279,6 +280,78 @@ How to measure (dashboard → Search progress, or `organicDiagnostics.snapshot`)
 - Week 1–2: pages seen and indexed x of y should rise. The sitemap line should show Google reading it again.
 - Week 2–6: impressions rise first, then average position improves on the kept articles.
 - Clicks follow. Judge LeadPilot by queries with a position under 20, not by total clicks.
+
+### Sep 25 (P45–P47): quality gate that repairs instead of blocking; waste audit
+Owner (chat): the 85-score gate "clearly wasnt well thought out… wasteful… user and website based"; "everything needs to
+become a lot more efficient and LEAN".
+
+Measured before the change (WATCH-11/12, the owner's two sites, 7 days):
+- 47 drafts, 7 published. $18.11 of Anthropic spend, about $2.59 per published article.
+- A draft that passes first time costs about $0.30–0.70.
+- Blocked drafts almost all had "Editorial quality score 84" plus "claim-to-evidence audit" failures. Any
+  deterministic evidence defect caps the editorial score at 84 (contractConsistentEditorialScore), so one
+  over-strict claim check failed both.
+- The fact score is verified ÷ claims, so 5 of 6 claims verified gives 83, which blocks. It punishes articles with few
+  checkable claims.
+- The paragraph-level evidence rules (hasExternalSystemAssertion and friends) flag ordinary advice in SEO and tech
+  niches: "scores are based on…", checklists, reader instructions.
+
+P45 (f413584), Autopilot/provider mode only; legacy paths unchanged:
+- pruneUnsupportedEvidenceSentences runs before the paid fact check.
+  - It removes uncited sentences that make a checkable claim (number, named third party, platform mechanics, product
+    fact) that the hash-bound first-party snapshot doesn't support. That is the gate's own rule, applied as a filter.
+  - Deleting text can't add a claim, so the reviewers still audit the exact result.
+  - Offline replay on the 49 real drafts: the deterministic check passed 17/49 before and 39/49 after. The remaining
+    10 are research-mode cited-source mismatches (research is off).
+  - 1–5 sentences removed per draft; none fell under 1200 words.
+- validateClaimEvidenceLedger judges uncited supported entries per claim-bearing sentence (productEvidenceSupportsClaim
+  is shared with the pruner). The named-phrase lead-in fix means "What Pentra adds…" no longer reads as a product
+  called "What Pentra".
+- The fact check is findings-only in provider mode.
+  - It no longer echoes the whole article (the largest waste of output tokens); max_tokens went from 16384 to 4096.
+  - It returns unverifiedClaims, stored in factCheckNotes as «…».
+  - Scores and counts are still required: an empty response is still content_model_response_invalid.
+- Revisions first remove the sentences the previous review named: ledger-unsupported claims plus unverified claims.
+  - When every defect is an uncited-evidence defect (onlyEvidenceDefects), the paid remediate call is skipped.
+  - Editorial, length and format defects, and cited-source mismatches, still get the model repair.
+- normalizeArticleHeadings: one H1 per article. It fixed the 2-H1 pages found on LeadPilot.
+
+P47 (for all customers; it replaced P46, which never ran separately):
+- removeTopicsFromOldFacts: on a business-facts save, planned topics Pentra copied from facts the owner removed are
+  deleted before the next article.
+  - This covers anchor fallback topics and owner-question topics.
+  - Researched keywords, queued/used topics and plan checkpoints stay.
+- Keyword-research budget leak: the $1 topic_plan reservation was never closed.
+  - meterDataForSeoCost sums DataForSEO's reported costs.
+  - closeTopicResearchReservation settles at that cost, or releases the reservation when nothing was sent.
+  - An uncertain total, or a cost above the reservation, keeps the hold.
+- The writer's "already covered" keyword list uses only published/ready articles (max 80). Discarded drafts no longer
+  grow the prompt or block topics.
+
+P48: repair is limited to text Pentra wrote itself (contentProviderMayRepairDraft: intent "create", not an owner edit,
+correction, rollback or page improvement). Customer text is reviewed, never pruned. P45 briefly applied the pruning to
+owner edits (15:10–P48 deploy); SLC55 now proves an owner's unsupported sentence survives review verbatim.
+
+Waste audit (subagent, read-only; file:line evidence in chat 2026-09-25). Still open, in priority order:
+1. Stale holds (WATCH-13, aggregates). $27.55 of September's $62.43 fleet usage is open holds, not spend.
+   - 3 content_work holds on terminal jobs: $7.50 against $1.76 actual. One is the credit-failure job, held by
+     design until restoration. The other two are Sep 14 jobs, one of them published.
+   - 21 topic_plan holds ($31, from before P47).
+   - Small legacy backfill/micro-seed holds.
+   Reconcile with a safe settle-at-recorded-actual-or-keep pass, and find why the Sep 14 pair never settled.
+   Limits are already sized for beta (PENTRA_PROVIDER_LIMITS: fleet $40/day and $200/month, account $20/day;
+   starter $20/month, pro $50/month, scale $120/month). The $2.50 per-job hold could drop to about $1.50 after P45
+   (worst case is now about $1.2 admitted).
+2. Anthropic prompt caching. The evidence block is byte-identical across up to 10 review-phase calls per draft, worth
+   about 8–12%. Receipts must first price cache_creation_input_tokens and cache_read_input_tokens. Deploy with the
+   queue empty (request hashes change).
+3. Per-call ceilings are 4–5× actual: bytes are used as tokens and max_tokens is 16384. Size ceilings on tokens; use
+   max_tokens 8192 for submit and remediate.
+4. Stop revision 2 early when revision 1 removed nothing. Check length before paying for review and audit.
+5. Retries re-crawl the site, so replayed request hashes change and a job can lose everything it spent. Reuse
+   article.productEvidenceSnapshot.
+6. The provider client has no timeout. Convex kills the action at 10 minutes and leaves an ambiguous $2.50 hold.
+7. Owner-edited drafts publish at "-edited" slugs, which can chain: "-edited-edited-edited".
 
 ### What Autopilot articles do NOT have (found Sep 24 night; public copy corrected in P26)
 - [FIXED in P31: bounded live web research now runs inside the audited provider; see the P31 section.] Before P31:
