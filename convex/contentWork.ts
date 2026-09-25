@@ -99,6 +99,17 @@ function replacementsHealthy(work: Doc<"jobs">[]) {
   return finished.filter(j => j.contentWork!.stage === "failed").length < 2;
 }
 const TOPIC_REPLENISH_INTERVAL_MS = 3 * 86_400_000, TOPIC_REPLENISH_BUDGET_MICRO_USD = 1_000_000;
+/** A keyword naming one of the site's listed competitors can't be written: the writer
+ * must never name them, so the draft is blocked. Such topics are never chosen. */
+function competitorNamesFor(site: Pick<Doc<"sites">, "competitors">): string[] {
+  return (site.competitors ?? []).map(c => c.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "")
+    .replace(/\.(com|io|co|org|net|ai|app|dev|so|us|uk|co\.uk)$/, "").trim()).filter(name => name.length >= 3);
+}
+function namesCompetitor(text: string, names: string[]) {
+  const normalized = ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, " ")} `;
+  return names.some(name => normalized.includes(` ${name.replace(/[^a-z0-9]+/g, " ").trim()} `) ||
+    normalized.replace(/ /g, "").includes(name.replace(/[^a-z0-9]+/g, "")) && name.replace(/[^a-z0-9]+/g, "").length >= 5);
+}
 /** Keywords above this difficulty are out of reach for most small sites; research asks for this bound too. */
 const WINNABLE_KEYWORD_DIFFICULTY = 45;
 /** Research that found no new keyword is not repeated for a week. */
@@ -969,7 +980,9 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
   }
   const fit = (t: { primaryKeyword: string; label: string }) => evaluateTopicBusinessFit({ keyword: t.primaryKeyword, label: t.label, ...signals }).eligible;
   const covered = topics.filter(t => !["planned", "pending"].includes(t.status ?? "planned"));
+  const competitors = competitorNamesFor(site);
   const planned = topics.filter(t => ["planned", "pending"].includes(t.status ?? "planned") && fit(t) &&
+    !namesCompetitor(`${t.primaryKeyword} ${t.label}`, competitors) &&
     !planCheckpointTopicExecutionLocked(t) && !terminalContentFeasibility(t.contentFeasibilityStatus) &&
     ![...covered, ...pageCoverage, ...excludedIntents].some(c => contentIntentConflicts(t, c)));
   // Keywords people measurably search for come first; within each group the
@@ -1162,7 +1175,8 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
     for (const k of [...keywords].sort((a, b) => b.searchVolume - a.searchVolume)) {
       if (added >= 15) break;
       const keyword = k.keyword.trim().toLowerCase().replace(/\s+/g, " ");
-      if (keyword.split(" ").length < 2 || keyword.length > 80 || k.difficulty > WINNABLE_KEYWORD_DIFFICULTY) continue;
+      if (keyword.split(" ").length < 2 || keyword.length > 80 || k.difficulty > WINNABLE_KEYWORD_DIFFICULTY ||
+        namesCompetitor(keyword, competitorNamesFor(site))) continue;
       const proposal = { primaryKeyword: keyword, label: keyword.replace(/^./, c => c.toUpperCase()) };
       if (!evaluateTopicBusinessFit({ keyword, label: proposal.label, ...signals }).eligible) continue;
       if (taken.some(t => contentIntentConflicts(proposal, t))) continue;

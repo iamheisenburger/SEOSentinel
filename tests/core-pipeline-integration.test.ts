@@ -1127,10 +1127,13 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     assert.equal(waitingForResearch.mode, "topics_researching");
     assert.ok(f.get(site.id)!.contentSchedule.topicsReplenishedAt);
     assert.equal(f.tables.jobs.filter(j => j.contentWork).length, 0, "no article starts on an unsearched topic while research runs");
+    f.get(site.id)!.competitors = ["https://www.rivaltool.com", "OtherVendor.io"];
     await f.invoke("contentWork:addResearchedTopics", { siteId: site.id, keywords: [
       { keyword: `${keyword} pricing guide`, searchVolume: 480, difficulty: 14, difficultyMeasured: true },
-      { keyword: `${keyword} pricing comparison`, searchVolume: 9900, difficulty: 79, difficultyMeasured: true }] });
-    assert.equal(f.get(site.id)!.contentSchedule.topicsReplenishAdded, 1, "keywords out of reach are not added");
+      { keyword: `${keyword} pricing comparison`, searchVolume: 9900, difficulty: 79, difficultyMeasured: true },
+      { keyword: `rivaltool ${keyword} review`, searchVolume: 900, difficulty: 10, difficultyMeasured: true },
+      { keyword: `${keyword} with othervendor`, searchVolume: 700, difficulty: 8, difficultyMeasured: true }] });
+    assert.equal(f.get(site.id)!.contentSchedule.topicsReplenishAdded, 1, "keywords out of reach or naming a competitor are not added");
     const unsearched = f.add("topic_clusters", { ...f.tables.topic_clusters.find(t => t.siteId === site.id)!, _id: undefined,
       primaryKeyword: "a completely different owner question", label: "A completely different owner question", status: "planned", priority: 99,
       searchVolume: undefined, createdAt: f.now(), updatedAt: f.now() });

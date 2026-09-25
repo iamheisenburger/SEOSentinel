@@ -89,7 +89,10 @@ export async function contentStructuredCall(args: { system: string; userMessage:
 }
 
 /** Autopilot live web research is on unless the deployment turns it off. */
-export const contentWebResearchEnabled = () => process.env.PENTRA_CONTENT_WEB_RESEARCH !== "off";
+/** Live web research is opt-in (PENTRA_CONTENT_WEB_RESEARCH=on). In production its
+ * citation-heavy drafts failed the publication gate and left slots empty, so the
+ * proven confirmed-facts path is the default until research passes the gate. */
+export const contentWebResearchEnabled = () => process.env.PENTRA_CONTENT_WEB_RESEARCH === "on";
 /** Anthropic's published server web search fee: $10 per 1,000 searches. */
 export const WEB_SEARCH_MICRO_USD_PER_REQUEST = 10_000;
 /** Generous per-search allowance for result content counted as input tokens. */
