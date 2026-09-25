@@ -57,16 +57,25 @@ const clerkAppMiddleware = clerkMiddleware(async (auth, request) => {
     "analytics", "backlinks", "unsubscribe", "e2e-acceptance",
   ]);
   const pathParts = pathname.split("/").filter(Boolean);
-  if (pathParts.length === 2 && !knownPrefixes.has(pathParts[0])) {
+  // Pentra's own site uses /blog/[slug]; an unknown path there is a real 404,
+  // never a copy of the blog (soft 404s waste Google's crawl of a young site).
+  const host = request.nextUrl.hostname.toLowerCase().replace(/^www\./, "");
+  const appHost = (() => { try { return new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://pentra.dev").hostname.replace(/^www\./, ""); } catch { return "pentra.dev"; } })();
+  const customBlogHost = host !== appHost && host !== "pentra.dev" && host !== "localhost" && !host.endsWith(".vercel.app");
+  if (customBlogHost && pathParts.length === 2 && !knownPrefixes.has(pathParts[0])) {
     // Path like /my-custom-prefix/article-slug — rewrite to blog viewer
     const rewriteUrl = new URL(`/blog/${pathParts[1]}`, request.url);
     return NextResponse.rewrite(rewriteUrl);
   }
-  if (pathParts.length === 1 && !knownPrefixes.has(pathParts[0])
+  if (customBlogHost && pathParts.length === 1 && !knownPrefixes.has(pathParts[0])
     && pathParts[0] !== "favicon.ico" && !pathParts[0].includes(".")) {
     // Path like /my-custom-prefix — could be a blog listing for custom prefix
     const rewriteUrl = new URL("/blog", request.url);
     return NextResponse.rewrite(rewriteUrl);
+  }
+  if (!customBlogHost && pathParts.length > 0 && !knownPrefixes.has(pathParts[0]) && !pathParts[0].includes(".")) {
+    // Not a page on Pentra's site: let Next answer 404 instead of redirecting to sign-in.
+    return NextResponse.next();
   }
 
   if (!isPublicRoute(request)) {

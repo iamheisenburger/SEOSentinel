@@ -5,6 +5,11 @@ import { PricingSection } from "@/components/landing/pricing-section";
 import { ProductFrame } from "@/components/landing/product-frame";
 import { RunLog } from "@/components/landing/run-log";
 import { AnswerPanel, ControlPanel, HealthPanel, RankingsPanel, SourcesPanel } from "@/components/landing/panels";
+import { convexHttp } from "@/lib/convexHttpClient";
+import { api } from "../../convex/_generated/api";
+
+// The latest guides are linked from the homepage so search engines find new articles quickly.
+export const revalidate = 3600;
 
 /* Design: a dark, product-led page. Near-black canvas, precise sans type,
  * hairline structure instead of card grids, the product itself as the imagery.
@@ -362,6 +367,42 @@ const faqSchema = {
   mainEntity: faqs.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })),
 };
 
+/* ─── Latest guides (crawlable links to new articles) ───────────── */
+
+async function LatestGuides() {
+  let articles: { _id: string; title: string; slug: string; createdAt: number }[] = [];
+  try {
+    articles = (await convexHttp.query(api.blog.listPublishedByDomain, { domain: "pentra.dev" }))
+      .filter(article => article.slug).sort((a, b) => b.createdAt - a.createdAt).slice(0, 6);
+  } catch { articles = []; }
+  if (articles.length === 0) return null;
+  return (
+    <section className="border-t border-white/[0.06] py-20 md:py-24">
+      <div className={WRAP}>
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p className={EYEBROW}>From the blog</p>
+            <h2 className="mt-4 text-[clamp(1.6rem,3vw,2.2rem)] font-semibold leading-[1.1] tracking-[-0.03em]">Latest guides, published by Pentra</h2>
+          </div>
+          <Link href="/blog" className="text-[15px] font-medium text-[#D0D6E0] transition hover:text-white">All guides <span aria-hidden>→</span></Link>
+        </div>
+        <ul className="mt-10 grid gap-x-10 border-t border-white/[0.06] md:grid-cols-2">
+          {articles.map(article => (
+            <li key={article._id} className="border-b border-white/[0.06]">
+              <Link href={`/blog/${article.slug}`} className="group flex items-baseline justify-between gap-4 py-4">
+                <span className="text-[15px] leading-snug text-[#D0D6E0] transition group-hover:text-white">{article.title}</span>
+                <span className="shrink-0 font-mono text-[12px] text-[#62666D]">
+                  {new Date(article.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
 export default function LandingPage() {
   return (
     <main className="relative min-h-screen overflow-x-clip bg-[#08090A] text-[#F7F8F8]">
@@ -375,6 +416,7 @@ export default function LandingPage() {
       <FeatureRows />
       <Platforms />
       <PricingSection />
+      <LatestGuides />
       <FAQ />
       <FinalCTA />
       <Footer />

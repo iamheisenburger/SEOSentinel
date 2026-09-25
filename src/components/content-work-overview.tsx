@@ -147,6 +147,7 @@ function OrganicOutcome({ siteId, simple = false }: { siteId: Id<"sites">; simpl
         {delta !== null && <span className={`rounded-full px-2 py-0.5 text-[12px] ${delta >= 0 ? "bg-[#22C55E]/10 text-[#22C55E]" : "bg-[#F59E0B]/10 text-[#F59E0B]"}`}>{delta >= 0 ? "+" : ""}{delta} vs previous</span>}
         {result.delayed && <span className="text-[12px] text-[#8A8F98]">Data is delayed.</span>}
       </div>
+      <SearchProgress current={result.current} previousImpressions={result.previous?.impressions ?? null} index={"index" in result ? result.index : null} />
       {"daily" in result && result.daily && result.daily.length >= 28 && <ClicksChart daily={result.daily} />}
       <p className={BODY}>{result.previous ? `Previous complete window: ${clicks(result.previous.clicks)} (${result.previous.start}–${result.previous.end}); change ${result.current.clicks - result.previous.clicks >= 0 ? "+" : ""}${result.current.clicks - result.previous.clicks}.` : "No complete previous window; no comparison is shown."}</p>
       {!simple && <p className="text-[13px] text-[#8A8F98]">Property: {result.property}. Search Console calendar dates. New-page cohorts start on the first full day after publication.</p>}
@@ -156,6 +157,34 @@ function OrganicOutcome({ siteId, simple = false }: { siteId: Id<"sites">; simpl
     </>}
     {!simple && <p className="text-[13px] text-[#8A8F98]">Observed clicks do not prove Pentra caused the change. Monitoring without an edit is not a completed improvement.</p>}
   </section>;
+}
+
+/** Leading indicators: Google shows pages (impressions, position) and indexes them before they earn clicks. */
+export function SearchProgress({ current, previousImpressions, index }: {
+  current: { impressions?: number; position?: number | null; pagesSeen?: number };
+  previousImpressions: number | null; index: { checked: number; indexed: number } | null;
+}) {
+  if (current.impressions === undefined) return null;
+  const change = previousImpressions === null ? null : current.impressions - previousImpressions;
+  const stats: { label: string; value: string; note: string }[] = [
+    { label: "Impressions", value: current.impressions.toLocaleString("en-US"),
+      note: change === null ? "times shown in Google" : `${change >= 0 ? "+" : ""}${change.toLocaleString("en-US")} vs previous` },
+    { label: "Average position", value: current.position === null || current.position === undefined ? "–" : String(current.position),
+      note: "page one is 1 to 10" },
+    { label: "Pages seen in Google", value: String(current.pagesSeen ?? 0), note: "shown at least once" },
+    { label: "Indexed", value: index && index.checked > 0 ? `${index.indexed} of ${index.checked}` : "–",
+      note: index && index.checked > 0 ? "recent articles checked" : "checked daily once connected" },
+  ];
+  return <div className="space-y-2">
+    <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-white/[0.06] bg-white/[0.06] sm:grid-cols-4">
+      {stats.map(stat => <div key={stat.label} className="bg-[#0B0C0E] px-3 py-2.5">
+        <dt className="text-[11px] uppercase tracking-[0.08em] text-[#62666D]">{stat.label}</dt>
+        <dd className="mt-1 text-[18px] font-semibold tracking-tight text-[#F7F8F8]">{stat.value}</dd>
+        <dd className="text-[11px] text-[#8A8F98]">{stat.note}</dd>
+      </div>)}
+    </dl>
+    <p className="text-[12px] text-[#62666D]">Impressions and positions move first. Clicks follow once pages reach page one.</p>
+  </div>;
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

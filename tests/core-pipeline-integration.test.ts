@@ -3064,10 +3064,12 @@ test("SLC29 Search Console requires complete current epochs and distinguishes ze
   let r = await f.invoke("searchPerformance:contentOutcome", { siteId: site.id });
   assert.equal(r.current.clicks, 0); assert.equal(r.previous.clicks, 0); assert.equal(r.delayed, true);
   f.add("search_page_daily", { siteId: site.id, date: "2026-09-07", syncEpoch: "old-connection", page: `https://${site.domain}/blog/new-page`, clicks: 999, impressions: 999, position: 1, ctr: 1, createdAt: START });
-  f.add("search_page_daily", { siteId: site.id, date: "2026-09-07", syncEpoch: "current-0", page: `https://${site.domain}/blog/new-page`, clicks: 3, impressions: 30, position: 2, ctr: .1, createdAt: START });
+  f.add("search_page_daily", { siteId: site.id, date: "2026-09-07", syncEpoch: "current-0", page: `https://${site.domain}/blog/new-page`, clicks: 3, impressions: 30, weightedPosition: 60, position: 2, ctr: .1, createdAt: START });
   f.add("article_summaries", { siteId: site.id, slug: "new-page", title: "New synthetic page", status: "published", publicUrlStatus: "verified", publishedAt: end - day, createdAt: end - day });
   r = await f.invoke("searchPerformance:contentOutcome", { siteId: site.id });
   assert.equal(r.current.clicks, 3); assert.equal(r.cohorts[0].clicks, 3);
+  assert.equal(r.current.impressions, 30); assert.equal(r.current.position, 2); assert.equal(r.current.pagesSeen, 1);
+  assert.equal(r.previous.impressions, 0); assert.deepEqual(r.index, { checked: 0, indexed: 0 }, "no URL inspection yet");
   assert.equal(r.daily.length, 56); assert.deepEqual(r.daily.at(-1), { date: "2026-09-07", clicks: 3 }); assert.deepEqual(r.daily[0], { date: "2026-07-14", clicks: 0 });
   stored.gscDateEpochs.pop(); r = await f.invoke("searchPerformance:contentOutcome", { siteId: site.id });
   assert.equal(r.current.clicks, 3); assert.equal(r.previous, null);

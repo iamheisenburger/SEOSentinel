@@ -63,7 +63,16 @@ export const contentOutcome = query({ args: { siteId: v.id("sites") }, handler: 
   const rows = await takeCurrentGscPageRows(ctx, site, OWNER_GSC_READ_LIMIT, { startDate: previousStart, endDate: through });
   if (rows.exhausted || !complete(currentStart, through)) return unavailable("incomplete");
   const sum = (start: string, end: string) => rows.rows.filter(r => r.date >= start && r.date <= end).reduce((n, r) => n + r.clicks, 0);
+  // Leading indicators: Google shows pages (impressions, position) well before they earn clicks.
+  const inWindow = (start: string, end: string) => rows.rows.filter(r => r.date >= start && r.date <= end);
+  const impressionsIn = (start: string, end: string) => inWindow(start, end).reduce((n, r) => n + r.impressions, 0);
+  const currentRows = inWindow(currentStart, through), currentImpressions = impressionsIn(currentStart, through);
+  const position = currentImpressions > 0 ? Math.round((currentRows.reduce((n, r) => n + r.weightedPosition, 0) / currentImpressions) * 10) / 10 : null;
+  const pagesSeen = new Set(currentRows.filter(r => r.impressions > 0).map(r => r.page)).size;
   const pages = await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "published")).take(501);
+  const checked = pages.filter(p => articleMatchesCurrentDomain(site, p) && p.gscInspectedAt && !p.gscInspectionError && p.gscIndexVerdict &&
+    gscInspectionMatchesCurrentConnection(site, p));
+  const index = { checked: checked.length, indexed: checked.filter(p => p.gscIndexVerdict === "PASS").length };
   const cohorts = pages.length > 500 ? null : pages.filter(p => articleMatchesCurrentDomain(site, p) && p.publicUrlStatus === "verified" &&
     p.publishedAt && searchConsoleDate(p.publishedAt) >= currentStart && searchConsoleDate(p.publishedAt) <= through).map(p => {
       const start = addSearchConsoleDays(searchConsoleDate(p.publishedAt!), 1), url = publishedArticlePageUrl(site.domain, site.urlStructure, p.slug);
@@ -79,8 +88,9 @@ export const contentOutcome = query({ args: { siteId: v.id("sites") }, handler: 
   }
   return { status: "available" as const, through, property: site.gscProperty ?? null, daily,
     delayed: through < addSearchConsoleDays(searchConsoleDate(Date.now()), -3),
-    current: { start: currentStart, end: through, clicks: sum(currentStart, through) },
-    previous: complete(previousStart, previousEnd) ? { start: previousStart, end: previousEnd, clicks: sum(previousStart, previousEnd) } : null, cohorts };
+    current: { start: currentStart, end: through, clicks: sum(currentStart, through), impressions: currentImpressions, position, pagesSeen },
+    previous: complete(previousStart, previousEnd) ? { start: previousStart, end: previousEnd, clicks: sum(previousStart, previousEnd),
+      impressions: impressionsIn(previousStart, previousEnd) } : null, index, cohorts };
 } });
 
 function completeCurrentGscRows<Row>(
