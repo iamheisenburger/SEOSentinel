@@ -102,8 +102,13 @@ const TOPIC_REPLENISH_INTERVAL_MS = 3 * 86_400_000, TOPIC_REPLENISH_BUDGET_MICRO
 /** A keyword naming one of the site's listed competitors can't be written: the writer
  * must never name them, so the draft is blocked. Such topics are never chosen. */
 function competitorNamesFor(site: Pick<Doc<"sites">, "competitors">): string[] {
-  return (site.competitors ?? []).map(c => c.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "")
-    .replace(/\.(com|io|co|org|net|ai|app|dev|so|us|uk|co\.uk)$/, "").trim()).filter(name => name.length >= 3);
+  return (site.competitors ?? []).map(c => {
+    const host = c.toLowerCase().trim().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "").trim();
+    const base = host.replace(/\.(com|io|co|org|net|ai|app|dev|so|us|uk|co\.uk)$/, "").trim();
+    // A short one-word brand is often an everyday word ("seo.ai", "copy.ai"):
+    // match its full name so ordinary keywords like "ad copy" stay available.
+    return base !== host && !/\s/.test(base) && base.length < 5 ? host : base;
+  }).filter(name => name.length >= 3);
 }
 function namesCompetitor(text: string, names: string[]) {
   const normalized = ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, " ")} `;
@@ -997,6 +1002,21 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
   if (preferredId) return planned.find(t => t._id === preferredId) ?? null;
   if (options.demandOnly) return planned.find(searched) ?? null;
   if (planned[0]) return planned[0];
+  // No researched keyword is left: a real question the owner confirmed their
+  // customers ask is a better article than a guide named after a feature.
+  for (const question of site.painPoints ?? []) {
+    const label = question.trim().replace(/\s+/g, " ");
+    if (label.length < 15 || label.length > 110 || !label.endsWith("?") || label.split(" ").length < 4) continue;
+    const proposal = { primaryKeyword: label.toLowerCase().replace(/[?!.\s]+$/, ""), label };
+    if (!fit(proposal) || namesCompetitor(label, competitors) ||
+      [...topics, ...pageCoverage, ...excludedIntents].some(t => contentIntentConflicts(proposal, t))) continue;
+    const id = await ctx.db.insert("topic_clusters", { siteId: site._id, ...proposal,
+      planningCanonicalDomain: siteCanonicalDomain(site)!, planningDomainRevision: siteCanonicalDomainRevision(site),
+      secondaryKeywords: [], intent: "informational", priority: 1, status: "planned",
+      notes: "A customer question the owner confirmed. Search forecasts are unknown. Answer it from supported business facts with conditional guidance; never invent experience or external claims.",
+      createdAt: Date.now(), updatedAt: Date.now() });
+    return (await ctx.db.get(id))!;
+  }
   const anchors = tenantDiscoveryAnchors([...(site.anchorKeywords ?? []), ...(site.keyFeatures ?? []),
     ...(site.painPoints ?? []), site.productUsage], 40);
   for (const primaryKeyword of anchors) {

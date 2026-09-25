@@ -146,6 +146,81 @@ export function discoveryFindings(input: {
   return issues;
 }
 
+/** A page's identity for discovery checks: host without www, path without a
+ * trailing slash. Protocol, query and fragment don't make a different page. */
+export function discoveryPageKey(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol)) return null;
+    return `${parsed.host.replace(/^www\./, "").toLowerCase()}${parsed.pathname.replace(/\/+$/, "") || "/"}`;
+  } catch { return null; }
+}
+
+/** Every page a sitemap document lists, as discovery keys (any protocol). */
+export function sitemapPageKeys(xml: string): string[] {
+  const keys: string[] = [];
+  for (const match of xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)) {
+    const key = discoveryPageKey(decode(match[1]));
+    if (key) keys.push(key);
+  }
+  return keys;
+}
+
+/** Every link on a page, as discovery keys resolved against the page address. */
+export function linkedPageKeys(html: string, pageUrl: string): Set<string> {
+  const keys = new Set<string>();
+  for (const match of html.matchAll(/<a\b[^>]*?\bhref\s*=\s*["']([^"']*)["']/gi)) {
+    try {
+      const key = discoveryPageKey(new URL(decode(match[1]).trim(), pageUrl).toString());
+      if (key) keys.add(key);
+    } catch { /* ignore malformed links */ }
+  }
+  return keys;
+}
+
+/** Links on a homepage that look like the site's article listing page. */
+export function listingPageCandidates(homeHtml: string, homeUrl: string, limit = 2): string[] {
+  const host = discoveryPageKey(homeUrl)?.split("/")[0], out: string[] = [];
+  for (const match of homeHtml.matchAll(/<a\b[^>]*?\bhref\s*=\s*["']([^"']*)["']/gi)) {
+    try {
+      const url = new URL(decode(match[1]).trim(), homeUrl);
+      url.hash = ""; url.search = "";
+      if (url.protocol !== "https:" || url.host.replace(/^www\./, "").toLowerCase() !== host) continue;
+      if (!/^\/(?:blog|news|articles|insights|resources|posts|journal|stories|guides|learn)\/?$/i.test(url.pathname)) continue;
+      if (!out.includes(url.toString())) out.push(url.toString());
+    } catch { /* ignore */ }
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** Can Google find the articles Pentra published? A live article missing from
+ * the sitemap may never be found; the newest one should be linked from the
+ * homepage or the blog page. Unknown inputs (null) never produce a finding. */
+export function articleDiscoveryFindings(input: {
+  articleUrls: string[];
+  sitemapKeys: Set<string> | null;
+  servedStatus: Record<string, number>;
+  newestLinked: boolean | null;
+}): PageHealthIssue[] {
+  const issues: PageHealthIssue[] = [];
+  if (input.sitemapKeys) {
+    const listed = input.sitemapKeys;
+    const missing = input.articleUrls.filter(url => {
+      const key = discoveryPageKey(url);
+      return key !== null && !listed.has(key) && input.servedStatus[url] === 200;
+    });
+    if (missing.length) {
+      const one = missing.length === 1;
+      issues.push({ code: "articles_missing_from_sitemap", severity: "critical",
+        message: `${one ? "1 of your recent articles is" : `${missing.length} of your recent articles are`} live but not in your sitemap, so Google may never find ${one ? "it" : "them"} (for example ${new URL(missing[0]).pathname}). Make sure your sitemap lists every blog post.` });
+    }
+  }
+  if (input.newestLinked === false) issues.push({ code: "newest_article_not_linked", severity: "warning",
+    message: "Your newest article isn't linked from your homepage or your blog page. Google finds new pages mainly by following links, so make sure your blog page lists new posts." });
+  return issues;
+}
+
 /** Sitemap <loc> URLs on the same host, first-party only, bounded. */
 export function sitemapUrls(xml: string, siteHost: string, limit = 10): string[] {
   const host = siteHost.replace(/^www\./, "").toLowerCase();

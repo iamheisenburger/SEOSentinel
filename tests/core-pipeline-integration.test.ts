@@ -1127,13 +1127,14 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     assert.equal(waitingForResearch.mode, "topics_researching");
     assert.ok(f.get(site.id)!.contentSchedule.topicsReplenishedAt);
     assert.equal(f.tables.jobs.filter(j => j.contentWork).length, 0, "no article starts on an unsearched topic while research runs");
-    f.get(site.id)!.competitors = ["https://www.rivaltool.com", "OtherVendor.io"];
+    f.get(site.id)!.competitors = ["https://www.rivaltool.com", "OtherVendor.io", "Copy.ai"];
     await f.invoke("contentWork:addResearchedTopics", { siteId: site.id, keywords: [
-      { keyword: `${keyword} pricing guide`, searchVolume: 480, difficulty: 14, difficultyMeasured: true },
+      { keyword: `${keyword} copy pricing guide`, searchVolume: 480, difficulty: 14, difficultyMeasured: true },
       { keyword: `${keyword} pricing comparison`, searchVolume: 9900, difficulty: 79, difficultyMeasured: true },
       { keyword: `rivaltool ${keyword} review`, searchVolume: 900, difficulty: 10, difficultyMeasured: true },
-      { keyword: `${keyword} with othervendor`, searchVolume: 700, difficulty: 8, difficultyMeasured: true }] });
-    assert.equal(f.get(site.id)!.contentSchedule.topicsReplenishAdded, 1, "keywords out of reach or naming a competitor are not added");
+      { keyword: `${keyword} with othervendor`, searchVolume: 700, difficulty: 8, difficultyMeasured: true },
+      { keyword: `copy ai ${keyword} alternative`, searchVolume: 650, difficulty: 9, difficultyMeasured: true }] });
+    assert.equal(f.get(site.id)!.contentSchedule.topicsReplenishAdded, 1, "keywords out of reach or naming a competitor are not added; a short brand (copy.ai) only matches its full name");
     const unsearched = f.add("topic_clusters", { ...f.tables.topic_clusters.find(t => t.siteId === site.id)!, _id: undefined,
       primaryKeyword: "a completely different owner question", label: "A completely different owner question", status: "planned", priority: 99,
       searchVolume: undefined, createdAt: f.now(), updatedAt: f.now() });
@@ -1148,7 +1149,7 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     const job = f.tables.jobs.find(j => j.contentWork && j.siteId === site.id)!;
     assert.ok(job, JSON.stringify(started));
     const chosen = f.get(job.payload.topicId)!;
-    assert.equal(chosen.primaryKeyword, `${keyword} pricing guide`, "a searched keyword beats a higher-priority unsearched one");
+    assert.equal(chosen.primaryKeyword, `${keyword} copy pricing guide`, "a searched keyword beats a higher-priority unsearched one");
     assert.notEqual(job.payload.topicId, unsearched);
     assert.notEqual(job.payload.topicId, outOfReach, "a keyword a small site cannot rank for is not preferred");
     assert.notEqual(job.payload.topicId, harder, "480 searches at difficulty 14 beat 1,000 at difficulty 40");
@@ -1157,6 +1158,8 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
   await t.test("empty_keyword_research_falls_back_without_missing_the_slot", async () => {
     const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
     const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    const question = "How often should irrigation maintenance scheduling software remind my crew about valve inspections?";
+    saved.painPoints = [...(saved.painPoints ?? []), question];
     f.setIdentity(saved.userId);
     const r = await f.invoke("contentWork:readiness", { siteId: site.id });
     await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
@@ -1169,7 +1172,9 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     assert.equal(f.get(site.id)!.contentSchedule.topicsReplenishAdded, 0);
     const next = await f.invoke("contentWork:advance", { siteId: site.id });
     assert.notEqual(next.mode, "topics_researching", "the cadence continues with a confirmed business question");
-    assert.ok(f.tables.jobs.some(j => j.contentWork && j.siteId === site.id), JSON.stringify(next));
+    const fallbackJob = f.tables.jobs.find(j => j.contentWork && j.siteId === site.id);
+    assert.ok(fallbackJob, JSON.stringify(next));
+    assert.equal(f.get(fallbackJob.payload.topicId)!.label, question, "a customer question the owner confirmed beats a guide named after a feature");
     assert.equal(f.tables.provider_spend_reservations.filter(x => x.siteId === site.id && x.purpose === "topic_plan").length, reservations,
       "empty research is not repeated right away");
     f.assertOffline();

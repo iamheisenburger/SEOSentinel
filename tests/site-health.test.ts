@@ -107,3 +107,29 @@ test("discovery findings: missing homepage canonical, soft 404s and a temporary 
   assert.match(discoveryFindings({ homeUrl: "https://www.example.com/", homeStatus: 200, homeHtml: '<link rel="canonical" href="/">',
     missingPageStatus: 404, alternateHost: { status: 302, location: "https://www.example.com/" } })[0].message, /non-www address/);
 });
+
+test("article discovery: live articles missing from the sitemap and an unlinked newest article are found", async () => {
+  const { articleDiscoveryFindings, discoveryPageKey, linkedPageKeys, listingPageCandidates, sitemapPageKeys } = await import("../convex/lib/siteHealth.ts");
+  // One page identity regardless of protocol, www, trailing slash, query or fragment.
+  assert.equal(discoveryPageKey("http://www.Acme.example/blog/post/?utm=1#top"), "acme.example/blog/post");
+  assert.equal(discoveryPageKey("https://acme.example/"), "acme.example/");
+  assert.equal(discoveryPageKey("mailto:hi@acme.example"), null);
+  const listed = new Set(sitemapPageKeys(`<urlset><url><loc>http://acme.example/blog/listed/</loc></url><url><loc>https://www.acme.example/</loc></url></urlset>`));
+  assert.deepEqual([...listed], ["acme.example/blog/listed", "acme.example/"], "an http:// or www sitemap entry still counts");
+  const articles = ["https://acme.example/blog/listed", "https://acme.example/blog/missing", "https://acme.example/blog/merged", "https://acme.example/blog/unknown"];
+  const codes = (input: Parameters<typeof articleDiscoveryFindings>[0]) => articleDiscoveryFindings(input).map(issue => issue.code);
+  const found = articleDiscoveryFindings({ articleUrls: articles, sitemapKeys: listed,
+    servedStatus: { "https://acme.example/blog/missing": 200, "https://acme.example/blog/merged": 308 }, newestLinked: true });
+  assert.deepEqual(found.map(issue => [issue.code, issue.severity]), [["articles_missing_from_sitemap", "critical"]]);
+  assert.match(found[0].message, /^1 of your recent articles is live but not in your sitemap.*\/blog\/missing/,
+    "only a page served on its own address counts: a permanent redirect (consolidated) or an unknown status never does");
+  assert.deepEqual(codes({ articleUrls: articles, sitemapKeys: null, servedStatus: { "https://acme.example/blog/missing": 200 }, newestLinked: null }), [],
+    "a sitemap that couldn't be read completely, or an unknown link state, never produces a finding");
+  assert.deepEqual(codes({ articleUrls: [], sitemapKeys: listed, servedStatus: {}, newestLinked: false }), ["newest_article_not_linked"]);
+  // Links resolve against the page, with or without www, trailing slash or fragment.
+  const links = linkedPageKeys(`<a class="x" href="/blog/new-post/">New</a><a href='https://www.acme.example/about#team'>About</a><a href="javascript:void(0)">x</a>`, "https://acme.example/blog");
+  assert.ok(links.has("acme.example/blog/new-post") && links.has("acme.example/about"));
+  assert.equal(links.size, 2);
+  assert.deepEqual(listingPageCandidates(`<a href="/blog/">Blog</a><a href="https://other.example/news">x</a><a href="/pricing">p</a><a href="/news?page=1">News</a>`, "https://acme.example/"),
+    ["https://acme.example/blog/", "https://acme.example/news"], "only same-site listing pages are followed");
+});

@@ -2,6 +2,12 @@ import { internalMutation, internalQuery, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
+import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
+import { publishedArticlePageUrl } from "./lib/searchPerformance";
+
+const publishedArticlePageUrlOrNull = (domain: string, urlStructure: string | undefined, slug: string) => {
+  try { return publishedArticlePageUrl(domain, urlStructure, slug); } catch { return null; }
+};
 
 
 export const siteForCheck = internalQuery({ args: { siteId: v.id("sites"), userId: v.optional(v.string()) },
@@ -10,8 +16,15 @@ export const siteForCheck = internalQuery({ args: { siteId: v.id("sites"), userI
     if (!site || (userId !== undefined && site.userId !== userId)) return null;
     const latest = await ctx.db.query("site_health_checks").withIndex("by_site_checked", q => q.eq("siteId", siteId)).order("desc").first();
     const pages = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId)).take(50);
+    // Newest published articles on the current domain, for the discovery pass.
+    const published = (await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "published"))
+      .order("desc").take(60)).filter(row => row.publishedAt && articleMatchesCurrentDomain(site, row));
+    const articles = published.sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0)).slice(0, 25).flatMap(row => {
+      const url = row.publicUrl?.startsWith("https://") ? row.publicUrl : publishedArticlePageUrlOrNull(site.domain, site.urlStructure, row.slug);
+      return url ? [{ url, publishedAt: row.publishedAt! }] : [];
+    });
     return { domain: site.domain, lastCheckedAt: latest?.checkedAt ?? null, knownUrls: pages.map(p => p.url).filter(Boolean) as string[],
-      ctaUrl: site.ctaUrl?.startsWith("https://") ? site.ctaUrl : null };
+      ctaUrl: site.ctaUrl?.startsWith("https://") ? site.ctaUrl : null, articles };
   } });
 
 export const record = internalMutation({ args: { siteId: v.id("sites"), score: v.number(), error: v.optional(v.string()),

@@ -4,7 +4,7 @@ import { action, internalAction, type ActionCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { ConvexError, v } from "convex/values";
 import type { Id } from "../_generated/dataModel";
-import { analyzePageHealth, discoveryFindings, healthScore, robotsTxtFindings, sitemapIndexChildren, sitemapUrls, speedFindings, type PageHealthResult } from "../lib/siteHealth";
+import { analyzePageHealth, articleDiscoveryFindings, discoveryFindings, discoveryPageKey, healthScore, linkedPageKeys, listingPageCandidates, robotsTxtFindings, sitemapIndexChildren, sitemapPageKeys, sitemapUrls, speedFindings, type PageHealthResult } from "../lib/siteHealth";
 import { safeFetchPublicText, safePublicRedirectStatus } from "../lib/safeOutbound";
 import { fetchPage } from "../lib/fetchPage";
 
@@ -21,6 +21,27 @@ async function pageSpeed(url: string): Promise<unknown> {
       { expectedHost: "www.googleapis.com", maxRedirects: 0, maxBytes: 200_000, timeoutMs: 60_000, headers: { Accept: "application/json" } });
     return JSON.parse(response.text);
   } catch { return null; }
+}
+
+/** Every page the site's sitemap lists, or null when it can't be read
+ * completely (then no sitemap finding is made: never invent a problem). */
+async function readWholeSitemap(host: string, declared: string[]): Promise<Set<string> | null> {
+  for (const candidate of [...declared, `https://${host}/sitemap.xml`]) {
+    const root = await fetchPage(candidate);
+    if (root.status !== 200) continue;
+    const documents: string[] = [];
+    if (/<sitemapindex\b/i.test(root.html)) {
+      const children = sitemapIndexChildren(root.html, host, 21);
+      if (!children.length || children.length > 20) return null;
+      for (const child of children) {
+        const page = await fetchPage(child);
+        if (page.status !== 200 || /<sitemapindex\b/i.test(page.html)) return null;
+        documents.push(page.html);
+      }
+    } else documents.push(root.html);
+    return new Set(documents.flatMap(sitemapPageKeys));
+  }
+  return null;
 }
 
 async function runCheck(ctx: ActionCtx, siteId: Id<"sites">, userId?: string) {
@@ -68,6 +89,35 @@ async function runCheck(ctx: ActionCtx, siteId: Id<"sites">, userId?: string) {
     try { alternateHost = await safePublicRedirectStatus(`https://${alternate}/`); } catch { alternateHost = null; }
     results[0].issues.push(...discoveryFindings({ homeUrl: home, homeHtml, homeStatus: results[0].status,
       missingPageStatus: missing.status, alternateHost }));
+    // Article discovery pass: every live article Pentra published must be in
+    // the sitemap (a day's grace for sitemap rebuilds), and the newest must be
+    // linked from the homepage or the blog page.
+    const now = Date.now();
+    const settled = site.articles.filter(a => now - a.publishedAt > 86_400_000).map(a => a.url);
+    const sitemapKeys = settled.length ? await readWholeSitemap(host, robots.sitemaps) : null;
+    const servedStatus: Record<string, number> = {};
+    if (sitemapKeys) {
+      for (const url of settled.filter(u => { const key = discoveryPageKey(u); return key !== null && !sitemapKeys.has(key); }).slice(0, 10)) {
+        try { servedStatus[url] = (await safePublicRedirectStatus(url)).status; } catch { /* unknown: never counted */ }
+      }
+    }
+    let newestLinked: boolean | null = null;
+    const newest = site.articles.find(a => now - a.publishedAt > 3_600_000);
+    const newestKey = newest ? discoveryPageKey(newest.url) : null;
+    if (newest && newestKey) {
+      const readable: { html: string; url: string }[] = results[0].status === 200 ? [{ html: homeHtml, url: home }] : [];
+      const parent = new URL(newest.url);
+      parent.pathname = parent.pathname.replace(/\/+$/, "").replace(/\/[^/]*$/, "") || "/";
+      parent.search = ""; parent.hash = "";
+      const listings = [parent.toString(), ...listingPageCandidates(homeHtml, home)]
+        .filter((url, i, all) => discoveryPageKey(url) !== discoveryPageKey(home) && all.findIndex(u => discoveryPageKey(u) === discoveryPageKey(url)) === i).slice(0, 3);
+      for (const url of listings) {
+        const page = await fetchPage(url);
+        if (page.status === 200) readable.push({ html: page.html, url: page.finalUrl });
+      }
+      if (readable.length) newestLinked = readable.some(page => linkedPageKeys(page.html, page.url).has(newestKey));
+    }
+    results[0].issues.push(...articleDiscoveryFindings({ articleUrls: settled, sitemapKeys, servedStatus, newestLinked }));
   }
   const pages = results.map(r => ({ url: r.url, status: r.status, ...(r.title ? { title: r.title.slice(0, 200) } : {}), issues: r.issues }));
   const score = healthScore(results);
