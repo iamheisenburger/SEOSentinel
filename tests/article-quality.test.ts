@@ -2258,3 +2258,48 @@ test("related-reading anchors are complete phrases, never cut mid-title", async 
   const long = preferredInternalLinkAnchorCandidates("Why Small Businesses Lose Visitors Before They Ever Become Leads Today")[0];
   assert.ok(!/\b(?:a|the|for|to|of|and)$/i.test(long) && long.split(" ").length <= 8, long);
 });
+
+// --- Reader instructions, disclaimers and non-statistical wording (overnight Sep 25) ---
+// Replaying 49 stored articles showed supported, uncited guidance blocked for
+// wording that makes no claim: "pull the last 20 leads", checklist items, a
+// "hypothetical example" disclaimer, "average position". Real claims stay strict.
+{
+  const productEvidence = "Name: Acme\n\nSummary: Acme sells scheduling software for clinics.";
+  const ledger = (claim: string) => validateClaimEvidenceLedger({
+    markdown: claim,
+    sources: [],
+    researchEvidence: "",
+    productEvidence,
+    productEvidenceHash: sha256Hex(productEvidence),
+    claimEvidence: [{ claim, supported: true, citationNumbers: [], reason: "Reader guidance, not a factual claim." }],
+  });
+
+  test("reader instructions with counts or timeframes are not factual claims", () => {
+    for (const claim of [
+      "1. **How long between capture and first outreach?** Pull timestamps for the last 20 leads and calculate the gap yourself. If it varies wildly, the issue is process, not the tool.\n2. **Who owns each lead?** Check the assignment rule.",
+      "- [ ] We've picked at least two metrics to check 30 days after go-live.\n- [ ] We have a written definition of a qualified lead.",
+      "A practical check you can run yourself: open Google Search Console, sort your pages by average position, and look for anything between position 8 and 15.",
+    ]) {
+      const result = ledger(claim);
+      assert.equal(result.passed, true, `${claim}\n${result.issues.join("\n")}`);
+    }
+  });
+
+  test("instructions that smuggle a statistic, outcome or source still need evidence", () => {
+    for (const claim of [
+      "Check your leads monthly, because 70% of leads go cold within 5 minutes.",
+      "Pull your last 20 leads; businesses that do this increase conversions by 30%.",
+      "According to a recent survey, most teams review leads weekly.",
+      "On average, small sites get 20 visitors a day from search.",
+      "The majority of customers abandon a form after 3 fields.",
+    ]) {
+      assert.equal(ledger(claim).passed, false, claim);
+    }
+  });
+
+  test("an explicit hypothetical disclaimer is not a claim, unless it carries numbers", () => {
+    assert.equal(ledger("The table below is a hypothetical example to illustrate the format; it is not a real finding from any actual analysis.").passed, true);
+    assert.equal(ledger("Every example below is explicitly labeled as hypothetical — it is a teaching illustration, not a documented case study.").passed, true);
+    assert.equal(ledger("In this hypothetical example, not a real case, revenue grew 40% in 3 months.").passed, false);
+  });
+}

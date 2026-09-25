@@ -330,7 +330,7 @@ export function countDifferentiationSignals(
 // "evidence that/of...") while the independent citation, numeric, outcome,
 // and named-product checks below continue to guard facts embedded in advice.
 const FACTUAL_CLAIM_PATTERN =
-  /\b(?:according to|stud(?:y|ies)|survey|dataset|findings?|average|majority)\b|(?<!\bnot )\bevidence\s+(?:that|of)\b|\b(?:study|survey|report|data|evidence|research)\b[^\n.!?]{0,40}\b(?:shows?|found|finds?|indicates?|reports?|supports?|suggests?|demonstrates?|confirms?)\b|\b(?:shows?|found|indicates?)\s+that\b/i;
+  /\b(?:according to|stud(?:y|ies)|survey|dataset|findings?)\b|\bon average\b|\b(?:the|an) average\b(?! (?:position|rank(?:ing)?|order|score|value|price|cost))|\baverage (?:of )?\d|\bmajority of (?:users|people|buyers|customers|visitors|businesses|companies|sites|websites|marketers|searchers|shoppers|consumers|founders|teams|americans|adults)\b|(?<!\bnot )\bevidence\s+(?:that|of)\b|\b(?:study|survey|report|data|evidence|research)\b[^\n.!?]{0,40}\b(?:shows?|found|finds?|indicates?|reports?|supports?|suggests?|demonstrates?|confirms?)\b|\b(?:shows?|found|indicates?)\s+that\b/i;
 
 /**
  * Pentra publishes plain Markdown, never executable MDX.  Keep this deliberately
@@ -626,6 +626,62 @@ function isExplicitAuthorFramework(
   );
 }
 
+const READER_INSTRUCTION_VERB =
+  /^(?:consider|pull|open|trace|time|check|look|list|count|write|pick|choose|ask|test|record|calculate|track|measure|review|map|note|compare|name|draft|sort|tag|group|mark|highlight|read|search|type|export|run|start|set|keep|repeat|skip|remove|delete|add|decide|confirm|verify|document|identify|find|collect|gather|interview|call|email|survey|audit|walk|plot|flag|rank|score|estimate|budget|schedule|share|send|capture|label|split|merge|cross-reference|filter|expand|narrow|try)\b/i;
+
+/**
+ * One sentence that tells the reader what to do in their own business
+ * ("Pull timestamps for the last 20 leads", "- [ ] We've picked two metrics to
+ * check 30 days after go-live") is an instruction, not a factual claim, even
+ * when it contains a count or a timeframe. Stays strict for anything that
+ * reads like evidence: citations, percentages, money, outcome or hype
+ * language, research wording, a causal clause carrying a number, or a
+ * capability claim about a named product.
+ */
+/**
+ * "The table below is a hypothetical example…", "Every example below is
+ * labeled hypothetical, not a real case": a disclaimer that withdraws a claim
+ * is not a claim. Only when it carries no numbers, citations or outcomes.
+ */
+function isHypotheticalDisclaimer(sentence: string): boolean {
+  if (claimSentenceSegments(sentence).length !== 1) return false;
+  const plain = sentence.replace(/[*_]/g, "").trim();
+  if (
+    inlineCitationNumbers(plain).length > 0 ||
+    /\d|[%$€£]/.test(plain) ||
+    HYPE_PATTERN.test(plain) ||
+    QUANTIFIED_OUTCOME_PATTERN.test(plain)
+  ) return false;
+  return /\b(?:hypothetical|illustrative|illustration|for illustration|made[- ]up|fictional|invented)\b/i.test(plain) &&
+    /\b(?:not (?:a |an )?(?:real|actual|documented|verified)|is (?:a )?hypothetical|are (?:all )?(?:hypothetical|illustrative)|labeled|labelled|to illustrate|for illustration)\b/i.test(plain);
+}
+
+function isReaderInstructionSentence(sentence: string, productEvidence: string): boolean {
+  if (claimSentenceSegments(sentence).length !== 1) return false;
+  const checklist = /^\s*[-*]\s+\[[ xX]\]\s+/.test(sentence);
+  const plain = sentence
+    .replace(/^\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)/, "")
+    .replace(/^\*\*[^*]+\*\*\s*/, "")
+    .replace(/\*\*|__/g, "")
+    .trim()
+    // "A practical check you can run yourself: open…", "As a working test, look…",
+    // "When you do, consider…": the label is framing, the instruction follows.
+    .replace(/^(?:(?:a|one|another|the) (?:practical|quick|simple|useful|good|first|second|final) (?:check|test|step|exercise)[^:.!?]{0,40}:|as a (?:working|quick|simple|practical|first) (?:test|check|step),|(?:when|once|after|before|if) you (?:do|have|run|finish|start)[^,.!?]{0,40},|(?:first|next|then|finally|instead|also|in practice),)\s*/i, "")
+    .trim();
+  if (
+    inlineCitationNumbers(sentence).length > 0 ||
+    /[%$€£]/.test(plain) ||
+    HYPE_PATTERN.test(plain) ||
+    QUANTIFIED_OUTCOME_PATTERN.test(plain) ||
+    FACTUAL_CLAIM_PATTERN.test(plain) ||
+    /\b(?:because|since|as a result|which means|so that)\b[^.!?]*\d/i.test(plain) ||
+    (referencesNamedProduct(plain, productEvidence) &&
+      /\b(?:offers?|provides?|includes?|supports?|automates?|publishes?|crawls?|detects?|generates?|integrates?|connects?|tracks?|monitors?|analy[sz]es?|creates?|increases?|improves?|reduces?|saves?)\b/i.test(plain))
+  ) return false;
+  if (checklist) return /^(?:we|our|i|my|you|your|the team|someone|each|every|there is|there's|a|an|at least)\b/i.test(plain);
+  return READER_INSTRUCTION_VERB.test(plain);
+}
+
 function isReaderRunProcedure(paragraph: string, productEvidence: string): boolean {
   if (
     inlineCitationNumbers(paragraph).length > 0 ||
@@ -705,6 +761,8 @@ function hasEvidenceClaimSignal(value: string, productEvidence: string): boolean
 
 function requiresClaimEvidence(value: string, productEvidence: string): boolean {
   if (
+    isReaderInstructionSentence(value, productEvidence) ||
+    isHypotheticalDisclaimer(value) ||
     isReaderMeasurementInstruction(value, productEvidence) ||
     isExplicitAuthorFramework(value, productEvidence) ||
     isReaderRunProcedure(value, productEvidence) ||
@@ -874,9 +932,17 @@ export function validateClaimEvidenceLedger(args: {
       // on its own. A signal only the whole paragraph carries stays strict.
       const claimSentences = claimSentenceSegments(entry.claim)
         .filter((sentence) => requiresClaimEvidence(sentence, args.productEvidence));
+      // A signal only the whole paragraph carries stays strict, unless every
+      // sentence that carries it is a reader instruction (a count or a
+      // timeframe in "pull the last 20 leads" is not evidence of anything).
+      const residual = claimSentenceSegments(entry.claim)
+        .filter((sentence) => !isReaderInstructionSentence(sentence, args.productEvidence))
+        .join(" ");
       const unsupportedSentences = claimSentences.length > 0
         ? claimSentences.filter((sentence) => !productSnapshotSupports(sentence))
-        : [entry.claim];
+        : requiresClaimEvidence(residual, args.productEvidence)
+          ? [entry.claim]
+          : [];
       if (unsupportedSentences.length > 0) {
         issues.push(
           `Supported claim ledger entry ${index + 1} ("${entry.claim.slice(0, 220)}") has neither a matched source excerpt nor a valid matched first-party evidence snapshot. ` +
