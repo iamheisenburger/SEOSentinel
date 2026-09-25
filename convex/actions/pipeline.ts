@@ -1,5 +1,5 @@
 "use node";
-import { contentProviderActive, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
+import { contentProviderActive, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
 class ContentQualityRejection extends Error {}
 
 import { internal } from "../_generated/api";
@@ -7151,8 +7151,8 @@ async function reviewExistingArticleHandler(
     // previous review named (unsupported ledger claims, unverified fact-check
     // claims). Deleting text cannot add a claim, costs nothing, and converges;
     // a model rewrite is only needed for editorial defects.
-    const evidenceRepairOnly = contentProviderActive() && incrementRevision && onlyEvidenceDefects(storedDefects);
-    if (contentProviderActive() && incrementRevision) {
+    const evidenceRepairOnly = contentProviderMayRepairDraft() && incrementRevision && onlyEvidenceDefects(storedDefects);
+    if (contentProviderMayRepairDraft() && incrementRevision) {
       reviewMarkdown = removeUnsupportedClaimSentences(reviewMarkdown, [
         ...(article.claimEvidence ?? []).filter((entry) => !entry.supported).map((entry) => entry.claim),
         ...unverifiedClaimsFromFactCheckNotes(article.factCheckNotes),
@@ -7210,7 +7210,7 @@ async function reviewExistingArticleHandler(
       reviewMarkdown = remediated.markdown;
     }
 
-    if (contentProviderActive()) {
+    if (contentProviderMayRepairDraft()) {
       reviewMarkdown = pruneUnsupportedEvidenceSentences({
         markdown: normalizeArticleHeadings(reviewMarkdown, article.title), productEvidence, productEvidenceHash,
       }).markdown;

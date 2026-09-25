@@ -18,6 +18,13 @@ export const contentProviderActive = () => Boolean(scope.getStore());
 // Admission/expiry/leases still use the real clock, never this prompt-only time.
 export const contentProviderPromptTime = () => scope.getStore()?.job.createdAt ?? Date.now();
 export function withContentProvider<T>(value: Scope, run: () => Promise<T>) { return scope.run(value, run); }
+/** Pentra may repair (prune) only text it wrote itself: a new Autopilot or
+ * owner-requested article. An owner's edit, an improvement of an existing page,
+ * a correction or a rollback carries customer text that is never rewritten. */
+export const contentProviderMayRepairDraft = () => {
+  const cw = scope.getStore()?.job.contentWork;
+  return !!cw && cw.intent === "create" && !cw.ownerRequest?.sourceArticleId && !cw.operation && !cw.editTarget;
+};
 
 /** No SDK retry, model fallback, repair ladder or optional paid service. The
  * same durable job owns every bounded call and its ambiguous-response receipt.

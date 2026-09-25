@@ -1622,10 +1622,12 @@ test("SLC55 a failed owner edit stays bounded and never replaces the customer's 
   await pumpUntil(f, () => f.get(original.jobId)!.contentWork.stage === "failed");
   const source = f.get(f.get(original.jobId)!.articleId)!, draftCalls = f.modelCalls.filter(c => c.tools[0].name === "submit_article").length;
   const edited = await f.invoke("contentWork:requestDraft", { ...base, requestKey: "owner-failed-edited-review",
-    edit: { articleId: source._id, artifactHash: publicationArtifactHash(source as never), markdown: `${source.markdown}\n\nCheck the approved business details.` } });
+    edit: { articleId: source._id, artifactHash: publicationArtifactHash(source as never), markdown: `${source.markdown}\n\nCheck the approved business details. Our crews finish inspections 47% faster than last year.` } });
   const editedId = f.get(edited.jobId)!.articleId;
   await pumpUntil(f, () => f.get(edited.jobId)!.contentWork.stage === "failed");
   const job = f.get(edited.jobId)!;
+  assert.match(f.get(editedId)!.markdown, /Our crews finish inspections 47% faster than last year\./,
+    "Pentra never prunes the customer's own words; an owner edit is reviewed, not rewritten");
   assert.equal(job.articleId, editedId); assert.equal(job.contentWork.revisions, 2);
   assert.equal(job.contentWork.replacements, 0);
   assert.equal(f.modelCalls.filter(c => c.tools[0].name === "submit_article").length, draftCalls);
