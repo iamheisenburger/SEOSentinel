@@ -81,7 +81,9 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
   </>;
   // Sites set up through the Autopilot / Review-first choice get a plain summary.
   if (newFlow) {
-    const needsReview = state.work.filter(w => !w.retiredAt && (w.stage === "failed" || w.stage === "review_failed") && !w.superseded && !w.parked && !(state.published ?? []).some(a => a.articleId === w.articleId));
+    // Only a retained draft can be reviewed; a slot that failed before any draft
+    // existed (a provider interruption) is operator business, not the owner's.
+    const needsReview = state.work.filter(w => !w.retiredAt && w.articleId && (w.stage === "failed" || w.stage === "review_failed") && !w.superseded && !w.parked && !(state.published ?? []).some(a => a.articleId === w.articleId));
     const link = "text-[#F7F8F8] underline decoration-white/30 underline-offset-2 hover:decoration-white";
     return <section className="overflow-hidden rounded-xl border border-white/[0.06] bg-[#0E0F11]" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
       <div className="flex items-center justify-between gap-3 border-b border-white/[0.04] px-5 py-4">

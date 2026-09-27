@@ -41,8 +41,8 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
   const verified = state.work.filter(w => w.stage === "verified").sort((a, b) => (b.verifiedAt ?? 0) - (a.verifiedAt ?? 0)).slice(0, 5);
   const published = state.published ?? [];
   // Plain-mode owners only see what needs them: a revision Pentra is still working through is not their problem.
-  const attention = state.work.filter(w => w.failure && !w.retiredAt && !w.superseded && !w.parked && !published.some(a => a.articleId === w.articleId) &&
-    (!plain || w.systemFailure || w.stage === "failed"));
+  const attention = state.work.filter(w => w.failure && !w.retiredAt && !w.superseded && !w.parked && !(plain && w.pastSlot) &&
+    !published.some(a => a.articleId === w.articleId) && (!plain || w.systemFailure || w.stage === "failed"));
   const tone = delivery.status === "failed" || delivery.status === "changed" ? "bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/20"
     : delivery.status === "paused" ? "bg-white/[0.04] text-[#8A8F98] border-white/10" : "bg-[#22C55E]/10 text-[#22C55E] border-[#22C55E]/20";
   return <div className="space-y-5" aria-label="Content service overview">

@@ -162,3 +162,19 @@ test("SLC38 customer rendering treats provider interruption as platform responsi
   assert.match(restored, /Retry interrupted preparation/); assert.match(restored, /original deadline and earlier attempt remain recorded/);
   assert.doesNotMatch(restored, /synthetic-private-call|synthetic-private-token|purchase credits/);
 });
+
+test("P54 a failed slot the schedule already moved past is history, not 'Needs attention' for an Autopilot owner", () => {
+  const base = { ...state, autopilot: { selectable: true, on: true }, funding: { ...state.funding, status: "available" },
+    plan: { tier: "starter", articlesPerMonth: 10, autopilotIntervalMs: 259_200_000 },
+    schedule: { ...state.schedule, paused: false, autopilotSelected: true, nextDeadlineAt: 10_000 },
+    results: { live: 3, liveThisMonth: 2, planUsedThisMonth: 4 } };
+  const interrupted = { jobId: "jobs:credit", articleId: undefined, stage: "failed", deadlineAt: 5_000, windowStartAt: 4_700,
+    failure: "Pentra's generation service is interrupted. Our team must restore it; you do not need to fund a provider or change your plan.",
+    systemFailure: false, retiredAt: undefined, superseded: false, parked: false };
+  const past = render("content-work-overview", { ...base, work: [{ ...interrupted, pastSlot: true }] }).html;
+  assert.doesNotMatch(past, /generation service is interrupted/);
+  const current = render("content-work-overview", { ...base, work: [{ ...interrupted, deadlineAt: 10_000, pastSlot: false }] }).html;
+  assert.match(current, /generation service is interrupted/, "a failure that still blocks the due slot is shown");
+  const card = render("content-work-service", { ...base, work: [{ ...interrupted, pastSlot: true }] }).html;
+  assert.doesNotMatch(card, /draft needs your review/, "a slot that failed before any draft existed is not a draft to review");
+});

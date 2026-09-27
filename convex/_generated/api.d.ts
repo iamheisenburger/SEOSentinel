@@ -39,6 +39,7 @@ import type * as articles from "../articles.js";
 import type * as autopilot from "../autopilot.js";
 import type * as blog from "../blog.js";
 import type * as cadenceMicroSeed from "../cadenceMicroSeed.js";
+import type * as contentHealth from "../contentHealth.js";
 import type * as contentImprovements from "../contentImprovements.js";
 import type * as contentWork from "../contentWork.js";
 import type * as crons from "../crons.js";
@@ -235,6 +236,7 @@ declare const fullApi: ApiFromModules<{
   autopilot: typeof autopilot;
   blog: typeof blog;
   cadenceMicroSeed: typeof cadenceMicroSeed;
+  contentHealth: typeof contentHealth;
   contentImprovements: typeof contentImprovements;
   contentWork: typeof contentWork;
   crons: typeof crons;

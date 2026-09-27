@@ -629,6 +629,25 @@ async function listBySiteHandler(
     return articles.map((article) => summaryListItem(summaryFields(article)));
 }
 
+/** Light counts for the Websites page cards: summaries and topic status
+ * indexes only, bounded, never full article or topic rows. */
+export const cardCounts = query({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }) => {
+    const site = await requireSiteOwner(ctx, siteId);
+    const cap = 1000;
+    const summaries = async (status: string) => (await ctx.db.query("article_summaries")
+      .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", status)).take(cap + 1))
+      .filter((row) => articleMatchesCurrentDomain(site, row));
+    const published = await summaries("published");
+    const drafts = (await Promise.all(["draft", "review", "ready", "revision"].map(summaries))).flat();
+    const topics = (await ctx.db.query("topic_clusters").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "planned"))
+      .take(cap + 1)).filter((topic) => topicMatchesCurrentDomain(site, topic));
+    return { published: Math.min(published.length, cap), drafts: Math.min(drafts.length, cap), topics: Math.min(topics.length, cap),
+      capped: published.length > cap || topics.length > cap };
+  },
+});
+
 export const listBySite = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {

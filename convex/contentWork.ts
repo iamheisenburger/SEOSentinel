@@ -61,14 +61,10 @@ async function ownerDraftAllowance(ctx: QueryCtx | MutationCtx, site: Doc<"sites
   if (validationScoped || !site.userId) return null;
   const entitlement = await ctx.db.query("account_plan_entitlements").withIndex("by_user", q => q.eq("userId", site.userId!)).unique();
   const tier = resolvePlanFromFeatures(entitlement?.planFeatures ?? site.planFeatures ?? []).tier;
-  const now = new Date(), monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-  let used = 0;
-  for (const owned of await ctx.db.query("sites").withIndex("by_user", q => q.eq("userId", site.userId!)).take(LIMIT)) {
-    const siteJobs = await ctx.db.query("jobs").withIndex("by_site_content_deadline", q =>
-      q.eq("siteId", owned._id).gte("contentWork.deadlineAt", monthStart)).take(LIMIT);
-    used += siteJobs.filter(j => j.contentWork?.ownerRequest && !j.contentWork.ownerRequest.sourceArticleId &&
-      j.contentWork.ownerRequest.requestedAt >= monthStart).length;
-  }
+  // One monthly allowance per plan: Autopilot articles and new owner drafts
+  // count against the same number the pricing page promises (and the
+  // dashboard shows), so the two can never add up past the plan.
+  const { used } = await accountArticlesThisMonth(ctx, site);
   return { tier, used, limit: OWNER_DRAFTS_PER_MONTH[tier] as number };
 }
 const LIMIT = 1000;
@@ -899,6 +895,11 @@ export const readiness = query({
         publishedAt: j.contentWork!.publishedAt, verifiedAt: j.contentWork!.verifiedAt, creditRetry,
         superseded: supersededJobs.has(j._id),
         parked: parkedByAutopilot(j),
+        // A failed automatic slot the schedule has already moved past (its
+        // replacement or the next article covered it) needs nothing from the
+        // owner; it stays in Activity as history instead of "Needs attention".
+        pastSlot: Boolean(s && j.status === "failed" && j.contentWork!.stage === "failed" && !creditRetry &&
+          j.contentWork!.deadlineAt < s.nextDeadlineAt),
         failure: supersededJobs.has(j._id) ? "Replaced by your edited version of this article, which is now live. The missed slot stays on record."
           : parkedByAutopilot(j) ? j.contentWork!.failure === "content_model_response_invalid"
             ? "Pentra's writing service returned an incomplete response for this article, so nothing was published. Your schedule continued with the next article."
@@ -1256,6 +1257,72 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
     return { added };
   } });
 
+/** Minimum spacing between two automatic publications: half the cadence
+ * interval, at most four hours. On time a slot is a whole interval after the
+ * previous one, so this only ever slows a catch-up after missed slots. */
+export const CATCH_UP_MAX_GAP_MS = 4 * 3_600_000;
+async function catchUpPaceAt(ctx: MutationCtx, siteId: Id<"sites">, intervalMs: number) {
+  const latest = await ctx.db.query("articles").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published"))
+    .order("desc").take(5);
+  const last = latest.reduce((max, a) => typeof a.publishedAt === "number" && a.publishedAt > max ? a.publishedAt : max, 0);
+  return last > 0 ? last + Math.min(Math.floor(intervalMs / 2), CATCH_UP_MAX_GAP_MS) : 0;
+}
+
+/** A reviewed article must never be stranded behind the schedule.
+ *
+ * Several legitimate paths move `nextDeadlineAt` without touching prepared
+ * jobs: a parked failed slot, Autopilot re-selection or re-enable, a paused
+ * contract resumed later. A ready job whose deadline no longer matches the
+ * cadence grid is then invisible to delivery (it sits below `nextDeadlineAt`)
+ * or blocks it forever (off-grid above it, with the buffer full). Instead of
+ * paying for a new article while an approved one waits, bind the earliest
+ * ready article to the first free slot of the two-article buffer. The artifact,
+ * its approval hash and every receipt are unchanged; only its slot moves, and
+ * the original deadline is kept in `slotRebinds` so the miss stays on record. */
+export async function rebindStrandedReadyWork(ctx: MutationCtx, site: Doc<"sites">,
+  schedule: NonNullable<Doc<"sites">["contentSchedule"]>, waiting: Doc<"jobs">[], now = Date.now()) {
+  const next = schedule.nextDeadlineAt, interval = schedule.intervalMs;
+  if (!Number.isSafeInteger(next) || !Number.isSafeInteger(interval) || interval <= 0) return null;
+  const eligible = async (j: Doc<"jobs">) => {
+    const cw = j.contentWork;
+    if (!cw || j.siteId !== site._id || j.status !== "done" || cw.stage !== "ready" || cw.ownerRequest || cw.operation ||
+      cw.retiredAt !== undefined || !cw.approvedArtifactHash || !j.articleId || j.workerToken || j.leaseExpiresAt ||
+      cw.profileHash !== schedule.profileHash || cw.connectionHash !== schedule.connectionHash) return false;
+    const article = await ctx.db.get(j.articleId);
+    return Boolean(article && article.siteId === site._id && isSealedReady(article) &&
+      article.auditedContentHash === cw.approvedArtifactHash && publicationArtifactHash(article) === cw.approvedArtifactHash);
+  };
+  const occupied = new Set(waiting.map(j => j.contentWork!.deadlineAt));
+  // Stranded below the schedule: never visible to `waiting` (jobsForSite reads
+  // deadlines >= nextDeadlineAt), so they are looked up explicitly, newest first.
+  const below = (await ctx.db.query("jobs").withIndex("by_site_content_deadline", q => q.eq("siteId", site._id)
+    .lt("contentWork.deadlineAt", next)).order("desc").take(200));
+  const stranded: Doc<"jobs">[] = [];
+  for (const j of below) if (await eligible(j)) stranded.push(j);
+  const offGrid: Doc<"jobs">[] = [];
+  for (const j of waiting) {
+    const d = j.contentWork!.deadlineAt;
+    if (d !== next && d !== next + interval && await eligible(j)) offGrid.push(j);
+  }
+  let target: number | null = null, candidate: Doc<"jobs"> | undefined;
+  if (!occupied.has(next)) {
+    // The due slot is empty: the oldest approved article takes it.
+    candidate = [...stranded, ...offGrid].sort((a, b) => a.contentWork!.deadlineAt - b.contentWork!.deadlineAt)[0];
+    target = next;
+  } else if (!occupied.has(next + interval) && waiting.length < 2) {
+    // The due slot is covered: a stranded article fills the second slot
+    // instead of a new paid draft.
+    candidate = stranded.sort((a, b) => a.contentWork!.deadlineAt - b.contentWork!.deadlineAt)[0];
+    target = next + interval;
+  }
+  if (!candidate || target === null) return null;
+  const cw = candidate.contentWork!;
+  await ctx.db.patch(candidate._id, { contentWork: { ...cw, deadlineAt: target, windowStartAt: target - CONTENT_DELIVERY_WINDOW_MS,
+    windowWakeId: undefined, slotRebinds: [...(cw.slotRebinds ?? []), { fromDeadlineAt: cw.deadlineAt, toDeadlineAt: target, at: now,
+      reason: cw.deadlineAt < next ? "stranded_behind_schedule" : "off_cadence_grid" }].slice(-10) }, updatedAt: now });
+  return { jobId: candidate._id, fromDeadlineAt: cw.deadlineAt, toDeadlineAt: target };
+}
+
 /** One scheduler, same jobs and workers. A done/ready job is a checkpoint, not
  * another queue. Delivery reclaims that identical execution record. */
 export const advance = internalMutation({
@@ -1284,6 +1351,12 @@ export const advance = internalMutation({
       return { scheduled: 0, mode: "public_url_pending" };
     }
     if (restoration && ["pending", "running"].includes(restoration.status)) return { scheduled: 0, mode: "work_in_progress", activeJobId: restoration._id };
+    // A prepared article is never left behind the schedule or off its grid.
+    const rebound = await rebindStrandedReadyWork(ctx, site, schedule, waiting);
+    if (rebound) {
+      await wake(ctx, siteId);
+      return { scheduled: 0, mode: "content_slot_rebound", activeJobId: rebound.jobId };
+    }
     // Delivery and its persisted window wake precede all unrelated preparation,
     // review and funding failures. Claiming still uses the existing disjoint
     // provider-free worker lane and the publisher's destination lease.
@@ -1318,6 +1391,15 @@ export const advance = internalMutation({
     }
     const first = ready.find(j => j.contentWork!.deadlineAt === schedule.nextDeadlineAt);
     if (active && first && Date.now() >= first.contentWork!.windowStartAt) {
+      // Catching up after missed slots (an outage, or Autopilot resumed after a
+      // review-first period) is paced, never a burst: deadlines and misses stay
+      // exactly as recorded, only back-to-back deliveries are spaced out.
+      const paceAt = await catchUpPaceAt(ctx, siteId, schedule.intervalMs);
+      if (paceAt > Date.now()) {
+        await ctx.scheduler.runAt(paceAt, internal.autopilot.dispatchSiteFollowup,
+          { siteId, trigger: "content_window", reason: `catch_up_pace_${first.contentWork!.deadlineAt}` });
+        return { scheduled: 0, mode: "cadence_not_due", eligibleAt: paceAt };
+      }
       const article = first.articleId ? await ctx.db.get(first.articleId) : null;
       if (!article || !isSealedReady(article) || article.auditedContentHash !== first.contentWork!.approvedArtifactHash ||
         publicationArtifactHash(article) !== first.contentWork!.approvedArtifactHash) return { scheduled: 0, mode: "content_artifact_changed" };
@@ -1361,7 +1443,12 @@ export const advance = internalMutation({
     const failed = waiting.find(j => j.contentWork!.stage === "review_failed");
     if (failed) return reviseFailedWork(ctx, site, failed);
     // A failed delivery slot cannot silently mint unlimited replacement jobs.
-    const failedSlot = work.find(j => j.contentWork!.stage === "failed" && j.contentWork!.deadlineAt === schedule.nextDeadlineAt);
+    // A replacement (or rebound article) already holding this deadline covers
+    // the slot: the failed job stays on record, but it must not park the
+    // schedule past the article that will be delivered for it.
+    const slotCovered = waiting.some(j => j.contentWork!.deadlineAt === schedule.nextDeadlineAt);
+    const failedSlot = slotCovered ? undefined
+      : work.find(j => j.contentWork!.stage === "failed" && j.contentWork!.deadlineAt === schedule.nextDeadlineAt);
     // Only sites that chose Autopilot in the new setup continue past a parked
     // draft; older contracts keep their failed slot exactly as recorded.
     const failure = failedSlot?.contentWork!.failure ?? "";

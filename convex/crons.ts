@@ -18,6 +18,14 @@ crons.daily("autopilot-8", { hourUTC: 21, minuteUTC: 0 }, internal.autopilot.dis
 // Durable watchdog: detects scheduler silence and a missed quality-published
 // cadence independently of the generation pipeline itself.
 crons.interval("autopilot-sla-watchdog", { hours: 1 }, internal.autopilot.auditSla);
+// Publishing receipts are fresh for 72h; renew verified ones after 24h so a
+// long-running Autopilot site never lapses into "verification required".
+crons.interval("publisher-destination-receipt-renewal", { hours: 6 }, internal.publisher.renewDestinationReceipts, {});
+// Same-day visibility: every Autopilot site is checked, repairable stops are
+// nudged, and the operator's Telegram gets a report (daily, and within six
+// hours of any problem). Requires PENTRA_OPS_TELEGRAM_BOT_TOKEN/_CHAT_ID.
+crons.daily("content-health-daily", { hourUTC: 3, minuteUTC: 30 }, internal.contentHealth.runContentHealth, { notify: "always" });
+crons.interval("content-health-watch", { hours: 6 }, internal.contentHealth.runContentHealth, { notify: "problems" });
 crons.interval(
   "growth-loop-ga-rollout-start",
   { minutes: 15 },

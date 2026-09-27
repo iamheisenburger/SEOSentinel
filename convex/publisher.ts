@@ -480,6 +480,49 @@ async function reverifyGithubConnectionHandler(
   return { ok: true as const, repoDefaultBranch, verifiedAt };
 }
 
+/** A verified destination receipt is fresh for 72 hours
+ * (PUBLISHER_DESTINATION_RECEIPT_FRESH_MS), but Autopilot runs for months.
+ * Renew it well before it lapses with the connection already stored: a
+ * read-only GitHub repository lookup or WordPress users/me check, the same
+ * handlers the owner's Verify button uses. Nothing is written to the site and
+ * no credential changes. A renewal that fails changes nothing: the receipt
+ * lapses as before and the dashboard asks the owner to reconnect. */
+export const PUBLISHER_RECEIPT_RENEW_AFTER_MS = 24 * 60 * 60 * 1000;
+
+type ReceiptRenewalResult = {
+  checked: number;
+  renewed: number;
+  outcomes: Array<{ siteId: Id<"sites">; renewed: boolean; reason?: string }>;
+};
+
+export const renewDestinationReceipts = internalAction({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, { cursor }): Promise<ReceiptRenewalResult> => {
+    const page: { isDone: boolean; continueCursor: string; sites: Array<{ siteId: Id<"sites">; method: "github" | "wordpress" }> } =
+      await ctx.runQuery(internal.sites.destinationReceiptRenewalPage, {
+      cursor: cursor ?? null,
+      renewBefore: Date.now() - PUBLISHER_RECEIPT_RENEW_AFTER_MS,
+    });
+    const outcomes: Array<{ siteId: Id<"sites">; renewed: boolean; reason?: string }> = [];
+    for (const { siteId, method } of page.sites) {
+      try {
+        if (method === "github") await reverifyGithubConnectionHandler(ctx, siteId);
+        else await verifyPublicationDestinationHandler(ctx, siteId);
+        outcomes.push({ siteId, renewed: true });
+      } catch (error) {
+        // Never echo credentials or provider bodies; the category is enough.
+        const message = error instanceof Error ? error.message : String(error);
+        outcomes.push({ siteId, renewed: false,
+          reason: /not found|permission|cannot publish|401|403/i.test(message) ? "destination_rejected" : "renewal_failed" });
+      }
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.publisher.renewDestinationReceipts, { cursor: page.continueCursor });
+    }
+    return { checked: page.sites.length, renewed: outcomes.filter(o => o.renewed).length, outcomes };
+  },
+});
+
 export const reverifyGithubConnectionInternal = internalAction({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) =>

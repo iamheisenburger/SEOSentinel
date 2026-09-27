@@ -132,13 +132,9 @@ function SiteCard({
   const deleteSite = useMutation(api.sites.deleteSite);
   const updateSite = useMutation(api.sites.updateSite);
 
-  const articles = useQuery(api.articles.listBySite, { siteId: site._id });
-  const topics = useQuery(api.topics.listBySite, { siteId: site._id });
-
-  const articleCount = articles?.length ?? 0;
-  const topicCount = topics?.length ?? 0;
-  const publishedCount =
-    articles?.filter((a) => a.status === "published").length ?? 0;
+  // Light, bounded counts. While they load the card shows "…", never a false 0.
+  const counts = useQuery(api.articles.cardCounts, { siteId: site._id });
+  const shown = (n: number | undefined) => n === undefined ? "…" : counts?.capped && n >= 1000 ? "1000+" : String(n);
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -212,7 +208,7 @@ function SiteCard({
 
         {/* Stats */}
         <div className="mt-4 grid grid-cols-3 divide-x divide-white/[0.06] rounded-lg border border-white/[0.06]">
-          {([["Published", publishedCount], ["Drafts", articleCount - publishedCount], ["Topics", topicCount]] as const).map(([label, value]) => (
+          {([["Published", shown(counts?.published)], ["Drafts", shown(counts?.drafts)], ["Topics", shown(counts?.topics)]] as const).map(([label, value]) => (
             <div key={label} className="px-3 py-2.5">
               <p className="text-[18px] font-semibold tracking-tight tabular-nums text-[#F7F8F8]">{value}</p>
               <p className="text-[11px] text-[#62666D]">{label}</p>

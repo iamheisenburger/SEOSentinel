@@ -2909,6 +2909,30 @@ export const getOneSetupReadiness = query({
   },
 });
 
+/** Sites whose verified publishing receipt should be renewed before it lapses
+ * (see publisher.renewDestinationReceipts). Only a previously verified,
+ * unrevoked GitHub or WordPress receipt is ever renewed; nothing here grants
+ * a destination the owner never verified. */
+export const destinationReceiptRenewalPage = internalQuery({
+  args: { cursor: v.union(v.string(), v.null()), renewBefore: v.number() },
+  handler: async (ctx, { cursor, renewBefore }) => {
+    const page = await ctx.db.query("sites").paginate({ cursor, numItems: 50 });
+    return {
+      isDone: page.isDone,
+      continueCursor: page.continueCursor,
+      sites: page.page.filter((site) => {
+        const receipt = site.publisherDestinationReceipt;
+        const method = site.publishMethod ?? "github";
+        return Boolean(site.userId) && !site.deletionStatus && !site.accountDeletionRequestedAt &&
+          (method === "github" || method === "wordpress") &&
+          Boolean(site.autopilotEnabled || site.contentSchedule) &&
+          receipt?.status === "verified" && receipt.revokedAt === undefined && receipt.method === method &&
+          Number.isFinite(receipt.verifiedAt) && receipt.verifiedAt > 0 && receipt.verifiedAt <= renewBefore;
+      }).map((site) => ({ siteId: site._id, method: (site.publishMethod ?? "github") as "github" | "wordpress" })),
+    };
+  },
+});
+
 export const getFull = internalQuery({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {

@@ -1267,6 +1267,10 @@ export default defineSchema({
       retiredForReviewToken: v.optional(v.string()),
       // Autopilot: this job is the single replacement for a failed job's slot.
       replacesJobId: v.optional(v.id("jobs")),
+      // A ready article moved to the current cadence slot after the schedule
+      // passed (or never matched) its original deadline. Kept as the record.
+      slotRebinds: v.optional(v.array(v.object({ fromDeadlineAt: v.number(), toDeadlineAt: v.number(),
+        at: v.number(), reason: v.string() }))),
     })),
     siteId: v.optional(v.id("sites")),
     canonicalDomain: v.optional(v.string()),

@@ -77,6 +77,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   evidence?: { sources: Array<{ url: string; title: string; text: string }>; failed?: string[]; brief?: string; competitor?: string };
   webResearch?: { citations: Array<{ url: string; title: string; cited_text: string }>; searches?: number; error?: { status: number; type: string } } } = {}) {
   const modelCalls: Fields[] = [];
+  const telegramMessages: Fields[] = [];
   const businesses = options.businesses ?? defaultBusinesses;
   let publisherFailuresRemaining = options.publisherFailures ?? 0;
   let lostCommitResponsesRemaining = options.lostCommitResponses ?? 0;
@@ -111,6 +112,10 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
     }
     if (options.wordpress && businesses.some(b => b.domain === url.hostname) && (url.pathname === "/" || url.pathname.startsWith("/wp-json/") || url.pathname.startsWith("/blog/") || /^\/selected-[a-f0-9]+\/$/.test(url.pathname))) {
       return options.wordpress.transport(url, init);
+    }
+    if (url.origin === "https://api.telegram.org") {
+      assert.match(url.pathname, /^\/botsynthetic-ops-token\/sendMessage$/); assert.equal(init.method, "POST");
+      telegramMessages.push(JSON.parse(String(init.body))); return json({ ok: true, result: { message_id: telegramMessages.length } });
     }
     if (url.origin === "https://api.anthropic.com") {
       assert.equal(url.pathname, "/v1/messages");
@@ -316,7 +321,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
     f.add("pages", { siteId: id, slug: "/", url: `https://${b.domain}/`, title: b.niche, summary: `${b.name} provides ${b.niche}.`, keywords: b.keywords, createdAt: START - 1000 });
     return { ...b, id };
   });
-  return { ...f, sites, modelCalls, repositories, failedPublications };
+  return { ...f, sites, modelCalls, repositories, failedPublications, telegramMessages };
 }
 
 test("owner can verify an existing GitHub destination without publishing or spending", async () => {
@@ -6000,4 +6005,261 @@ test("a queued publication behind a pristine crashed lease rechecks the seal at 
   assert.equal(f.trace.filter(t => t.name === "jobs:markPublishFailed" && t.args.jobId === queue.jobId).length, 0);
   assert.ok(f.trace.some(t => t.name === "articles:releaseExpiredPristinePublication" && t.args.articleId === article._id && t.result?.released));
   f.assertOffline();
+});
+
+// --- P54: a reviewed article is never stranded behind the schedule -------------------------------
+// Production (leadpilot.chat, Sep 27): an approved replacement kept its original deadline while the
+// schedule moved past it, so `advance` (which only sees deadlines >= nextDeadlineAt) never delivered it.
+
+test("P54 a failed slot covered by its ready replacement is delivered, never parked past it", async () => {
+  const opts: Parameters<typeof setup>[0] = { growthFirst: true, businesses: [slcBusinesses[0]], quality: "low", budgetMicroUsd: 2_000_000 };
+  const f = setup(opts), site = await selectGrowth(f);
+  f.get(site.id)!.contentSchedule.autopilotSelectedAt = START;
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "failed"));
+  const failed = f.tables.jobs.find(j => j.contentWork?.stage === "failed")!;
+  const deadline = f.now() + 3 * 3_600_000, schedule = f.get(site.id)!.contentSchedule, interval = schedule.intervalMs;
+  Object.assign(failed.contentWork, { deadlineAt: deadline, windowStartAt: deadline - 300_000 });
+  schedule.nextDeadlineAt = deadline;
+  opts.quality = undefined; // the single replacement passes review, hours before its slot opens
+  const first = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(first.mode, "buffer_replacement", JSON.stringify(first));
+  const replacementId = first.activeJobId;
+  await pumpUntil(f, () => f.get(replacementId)!.contentWork.stage === "ready", 200, deadline);
+  assert.ok(f.now() < deadline - 300_000, "the replacement is ready before its window opens");
+  // Before P54 this returned content_slot_parked and moved nextDeadlineAt past the ready replacement.
+  const covered = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.notEqual(covered.mode, "content_slot_parked", JSON.stringify(covered));
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline, "the covered slot is kept");
+  await pumpUntil(f, () => f.get(replacementId)!.contentWork.stage === "verified", 400, deadline + 2 * 3_600_000);
+  assert.equal(f.get(replacementId)!.contentWork.deadlineAt, deadline);
+  assert.ok(f.get(replacementId)!.contentWork.publishedAt >= deadline - 300_000);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline + interval, "the schedule advances exactly once for the slot");
+  assert.equal(f.get(failed._id)!.contentWork.failure, "bounded_content_quality_exhausted", "the failed attempt stays on record");
+  f.assertOffline();
+});
+
+test("P54 ready articles stranded behind a moved schedule are rebound instead of paying for new drafts", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 }), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const schedule = f.get(site.id)!.contentSchedule, interval = schedule.intervalMs;
+  const readyIds = f.tables.jobs.filter(j => j.contentWork?.stage === "ready")
+    .sort((a, b) => a.contentWork.deadlineAt - b.contentWork.deadlineAt).map(j => j._id);
+  const original = readyIds.map(id => f.get(id)!.contentWork.deadlineAt);
+  // The same effect as re-enabling Autopilot or re-selecting it: the schedule restarts past both prepared slots.
+  const moved = original[1] + 2 * interval;
+  schedule.nextDeadlineAt = moved; schedule.active = true;
+  const jobsBefore = f.tables.jobs.length, callsBefore = f.modelCalls.length;
+  const one = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(one.mode, "content_slot_rebound", JSON.stringify(one));
+  assert.equal(one.activeJobId, readyIds[0], "the oldest approved article takes the due slot");
+  const two = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(two.mode, "content_slot_rebound", JSON.stringify(two));
+  assert.equal(two.activeJobId, readyIds[1], "the second stranded article fills the second slot");
+  assert.equal(f.tables.jobs.length, jobsBefore, "no new paid draft was admitted while approved articles waited");
+  assert.equal(f.modelCalls.length, callsBefore);
+  assert.deepEqual(readyIds.map(id => f.get(id)!.contentWork.deadlineAt), [moved, moved + interval]);
+  for (const [i, id] of readyIds.entries()) {
+    const rebind = f.get(id)!.contentWork.slotRebinds.at(-1);
+    assert.equal(rebind.fromDeadlineAt, original[i], "the original deadline stays on record");
+    assert.equal(rebind.reason, "stranded_behind_schedule");
+  }
+  const third = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.notEqual(third.mode, "content_slot_rebound", "rebinding is idempotent once the buffer is aligned");
+  f.setTime(Math.max(f.now(), moved));
+  await pumpUntil(f, () => readyIds.every(id => f.get(id)!.contentWork.stage === "verified"), 600, moved + 3 * interval);
+  assert.deepEqual(readyIds.map(id => f.get(id)!.contentWork.deadlineAt), [moved, moved + interval]);
+  assert.ok(f.get(readyIds[0])!.contentWork.publishedAt < f.get(readyIds[1])!.contentWork.publishedAt);
+  f.assertOffline();
+});
+
+test("P54 an off-grid buffer cannot deadlock the schedule, and unsealed work is never rebound", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 }), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const schedule = f.get(site.id)!.contentSchedule, interval = schedule.intervalMs, next = schedule.nextDeadlineAt;
+  const ready = f.tables.jobs.filter(j => j.contentWork?.stage === "ready").sort((a, b) => a.contentWork.deadlineAt - b.contentWork.deadlineAt);
+  // Both prepared slots sit half an interval off the grid: nothing occupies nextDeadlineAt and the buffer is full.
+  for (const [i, j] of ready.entries()) {
+    const d = next + interval / 2 + i * interval;
+    Object.assign(j.contentWork, { deadlineAt: d, windowStartAt: d - 300_000 });
+  }
+  // An article whose seal no longer matches is never moved.
+  const tampered = f.get(ready[0].articleId)!, sealedHash = tampered.auditedContentHash;
+  tampered.auditedContentHash = "0".repeat(64);
+  const blocked = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.notEqual(blocked.activeJobId, ready[0]._id, JSON.stringify(blocked));
+  tampered.auditedContentHash = sealedHash;
+  f.get(ready[1]._id)!.contentWork.deadlineAt = next + interval / 2 + interval; // reset in case it moved
+  f.get(ready[1]._id)!.contentWork.windowStartAt = next + interval / 2 + interval - 300_000;
+  const moved = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(moved.mode, "content_slot_rebound", JSON.stringify(moved));
+  assert.equal(moved.activeJobId, ready[0]._id);
+  assert.equal(f.get(ready[0]._id)!.contentWork.deadlineAt, next);
+  assert.equal(f.get(ready[0]._id)!.contentWork.slotRebinds.at(-1).reason, "off_cadence_grid");
+  f.setTime(Math.max(f.now(), next));
+  await pumpUntil(f, () => ready.every(j => f.get(j._id)!.contentWork.stage === "verified"), 600, next + 4 * interval);
+  f.assertOffline();
+});
+
+test("P54 verified publishing receipts renew before they lapse; revoked, recent and failing ones are left alone", async () => {
+  const f = setup({ businesses: slcBusinesses.slice(0, 3) }); const [stale, expired, revoked] = f.sites;
+  const hour = 3_600_000;
+  f.setTime(START + 80 * hour);
+  const receipt = (id: string) => f.get(id)!.publisherDestinationReceipt;
+  receipt(stale.id).verifiedAt = f.now() - 30 * hour;              // due for renewal, still valid
+  receipt(expired.id).verifiedAt = f.now() - 80 * hour;            // already lapsed (the leadpilot.chat state)
+  receipt(revoked.id).revokedAt = f.now() - hour;                   // the owner revoked it: never renewed
+  const before = f.sites.map(s => ({ gen: f.get(s.id)!.publisherConnectionGeneration ?? 0, token: f.get(s.id)!.githubToken,
+    mode: f.get(s.id)!.autopilotRolloutMode, epoch: f.get(s.id)!.autopilotRolloutEpoch }));
+  const revokedBefore = JSON.stringify(receipt(revoked.id));
+  const result = await f.invoke("publisher:renewDestinationReceipts", {});
+  assert.equal(result.renewed, 2, JSON.stringify(result));
+  for (const s of [stale, expired]) {
+    assert.equal(receipt(s.id).status, "verified"); assert.ok(receipt(s.id).verifiedAt >= f.now() - 60_000);
+  }
+  assert.equal(JSON.stringify(receipt(revoked.id)), revokedBefore);
+  f.sites.forEach((s, i) => {
+    const site = f.get(s.id)!;
+    assert.equal(site.publisherConnectionGeneration ?? 0, before[i].gen, "renewal never changes the connection binding");
+    assert.equal(site.githubToken, before[i].token);
+    assert.equal(site.autopilotRolloutMode, before[i].mode); assert.equal(site.autopilotRolloutEpoch, before[i].epoch);
+    assert.equal(f.repositories.get(s.name.toLowerCase())!.writes, 0, "renewal is read-only");
+  });
+  f.setIdentity(f.get(expired.id)!.userId);
+  assert.equal((await f.invoke("contentWork:readiness", { siteId: expired.id })).destination.verified, true);
+  f.setIdentity(null);
+  const again = await f.invoke("publisher:renewDestinationReceipts", {});
+  assert.equal(again.checked, 0, "a freshly renewed receipt is not renewed again");
+  assert.equal(f.modelCalls.length, 0);
+  f.assertOffline();
+});
+
+test("P54 a failing destination is not renewed and the renewal run never throws", async () => {
+  const f = setup({ githubReadUnavailable: () => true }); const site = f.sites[0];
+  f.setTime(START + 50 * 3_600_000);
+  const before = JSON.stringify(f.get(site.id)!.publisherDestinationReceipt);
+  const result = await f.invoke("publisher:renewDestinationReceipts", {});
+  assert.ok(result.outcomes.some((o: { siteId: string; renewed: boolean }) => o.siteId === site.id && !o.renewed), JSON.stringify(result));
+  assert.equal(JSON.stringify(f.get(site.id)!.publisherDestinationReceipt), before);
+  f.assertOffline();
+});
+
+test("P54 the daily health check reports stops the same day and nudges repairable ones", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 }), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  // Without the operator chat configured the check still runs and never sends.
+  const silent = await f.invoke("contentHealth:runContentHealth", { notify: "always" });
+  assert.equal(silent.notified, false); assert.equal(f.telegramMessages.length, 0);
+  f.restartRuntime({ PENTRA_OPS_TELEGRAM_BOT_TOKEN: "synthetic-ops-token", PENTRA_OPS_TELEGRAM_CHAT_ID: "7180987163" });
+  const healthy = await f.invoke("contentHealth:runContentHealth", { notify: "problems" });
+  assert.equal(healthy.checked, 1); assert.equal(healthy.attention, 0, JSON.stringify(healthy));
+  assert.equal(f.telegramMessages.length, 0, "a healthy fleet is quiet between daily reports");
+  const daily = await f.invoke("contentHealth:runContentHealth", { notify: "always" });
+  assert.equal(daily.notified, true); assert.equal(f.telegramMessages.length, 1);
+  assert.match(f.telegramMessages[0].text, /1 Autopilot site\(s\): 1 OK, 0 need attention/);
+  assert.equal(f.telegramMessages[0].chat_id, "7180987163");
+  // The schedule jumps past both prepared articles and the slot is overdue: attention, and a nudge repairs it.
+  const schedule = f.get(site.id)!.contentSchedule, interval = schedule.intervalMs;
+  const latest = Math.max(...f.tables.jobs.filter(j => j.contentWork?.stage === "ready").map(j => j.contentWork.deadlineAt));
+  schedule.nextDeadlineAt = latest + 2 * interval; schedule.active = true;
+  f.setTime(schedule.nextDeadlineAt + 2 * 3_600_000);
+  const problem = await f.invoke("contentHealth:runContentHealth", { notify: "problems" });
+  assert.equal(problem.attention, 1); assert.equal(problem.nudged, 1); assert.equal(problem.notified, true);
+  const text = f.telegramMessages.at(-1)!.text;
+  assert.match(text, /ATTENTION/); assert.match(text, /overdue/); assert.match(text, /behind the schedule/);
+  assert.doesNotMatch(text, /synthetic-only|sk-|token/i, "no credentials ever leave in a report");
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "verified"), 400, f.now() + 6 * 3_600_000);
+  assert.ok(f.tables.jobs.some(j => j.contentWork?.slotRebinds?.length), "the nudge ran the scheduler, which rebound the stranded article");
+  f.assertOffline();
+});
+
+// --- P54 soak: a week of Autopilot with faults injected ----------------------------------------------
+// Single-step tests never ran the scheduler for days, so time-based failures (72 h receipts, schedules
+// that moved past prepared work, parked slots) only appeared in production. This runs a 21/week site for
+// seven virtual days with the real crons simulated and faults injected, and asserts it keeps publishing.
+test("P54 soak: seven days at 21 a week keep publishing through review failures, a pause and receipt ageing", async () => {
+  const hour = 3_600_000, day = 24 * hour;
+  // Enough distinct confirmed topics for a week at this pace (the default fixture has six).
+  const topics = ["valve inspection workflow", "leak alert triage", "pump service checklist", "seasonal shutdown planning",
+    "pressure test documentation", "maintenance scheduling software", "sprinkler zone audit", "drip line flushing routine",
+    "backflow test records", "controller schedule review", "soil moisture sensor calibration", "nozzle replacement log",
+    "winterization job sheet", "spring startup inspection", "mainline break response", "filter cleaning interval",
+    "crew route planning", "customer visit notes", "water usage report", "rain sensor troubleshooting",
+    "irrigation estimate template", "warranty repair tracking", "parts inventory reorder", "technician training checklist",
+    "site access instructions", "photo evidence standards", "invoice approval workflow", "service agreement renewal"]
+    .map(t => `irrigation ${t}`);
+  const opts: Parameters<typeof setup>[0] = { growthFirst: true, businesses: [{ ...slcBusinesses[0], cadence: 21, keywords: topics }], budgetMicroUsd: 2_000_000 };
+  const f = setup(opts); const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21; // the leadpilot.chat pace: one article every 8 hours
+  const site = await selectGrowth(f, 8 * hour);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  f.restartRuntime({ PENTRA_OPS_TELEGRAM_BOT_TOKEN: "synthetic-ops-token", PENTRA_OPS_TELEGRAM_CHAT_ID: "1" });
+  const end = START + 7 * day;
+  let nextCron = START + 3 * hour, nextRenewal = START + 6 * hour;
+  const faults = { lowQualityAt: START + 2 * day, reviewFirstAt: START + 4 * day, backToAutopilotAt: START + 4 * day + 20 * hour };
+  let lowQualityDone = false, reviewFirstDone = false, backDone = false;
+  const owner = f.get(site.id)!.userId;
+  for (let step = 0; step < 20_000 && f.now() < end; step++) {
+    const pending = f.tables._scheduled_functions.filter(r => r.state.kind === "pending").sort((a, b) => a.at - b.at)[0];
+    const at = Math.min(pending?.at ?? Infinity, nextCron, nextRenewal, end);
+    f.setTime(Math.max(f.now() + 1, at));
+    if (!lowQualityDone && f.now() >= faults.lowQualityAt) { opts.quality = "low"; lowQualityDone = true; }
+    if (opts.quality === "low" && f.tables.jobs.some(j => j.contentWork?.stage === "failed" && j.updatedAt >= faults.lowQualityAt)) opts.quality = undefined;
+    if (!reviewFirstDone && f.now() >= faults.reviewFirstAt) {
+      f.setIdentity(owner); const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+      await f.invoke("contentWork:setAutopilot", { siteId: site.id, enabled: false, reviewToken: r.reviewToken });
+      f.setIdentity(null); reviewFirstDone = true;
+    }
+    if (!backDone && f.now() >= faults.backToAutopilotAt) {
+      f.setIdentity(owner); const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+      await f.invoke("contentWork:setAutopilot", { siteId: site.id, enabled: true, reviewToken: r.reviewToken });
+      f.setIdentity(null); backDone = true;
+    }
+    if (f.now() >= nextRenewal) { await f.invoke("publisher:renewDestinationReceipts", {}); nextRenewal += 6 * hour; continue; }
+    if (f.now() >= nextCron) {
+      await f.invoke("autopilot:dispatchActiveSites", { trigger: "natural", cronSlotUTC: "00:00" });
+      await f.invoke("contentHealth:runContentHealth", { notify: "problems" });
+      nextCron += 3 * hour; continue;
+    }
+    if (pending && pending.at <= f.now()) await f.runNextScheduled();
+    f.assertOffline();
+  }
+  const published = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "verified" && j.contentWork.intent === "create")
+    .map(j => j.contentWork.publishedAt).sort((a, b) => a - b);
+  const perDay = Array.from({ length: 7 }, (_, d) => published.filter(t => t >= START + d * day && t < START + (d + 1) * day).length);
+  const s = f.get(site.id)!.contentSchedule;
+  const stranded = f.tables.jobs.filter(j => j.siteId === site.id && j.status === "done" && j.contentWork?.stage === "ready" &&
+    !j.contentWork.ownerRequest && j.contentWork.retiredAt === undefined && j.contentWork.deadlineAt < s.nextDeadlineAt);
+  const summary = JSON.stringify({ perDay, total: published.length, intervalH: s.intervalMs / hour, publishedH: published.map(t => +((t - START) / hour).toFixed(1)),
+    cadence: f.get(site.id)!.cadencePerWeek, jobs: f.tables.jobs.filter(j => j.contentWork).map(j => [j.contentWork.stage, +((j.contentWork.deadlineAt - START) / hour).toFixed(1), j.status]),
+    nextDeadlineAt: s.nextDeadlineAt - f.now(), stranded: stranded.length,
+    failed: f.tables.jobs.filter(j => j.contentWork?.stage === "failed").map(j => j.contentWork.failure),
+    reports: f.telegramMessages.length });
+  if (process.env.PENTRA_SOAK_VERBOSE) console.log(summary);
+  // Days without an owner-imposed pause publish (almost) every slot; the review-first day is allowed to be quiet.
+  for (const d of [1, 2, 3, 5, 6]) assert.ok(perDay[d] >= 2, `day ${d} published ${perDay[d]}: ${summary}`);
+  assert.ok(published.length >= 16, summary);
+  const gaps = published.slice(1).map((t, i) => t - published[i]);
+  assert.ok(Math.min(...gaps) >= 4 * hour - 60_000, `catch-up after the review-first period is paced, not a burst: ${summary}`);
+  assert.equal(stranded.length, 0, `no reviewed article is left behind the schedule: ${summary}`);
+  assert.ok(f.now() - s.nextDeadlineAt < 8 * hour, `the schedule is not stuck overdue: ${summary}`);
+  f.setIdentity(owner);
+  assert.equal((await f.invoke("contentWork:readiness", { siteId: site.id })).destination.verified, true, "the 72h receipt never lapsed");
+  f.setIdentity(null);
+  f.assertOffline();
+});
+
+test("P54 the Websites page counts come from light bounded indexes and match the dashboard", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 }), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  await exerciseReadyPause(f);
+  f.setIdentity("someone-else");
+  await assert.rejects(f.invoke("articles:cardCounts", { siteId: site.id }), /Not authorized/);
+  f.setIdentity(f.get(site.id)!.userId);
+  const counts = await f.invoke("articles:cardCounts", { siteId: site.id });
+  const live = f.tables.article_summaries.filter(r => r.siteId === site.id && r.status === "published").length;
+  const planned = f.tables.topic_clusters.filter(t => t.siteId === site.id && t.status === "planned").length;
+  assert.equal(counts.published, live); assert.ok(counts.published >= 1);
+  assert.equal(counts.drafts, f.tables.article_summaries.filter(r => r.siteId === site.id && ["draft", "review", "ready", "revision"].includes(r.status)).length);
+  assert.equal(counts.topics, planned); assert.equal(counts.capped, false);
+  f.setIdentity(null); f.assertOffline();
 });
