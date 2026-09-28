@@ -1622,7 +1622,16 @@ export const advance = internalMutation({
       }
       topic = await chooseTopic(ctx, site);
     }
-    if (!topic) return { scheduled: 0, mode: "content_inputs_exhausted" };
+    if (!topic) {
+      // Wake exactly when keyword research may run again, instead of waiting
+      // up to three hours for the next scheduled check.
+      const researchAt = schedule.autopilotSelectedAt ? topicResearchDueAt(schedule) : 0;
+      if (researchAt > Date.now() && researchAt - Date.now() <= 86_400_000) {
+        await ctx.scheduler.runAt(researchAt, internal.autopilot.dispatchSiteFollowup, {
+          siteId, trigger: "content_work", reason: "topic_research_due" });
+      }
+      return { scheduled: 0, mode: "content_inputs_exhausted", ...(researchAt > Date.now() ? { eligibleAt: researchAt } : {}) };
+    }
     // Autopilot honours the plan's monthly article allowance across the whole
     // account. When it is used up, the next article waits for the new month.
     if (schedule.autopilotSelectedAt && !improvement && site.userId) {

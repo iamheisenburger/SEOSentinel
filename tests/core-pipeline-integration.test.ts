@@ -6579,3 +6579,29 @@ test("P57 soak: fourteen days at 21 a week keep publishing through five kinds of
   f.assertOffline();
 });
 
+
+test("P58 a site out of topics wakes exactly when keyword research may run again", async () => {
+  const hour = 3_600_000;
+  const f = setup({ growthFirst: true, budgetMicroUsd: 2_000_000, businesses: [{ ...slcBusinesses[0], cadence: 21 }],
+    discovery: { ads: () => [], suggestions: () => [] } });
+  const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour);
+  const saved = f.get(site.id)!;
+  Object.assign(saved, { anchorKeywords: [], painPoints: [], keyFeatures: [], productUsage: "" });
+  saved.contentSchedule.profileHash = confirmedContentProfileHash(saved as never);
+  Object.assign(saved.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START,
+    topicsReplenishedAt: f.now() - hour, topicsReplenishAdded: 2 });
+  for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+  const due = f.now() + 7 * hour;
+  const result = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(result.mode, "content_inputs_exhausted"); assert.equal(result.eligibleAt, due);
+  const wake = f.tables._scheduled_functions.find(r => r.state.kind === "pending" && r.args?.reason === "topic_research_due");
+  assert.ok(wake && wake.at === due, "a wake is set for the moment research is allowed");
+  const before = f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan").length;
+  f.setTime(due);
+  await f.invoke(wake.name, wake.args); wake.state = { kind: "success" };
+  await pumpUntil(f, () => f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan").length > before,
+    20, due + hour);
+  f.assertOffline();
+});
