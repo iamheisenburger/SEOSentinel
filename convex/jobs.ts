@@ -25,6 +25,7 @@ import {
 import {
   MAX_PUBLICATION_ATTEMPTS,
   nextPublicationRetry,
+  transientPublicationError,
 } from "./lib/publicationLease";
 import {
   autonomousRolloutActive,
@@ -5202,6 +5203,7 @@ export const markPublishFailed = internalMutation({
         : {};
     const { attempts, willRetry, retryDelayMs } = nextPublicationRetry(
       job.publicationAttempts ?? 0,
+      transientPublicationError(error),
     );
     const currentTime = now();
     await settleArticleProviderAttempt(ctx, job, "completed", currentTime);
@@ -5257,8 +5259,8 @@ export const markPublishFailed = internalMutation({
     await ctx.db.patch(jobId, {
       status: willRetry ? "pending" : "failed",
       error: willRetry
-        ? `Publication attempt ${attempts}/${MAX_PUBLICATION_ATTEMPTS} failed: ${error}`
-        : `Publication retry exhausted after ${attempts}/${MAX_PUBLICATION_ATTEMPTS} attempts: ${error}`,
+        ? `Publication attempt ${attempts}/${Math.max(attempts, MAX_PUBLICATION_ATTEMPTS)} failed: ${error}`
+        : `Publication retry exhausted after ${attempts}/${Math.max(attempts, MAX_PUBLICATION_ATTEMPTS)} attempts: ${error}`,
       publicationAttempts: attempts,
       publicationDeferral,
       payload: {

@@ -356,7 +356,7 @@ test("failed GitHub verification cannot create a destination receipt", async () 
   const site = f.sites[0];
   delete f.get(site.id)!.publisherDestinationReceipt;
   f.setIdentity(f.get(site.id)!.userId);
-  await assert.rejects(f.invoke("publisher:verifyPublicationDestination", { siteId: site.id }), /GitHub repo not found/);
+  await assert.rejects(f.invoke("publisher:verifyPublicationDestination", { siteId: site.id }), /GitHub repo (not found|unavailable)/);
   assert.equal(f.get(site.id)!.publisherDestinationReceipt, undefined);
   assert.equal(f.modelCalls.length, 0);
   assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 0);
@@ -3795,7 +3795,9 @@ test("SLC repair26 repeated rejection exhausts bounded recovery without extra ca
   await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "failed"));
   const job = f.tables.jobs[0];
   assert.equal(f.modelCalls.length, 4); assert.equal(job.contentWork.recoveryAttempts, 3);
-  assert.equal(job.contentWork.failure, "content_recovery_attempts_exhausted");
+  // P57: an overloaded provider through every retry is not a Pentra processing error, so it never pauses the schedule.
+  assert.equal(job.contentWork.failure, "content_provider_unavailable");
+  assert.notEqual(f.get(site.id)!.contentSchedule.paused, true);
   assert.equal(f.tables.jobs.length, 1); assert.equal(job.contentWork.replacements, 0);
   assert.equal(f.get(job.providerSpendReservationId)!.settledAt, undefined);
   for (let n = 0; n < 3; n++) await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "job_retry", reason: "duplicate terminal wake" });
@@ -6435,3 +6437,145 @@ test("P56 research spacing follows the cadence and how much the last run found",
   assert.equal(await gap({ intervalMs: 7 * day, topicsReplenishAdded: 0 }), 7 * day);
   f.assertOffline();
 });
+
+// --- P57: topic supply from the site's own Search Console -------------------------------------------
+test("P57 searches the site already appears for become topics when no article of its own answers them", async () => {
+  const hour = 3_600_000;
+  const f = setup({ growthFirst: true, budgetMicroUsd: 2_000_000, businesses: [{ ...slcBusinesses[0], cadence: 21 }],
+    discovery: { ads: () => [], suggestions: () => [] } });
+  const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour);
+  const saved = f.get(site.id)!;
+  Object.assign(saved.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const domain = saved.canonicalDomain ?? saved.domain, revision = saved.canonicalDomainRevision ?? 0;
+  Object.assign(saved, { gscAccessToken: "synthetic-only", gscProperty: `sc-domain:${domain}`, gscCanonicalDomain: domain,
+    gscDomainRevision: revision, gscDataThrough: "2026-09-10", gscDateEpochs: [{ date: "2026-09-09", syncEpoch: "e1" }, { date: "2026-09-10", syncEpoch: "e1" }] });
+  // A published article that already answers one of the searches.
+  const articleId = f.add("articles", { siteId: site.id, status: "published", title: "Irrigation valve pressure testing", slug: "valve-pressure", createdAt: f.now(), updatedAt: f.now() });
+  f.add("article_summaries", { articleId, siteId: site.id, canonicalDomain: domain, domainRevision: revision, status: "published",
+    title: "Irrigation valve pressure testing", slug: "valve-pressure", createdAt: f.now(), updatedAt: f.now() });
+  const { publishedArticlePageUrl } = await import("../convex/lib/searchPerformance.ts");
+  const articleUrl = publishedArticlePageUrl(saved.domain, saved.urlStructure, "valve-pressure");
+  const row = (date: string, query: string, impressions: number, position: number, page = `https://${domain}/`) =>
+    f.add("search_performance", { siteId: site.id, date, query, page, syncVersion: 2, syncEpoch: "e1", syncedAt: f.now(),
+      clicks: 0, impressions, ctr: 0, position, createdAt: f.now() });
+  row("2026-09-09", "irrigation valve leak checklist", 25, 31); row("2026-09-10", "Irrigation valve leak checklist", 15, 27);
+  row("2026-09-10", "irrigation pump leak triage", 3, 40);                   // too few impressions
+  row("2026-09-10", "irrigation pressure alert planning", 60, 2.4);          // already top three
+  row("2026-09-10", "irrigation valve pressure test", 50, 12, articleUrl);   // answered by a published article
+  row("2026-09-10", "cheap flights to paris", 90, 45);                        // not this business
+  row("2026-09-10", "reservoir login", 70, 4);                                // branded
+  for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+  saved.contentSchedule.nextDeadlineAt = f.now() + 5 * hour;
+  const candidates = (await f.invoke("contentWork:growthTopicContext", { siteId: site.id })).searchConsole;
+  assert.deepEqual(candidates.map((c: { keyword: string }) => c.keyword).sort(), ["cheap flights to paris", "irrigation valve leak checklist"],
+    "branded, top-three, thin and already-answered searches are left out before any check");
+  assert.equal(candidates.find((c: { keyword: string }) => c.keyword === "irrigation valve leak checklist").impressions, 40);
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "topics_researching");
+  await pumpUntil(f, () => f.get(site.id)!.contentSchedule.topicsReplenishAdded !== undefined, 20, f.now() + hour);
+  const planned = f.tables.topic_clusters.filter(t => t.siteId === site.id && t.status === "planned");
+  const fromConsole = planned.find(t => t.primaryKeyword === "irrigation valve leak checklist");
+  assert.ok(fromConsole, JSON.stringify(planned.map(t => t.primaryKeyword)));
+  assert.match(fromConsole.notes, /^Search Console: this site was shown 40 times in 28 days/);
+  assert.ok(!planned.some(t => t.primaryKeyword === "cheap flights to paris"), "an off-business search is never added");
+  f.assertOffline();
+});
+
+// --- P57 soak: fourteen days at 21 a week with faults injected ---------------------------------------
+// The owner's rule: Pentra must publish every day, not for one or two days until the next unseen failure.
+// Fourteen virtual days with the real crons simulated, starting with six topics, and one fault after another:
+// a draft the reviewer rejects, a writing-service outage, a review-first period, a research outage and a
+// GitHub outage. Every day outside the owner's own pause must publish at least twice, without bursts.
+test("P57 soak: fourteen days at 21 a week keep publishing through five kinds of fault", async () => {
+  const hour = 3_600_000, day = 24 * hour, days = 14;
+  const nouns = ["valve", "leak", "pump", "pressure", "shutdown", "maintenance", "service", "alert", "seasonal"];
+  const tails = ["checklist", "triage", "documentation", "inspection", "test", "scheduling", "planning", "workflow"];
+  const pool = [...P55_RESEARCH, ...nouns.flatMap(a => nouns.filter(b => b !== a).flatMap(b => tails.map(t => `irrigation ${a} ${b} ${t}`)))];
+  const state = { open: false, researchOutage: false, githubOutage: false, handed: [] as string[] };
+  const opts: Parameters<typeof setup>[0] = { growthFirst: true, budgetMicroUsd: 2_000_000, businesses: [{ ...slcBusinesses[0], cadence: 21 }],
+    githubReadUnavailable: () => state.githubOutage,
+    discovery: { ads: () => [...slcBusinesses[0].keywords, ...state.handed],
+      suggestions: () => {
+        if (!state.open || state.researchOutage) return [];
+        const batch = pool.filter(k => !state.handed.includes(k)).slice(0, 4); state.handed.push(...batch); return batch;
+      } } };
+  const f = setup(opts); const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  state.open = true;
+  f.restartRuntime({ PENTRA_OPS_TELEGRAM_BOT_TOKEN: "synthetic-ops-token", PENTRA_OPS_TELEGRAM_CHAT_ID: "1", PENTRA_OPS_REPORT_DOMAINS: f.get(site.id)!.domain });
+  const owner = f.get(site.id)!.userId;
+  const at = (d: number, h = 0) => START + d * day + h * hour;
+  const faults = [
+    { from: at(2), to: at(3), on: () => { opts.quality = "low"; }, off: () => { opts.quality = undefined; } },
+    { from: at(3, 6), to: at(3, 12), on: () => { opts.providerFailure = "submit_article"; }, off: () => { opts.providerFailure = undefined; } },
+    { from: at(5), to: at(5, 20), on: () => setAutopilot(false), off: () => setAutopilot(true) },
+    { from: at(8), to: at(9), on: () => { state.researchOutage = true; }, off: () => { state.researchOutage = false; } },
+    { from: at(10, 2), to: at(10, 6), on: () => { state.githubOutage = true; }, off: () => { state.githubOutage = false; } },
+  ].map(x => ({ ...x, started: false, ended: false }));
+  async function setAutopilot(enabled: boolean) {
+    f.setIdentity(owner); const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:setAutopilot", { siteId: site.id, enabled, reviewToken: r.reviewToken }); f.setIdentity(null);
+  }
+  const end = at(days);
+  let nextCron = START + 3 * hour, nextRenewal = START + 6 * hour, nextDaily = START + day;
+  for (let step = 0; step < 60_000 && f.now() < end; step++) {
+    const pending = f.tables._scheduled_functions.filter(r => r.state.kind === "pending").sort((a, b) => a.at - b.at)[0];
+    const boundaries = faults.flatMap(x => [x.started ? Infinity : x.from, x.ended ? Infinity : x.to]);
+    f.setTime(Math.max(f.now() + 1, Math.min(pending?.at ?? Infinity, nextCron, nextRenewal, nextDaily, end, ...boundaries)));
+    for (const x of faults) {
+      if (!x.started && f.now() >= x.from) { x.started = true; await x.on(); }
+      if (x.started && !x.ended && f.now() >= x.to) { x.ended = true; await x.off(); }
+    }
+    if (f.now() >= nextRenewal) { await f.invoke("publisher:renewDestinationReceipts", {}); nextRenewal += 6 * hour; continue; }
+    if (f.now() >= nextDaily) { await f.invoke("contentHealth:runContentHealth", { notify: "always" }); nextDaily += day; continue; }
+    if (f.now() >= nextCron) {
+      await f.invoke("autopilot:dispatchActiveSites", { trigger: "natural", cronSlotUTC: "00:00" });
+      await f.invoke("contentHealth:runContentHealth", { notify: "problems" });
+      nextCron += 3 * hour; continue;
+    }
+    if (pending && pending.at <= f.now()) await f.runNextScheduled();
+    f.assertOffline();
+  }
+  const published = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "verified" && j.contentWork.intent === "create")
+    .map(j => j.contentWork.publishedAt).sort((a, b) => a - b);
+  const perDay = Array.from({ length: days }, (_, d) => published.filter(t => t >= at(d) && t < at(d + 1)).length);
+  const s = f.get(site.id)!.contentSchedule;
+  const stranded = f.tables.jobs.filter(j => j.siteId === site.id && j.status === "done" && j.contentWork?.stage === "ready" &&
+    !j.contentWork.ownerRequest && j.contentWork.retiredAt === undefined && j.contentWork.deadlineAt < s.nextDeadlineAt);
+  const research = f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan")
+    .map(r => r.createdAt ?? 0).sort((a, b) => a - b);
+  const summary = JSON.stringify({ perDay, total: published.length, research: research.length, handed: state.handed.length,
+    failed: f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "failed").map(j => j.contentWork.failure),
+    stranded: stranded.length, overdueH: +((f.now() - s.nextDeadlineAt) / hour).toFixed(1), reports: f.telegramMessages.length });
+  if (process.env.PENTRA_SOAK_VERBOSE) {
+    console.log(summary);
+    const runs = (f.tables.autopilot_runs ?? []).filter(r => r.siteId === site.id).sort((a, b) => a.scheduledAt - b.scheduledAt);
+    for (let d = 1; d < 6; d++) {
+      const dayRuns = runs.filter(r => r.scheduledAt >= at(d) && r.scheduledAt < at(d + 1));
+      const counts: Record<string, number> = {}; for (const r of dayRuns) counts[r.outcome ?? r.status] = (counts[r.outcome ?? r.status] ?? 0) + 1;
+      console.log(`# day ${d}`, JSON.stringify(counts));
+    }
+    console.log("# jobs", JSON.stringify(f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork).map(j => [((j.createdAt - START) / hour).toFixed(1),
+      ((j.contentWork.deadlineAt - START) / hour).toFixed(1), j.contentWork.stage, j.contentWork.failure ?? "", j.contentWork.replacesJobId ? "R" : ""]).filter(x => +x[0] > 40 && +x[0] < 130)));
+  }
+  perDay.forEach((n, d) => { if (d !== 5) assert.ok(n >= 2, `day ${d} published ${n}: ${summary}`); });
+  assert.ok(published.length >= 36, summary);
+  const qualityFailures = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.failure === "bounded_content_quality_exhausted").length;
+  assert.ok(qualityFailures <= 10, `a day-long reviewer regression retries with backoff instead of looping (${qualityFailures} attempts): ${summary}`);
+  assert.equal(f.get(site.id)!.contentSchedule.paused, false, "a writing-service outage never pauses Autopilot");
+  const gaps = published.slice(1).map((t, i) => t - published[i]);
+  assert.ok(Math.min(...gaps) >= 4 * hour - 60_000, `catch-up is paced, never a burst: ${summary}`);
+  assert.equal(stranded.length, 0, `no reviewed article left behind the schedule: ${summary}`);
+  assert.ok(f.now() - s.nextDeadlineAt < 8 * hour, `the schedule is not stuck overdue: ${summary}`);
+  assert.ok(research.slice(1).every((t, i) => t - research[i] >= 8 * hour - 60_000) && research.length <= 2 * days,
+    `keyword research stays bounded: ${summary}`);
+  assert.ok(f.telegramMessages.length >= days, `a report every day: ${summary}`);
+  f.setIdentity(owner);
+  assert.equal((await f.invoke("contentWork:readiness", { siteId: site.id })).destination.verified, true, "the connection check never lapsed");
+  f.setIdentity(null);
+  f.assertOffline();
+});
+

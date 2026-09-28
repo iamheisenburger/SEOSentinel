@@ -1079,24 +1079,46 @@ function relevanceTokens(value: string): string[] {
     .filter((word) => word.length >= 3 && !RELEVANCE_STOP_WORDS.has(word));
 }
 
-function distinctiveRelevanceRoots(words: string[]): Set<string> {
-  return new Set(
-    words
-      .filter((word) =>
-        !GENERIC_BUSINESS_SIGNAL_WORDS.has(word) &&
-        !BUSINESS_QUERY_MODIFIER_WORDS.has(word)
-      )
-      .map(relevanceRoot),
-  );
+function distinctiveWord(word: string, promoted?: ReadonlySet<string>) {
+  return (promoted?.has(word) === true || !GENERIC_BUSINESS_SIGNAL_WORDS.has(word)) &&
+    !BUSINESS_QUERY_MODIFIER_WORDS.has(word);
 }
 
-function distinctiveRelevanceRootSequence(words: string[]): string[] {
-  return words
-    .filter((word) =>
-      !GENERIC_BUSINESS_SIGNAL_WORDS.has(word) &&
-      !BUSINESS_QUERY_MODIFIER_WORDS.has(word)
-    )
-    .map(relevanceRoot);
+function distinctiveRelevanceRoots(words: string[], promoted?: ReadonlySet<string>): Set<string> {
+  return new Set(words.filter((word) => distinctiveWord(word, promoted)).map(relevanceRoot));
+}
+
+function distinctiveRelevanceRootSequence(words: string[], promoted?: ReadonlySet<string>): string[] {
+  return words.filter((word) => distinctiveWord(word, promoted)).map(relevanceRoot);
+}
+
+/**
+ * Words that are generic across businesses ("lead", "sales") can be a
+ * tenant's actual subject: a lead-qualification product is about leads. A
+ * generic word counts as this tenant's own subject only when it recurs in at
+ * least two of the tenant's confirmed product phrases (anchor keywords and
+ * key features). Words that describe no subject at all are never promoted.
+ */
+const PROMOTABLE_TENANT_CORE_WORDS = new Set([
+  "lead", "leads", "sales", "marketing", "market", "generation", "agent", "customer", "customers",
+  "job", "jobs", "project", "projects", "program", "programs", "budget", "planning", "analysis",
+  "report", "reports", "workflow", "workflows", "development", "representative",
+]);
+
+export function tenantCoreVocabulary(productAnchorSignals: string[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const phrase of productAnchorSignals) {
+    for (const word of new Set(relevanceTokens(phrase))) {
+      if (PROMOTABLE_TENANT_CORE_WORDS.has(word)) counts.set(word, (counts.get(word) ?? 0) + 1);
+    }
+  }
+  const promoted = new Set<string>();
+  for (const [word, count] of counts) if (count >= 2) promoted.add(word);
+  // Singular and plural forms share one decision.
+  for (const word of [...promoted]) {
+    for (const other of PROMOTABLE_TENANT_CORE_WORDS) if (relevanceRoot(other) === relevanceRoot(word)) promoted.add(other);
+  }
+  return promoted;
 }
 
 function longestSharedContiguousRootRun(
@@ -1151,6 +1173,7 @@ export type BusinessSignalMatch = {
 export function businessSignalMatch(
   keyword: string,
   businessSignals: string[],
+  promoted?: ReadonlySet<string>,
 ): BusinessSignalMatch {
   const keywordWords = relevanceTokens(keyword);
   if (keywordWords.length === 0) {
@@ -1172,8 +1195,8 @@ export function businessSignalMatch(
     };
   }
 
-  const keywordRoots = distinctiveRelevanceRoots(keywordWords);
-  const signalRoots = distinctiveRelevanceRoots(signalWords);
+  const keywordRoots = distinctiveRelevanceRoots(keywordWords, promoted);
+  const signalRoots = distinctiveRelevanceRoots(signalWords, promoted);
   const matched = [...keywordRoots].filter((root) => signalRoots.has(root));
   const unmatched = [...keywordRoots].filter((root) => !signalRoots.has(root));
 
@@ -1193,9 +1216,9 @@ export function businessSignalMatch(
   // therefore need an ordered contiguous distinctive phrase in one actual
   // tenant signal. "Research quality in AI-generated content" cannot become
   // the unrelated product entity "research question generator".
-  const keywordSequence = distinctiveRelevanceRootSequence(keywordWords);
+  const keywordSequence = distinctiveRelevanceRootSequence(keywordWords, promoted);
   const cohesiveMatchedCount = businessSignals.reduce((highest, signal) => {
-    const sequence = distinctiveRelevanceRootSequence(relevanceTokens(signal));
+    const sequence = distinctiveRelevanceRootSequence(relevanceTokens(signal), promoted);
     return Math.max(
       highest,
       longestSharedContiguousRootRun(keywordSequence, sequence),
@@ -1224,8 +1247,9 @@ export function businessSignalMatch(
 export function keywordMatchesBusinessSignals(
   keyword: string,
   businessSignals: string[],
+  promoted?: ReadonlySet<string>,
 ): boolean {
-  return businessSignalMatch(keyword, businessSignals).eligible;
+  return businessSignalMatch(keyword, businessSignals, promoted).eligible;
 }
 
 const PROFESSIONAL_SERVICE_TERM =
@@ -1479,7 +1503,26 @@ export function hasPractitionerIntent(keyword: string): boolean {
   );
 }
 
-export function evaluateTopicBusinessFit(args: {
+type TopicBusinessFitArgs = Parameters<typeof evaluateTopicBusinessFitWith>[0];
+
+/**
+ * The deterministic business-fit gate. A keyword passes on the strict rules,
+ * or — only if it fails them — on the same rules with the tenant's own
+ * recurring subject words counted as distinctive (see tenantCoreVocabulary).
+ * The second pass can only add keywords, never remove one, and it still
+ * requires at least two matched subject words, a cohesive phrase from one
+ * tenant signal and a product anchor.
+ */
+export function evaluateTopicBusinessFit(args: TopicBusinessFitArgs): TopicBusinessFitEvaluation {
+  const strict = evaluateTopicBusinessFitWith(args);
+  if (strict.eligible) return strict;
+  const promoted = tenantCoreVocabulary(args.productAnchorSignals ?? []);
+  if (promoted.size === 0) return strict;
+  const widened = evaluateTopicBusinessFitWith(args, promoted);
+  return widened.eligible ? widened : strict;
+}
+
+function evaluateTopicBusinessFitWith(args: {
   keyword: string;
   label?: string;
   coreBusinessSignals: string[];
@@ -1491,8 +1534,8 @@ export function evaluateTopicBusinessFit(args: {
   productAnchorSignals?: string[];
   businessModelSignals: string[];
   growthSeed?: string;
-}): TopicBusinessFitEvaluation {
-  const core = businessSignalMatch(args.keyword, args.coreBusinessSignals);
+}, promoted?: ReadonlySet<string>): TopicBusinessFitEvaluation {
+  const core = businessSignalMatch(args.keyword, args.coreBusinessSignals, promoted);
   const keywordWords = relevanceTokens(args.keyword);
   const keywordRoots = new Set(keywordWords.map(relevanceRoot));
   const anchorWords = (args.productAnchorSignals ?? []).flatMap(relevanceTokens);
@@ -1506,7 +1549,7 @@ export function evaluateTopicBusinessFit(args: {
   const anchorAligned = anchorWords.length === 0 || (
     matchedDistinctiveAnchorRoots.length >= 1 && sharedAnchorRoots.length >= 2
   ) || (
-    distinctiveRelevanceRoots(keywordWords).size === 0 &&
+    distinctiveRelevanceRoots(keywordWords, promoted).size === 0 &&
     genericOfferingAlignment(keywordWords, anchorWords)
   );
   const modelAligned = keywordMatchesBusinessModel(
@@ -1519,10 +1562,12 @@ export function evaluateTopicBusinessFit(args: {
   const titleAligned = !args.label || keywordMatchesBusinessSignals(
     args.keyword,
     [args.label],
+    promoted,
   );
   const growthAligned = !args.growthSeed || keywordMatchesBusinessSignals(
     args.keyword,
     [args.growthSeed],
+    promoted,
   );
   const reasons: string[] = [];
   if (!core.eligible) {
@@ -1544,10 +1589,14 @@ export function evaluateTopicBusinessFit(args: {
   if (!modelAligned) reasons.push("search intent targets a different business model");
   if (!titleAligned) reasons.push("article title does not preserve the measured keyword intent");
   if (!growthAligned) reasons.push("support topic is not adjacent to its measured parent query");
+  // The widened pass needs two matched subject words, so a bare promoted
+  // word ("sales jobs") never passes on its own.
+  const widenedSubject = !promoted || core.matchedDistinctiveRoots.length >= 2;
+  if (!widenedSubject) reasons.push("keyword needs two of the tenant's own subject words");
   return {
     eligible:
       core.eligible && anchorAligned && modelAligned && titleAligned &&
-      growthAligned && !practitionerIntent,
+      growthAligned && !practitionerIntent && widenedSubject,
     score: core.score,
     reasons,
     version: TOPIC_BUSINESS_FIT_VERSION,

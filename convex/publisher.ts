@@ -383,7 +383,9 @@ async function getDefaultBranch({
       Accept: "application/vnd.github+json",
     },
   });
-  if (!res.ok) throw new Error(`GitHub repo not found: ${owner}/${repo} (${res.statusText})`);
+  if (!res.ok) throw new Error(res.status === 404
+    ? `GitHub repo not found: ${owner}/${repo} (HTTP 404)`
+    : `GitHub repo unavailable: ${owner}/${repo} (HTTP ${res.status})`);
   const data = await res.json() as {
     default_branch?: unknown;
     permissions?: { push?: unknown };
@@ -570,7 +572,7 @@ async function commitToMain({
   if (!branchRes.ok) {
     if (branchRes.status !== 404 && branchRes.status !== 409) {
       throw new Error(
-        `Failed to read sealed GitHub branch: ${branchRes.statusText}`,
+        `Failed to read sealed GitHub branch: ${branchRes.statusText} (HTTP ${branchRes.status})`,
       );
     }
     const destination = await inspectGitHubDestination({
@@ -651,7 +653,7 @@ async function commitToMain({
     },
   );
   if (!blobRes.ok)
-    throw new Error(`Failed to create blob: ${blobRes.statusText}`);
+    throw new Error(`Failed to create blob: ${blobRes.statusText} (HTTP ${blobRes.status})`);
   const blob = await blobRes.json();
   if (typeof blob?.sha !== "string") {
     throw new Error("GitHub did not return a blob SHA");
@@ -674,7 +676,7 @@ async function commitToMain({
     },
   );
   if (!treeRes.ok)
-    throw new Error(`Failed to create tree: ${treeRes.statusText}`);
+    throw new Error(`Failed to create tree: ${treeRes.statusText} (HTTP ${treeRes.status})`);
   const tree = await treeRes.json();
 
   const commitRes = await fetch(
@@ -690,7 +692,7 @@ async function commitToMain({
     },
   );
   if (!commitRes.ok)
-    throw new Error(`Failed to create commit: ${commitRes.statusText}`);
+    throw new Error(`Failed to create commit: ${commitRes.statusText} (HTTP ${commitRes.status})`);
   const commit = await commitRes.json();
 
   // Blob/tree/commit objects are inert until the branch ref moves. Persist
@@ -706,7 +708,7 @@ async function commitToMain({
     },
   );
   if (!updateRefRes.ok)
-    throw new Error(`Failed to update branch: ${updateRefRes.statusText}`);
+    throw new Error(`Failed to update branch: ${updateRefRes.statusText} (HTTP ${updateRefRes.status})`);
 
   return {
     commitUrl: `https://github.com/${owner}/${repo}/commit/${commit.sha}`,
@@ -755,7 +757,7 @@ async function inspectGitHubDestination({
   }
   if (!res.ok) {
     throw new Error(
-      `Failed to verify the existing GitHub destination: ${res.statusText}`,
+      `Failed to verify the existing GitHub destination: ${res.statusText} (HTTP ${res.status})`,
     );
   }
 
@@ -817,7 +819,7 @@ async function readGitHubBranchHead({
   );
   if (!response.ok) {
     throw new Error(
-      `Failed to confirm the current sealed GitHub branch: ${response.statusText}`,
+      `Failed to confirm the current sealed GitHub branch: ${response.statusText} (HTTP ${response.status})`,
     );
   }
   const payload = await response.json();
@@ -897,7 +899,7 @@ async function commitViaContentsApi({
   if (!putRes.ok) {
     const errBody = await putRes.text();
     throw new Error(
-      `Failed to commit ${file.path}: ${putRes.statusText} — ${errBody}`,
+      `Failed to commit ${file.path}: ${putRes.statusText} (HTTP ${putRes.status}) — ${errBody}`,
     );
   }
   const result = await putRes.json();

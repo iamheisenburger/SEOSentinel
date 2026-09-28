@@ -5,7 +5,9 @@ import { ConvexError, v } from "convex/values";
 import { contentIntentConflicts, evaluateTopicBusinessFit, tenantDiscoveryAnchors, tenantTopicBusinessSignals, isSealedReady } from "./lib/autopilotBuffer";
 import { publicationArtifactHash, publicationDeliveryConfig, sha256Hex } from "./lib/publicationArtifact";
 import { legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
-import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
+import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain, gscConnectionMatchesCurrentDomain } from "./lib/siteDomainBinding";
+import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
+import { addSearchConsoleDays, isBrandedSearchQuery, publishedArticlePageUrl } from "./lib/searchPerformance";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
 import { resolvePlanFromFeatures, cadenceFitsOperationalLimit, targetCadenceOptions } from "./planLimits";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
@@ -71,7 +73,25 @@ const LIMIT = 1000;
 /** Terminal outcomes an Autopilot site moves past without the owner: nothing was
  * published and no external write is uncertain. The failed job keeps its missed
  * deadline, attempts and spending; the schedule continues with the next slot. */
-const AUTOPILOT_SKIPPABLE_FAILURES = new Set(["bounded_content_quality_exhausted", "content_model_response_invalid", "candidate_rejected_before_draft"]);
+const AUTOPILOT_SKIPPABLE_FAILURES = new Set(["bounded_content_quality_exhausted", "content_model_response_invalid", "candidate_rejected_before_draft",
+  // The writing service stayed busy (rate limited or overloaded) through every retry: nothing was written or charged for it.
+  "content_provider_unavailable"]);
+/** After repeated failed automatic articles, the next attempt waits (2h, then
+ * 4h; never longer than one cadence interval) instead of retrying at once: a failure
+ * that persists (a reviewer regression, a provider outage) must not burn
+ * topics and spend in a loop. The cadence resumes on the first success. */
+async function autopilotFailureBackoffUntil(ctx: MutationCtx, siteId: Id<"sites">, intervalMs: number) {
+  const automatic = (j: Doc<"jobs">) => Boolean(j.contentWork && j.contentWork.intent === "create" && !j.contentWork.ownerRequest);
+  const failed = (await ctx.db.query("jobs").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "failed")).order("desc").take(20))
+    .filter(j => automatic(j) && j.contentWork!.stage === "failed");
+  if (failed.length < 2) return 0;
+  const done = (await ctx.db.query("jobs").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "done")).order("desc").take(10))
+    .filter(automatic);
+  const lastSuccess = done.reduce((max, j) => Math.max(max, j.updatedAt), 0);
+  const streak = failed.filter(j => j.updatedAt > lastSuccess).sort((a, b) => b.updatedAt - a.updatedAt);
+  if (streak.length < 2) return 0;
+  return streak[0].updatedAt + Math.min(intervalMs, 4 * 3_600_000, 2 * 3_600_000 * 2 ** (streak.length - 2));
+}
 /** Autopilot keeps the cadence: a failed slot gets one fresh article (a new
  * topic, a new job and its own reservation) when there is still this much time
  * before the slot. The failed job stays on record; nothing is reset. */
@@ -1266,8 +1286,39 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
     coverage = [...new Set([...known, ...inventory.pageCoverage.map(c => normalizeResearchKeyword(c.primaryKeyword ?? ""))].filter(Boolean))];
   } catch { /* an incomplete inventory keeps the topic list only */ }
   return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds, known, coverage,
-    signals: tenantTopicBusinessSignals(site) };
+    signals: tenantTopicBusinessSignals(site), searchConsole: await searchConsoleTopicCandidates(ctx, site) };
 } });
+
+const urlKey = (url: string) => url.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[#?].*$/, "").replace(/\/+$/, "");
+/** Searches the site already appears for in Google (last 28 days of Search
+ * Console) that no article of its own answers: real demand Google already
+ * connects to this business, and the nearest ranking wins. Branded searches,
+ * searches it already ranks top-3 for, and searches answered by a published
+ * article are left out. Free: the rows are already synced. */
+export async function searchConsoleTopicCandidates(ctx: QueryCtx, site: Doc<"sites">) {
+  try {
+    const through = site.gscDataThrough;
+    if (!through || !gscConnectionMatchesCurrentDomain(site)) return [];
+    const { rows } = await takeCurrentGscQueryRows(ctx, site, 6000, { startDate: addSearchConsoleDays(through, -27), endDate: through });
+    const summaries = (await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", site._id).eq("status", "published")).take(2001))
+      .filter(row => articleMatchesCurrentDomain(site, row));
+    const articleUrls = new Set(summaries.map(row => urlKey(publishedArticlePageUrl(site.domain, site.urlStructure, row.slug))));
+    const byQuery = new Map<string, { impressions: number; weighted: number; article: boolean }>();
+    for (const row of rows) {
+      const query = normalizeResearchKeyword(row.query);
+      const entry = byQuery.get(query) ?? { impressions: 0, weighted: 0, article: false };
+      entry.impressions += row.impressions; entry.weighted += row.position * row.impressions;
+      if (row.page && articleUrls.has(urlKey(row.page))) entry.article = true;
+      byQuery.set(query, entry);
+    }
+    return [...byQuery.entries()].map(([keyword, q]) => ({ keyword, impressions: q.impressions,
+      position: q.impressions ? Math.round(q.weighted / q.impressions * 10) / 10 : 0, article: q.article }))
+      .filter(q => !q.article && q.impressions >= 5 && q.position > 3 && q.keyword.length <= 80 &&
+        q.keyword.split(" ").length >= 2 && q.keyword.split(" ").length <= 8 && !isBrandedSearchQuery(q.keyword, site.domain))
+      .sort((a, b) => b.impressions - a.impressions).slice(0, 40)
+      .map(({ keyword, impressions, position }) => ({ keyword, impressions, position }));
+  } catch { return []; }
+}
 
 /** Close Autopilot's keyword-research reservation: settled at the provider's
  * reported cost, or released when nothing was sent. Before this, every run held its full $1 of daily/monthly room forever. */
@@ -1292,7 +1343,9 @@ export const closeTopicResearchReservation = internalMutation({ args: { siteId: 
 /** Add researched keywords as planned topics: business-fit only, never a
  * duplicate of an existing topic, page or article intent. */
 export const addResearchedTopics = internalMutation({ args: { siteId: v.id("sites"),
-  keywords: v.array(v.object({ keyword: v.string(), searchVolume: v.number(), difficulty: v.number(), difficultyMeasured: v.boolean() })) },
+  keywords: v.array(v.object({ keyword: v.string(), searchVolume: v.number(), difficulty: v.number(), difficultyMeasured: v.boolean(),
+    // Search Console: the site already appears for this search (volume = impressions in 28 days).
+    source: v.optional(v.literal("search_console")), position: v.optional(v.number()) })) },
   handler: async (ctx, { siteId, keywords }) => {
     const site = await ctx.db.get(siteId);
     if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return { added: 0 };
@@ -1303,7 +1356,9 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
     // written, so it is not added (it would only take a research slot).
     const taken: { primaryKeyword: string }[] = [...inventory.topics, ...inventory.pageCoverage];
     let added = 0;
-    for (const k of [...keywords].sort((a, b) => b.searchVolume - a.searchVolume)) {
+    // Searches the site already appears for come first: they are the nearest wins.
+    const fromSearchConsole = (k: { source?: string }) => Number(k.source === "search_console");
+    for (const k of [...keywords].sort((a, b) => fromSearchConsole(b) - fromSearchConsole(a) || b.searchVolume - a.searchVolume)) {
       if (added >= 15) break;
       const keyword = k.keyword.trim().toLowerCase().replace(/\s+/g, " ");
       if (keyword.split(" ").length < 2 || keyword.length > 80 || k.difficulty > WINNABLE_KEYWORD_DIFFICULTY ||
@@ -1315,7 +1370,9 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
         planningDomainRevision: siteCanonicalDomainRevision(site), secondaryKeywords: [], intent: "informational",
         priority: Math.max(1, Math.min(90, Math.round(Math.log10(1 + k.searchVolume) * 20 - k.difficulty / 5))), status: "planned",
         searchVolume: k.searchVolume, keywordDifficulty: k.difficulty, keywordDifficultyMeasured: k.difficultyMeasured,
-        notes: "Researched keyword (search demand from DataForSEO) for the confirmed business. Use only supported business facts.",
+        notes: k.source === "search_console"
+          ? `Search Console: this site was shown ${k.searchVolume} times in 28 days for this search${typeof k.position === "number" ? ` at average position ${k.position}` : ""}, with no article of its own. Use only supported business facts.`
+          : "Researched keyword (search demand from DataForSEO) for the confirmed business. Use only supported business facts.",
         createdAt: Date.now(), updatedAt: Date.now() });
       taken.push(proposal); added++;
     }
@@ -1536,6 +1593,14 @@ export const advance = internalMutation({
     }
     if (failedSlot && !replaceNextSlot) return { scheduled: 0, mode: "content_failed_slot", blockers: [failedSlot.contentWork!.failure ?? "content_work_failed"] };
     if (waiting.length >= 2) return { scheduled: 0, mode: "buffer_full" };
+    if (schedule.autopilotSelectedAt) {
+      const backoffUntil = await autopilotFailureBackoffUntil(ctx, siteId, schedule.intervalMs);
+      if (backoffUntil > Date.now()) {
+        await ctx.scheduler.runAt(backoffUntil, internal.autopilot.dispatchSiteFollowup, {
+          siteId, trigger: "content_work", reason: "content_failure_backoff" });
+        return { scheduled: 0, mode: "content_failure_backoff", eligibleAt: backoffUntil };
+      }
+    }
     const pricing = await pricingConfiguration(ctx, site);
     if (!pricing) return { scheduled: 0, mode: "content_pricing_unavailable" };
     const improvement = await chooseImprovement(ctx, site, work);
@@ -1765,6 +1830,10 @@ export async function recoverContentWork(ctx: MutationCtx, job: Doc<"jobs">, err
   const recoveries = cw.recoveryAttempts ?? 0;
   const uncertain = cw.providerCalls.some(c => c.state === "started");
   const creditUnavailable = cw.providerCalls.some(interruptedCreditCall);
+  // The last request was refused as rate limited or overloaded: the service
+  // was busy, nothing was written, and it is not a Pentra processing error.
+  const lastCall = cw.providerCalls.at(-1);
+  const providerBusy = lastCall?.state === "rejected" && ["rate_limit_error", "overloaded_error"].includes(lastCall.rejectionCode ?? "");
   const used = cw.providerCalls.reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
   const failure = uncertain ? "content_provider_result_ambiguous_reconciliation_required"
     : creditUnavailable ? "content_provider_credit_unavailable"
@@ -1772,7 +1841,7 @@ export async function recoverContentWork(ctx: MutationCtx, job: Doc<"jobs">, err
     : /^content_audit_/.test(error) ? error
     : /Content work (budget exhausted|rollover blocked)/.test(error) ? error
     : /Content provider (authority changed|reservation unavailable)|Content checkpoint/.test(error) ? error
-    : recoveries >= MAX_CONTENT_RECOVERIES ? "content_recovery_attempts_exhausted"
+    : recoveries >= MAX_CONTENT_RECOVERIES ? (providerBusy ? "content_provider_unavailable" : "content_recovery_attempts_exhausted")
     : used >= cw.budgetMicroUsd ? `Content work budget exhausted: limitMicroUsd=${cw.budgetMicroUsd}; consumedCeilingMicroUsd=${used}; availableMicroUsd=0`
     : undefined;
   const willRetry = failure === undefined;

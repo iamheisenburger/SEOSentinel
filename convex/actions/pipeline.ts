@@ -8658,6 +8658,7 @@ export const autopilotTick = internalAction({
       content_budget_exhausted: "Existing account or fleet funding cannot admit this work.",
       content_slot_parked: "A draft is waiting for the owner's review; the schedule continued with the next article.",
       content_slot_rebound: "A reviewed article that had fallen behind the schedule was moved to the current slot instead of writing a new one.",
+      content_failure_backoff: "Recent automatic articles failed, so the next attempt waits a little instead of retrying at once.",
       autopilot_disabled: "Autopilot is disabled for this tenant.",
       cadence_paused: "The effective tenant cadence is paused.",
       rollout_observe: "Automation remains in fail-closed observe mode.",

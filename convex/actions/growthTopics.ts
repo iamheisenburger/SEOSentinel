@@ -8,7 +8,8 @@ import { dataForSeoLocationCode } from "../lib/dataForSeoLocale";
 import { contentIntentConflicts, evaluateTopicBusinessFit } from "../lib/autopilotBuffer";
 
 type ResearchContext = { domain: string; language: string; targetCountry: string | null; seeds: string[]; known: string[];
-  coverage: string[]; signals: { coreBusinessSignals: string[]; productAnchorSignals: string[]; businessModelSignals: string[] } };
+  coverage: string[]; signals: { coreBusinessSignals: string[]; productAnchorSignals: string[]; businessModelSignals: string[] };
+  searchConsole: Array<{ keyword: string; impressions: number; position: number }> };
 
 /** Keyword research for an Autopilot site whose topics ran out. The spend is
  * reserved (and bounded) by contentWork.advance before this runs; any failure
@@ -49,8 +50,12 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
       await ctx.runMutation(internal.contentWork.closeTopicResearchReservation, { siteId, reservationId, sent: true,
         actualMicroUsd: Math.ceil(metered.usd * 1_000_000) });
     }
-    const keywords = found.slice(0, 60).map(k => ({ keyword: k.keyword, searchVolume: Math.max(0, Math.round(k.searchVolume || 0)),
-      difficulty: Math.max(0, Math.min(100, Math.round(k.difficulty || 0))), difficultyMeasured: Boolean(k.difficultyMeasured) }));
+    // Searches the site already appears for in Google (no article of its own yet), then the researched ones.
+    const searchConsole = context.searchConsole.filter(q => exclusion(q.keyword) === undefined).map(q => ({ keyword: q.keyword,
+      searchVolume: Math.max(1, Math.round(q.impressions)), difficulty: 0, difficultyMeasured: false,
+      source: "search_console" as const, position: q.position }));
+    const keywords = [...searchConsole, ...found.slice(0, 60).map(k => ({ keyword: k.keyword, searchVolume: Math.max(0, Math.round(k.searchVolume || 0)),
+      difficulty: Math.max(0, Math.min(100, Math.round(k.difficulty || 0))), difficultyMeasured: Boolean(k.difficultyMeasured) }))];
     // Always report back (even empty) so a waiting Autopilot slot continues.
     const result: { added: number } = await ctx.runMutation(internal.contentWork.addResearchedTopics, { siteId, keywords });
     return result;

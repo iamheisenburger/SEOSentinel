@@ -1,16 +1,37 @@
 export const PUBLICATION_LEASE_MS = 15 * 60 * 1000;
 export const MAX_PUBLICATION_ATTEMPTS = 3;
 
-export function nextPublicationRetry(previousAttempts: number): {
+/** A destination that is down or rate limiting before any write keeps being
+ * retried for about a day (30 min, 1 h, 2 h, then every 4 h) instead of
+ * failing the slot after fifteen minutes. Every retry re-reads the destination
+ * before writing, as the first attempts do. */
+export const MAX_TRANSIENT_PUBLICATION_ATTEMPTS = 10;
+
+/** The destination was unreachable (HTTP 429/5xx) while Pentra was only
+ * reading it, before any write was attempted. A failed write keeps the
+ * three-attempt limit: each of those is a real write attempt. */
+const READ_PHASE_PUBLICATION_FAILURE = /GitHub repo unavailable|Failed to read sealed GitHub branch|Failed to verify the existing GitHub destination|Failed to confirm the current sealed GitHub branch|WordPress connection check failed|WordPress idempotency lookup failed/i;
+export function transientPublicationError(error: string) {
+  return READ_PHASE_PUBLICATION_FAILURE.test(error) && /\(HTTP (?:429|5\d\d)\)|\((?:429|5\d\d)\)/.test(error);
+}
+
+export function nextPublicationRetry(previousAttempts: number, transient = false): {
   attempts: number;
   willRetry: boolean;
   retryDelayMs: number;
 } {
   const attempts = Math.max(0, previousAttempts) + 1;
+  if (!transient || attempts < MAX_PUBLICATION_ATTEMPTS) {
+    return {
+      attempts,
+      willRetry: attempts < MAX_PUBLICATION_ATTEMPTS || (transient && attempts < MAX_TRANSIENT_PUBLICATION_ATTEMPTS),
+      retryDelayMs: attempts * 5 * 60 * 1000,
+    };
+  }
   return {
     attempts,
-    willRetry: attempts < MAX_PUBLICATION_ATTEMPTS,
-    retryDelayMs: attempts * 5 * 60 * 1000,
+    willRetry: attempts < MAX_TRANSIENT_PUBLICATION_ATTEMPTS,
+    retryDelayMs: Math.min(4 * 3_600_000, 30 * 60_000 * 2 ** (attempts - MAX_PUBLICATION_ATTEMPTS)),
   };
 }
 
