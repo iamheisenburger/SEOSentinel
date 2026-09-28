@@ -20,6 +20,8 @@ export default defineSchema({
       topicsReplenishedAt: v.optional(v.number()),
       // New topics that research added (0 backs off the next attempt).
       topicsReplenishAdded: v.optional(v.number()),
+      // Research runs so far; rotates which business anchors seed the next one.
+      topicsResearchRound: v.optional(v.number()),
     })),
     userId: v.optional(v.string()), // Clerk user ID
     domain: v.string(),

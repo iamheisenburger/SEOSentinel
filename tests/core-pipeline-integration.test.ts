@@ -75,9 +75,12 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   wordpress?: { username: string; password: string; transport: (url: URL, init: RequestInit) => Promise<Response> };
   failedOptionalSource?: boolean; liveCorrupt?: "canonical" | "body" | "title";
   evidence?: { sources: Array<{ url: string; title: string; text: string }>; failed?: string[]; brief?: string; competitor?: string };
-  webResearch?: { citations: Array<{ url: string; title: string; cited_text: string }>; searches?: number; error?: { status: number; type: string } } } = {}) {
+  webResearch?: { citations: Array<{ url: string; title: string; cited_text: string }>; searches?: number; error?: { status: number; type: string } };
+  /** Keyword research answers: Google Ads keywords for a seed batch, Labs suggestions for one seed. */
+  discovery?: { ads?: (seeds: string[]) => string[]; suggestions?: (seed: string) => string[] } } = {}) {
   const modelCalls: Fields[] = [];
   const telegramMessages: Fields[] = [];
+  const discoveryCalls: Array<{ endpoint: string; seeds: string[] }> = [];
   const businesses = options.businesses ?? defaultBusinesses;
   let publisherFailuresRemaining = options.publisherFailures ?? 0;
   let lostCommitResponsesRemaining = options.lostCommitResponses ?? 0;
@@ -288,7 +291,13 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
     let result: Fields[];
     if (url.pathname.endsWith("/backlinks/bulk_pages_summary/live")) result = [{ items: body.targets.map((target: string) => ({ url: target, main_domain_rank: 45, referring_domains: 50, backlinks: 90 })) }];
     else if (url.pathname.endsWith("/keywords_data/google_ads/search_volume/live")) result = options.emptyDiscovery ? [] : body.keywords.map(metric);
-    else if (url.pathname.endsWith("/keywords_data/google_ads/keywords_for_keywords/live")) {
+    else if (url.pathname.endsWith("/keywords_data/google_ads/keywords_for_keywords/live") && options.discovery?.ads) {
+      discoveryCalls.push({ endpoint: "ads", seeds: body.keywords }); result = options.discovery.ads(body.keywords).map(metric);
+    } else if (url.pathname.endsWith("/keyword_suggestions/live") && options.discovery?.suggestions) {
+      discoveryCalls.push({ endpoint: "suggestions", seeds: [body.keyword] });
+      result = [{ items: options.discovery.suggestions(body.keyword).map(keyword => ({ keyword, keyword_info: { search_volume: 210, cpc: 0.5, competition: 0.1 },
+        keyword_properties: { keyword_difficulty: 9 } })) }];
+    } else if (url.pathname.endsWith("/keywords_data/google_ads/keywords_for_keywords/live")) {
       const owner = businesses.find(b => body.keywords.some((keyword: string) => keyword.includes(b.keywords[0].split(" ")[0])));
       assert.ok(owner, JSON.stringify(body)); result = options.emptyDiscovery ? [] : owner.keywords.map(metric);
     } else if (url.pathname.endsWith("/keywords_data/google_ads/keywords_for_site/live")) result = [];
@@ -321,7 +330,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
     f.add("pages", { siteId: id, slug: "/", url: `https://${b.domain}/`, title: b.niche, summary: `${b.name} provides ${b.niche}.`, keywords: b.keywords, createdAt: START - 1000 });
     return { ...b, id };
   });
-  return { ...f, sites, modelCalls, repositories, failedPublications, telegramMessages };
+  return { ...f, sites, modelCalls, repositories, failedPublications, telegramMessages, discoveryCalls };
 }
 
 test("owner can verify an existing GitHub destination without publishing or spending", async () => {
@@ -6144,14 +6153,19 @@ test("P54 a failing destination is not renewed and the renewal run never throws"
 });
 
 test("P54 the daily health check reports stops the same day and nudges repairable ones", async () => {
-  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 }), site = await selectGrowth(f);
+  // A real cadence (the fastest plan: every 8 hours), so four topics left is days of work, not an alert.
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 }), site = await selectGrowth(f, 8 * 3_600_000);
   await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
   // Without the operator chat configured the check still runs and never sends.
   const silent = await f.invoke("contentHealth:runContentHealth", { notify: "always" });
   assert.equal(silent.notified, false); assert.equal(f.telegramMessages.length, 0);
   f.restartRuntime({ PENTRA_OPS_TELEGRAM_BOT_TOKEN: "synthetic-ops-token", PENTRA_OPS_TELEGRAM_CHAT_ID: "7180987163" });
+  const unlisted = await f.invoke("contentHealth:runContentHealth", { notify: "always" });
+  assert.equal(unlisted.notified, true);
+  assert.doesNotMatch(f.telegramMessages.pop()!.text, new RegExp(site.domain.replace(".", "\\.")), "a tenant not listed for detail appears only in counts");
+  f.restartRuntime({ PENTRA_OPS_REPORT_DOMAINS: `other.example, ${site.domain}` });
   const healthy = await f.invoke("contentHealth:runContentHealth", { notify: "problems" });
-  assert.equal(healthy.checked, 1); assert.equal(healthy.attention, 0, JSON.stringify(healthy));
+  assert.equal(healthy.checked, 1); assert.equal(healthy.attention, 0, JSON.stringify([healthy, await f.invoke("contentHealth:siteHealth", { siteId: site.id })]));
   assert.equal(f.telegramMessages.length, 0, "a healthy fleet is quiet between daily reports");
   const daily = await f.invoke("contentHealth:runContentHealth", { notify: "always" });
   assert.equal(daily.notified, true); assert.equal(f.telegramMessages.length, 1);
@@ -6167,6 +6181,9 @@ test("P54 the daily health check reports stops the same day and nudges repairabl
   const text = f.telegramMessages.at(-1)!.text;
   assert.match(text, /ATTENTION/); assert.match(text, /overdue/); assert.match(text, /behind the schedule/);
   assert.doesNotMatch(text, /synthetic-only|sk-|token/i, "no credentials ever leave in a report");
+  assert.match(text, new RegExp(site.domain.replace(".", "\\.")));
+  const one = await f.invoke("contentHealth:siteHealth", { siteId: site.id });
+  assert.equal(one.status, "attention"); assert.ok(one.problems.length > 0);
   await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "verified"), 400, f.now() + 6 * 3_600_000);
   assert.ok(f.tables.jobs.some(j => j.contentWork?.slotRebinds?.length), "the nudge ran the scheduler, which rebound the stranded article");
   f.assertOffline();
@@ -6262,4 +6279,109 @@ test("P54 the Websites page counts come from light bounded indexes and match the
   assert.equal(counts.drafts, f.tables.article_summaries.filter(r => r.siteId === site.id && ["draft", "review", "ready", "revision"].includes(r.status)).length);
   assert.equal(counts.topics, planned); assert.equal(counts.capped, false);
   f.setIdentity(null); f.assertOffline();
+});
+
+// --- P55: keyword supply at a fast cadence ----------------------------------------------------------
+// leadpilot.chat (21 a week) ran out of topics: research only started once the inventory was empty, then
+// waited three days (a week after an empty run), and it re-ran the same seeds whose first results were all
+// keywords the site already had. These run the real research action against a synthetic DataForSEO.
+// Research answers built from the tenant's own vocabulary (they pass the business-fit gate) and
+// distinct from each other and from the six confirmed anchors.
+const P55_RESEARCH = ["irrigation valve leak checklist", "irrigation pump inspection workflow", "irrigation pressure alert planning",
+  "seasonal irrigation pump maintenance", "irrigation valve pressure test", "irrigation leak documentation checklist", "irrigation pump leak triage",
+  "irrigation valve maintenance scheduling", "irrigation pressure service planning", "seasonal valve inspection planning",
+  "irrigation pump shutdown checklist", "irrigation leak test documentation", "irrigation valve shutdown planning", "irrigation pump alert triage",
+  "irrigation pressure inspection documentation", "irrigation maintenance alert checklist", "seasonal irrigation pressure test",
+  "irrigation valve service checklist", "irrigation pump pressure planning", "irrigation leak inspection workflow", "irrigation valve alert triage",
+  "irrigation shutdown test documentation", "irrigation pump maintenance scheduling", "irrigation leak service planning"];
+
+function p55Site(perCall: number) {
+  const anchors = slcBusinesses[0].keywords, pool = P55_RESEARCH;
+  const state = { open: false, handed: [] as string[] };
+  const opts: Parameters<typeof setup>[0] = { growthFirst: true, budgetMicroUsd: 2_000_000,
+    businesses: [{ ...slcBusinesses[0], cadence: 21 }],
+    discovery: {
+      // A mature site: Google Ads mostly returns what the site already has.
+      ads: () => [...anchors, ...state.handed],
+      suggestions: () => {
+        if (!state.open) return [];
+        const batch = pool.filter(k => !state.handed.includes(k)).slice(0, perCall);
+        state.handed.push(...batch); return batch;
+      } } };
+  return { opts, state, anchors, pool };
+}
+
+test("P55 research looks past keywords the site already has", async () => {
+  const hour = 3_600_000;
+  const { opts, state } = p55Site(4);
+  const f = setup(opts); const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  state.open = true;
+  // Six keywords the site already covers come back with its six anchors; the covered ones don't count as found.
+  state.handed.push(...P55_RESEARCH.slice(0, 6));
+  const saved = f.get(site.id)!;
+  for (const keyword of P55_RESEARCH.slice(0, 6)) f.add("topic_clusters", { siteId: site.id, primaryKeyword: keyword, label: keyword,
+    planningCanonicalDomain: saved.canonicalDomain ?? saved.domain, planningDomainRevision: saved.canonicalDomainRevision ?? 0,
+    secondaryKeywords: [], intent: "informational", priority: 50, status: "used", searchVolume: 100, keywordDifficulty: 5,
+    keywordDifficultyMeasured: true, createdAt: f.now(), updatedAt: f.now() });
+  assert.equal((await f.invoke("contentWork:growthTopicContext", { siteId: site.id })).known.length, 6, "the fixture topics belong to the site");
+  for (const topic of f.tables.topic_clusters) if (topic.siteId === site.id) topic.status = "used";
+  f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 5 * hour;
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "topics_researching");
+  await pumpUntil(f, () => f.get(site.id)!.contentSchedule.topicsReplenishAdded !== undefined, 20, f.now() + hour);
+  const added = f.get(site.id)!.contentSchedule.topicsReplenishAdded;
+  assert.ok(f.discoveryCalls.some(c => c.endpoint === "suggestions"), `the next source was asked: ${JSON.stringify(f.discoveryCalls)}`);
+  assert.ok(added >= 3, `new keywords were added (${added})`);
+  const planned = f.tables.topic_clusters.filter(t => t.siteId === site.id && t.status === "planned").map(t => t.primaryKeyword);
+  assert.ok(planned.every(k => !P55_RESEARCH.slice(0, 6).includes(k)), `only keywords the site did not have: ${planned}`);
+  assert.ok(planned.some(k => P55_RESEARCH.slice(6).includes(k)), `keywords from the next source were added: ${planned}`);
+  const reservation = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && r.purpose === "topic_plan")!;
+  assert.ok(reservation.settledAt !== undefined, "the research reservation is settled at the reported cost");
+  f.assertOffline();
+});
+
+test("P55 soak: seven days at 21 a week with six starting topics never run dry", async () => {
+  const hour = 3_600_000, day = 24 * hour;
+  const { opts, state } = p55Site(3);
+  const f = setup(opts); const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  state.open = true;
+  f.restartRuntime({ PENTRA_OPS_TELEGRAM_BOT_TOKEN: "synthetic-ops-token", PENTRA_OPS_TELEGRAM_CHAT_ID: "1", PENTRA_OPS_REPORT_DOMAINS: site.domain });
+  const end = START + 7 * day;
+  let nextCron = START + 3 * hour, nextRenewal = START + 6 * hour, nextDaily = START + day;
+  for (let step = 0; step < 20_000 && f.now() < end; step++) {
+    const pending = f.tables._scheduled_functions.filter(r => r.state.kind === "pending").sort((a, b) => a.at - b.at)[0];
+    const at = Math.min(pending?.at ?? Infinity, nextCron, nextRenewal, nextDaily, end);
+    f.setTime(Math.max(f.now() + 1, at));
+    if (f.now() >= nextRenewal) { await f.invoke("publisher:renewDestinationReceipts", {}); nextRenewal += 6 * hour; continue; }
+    if (f.now() >= nextDaily) { await f.invoke("contentHealth:runContentHealth", { notify: "always" }); nextDaily += day; continue; }
+    if (f.now() >= nextCron) {
+      await f.invoke("autopilot:dispatchActiveSites", { trigger: "natural", cronSlotUTC: "00:00" });
+      await f.invoke("contentHealth:runContentHealth", { notify: "problems" });
+      nextCron += 3 * hour; continue;
+    }
+    if (pending && pending.at <= f.now()) await f.runNextScheduled();
+    f.assertOffline();
+  }
+  const published = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "verified" && j.contentWork.intent === "create")
+    .map(j => j.contentWork.publishedAt).sort((a, b) => a - b);
+  const perDay = Array.from({ length: 7 }, (_, d) => published.filter(t => t >= START + d * day && t < START + (d + 1) * day).length);
+  const research = f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan").map(r => r.createdAt ?? r.reservedAt ?? 0).sort((a, b) => a - b);
+  const s = f.get(site.id)!.contentSchedule;
+  const summary = JSON.stringify({ perDay, total: published.length, researchH: research.map(t => +((t - START) / hour).toFixed(1)),
+    handed: state.handed.length, rounds: s.topicsResearchRound, lastAdded: s.topicsReplenishAdded,
+    planned: f.tables.topic_clusters.filter(t => t.siteId === site.id && t.status === "planned").length,
+    failed: f.tables.jobs.filter(j => j.contentWork?.stage === "failed").map(j => j.contentWork.failure) });
+  if (process.env.PENTRA_SOAK_VERBOSE) console.log(summary);
+  for (const d of [1, 2, 3, 4, 5, 6]) assert.ok(perDay[d] >= 2, `day ${d} published ${perDay[d]}: ${summary}`);
+  assert.ok(published.length >= 18, summary);
+  assert.ok(research.length >= 2 && research.length <= 8, `research is bounded to about once a day: ${summary}`);
+  assert.ok(research.slice(1).every((t, i) => t - research[i] >= day - 60_000), `never more than once a day: ${summary}`);
+  const reports = f.telegramMessages.map(m => String(m.text));
+  assert.ok(reports.some(t => /topics left \d+/.test(t)), `the daily report shows the topic runway: ${reports.at(-1)}`);
+  f.assertOffline();
 });

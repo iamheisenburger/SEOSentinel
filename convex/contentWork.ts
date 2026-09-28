@@ -115,6 +115,23 @@ function namesCompetitor(text: string, names: string[]) {
 const WINNABLE_KEYWORD_DIFFICULTY = 45;
 /** Research that found no new keyword is not repeated for a week. */
 const TOPIC_REPLENISH_EMPTY_BACKOFF_MS = 7 * 86_400_000;
+/** Research never runs more than once a day for a site. */
+const TOPIC_REPLENISH_MIN_GAP_MS = 86_400_000;
+/** Spacing between two keyword researches for a site. It scales with the
+ * cadence: a site publishing three times a day uses up a research batch in a
+ * day or two, so it cannot wait three days (or a week after an empty run). */
+export function topicResearchGapMs(schedule: { intervalMs: number; topicsReplenishAdded?: number }) {
+  const scaled = Math.max(TOPIC_REPLENISH_MIN_GAP_MS, 3 * schedule.intervalMs);
+  return Math.min(schedule.topicsReplenishAdded === 0 ? TOPIC_REPLENISH_EMPTY_BACKOFF_MS : TOPIC_REPLENISH_INTERVAL_MS, scaled);
+}
+/** Research starts before the searched keywords run out: when fewer are left
+ * than about four days of slots (at least 3, at most 12). */
+export function topicRunwayTarget(intervalMs: number) {
+  return Math.max(3, Math.min(12, Math.ceil(4 * 86_400_000 / Math.max(intervalMs, 3_600_000))));
+}
+export function topicResearchDueAt(schedule: { intervalMs: number; topicsReplenishAdded?: number; topicsReplenishedAt?: number }) {
+  return (schedule.topicsReplenishedAt ?? 0) + topicResearchGapMs(schedule);
+}
 /** An Autopilot article waits for fresh keyword research only while its slot is at least this far away. */
 const TOPIC_RESEARCH_WAIT_MARGIN_MS = 90 * 60_000;
 /** Autopilot writes for searched keywords: when none is left, research new
@@ -122,9 +139,8 @@ const TOPIC_RESEARCH_WAIT_MARGIN_MS = 90 * 60_000;
 async function startTopicResearchIfDue(ctx: MutationCtx, site: Doc<"sites">, articleBudgetMicroUsd: number) {
   const schedule = site.contentSchedule;
   if (!schedule?.autopilotSelectedAt || !site.userId) return false;
-  const interval = schedule.topicsReplenishAdded === 0 ? TOPIC_REPLENISH_EMPTY_BACKOFF_MS : TOPIC_REPLENISH_INTERVAL_MS;
-  if (Date.now() - (schedule.topicsReplenishedAt ?? 0) < interval) return false;
-  const request = { siteId: site._id, userId: site.userId, purpose: "topic_plan" as const, trigger: `autopilot_topics:${Math.floor(Date.now() / TOPIC_REPLENISH_INTERVAL_MS)}`,
+  if (Date.now() < topicResearchDueAt(schedule)) return false;
+  const request = { siteId: site._id, userId: site.userId, purpose: "topic_plan" as const, trigger: `autopilot_topics:${Math.floor(Date.now() / TOPIC_REPLENISH_MIN_GAP_MS)}`,
     reservedMicroUsd: TOPIC_REPLENISH_BUDGET_MICRO_USD, timestamp: Date.now() };
   // Research only when the account can still afford the article after it: the cadence comes first.
   const room = await inspectSharedProviderBudget(ctx, { ...request, reservedMicroUsd: TOPIC_REPLENISH_BUDGET_MICRO_USD + articleBudgetMicroUsd });
@@ -132,7 +148,7 @@ async function startTopicResearchIfDue(ctx: MutationCtx, site: Doc<"sites">, art
   const reserved = await reserveSharedProviderBudget(ctx, request);
   // A refused reservation spends nothing; try again on the next check.
   if (!reserved.ok) return false;
-  const next = { ...schedule, topicsReplenishedAt: Date.now() };
+  const next = { ...schedule, topicsReplenishedAt: Date.now(), topicsResearchRound: (schedule.topicsResearchRound ?? 0) + 1 };
   delete next.topicsReplenishAdded;
   await ctx.db.patch(site._id, { contentSchedule: next, updatedAt: Date.now() });
   await ctx.scheduler.runAfter(0, internal.actions.growthTopics.replenish, { siteId: site._id, reservationId: reserved.reservationId });
@@ -987,8 +1003,10 @@ export const control = mutation({ args: { siteId: v.id("sites"), action: v.union
     await wake(ctx, site._id);
   } });
 
-async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: Id<"topic_clusters">,
-  excludedIntents: { primaryKeyword: string; label?: string }[] = [], options: { demandOnly?: boolean } = {}) {
+/** The planned topics Autopilot may still write, best first (read-only). The
+ * health check uses the same list to report how many are left. */
+export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: Doc<"sites">,
+  excludedIntents: { primaryKeyword: string; label?: string }[] = []) {
   const topics = await takeCurrentDomainTopics(ctx, site, LIMIT + 1);
   if (topics.length > LIMIT) throw new Error("Topic inventory is incomplete");
   const signals = tenantTopicBusinessSignals(site);
@@ -1022,37 +1040,51 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
   const opportunity = (t: Doc<"topic_clusters">) => Math.log10(1 + (t.searchVolume ?? 0)) * 12 - (t.keywordDifficulty ?? 0) * 0.8;
   planned.sort((a, b) => Number(searched(b)) - Number(searched(a)) ||
     (searched(a) && searched(b) ? opportunity(b) - opportunity(a) : 0) || (b.priority ?? 0) - (a.priority ?? 0));
-  if (preferredId) return planned.find(t => t._id === preferredId) ?? null;
-  if (options.demandOnly) return planned.find(searched) ?? null;
-  if (planned[0]) return planned[0];
-  // No researched keyword is left: a real question the owner confirmed their
-  // customers ask is a better article than a guide named after a feature.
+  return { topics, pageCoverage, fit, competitors, planned, searched };
+}
+const PAIN_POINT_TOPIC_NOTES = "A customer question the owner confirmed. Search forecasts are unknown. Answer it from supported business facts with conditional guidance; never invent experience or external claims.";
+const ANCHOR_TOPIC_NOTES = "Confirmed first-party reader question. Search forecasts are unknown. Use supported business facts and conditional guidance; never invent experience or external claims.";
+/** When no researched keyword is left: the owner's confirmed customer
+ * questions first, then guides for their confirmed features (read-only). */
+export function fallbackTopicProposals(site: Doc<"sites">, inventory: Awaited<ReturnType<typeof eligiblePlannedTopics>>,
+  excludedIntents: { primaryKeyword: string; label?: string }[] = []) {
+  const { topics, pageCoverage, fit, competitors } = inventory;
+  const proposals: { primaryKeyword: string; label: string; notes: string }[] = [];
+  // A real question the owner confirmed their customers ask is a better
+  // article than a guide named after a feature.
   for (const question of site.painPoints ?? []) {
     const label = question.trim().replace(/\s+/g, " ");
     if (label.length < 15 || label.length > 110 || !label.endsWith("?") || label.split(" ").length < 4) continue;
     const proposal = { primaryKeyword: label.toLowerCase().replace(/[?!.\s]+$/, ""), label };
     if (!fit(proposal) || namesCompetitor(label, competitors) ||
       [...topics, ...pageCoverage, ...excludedIntents].some(t => contentIntentConflicts(proposal, t))) continue;
-    const id = await ctx.db.insert("topic_clusters", { siteId: site._id, ...proposal,
-      planningCanonicalDomain: siteCanonicalDomain(site)!, planningDomainRevision: siteCanonicalDomainRevision(site),
-      secondaryKeywords: [], intent: "informational", priority: 1, status: "planned",
-      notes: "A customer question the owner confirmed. Search forecasts are unknown. Answer it from supported business facts with conditional guidance; never invent experience or external claims.",
-      createdAt: Date.now(), updatedAt: Date.now() });
-    return (await ctx.db.get(id))!;
+    proposals.push({ ...proposal, notes: PAIN_POINT_TOPIC_NOTES });
   }
   const anchors = tenantDiscoveryAnchors([...(site.anchorKeywords ?? []), ...(site.keyFeatures ?? []),
     ...(site.painPoints ?? []), site.productUsage], 40);
   for (const primaryKeyword of anchors) {
     const proposal = { primaryKeyword, label: `A practical guide to ${primaryKeyword}` };
     if (!fit(proposal) || [...topics, ...pageCoverage, ...excludedIntents].some(t => contentIntentConflicts(proposal, t))) continue;
-    const id = await ctx.db.insert("topic_clusters", { siteId: site._id, ...proposal,
-      planningCanonicalDomain: siteCanonicalDomain(site)!, planningDomainRevision: siteCanonicalDomainRevision(site),
-      secondaryKeywords: [], intent: "informational", priority: 1, status: "planned",
-      notes: "Confirmed first-party reader question. Search forecasts are unknown. Use supported business facts and conditional guidance; never invent experience or external claims.",
-      createdAt: Date.now(), updatedAt: Date.now() });
-    return (await ctx.db.get(id))!;
+    proposals.push({ ...proposal, notes: ANCHOR_TOPIC_NOTES });
   }
-  return null;
+  return proposals;
+}
+async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: Id<"topic_clusters">,
+  excludedIntents: { primaryKeyword: string; label?: string }[] = [],
+  options: { demandOnly?: boolean; runway?: { planned: number; searched: number } } = {}) {
+  const inventory = await eligiblePlannedTopics(ctx, site, excludedIntents);
+  const { planned, searched } = inventory;
+  if (options.runway) Object.assign(options.runway, { planned: planned.length, searched: planned.filter(searched).length });
+  if (preferredId) return planned.find(t => t._id === preferredId) ?? null;
+  if (options.demandOnly) return planned.find(searched) ?? null;
+  if (planned[0]) return planned[0];
+  const [proposal] = fallbackTopicProposals(site, inventory, excludedIntents);
+  if (!proposal) return null;
+  const id = await ctx.db.insert("topic_clusters", { siteId: site._id, primaryKeyword: proposal.primaryKeyword, label: proposal.label,
+    planningCanonicalDomain: siteCanonicalDomain(site)!, planningDomainRevision: siteCanonicalDomainRevision(site),
+    secondaryKeywords: [], intent: "informational", priority: 1, status: "planned", notes: proposal.notes,
+    createdAt: Date.now(), updatedAt: Date.now() });
+  return (await ctx.db.get(id))!;
 }
 
 /** An explicit owner order uses the same priced worker, not the automatic
@@ -1194,13 +1226,33 @@ export const advanceOwnerDraft = internalMutation({ args: { jobId: v.id("jobs") 
   if (result.scheduled) await ctx.scheduler.runAfter(0, internal.actions.pipeline.processNextJob, { siteId: site._id, jobId });
 } });
 
-/** Seeds and locale for Autopilot keyword research (no secrets). */
+export const normalizeResearchKeyword = (keyword: string) => keyword.trim().toLowerCase().replace(/\s+/g, " ");
+/** Seeds for one research run. The same seeds return the same keywords, so
+ * each run starts further along the pool: the owner's business anchors, then
+ * keywords this site already wrote for that people search (both stay on the
+ * confirmed business). The first run uses the pool's start, as before. */
+export function rotatedResearchSeeds(anchors: string[], searchedKeywords: string[], round: number) {
+  const pool = [...new Set([...anchors, ...searchedKeywords].map(normalizeResearchKeyword).filter(Boolean))];
+  if (pool.length === 0) return [];
+  const start = (Math.max(0, round - 1) * 5) % pool.length;
+  return [...pool.slice(start), ...pool.slice(0, start)].slice(0, 15);
+}
+
+/** Seeds and locale for Autopilot keyword research (no secrets), plus the
+ * keywords the site already has so research looks past them. */
 export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await ctx.db.get(siteId);
   if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return null;
-  const seeds = tenantDiscoveryAnchors([...(site.anchorKeywords ?? []), ...(site.keyFeatures ?? []), ...(site.painPoints ?? []),
-    site.productUsage, site.niche, site.blogTheme], 12);
-  return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds };
+  const anchors = tenantDiscoveryAnchors([...(site.anchorKeywords ?? []), ...(site.keyFeatures ?? []), ...(site.painPoints ?? []),
+    site.productUsage, site.niche, site.blogTheme], 40);
+  const topics = await takeCurrentDomainTopics(ctx, site, LIMIT + 1);
+  const written = topics.filter(t => ["used", "queued"].includes(t.status ?? "") && (t.searchVolume ?? 0) > 0 &&
+    (t.keywordDifficulty ?? 0) <= WINNABLE_KEYWORD_DIFFICULTY)
+    .sort((a, b) => (b.searchVolume ?? 0) - (a.searchVolume ?? 0)).map(t => t.primaryKeyword)
+    .filter(k => { const n = normalizeResearchKeyword(k).split(" ").length; return n >= 2 && n <= 6; }).slice(0, 20);
+  const seeds = rotatedResearchSeeds(anchors, written, site.contentSchedule.topicsResearchRound ?? 1);
+  const known = [...new Set(topics.slice(0, LIMIT).map(t => normalizeResearchKeyword(t.primaryKeyword)))];
+  return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds, known };
 } });
 
 /** Close Autopilot's keyword-research reservation: settled at the provider's
@@ -1471,11 +1523,12 @@ export const advance = internalMutation({
     const pricing = await pricingConfiguration(ctx, site);
     if (!pricing) return { scheduled: 0, mode: "content_pricing_unavailable" };
     const improvement = await chooseImprovement(ctx, site, work);
+    const runway = { planned: 0, searched: 0 };
     let topic = improvement ? await ctx.db.get(await ctx.db.insert("topic_clusters", {
       siteId, planningCanonicalDomain: siteCanonicalDomain(site)!, planningDomainRevision: siteCanonicalDomainRevision(site),
       primaryKeyword: improvement.question, label: improvement.page.editable!.title, secondaryKeywords: [], intent: "informational",
       priority: 1, status: "planned", notes: improvement.reason, createdAt: Date.now(), updatedAt: Date.now(),
-    })) : await chooseTopic(ctx, site, undefined, [], { demandOnly: Boolean(schedule.autopilotSelectedAt) });
+    })) : await chooseTopic(ctx, site, undefined, [], { demandOnly: Boolean(schedule.autopilotSelectedAt), runway });
     if (!improvement && !topic && schedule.autopilotSelectedAt) {
       // No searched keyword is left: research new ones for the confirmed
       // business (within the ordinary spend limits). When the slot allows, the
@@ -1545,6 +1598,14 @@ export const advance = internalMutation({
     await ctx.db.patch(jobId, { providerSpendReservationId: reserved.reservationId });
     await ctx.db.patch(topic._id, { status: "queued", updatedAt: Date.now() });
     if (improvement) await ctx.db.patch(improvement.page._id, { editable: { ...improvement.page.editable!, lastWorkJobId: jobId } });
+    // Research the next keywords before the searched ones run out, instead of
+    // waiting for an empty inventory (which costs slots at a fast cadence).
+    // It never takes the room the next article needs.
+    if (schedule.autopilotSelectedAt && !improvement &&
+      runway.searched - ((topic.searchVolume ?? 0) > 0 ? 1 : 0) < topicRunwayTarget(slot.intervalMs)) {
+      const fresh = await ctx.db.get(siteId);
+      if (fresh) await startTopicResearchIfDue(ctx, fresh, pricing.budgetMicroUsd);
+    }
     return { scheduled: 1, mode: replacing ? "buffer_replacement" : "buffer_fill", activeJobId: jobId };
   },
 });
