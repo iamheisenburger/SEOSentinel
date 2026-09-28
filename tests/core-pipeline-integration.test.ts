@@ -6385,3 +6385,53 @@ test("P55 soak: seven days at 21 a week with six starting topics never run dry",
   assert.ok(reports.some(t => /topics left \d+/.test(t)), `the daily report shows the topic runway: ${reports.at(-1)}`);
   f.assertOffline();
 });
+
+test("P56 research keeps looking when the first source returns only keywords Autopilot could not write", async () => {
+  const hour = 3_600_000;
+  const offBusiness = ["celebrity gossip news today", "cheap flights to paris", "best pizza near me", "football transfer rumours",
+    "movie release dates 2026", "how to bake sourdough", "stock market futures live", "weather radar tonight", "lottery results tonight",
+    "used car prices", "concert tickets resale", "wedding dress ideas"];
+  const { state } = p55Site(4);
+  const f = setup({ growthFirst: true, budgetMicroUsd: 2_000_000, businesses: [{ ...slcBusinesses[0], cadence: 21 }],
+    discovery: { ads: () => offBusiness, suggestions: () => { const batch = P55_RESEARCH.filter(k => !state.handed.includes(k)).slice(0, 4);
+      state.handed.push(...batch); return batch; } } });
+  const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+  f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 5 * hour;
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "topics_researching");
+  await pumpUntil(f, () => f.get(site.id)!.contentSchedule.topicsReplenishAdded !== undefined, 20, f.now() + hour);
+  assert.ok(f.discoveryCalls.some(c => c.endpoint === "suggestions"), `twelve off-business keywords did not stop the search: ${JSON.stringify(f.discoveryCalls)}`);
+  const planned = f.tables.topic_clusters.filter(t => t.siteId === site.id && t.status === "planned").map(t => t.primaryKeyword);
+  assert.ok(planned.some(k => P55_RESEARCH.includes(k)), `on-business keywords were added: ${planned}`);
+  assert.ok(planned.every(k => !offBusiness.includes(k)), `nothing off-business was added: ${planned}`);
+  f.assertOffline();
+});
+
+test("P56 research spacing follows the cadence and how much the last run found", async () => {
+  const hour = 3_600_000, day = 24 * hour;
+  const f = setup({ growthFirst: true, budgetMicroUsd: 2_000_000, businesses: [{ ...slcBusinesses[0], cadence: 21 }] });
+  const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const at = f.now();
+  const gap = async (fields: { intervalMs: number; topicsReplenishAdded?: number }) => {
+    const schedule = f.get(site.id)!.contentSchedule;
+    Object.assign(schedule, { topicsReplenishedAt: at, ...fields });
+    if (!("topicsReplenishAdded" in fields)) delete schedule.topicsReplenishAdded;
+    return (await f.invoke("contentHealth:siteHealth", { siteId: site.id })).researchDueAt - at;
+  };
+  assert.equal(await gap({ intervalMs: 8 * hour, topicsReplenishAdded: 10 }), day, "every 8 hours: at most daily");
+  assert.equal(await gap({ intervalMs: 8 * hour, topicsReplenishAdded: 2 }), 8 * hour, "a thin run is followed up after one slot");
+  assert.equal(await gap({ intervalMs: 8 * hour, topicsReplenishAdded: 0 }), day, "an empty run waits a day");
+  assert.equal(await gap({ intervalMs: 8 * hour }), day, "research still in flight");
+  assert.equal(await gap({ intervalMs: day, topicsReplenishAdded: 10 }), 3 * day);
+  assert.equal(await gap({ intervalMs: day, topicsReplenishAdded: 1 }), day);
+  assert.equal(await gap({ intervalMs: day, topicsReplenishAdded: 0 }), 3 * day);
+  assert.equal(await gap({ intervalMs: 7 * day, topicsReplenishAdded: 1 }), 3 * day, "a weekly site keeps the three-day spacing");
+  assert.equal(await gap({ intervalMs: 7 * day, topicsReplenishAdded: 0 }), 7 * day);
+  f.assertOffline();
+});

@@ -122,7 +122,14 @@ const TOPIC_REPLENISH_MIN_GAP_MS = 86_400_000;
  * day or two, so it cannot wait three days (or a week after an empty run). */
 export function topicResearchGapMs(schedule: { intervalMs: number; topicsReplenishAdded?: number }) {
   const scaled = Math.max(TOPIC_REPLENISH_MIN_GAP_MS, 3 * schedule.intervalMs);
-  return Math.min(schedule.topicsReplenishAdded === 0 ? TOPIC_REPLENISH_EMPTY_BACKOFF_MS : TOPIC_REPLENISH_INTERVAL_MS, scaled);
+  const added = schedule.topicsReplenishAdded;
+  if (added === 0) return Math.min(TOPIC_REPLENISH_EMPTY_BACKOFF_MS, scaled);
+  const gap = Math.min(TOPIC_REPLENISH_INTERVAL_MS, scaled);
+  // A thin run (fewer new topics than the slots before the next run) is
+  // followed up after one slot with the next seeds, instead of leaving slots
+  // without a topic. A weekly site never has a slot inside the gap.
+  if (added !== undefined && added < Math.floor(gap / schedule.intervalMs)) return Math.max(schedule.intervalMs, 8 * 3_600_000);
+  return gap;
 }
 /** Research starts before the searched keywords run out: when fewer are left
  * than about four days of slots (at least 3, at most 12). */
@@ -1252,7 +1259,14 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
     .filter(k => { const n = normalizeResearchKeyword(k).split(" ").length; return n >= 2 && n <= 6; }).slice(0, 20);
   const seeds = rotatedResearchSeeds(anchors, written, site.contentSchedule.topicsResearchRound ?? 1);
   const known = [...new Set(topics.slice(0, LIMIT).map(t => normalizeResearchKeyword(t.primaryKeyword)))];
-  return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds, known };
+  // Everything a new article must not repeat: topics plus published articles and pages.
+  let coverage = known;
+  try {
+    const inventory = await eligiblePlannedTopics(ctx, site);
+    coverage = [...new Set([...known, ...inventory.pageCoverage.map(c => normalizeResearchKeyword(c.primaryKeyword ?? ""))].filter(Boolean))];
+  } catch { /* an incomplete inventory keeps the topic list only */ }
+  return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds, known, coverage,
+    signals: tenantTopicBusinessSignals(site) };
 } });
 
 /** Close Autopilot's keyword-research reservation: settled at the provider's
@@ -1282,10 +1296,12 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
   handler: async (ctx, { siteId, keywords }) => {
     const site = await ctx.db.get(siteId);
     if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return { added: 0 };
-    const topics = await takeCurrentDomainTopics(ctx, site, LIMIT + 1);
-    if (topics.length > LIMIT) return { added: 0 };
+    let inventory;
+    try { inventory = await eligiblePlannedTopics(ctx, site); } catch { return { added: 0 }; }
     const signals = tenantTopicBusinessSignals(site);
-    const taken: { primaryKeyword: string }[] = [...topics];
+    // A keyword that repeats a published article or page could never be
+    // written, so it is not added (it would only take a research slot).
+    const taken: { primaryKeyword: string }[] = [...inventory.topics, ...inventory.pageCoverage];
     let added = 0;
     for (const k of [...keywords].sort((a, b) => b.searchVolume - a.searchVolume)) {
       if (added >= 15) break;
