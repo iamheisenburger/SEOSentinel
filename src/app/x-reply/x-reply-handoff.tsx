@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { parseXReplyHandoff, xReplyLinks } from "@/lib/x-reply-handoff";
 
 const BUTTON = "flex w-full items-center justify-center rounded-full px-5 py-3 text-[15px] font-medium transition";
@@ -23,9 +23,19 @@ export function XReplyHandoffView() {
     return parseXReplyHandoff(hash, search);
   }, [location]);
   const [copied, setCopied] = useState(false);
+  const opened = useRef(false);
+  const links = draft ? xReplyLinks(draft) : null;
+
+  // Telegram opens links in its own browser, which is not signed in to X, so
+  // the reply goes straight to the installed X app's composer, once.
+  useEffect(() => {
+    if (!links || opened.current) return;
+    opened.current = true;
+    window.location.href = links.app;
+  }, [links]);
 
   if (draft === undefined) return null;
-  if (draft === null) {
+  if (draft === null || !links) {
     return (
       <div className="rounded-xl border border-white/[0.08] bg-[#0B0C0E] p-6">
         <p className="text-[15px] text-[#D0D6E0]">
@@ -35,14 +45,19 @@ export function XReplyHandoffView() {
     );
   }
 
-  const links = xReplyLinks(draft);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(draft.text);
       setCopied(true);
+      return true;
     } catch {
       setCopied(false);
+      return false;
     }
+  };
+  const copyAndOpenSource = async () => {
+    await copy();
+    window.location.href = links.sourceApp;
   };
 
   return (
@@ -52,25 +67,29 @@ export function XReplyHandoffView() {
         <h1 className="mt-2 text-[20px] font-medium text-[#F7F8F8]">
           {draft.author ? `Reply to @${draft.author}` : "Reply to this post"}
         </h1>
+        <p className="mt-1 text-[13px] text-[#8A8F98]">The X app should open automatically with this reply ready.</p>
       </div>
       <div className="rounded-xl border border-white/[0.08] bg-[#0B0C0E] p-5">
         <p className="whitespace-pre-wrap text-[16px] leading-relaxed text-[#F7F8F8]">{draft.text}</p>
         <p className="mt-3 font-mono text-[12px] text-[#62666D]">{draft.text.length} characters</p>
       </div>
-      <a href={links.composer} className={`${BUTTON} bg-[#F7F8F8] text-[#08090A] hover:bg-white`}>
-        Open reply in X
+      <a href={links.app} className={`${BUTTON} bg-[#F7F8F8] text-[#08090A] hover:bg-white`}>
+        Open reply in X app
       </a>
       <div className="grid grid-cols-2 gap-3">
         <button type="button" onClick={copy} className={`${BUTTON} border border-white/[0.1] text-[#F7F8F8] hover:bg-white/[0.04]`}>
           {copied ? "Copied" : "Copy reply"}
         </button>
-        <a href={links.app} className={`${BUTTON} border border-white/[0.1] text-[#F7F8F8] hover:bg-white/[0.04]`}>
-          Open X app
-        </a>
+        <button type="button" onClick={copyAndOpenSource} className={`${BUTTON} border border-white/[0.1] text-[#F7F8F8] hover:bg-white/[0.04]`}>
+          Copy + open post in X
+        </button>
       </div>
-      <a href={links.source} target="_blank" rel="noopener noreferrer" className="block text-center text-[14px] text-[#8A8F98] underline-offset-4 hover:underline">
-        View the original post
-      </a>
+      <p className="text-center text-[13px] text-[#62666D]">
+        If the X app opens without the reply target, use Copy + open post, then paste your reply.{" "}
+        <a href={links.composer} className="underline underline-offset-4 hover:text-[#8A8F98]">Browser fallback</a>
+        {" · "}
+        <a href={links.source} target="_blank" rel="noopener noreferrer" className="underline underline-offset-4 hover:text-[#8A8F98]">View post on the web</a>
+      </p>
       <p className="text-center text-[13px] text-[#62666D]">
         Nothing is posted until you press Reply in X. Skip the draft if it doesn&apos;t fit the post.
       </p>

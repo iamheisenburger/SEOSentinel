@@ -33,14 +33,18 @@ test("refuses incomplete or unsafe payloads", () => {
   assert.deepEqual(parseXReplyHandoff(make({ id: "12", text: TEXT })), { id: "12", text: TEXT, author: "" });
 });
 
-test("links open X's composer as a reply with the draft filled in", () => {
+test("the X app's composer is the primary link, opened as a reply with the draft filled in", () => {
   const links = xReplyLinks({ id: "1900000000000000000", text: "a & b, 100%?", author: "alice" });
   const composer = new URL(links.composer);
   assert.equal(composer.origin + composer.pathname, "https://x.com/intent/post");
   assert.equal(composer.searchParams.get("in_reply_to"), "1900000000000000000");
   assert.equal(composer.searchParams.get("text"), "a & b, 100%?");
-  assert.ok(links.app.startsWith("twitter://post?in_reply_to_status_id=1900000000000000000&message="));
-  assert.equal(decodeURIComponent(links.app.split("message=")[1]), "a & b, 100%?");
+  // Same scheme and parameter order as the LeadPilot handoff that opens the app from Telegram.
+  const app = links.app.match(/^twitter:\/\/post\?message=([^&]*)&in_reply_to_status_id=(\d+)$/);
+  assert.ok(app, links.app);
+  assert.equal(decodeURIComponent(app[1]), "a & b, 100%?");
+  assert.equal(app[2], "1900000000000000000");
+  assert.equal(links.sourceApp, "twitter://status?id=1900000000000000000");
   assert.equal(links.source, "https://x.com/alice/status/1900000000000000000");
   assert.equal(xReplyLinks({ id: "5", text: "t", author: "" }).source, "https://x.com/i/web/status/5");
 });
@@ -52,4 +56,8 @@ test("the page is public, noindex, and never posts", () => {
   assert.match(page, /index: false/);
   const view = readFileSync("src/app/x-reply/x-reply-handoff.tsx", "utf8");
   assert.doesNotMatch(view, /fetch\(|api\.x\.com|api\.twitter\.com/);
+  // Telegram's browser is not signed in to X: the page hands off to the app on
+  // load, and the primary button is the app link, never the web login.
+  assert.match(view, /window\.location\.href = links\.app/);
+  assert.match(view, /<a href=\{links\.app\}[^>]*>\s*Open reply in X app/);
 });

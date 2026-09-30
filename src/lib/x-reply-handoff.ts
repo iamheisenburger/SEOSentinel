@@ -31,10 +31,13 @@ export function parseXReplyHandoff(hash: string, search = ""): XReplyHandoff | n
 export function xReplyLinks({ id, text, author }: XReplyHandoff) {
   const message = encodeURIComponent(text);
   return {
-    /** X's web intent. On a phone with the X app, tapping it opens the app. */
+    /** The installed X app's own composer, opened as a reply with the draft
+     * filled in. This is the primary path: it never needs a browser sign-in. */
+    app: `twitter://post?message=${message}&in_reply_to_status_id=${id}`,
+    /** The source post inside the X app (for "copy, then reply by hand"). */
+    sourceApp: `twitter://status?id=${id}`,
+    /** X's web intent, only as a fallback for a browser already signed in to X. */
     composer: `https://x.com/intent/post?in_reply_to=${id}&text=${message}`,
-    /** The X app's own URL scheme, for phones where the web link stays in the browser. */
-    app: `twitter://post?in_reply_to_status_id=${id}&message=${message}`,
     source: author ? `https://x.com/${author}/status/${id}` : `https://x.com/i/web/status/${id}`,
   };
 }
