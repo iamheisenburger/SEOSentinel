@@ -1,3 +1,4 @@
+import { isApiCmsMethod } from "./lib/cmsDestinations";
 import {
   internalMutation,
   internalQuery,
@@ -16,6 +17,7 @@ import {
   assertSupportedPublicationRendererVersion,
   publicationAdapterConfigHashForVersion,
   publicationArtifactHash,
+  credentialedAdapterMethod,
   publicationArtifactHashForAuditVersion,
   publicationDeliveryConfig,
   publicationDeliveryConfigHash,
@@ -1574,7 +1576,7 @@ function attemptedAdapterContract(
   rendererVersion?: string;
 } | null {
   const method = article.publicationConfigSnapshot?.method;
-  if (method !== "wordpress" && method !== "webhook") return {};
+  if (!credentialedAdapterMethod(method)) return {};
   // Additive compatibility: rows attempted before these explicit fields were
   // introduced may infer them only from the still-exact live verification and
   // immutable renderer snapshot. The inferred values are persisted when the
@@ -1663,13 +1665,13 @@ async function assertInitialPublicationMutationAuthorized(
   }
   if (
     replayingAttemptedEnvelope &&
-    (sealedConfig.method === "wordpress" || sealedConfig.method === "webhook")
+    credentialedAdapterMethod(sealedConfig.method)
   ) {
     if (!attemptedAdapterContract(site, article)) {
       throw new Error("Attempted publication lost its sealed adapter contract");
     }
   } else if (
-    currentConfig.method === "wordpress" || currentConfig.method === "webhook"
+    credentialedAdapterMethod(currentConfig.method)
   ) {
     const adapterHash = publicationAdapterConfigHashForVersion(
       site,
@@ -1951,16 +1953,14 @@ export const recordPublicationAttempted = internalMutation({
     const recoveredAdapter = article.publicationAttemptedAt
       ? attemptedAdapterContract(site, article)
       : null;
-    const adapterVersion = currentConfig.method === "wordpress" ||
-        currentConfig.method === "webhook"
+    const adapterVersion = credentialedAdapterMethod(currentConfig.method)
       ? recoveredAdapter?.adapterVersion ?? PUBLICATION_ADAPTER_VERSION
       : undefined;
     const adapterConfigHash = adapterVersion
       ? recoveredAdapter?.adapterConfigHash ??
         publicationAdapterConfigHashForVersion(site, adapterVersion)
       : undefined;
-    const rendererVersion = currentConfig.method === "wordpress" ||
-        currentConfig.method === "webhook"
+    const rendererVersion = credentialedAdapterMethod(currentConfig.method)
       ? recoveredAdapter?.rendererVersion ?? currentConfig.rendererVersion
       : undefined;
     if (
@@ -2110,7 +2110,7 @@ export const completePublication = internalMutation({
     expectedRolloutEpoch: v.number(),
     leaseOwner: v.string(),
     receipt: v.object({
-      method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook")),
+      method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook"), v.literal("shopify"), v.literal("webflow"), v.literal("ghost")),
       deliveryKey: v.string(),
       contentHash: v.string(),
       externalId: v.string(),
@@ -2630,6 +2630,8 @@ export const applyQualityReview = internalMutation({
         contentDir: v.optional(v.string()),
         wpUrl: v.optional(v.string()),
         webhookUrl: v.optional(v.string()),
+        cmsEndpoint: v.optional(v.string()),
+        cmsCollection: v.optional(v.string()),
         brandPrimaryColor: v.optional(v.string()),
         brandAccentColor: v.optional(v.string()),
         brandFontFamily: v.optional(v.string()),
@@ -3250,7 +3252,7 @@ export const acceptOwnerReviewNotes = mutation({
     const site = (await ctx.db.get(article.siteId))!;
     assertNotPublishing(article);
     if (article.status === "published" || article.publicationAttemptedAt || article.publicationReceipt ||
-      article.publicationOutcomeUnverifiedAt || !["github", "wordpress"].includes(site.publishMethod ?? "")) {
+      article.publicationOutcomeUnverifiedAt || !(["github", "wordpress"].includes(site.publishMethod ?? "") || isApiCmsMethod(site.publishMethod))) {
       throw new ConvexError("This draft cannot be accepted for publication here.");
     }
     if (publicationArtifactHash(article) !== artifactHash) throw new ConvexError("This draft changed. Refresh before accepting it.");

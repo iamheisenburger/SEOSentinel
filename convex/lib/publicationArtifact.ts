@@ -2,6 +2,13 @@ import {
   PUBLICATION_ADAPTER_VERSION,
   PUBLISHER_RENDERER_VERSION,
 } from "./publicationReceipts.ts";
+import {
+  cmsAdapterSealInput,
+  cmsCollection,
+  cmsEndpoint,
+  cmsUrlStructure,
+  isApiCmsMethod,
+} from "./cmsDestinations.ts";
 
 // Version 7 binds every not-yet-published sealed artifact to the current
 // tenant business-fit policy. The bump makes pre-v9 ready inventory pass
@@ -146,6 +153,8 @@ export type PublicationDeliveryConfig = {
   contentDir?: string;
   wpUrl?: string;
   webhookUrl?: string;
+  cmsEndpoint?: string;
+  cmsCollection?: string;
   rendererVersion?: string;
   brandPrimaryColor?: string;
   brandAccentColor?: string;
@@ -162,6 +171,8 @@ export type PublicationSiteConfig = {
   repoDefaultBranch?: string;
   wpUrl?: string;
   webhookUrl?: string;
+  cmsEndpoint?: string;
+  cmsCollection?: string;
   rendererVersion?: string;
   brandPrimaryColor?: string;
   brandAccentColor?: string;
@@ -172,7 +183,15 @@ export type PublicationAdapterSiteConfig = PublicationSiteConfig & {
   wpUsername?: string;
   wpAppPassword?: string;
   webhookSecret?: string;
+  cmsClientId?: string;
+  cmsSecret?: string;
 };
+
+/** Methods whose destination is proven by Pentra's signed/credentialed
+ * production preflight (adapter verification) before any publication. */
+export function credentialedAdapterMethod(method: string | undefined): boolean {
+  return method === "wordpress" || method === "webhook" || isApiCmsMethod(method);
+}
 
 export function publicationAdapterConfigHash(
   site: Partial<PublicationAdapterSiteConfig>,
@@ -214,6 +233,18 @@ export function publicationAdapterConfigHashForVersion(
       method,
       webhookUrl,
       credentialHash: sha256Hex(webhookSecret),
+    }));
+  }
+  if (isApiCmsMethod(method)) {
+    const seal = cmsAdapterSealInput({ ...site, publishMethod: method });
+    if (!seal) return undefined;
+    return sha256Hex(JSON.stringify({
+      version: adapterVersion,
+      method,
+      endpoint: seal.endpoint,
+      collection: seal.collection,
+      ...(seal.clientId ? { clientId: seal.clientId } : {}),
+      credentialHash: sha256Hex(seal.credential),
     }));
   }
   return undefined;
@@ -331,8 +362,14 @@ export function publicationDeliveryConfig(
   // shape (`method`). Re-normalizing a stored snapshot must be idempotent;
   // defaulting a webhook/WordPress snapshot back to GitHub corrupts the seal.
   const method = site.publishMethod ?? site.method ?? "github";
-  if (!["github", "wordpress", "webhook", "manual"].includes(method)) {
+  if (!["github", "wordpress", "webhook", "manual"].includes(method) && !isApiCmsMethod(method)) {
     throw new Error(`Unsupported publication method: ${method}`);
+  }
+  const cms = isApiCmsMethod(method);
+  const cmsConfig = cms ? { ...site, publishMethod: method } : undefined;
+  if (cmsConfig && (!cmsEndpoint(cmsConfig) || !cmsCollection(cmsConfig) ||
+    site.urlStructure?.trim() !== cmsUrlStructure(cmsConfig))) {
+    throw new Error("Hosted platform destination is incomplete or its URL structure does not match the platform");
   }
   const { urlStructure, contentDir } = safeUrlStructure(site.urlStructure);
   const repoOwner = safeGitHubRepositoryPart(site.repoOwner, "owner");
@@ -354,8 +391,9 @@ export function publicationDeliveryConfig(
     contentDir: method === "github" ? contentDir : undefined,
     wpUrl: normalizedEndpoint(site.wpUrl),
     webhookUrl: normalizedEndpoint(site.webhookUrl),
+    ...(cmsConfig ? { cmsEndpoint: cmsEndpoint(cmsConfig)!, cmsCollection: cmsCollection(cmsConfig)! } : {}),
     rendererVersion:
-      method === "wordpress" || method === "webhook"
+      method === "wordpress" || method === "webhook" || cms
         ? site.rendererVersion?.trim() || PUBLISHER_RENDERER_VERSION
         : undefined,
     brandPrimaryColor: site.brandPrimaryColor?.trim() || undefined,

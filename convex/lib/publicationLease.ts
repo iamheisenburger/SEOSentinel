@@ -10,7 +10,7 @@ export const MAX_TRANSIENT_PUBLICATION_ATTEMPTS = 10;
 /** The destination was unreachable (HTTP 429/5xx) while Pentra was only
  * reading it, before any write was attempted. A failed write keeps the
  * three-attempt limit: each of those is a real write attempt. */
-const READ_PHASE_PUBLICATION_FAILURE = /GitHub repo unavailable|Failed to read sealed GitHub branch|Failed to verify the existing GitHub destination|Failed to confirm the current sealed GitHub branch|WordPress connection check failed|WordPress idempotency lookup failed/i;
+const READ_PHASE_PUBLICATION_FAILURE = /GitHub repo unavailable|Failed to read sealed GitHub branch|Failed to verify the existing GitHub destination|Failed to confirm the current sealed GitHub branch|WordPress connection check failed|WordPress idempotency lookup failed|Shopify lookup failed|Webflow lookup failed|Ghost lookup failed/i;
 export function transientPublicationError(error: string) {
   return READ_PHASE_PUBLICATION_FAILURE.test(error) && /\(HTTP (?:429|5\d\d)\)|\((?:429|5\d\d)\)/.test(error);
 }

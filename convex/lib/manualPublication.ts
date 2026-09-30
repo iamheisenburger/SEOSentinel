@@ -1,10 +1,12 @@
+import { isApiCmsMethod } from "./cmsDestinations.ts";
 /** Match the publisher's pre-write authorization in customer-facing controls.
  * This is not approval and never authorizes an external write itself. */
 /** Destinations where one exact, owner-approved article can be published
  * without activating an automatic schedule: GitHub, and the conditional
  * WordPress publisher on the growth-first service. */
 export function ownerApprovalDestination(site: { publishMethod?: string; serviceMode?: string }) {
-  return site.publishMethod === "github" || (site.publishMethod === "wordpress" && site.serviceMode === "growth_first");
+  return site.publishMethod === "github" ||
+    ((site.publishMethod === "wordpress" || isApiCmsMethod(site.publishMethod)) && site.serviceMode === "growth_first");
 }
 
 export function manualPublicationBlocker(site: { publishMethod?: string; serviceMode?: string; autopilotEnabled?: boolean; autopilotRolloutMode?: string } | null | undefined) {

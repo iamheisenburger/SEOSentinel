@@ -9,6 +9,12 @@ import {
 } from "./publicationArtifact.ts";
 import { PUBLICATION_ADAPTER_VERSION } from "./publicationReceipts.ts";
 import { normalizedOneSetupDomain } from "./oneSetup.ts";
+import {
+  type ApiCmsMethod,
+  cmsConnectionComplete,
+  cmsDestinationId,
+  isApiCmsMethod,
+} from "./cmsDestinations.ts";
 
 export const PUBLISHER_DESTINATION_RECEIPT_VERSION = 1;
 export const PUBLISHER_DESTINATION_RECEIPT_FRESH_MS = 72 * 60 * 60 * 1000;
@@ -19,7 +25,7 @@ export const PUBLISHER_AUTOPUBLISH_CONSENT_POLICY_HASH = sha256Hex(
   `pentra:publisher-autopublish-consent:v${PUBLISHER_AUTOPUBLISH_CONSENT_VERSION}:${PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}`,
 );
 
-export type SupportedPublisherMethod = "github" | "wordpress" | "webhook";
+export type SupportedPublisherMethod = "github" | "wordpress" | "webhook" | ApiCmsMethod;
 
 export type PublisherDestinationReceipt = {
   version: number;
@@ -79,6 +85,10 @@ type PublisherSite = Pick<
   | "wpAppPassword"
   | "webhookUrl"
   | "webhookSecret"
+  | "cmsEndpoint"
+  | "cmsClientId"
+  | "cmsSecret"
+  | "cmsCollection"
   | "urlStructure"
   | "publisherConnectionGeneration"
   | "publisherDestinationReceipt"
@@ -115,7 +125,7 @@ function normalizedEndpoint(value: string | undefined): string | null {
 export function supportedPublisherMethod(
   value: string | undefined,
 ): SupportedPublisherMethod | null {
-  return value === "github" || value === "wordpress" || value === "webhook"
+  return value === "github" || value === "wordpress" || value === "webhook" || isApiCmsMethod(value)
     ? value
     : null;
 }
@@ -146,6 +156,7 @@ export function publisherConnectionComplete(site: PublisherSite): boolean {
       normalizedEndpoint(site.webhookUrl) && site.webhookSecret?.trim(),
     );
   }
+  if (method && isApiCmsMethod(method)) return cmsConnectionComplete(site);
   return false;
 }
 
@@ -168,6 +179,7 @@ export function publisherDestinationId(
       return undefined;
     }
   }
+  if (method && isApiCmsMethod(method)) return cmsDestinationId(site);
   const endpoint = method === "wordpress"
     ? normalizedEndpoint(site.wpUrl)
     : method === "webhook"
@@ -211,6 +223,8 @@ export function publisherDestinationConfigHash(
       repoDefaultBranch: site.repoDefaultBranch,
       wpUrl: site.wpUrl,
       webhookUrl: site.webhookUrl,
+      cmsEndpoint: site.cmsEndpoint,
+      cmsCollection: site.cmsCollection,
     }).urlStructure;
   } catch {
     return undefined;

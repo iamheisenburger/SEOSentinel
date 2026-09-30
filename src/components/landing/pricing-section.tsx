@@ -10,7 +10,7 @@ const allFeatures = [
   "Written from your confirmed facts",
   "Independent fact-check review",
   "Improves pages near page one",
-  "WordPress and GitHub publishing",
+  "WordPress, Shopify, Webflow, Ghost and GitHub publishing",
   "Search Console reporting",
   "Weekly site health check",
 ];

@@ -8,6 +8,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { PUBLISHER_AUTOPUBLISH_CONSENT_TEXT } from "../../convex/lib/publisherProvisioning";
+import { isApiCmsMethod } from "../../convex/lib/cmsDestinations";
 
 type SetupState = {
   siteId: Id<"sites">;
@@ -32,7 +33,7 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
   const [picked, setChoice] = useState<"autopilot" | "review">("autopilot");
   const choice = paste ? "review" : picked;
   const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
-  const reviewAvailable = state.destination.kind === "github" || state.destination.kind === "wordpress" || paste;
+  const reviewAvailable = state.destination.kind === "github" || state.destination.kind === "wordpress" || isApiCmsMethod(state.destination.kind) || paste;
   const ready = state.destination.verified && state.entitlement;
   const start = async () => {
     setBusy(true); setError("");
@@ -64,7 +65,7 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
       <label className={`cursor-pointer rounded-xl border p-4 transition ${choice === "autopilot" ? "border-[#0EA5E9] bg-[#0EA5E9]/[0.06]" : "border-white/10 hover:border-white/20"}`}>
         <input type="radio" name="pentra-mode" className="mr-2" disabled={paste} checked={choice === "autopilot"} onChange={() => setChoice("autopilot")} />
         <span className="font-medium text-[#F7F8F8]">Autopilot (recommended)</span>
-        <p className="mt-1 text-sm text-[#8A8F98]">{paste ? "Needs a WordPress or GitHub connection, so Pentra can publish for you. " : ""}Pentra researches, writes and publishes on its own, {rhythm(state.plan.autopilotIntervalMs)}. Drafts it isn&apos;t confident about are held back, never published; everything else goes live automatically.</p>
+        <p className="mt-1 text-sm text-[#8A8F98]">{paste ? "Needs a connected website (WordPress, Shopify, Webflow, Ghost or GitHub), so Pentra can publish for you. " : ""}Pentra researches, writes and publishes on its own, {rhythm(state.plan.autopilotIntervalMs)}. Drafts it isn&apos;t confident about are held back, never published; everything else goes live automatically.</p>
       </label>
       <label className={`rounded-xl border p-4 transition ${reviewAvailable ? "cursor-pointer hover:border-white/20" : "opacity-50"} ${choice === "review" ? "border-[#0EA5E9] bg-[#0EA5E9]/[0.06]" : "border-white/10"}`}>
         <input type="radio" name="pentra-mode" className="mr-2" disabled={!reviewAvailable} checked={choice === "review"} onChange={() => setChoice("review")} />

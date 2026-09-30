@@ -15,6 +15,7 @@ import {
   assertSupportedPublicationRendererVersion,
   publicationAdapterConfigHashForVersion,
   publicationDeliveryConfig,
+  credentialedAdapterMethod,
   publicationDeliveryConfigHash,
   publicationDeliveryDestinationHash,
   publicationDeliveryKey,
@@ -113,7 +114,7 @@ function attemptedRevisionAdapterContract(
   rendererVersion?: string;
 } | null {
   const sealed = sealedRevisionDeliveryConfig(article);
-  if (sealed.method !== "wordpress" && sealed.method !== "webhook") return {};
+  if (!credentialedAdapterMethod(sealed.method)) return {};
   const adapterVersion = revision.adapterVersionAtAttempt ??
     site.publicationAdapterVersion;
   const adapterConfigHash = revision.adapterConfigHashAtAttempt ??
@@ -214,7 +215,7 @@ async function assertNoOtherUnresolvedPublication(
 }
 
 const revisionReceiptValidator = v.object({
-  method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook")),
+  method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook"), v.literal("shopify"), v.literal("webflow"), v.literal("ghost")),
   revisionKey: v.string(),
   deliveryKey: v.string(),
   baseContentHash: v.string(),

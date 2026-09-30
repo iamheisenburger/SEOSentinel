@@ -1,5 +1,6 @@
 import { publicationAdapterConfigHash } from "./publicationArtifact.ts";
 import { PUBLICATION_ADAPTER_VERSION } from "./publicationReceipts.ts";
+import { cmsConnectionComplete, isApiCmsMethod } from "./cmsDestinations.ts";
 import {
   contentAnalysisMatchesCurrentDomain,
   gscConnectionMatchesCurrentDomain,
@@ -29,6 +30,11 @@ export type AutopilotReadinessSite = {
   wpAppPassword?: string;
   webhookUrl?: string;
   webhookSecret?: string;
+  cmsEndpoint?: string;
+  cmsClientId?: string;
+  cmsSecret?: string;
+  cmsCollection?: string;
+  urlStructure?: string;
   publicationAdapterVerifiedAt?: number;
   publicationAdapterVersion?: string;
   publicationAdapterConfigHash?: string;
@@ -130,6 +136,16 @@ export function publicationDestinationBlockers(
       }
     }
     return blockers;
+  }
+  if (isApiCmsMethod(method)) {
+    if (!cmsConnectionComplete(site)) return [`${method}_connection_incomplete`];
+    const expectedConfigHash = publicationAdapterConfigHash(site);
+    return expectedConfigHash &&
+      site.publicationAdapterVersion === PUBLICATION_ADAPTER_VERSION &&
+      site.publicationAdapterConfigHash === expectedConfigHash &&
+      (site.publicationAdapterVerifiedAt ?? 0) > 0
+      ? []
+      : ["publication_adapter_unverified"];
   }
   return ["unsupported_publication_method"];
 }

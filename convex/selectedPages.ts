@@ -1,3 +1,4 @@
+import { isApiCmsMethod } from "./lib/cmsDestinations";
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { moneyPagesFirst, nearPageOne } from "./lib/moneyPages";
 import { internal } from "./_generated/api";
@@ -22,6 +23,17 @@ export function selectionConnection(site: Doc<"sites">) {
   if (!site.userId || !["github","wordpress"].includes(site.publishMethod ?? "") ||
     !publisherDestinationReceiptVerified({ site, ownerAccountKey: accountDeletionKey(site.userId) })) throw new Error("Verify the current publishing destination before selecting pages");
 }
+/** New-article work also runs on hosted platforms (Shopify, Webflow, Ghost),
+ * which publish new articles only; selecting existing pages stays GitHub/WordPress. */
+export function contentWorkConnection(site: Doc<"sites">) {
+  if (isApiCmsMethod(site.publishMethod)) {
+    if (!site.userId || !publisherDestinationReceiptVerified({ site, ownerAccountKey: accountDeletionKey(site.userId) })) {
+      throw new Error("Verify the current publishing destination before starting content work");
+    }
+    return;
+  }
+  selectionConnection(site);
+}
 export const selectionContext = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await owner(ctx, siteId); selectionConnection(site); return site;
 } });
@@ -34,6 +46,9 @@ export async function enrollVerifiedCreation(ctx: MutationCtx, site: Doc<"sites"
   const slug = article.slug.replace(/^\//, "");
   if (job.contentWork?.intent !== "create" || job.articleId !== article._id || article.siteId !== site._id ||
     article.publishedContentHash !== job.contentWork.approvedArtifactHash || !article.publicationReceipt || !article.publicUrl) throw new Error("Managed creation receipt is not bound to this work");
+  // Hosted platforms (Shopify, Webflow, Ghost) publish new articles only; there
+  // is no editable-page grant to enroll, and none is ever inferred.
+  if (isApiCmsMethod(site.publishMethod) && !source) return;
   if (!source || source.kind !== site.publishMethod || source.connectionHash !== contentConnectionHash(site) ||
     source.profileHash !== confirmedContentProfileHash(site) || source.connectionHash !== job.contentWork.connectionHash ||
     !selectedUrlMatches(site, slug, article.publicUrl)) throw new Error("Managed creation source or consent is unavailable");

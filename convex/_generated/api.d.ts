@@ -70,6 +70,8 @@ import type * as lib_cadenceMicroSeedSettlement from "../lib/cadenceMicroSeedSet
 import type * as lib_cadenceRefill from "../lib/cadenceRefill.js";
 import type * as lib_cadenceRevision from "../lib/cadenceRevision.js";
 import type * as lib_cadenceSettings from "../lib/cadenceSettings.js";
+import type * as lib_cmsDestinations from "../lib/cmsDestinations.js";
+import type * as lib_cmsPublishers from "../lib/cmsPublishers.js";
 import type * as lib_contentAudit from "../lib/contentAudit.js";
 import type * as lib_contentCorrection from "../lib/contentCorrection.js";
 import type * as lib_contentCorrectionProof from "../lib/contentCorrectionProof.js";
@@ -267,6 +269,8 @@ declare const fullApi: ApiFromModules<{
   "lib/cadenceRefill": typeof lib_cadenceRefill;
   "lib/cadenceRevision": typeof lib_cadenceRevision;
   "lib/cadenceSettings": typeof lib_cadenceSettings;
+  "lib/cmsDestinations": typeof lib_cmsDestinations;
+  "lib/cmsPublishers": typeof lib_cmsPublishers;
   "lib/contentAudit": typeof lib_contentAudit;
   "lib/contentCorrection": typeof lib_contentCorrection;
   "lib/contentCorrectionProof": typeof lib_contentCorrectionProof;

@@ -149,6 +149,9 @@ export function verifiedGrowthSupportDelivery<
       github: "committed",
       wordpress: "published",
       webhook: "accepted",
+      shopify: "published",
+      webflow: "published",
+      ghost: "published",
     } as const;
     if (
       receipt.method !== (site.publishMethod ?? "github") ||

@@ -1,3 +1,4 @@
+import { isApiCmsMethod } from "./lib/cmsDestinations";
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -24,7 +25,7 @@ import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
 import { contentConnectionHash, confirmedContentProfileHash, contentConnectionComplete, contentConsentToken, pasteDestination } from "./lib/contentSelection";
 import { contentFunding, contentIssue } from "./lib/contentCustomer";
 import { assertSafeImprovement } from "./lib/contentSelection";
-import { authorizedWorkPage, chooseImprovement, enrollVerifiedCreation, selectionConnection } from "./selectedPages";
+import { authorizedWorkPage, chooseImprovement, contentWorkConnection, enrollVerifiedCreation } from "./selectedPages";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes } from "./articles";
 import { AUTOPILOT_ACCEPTANCE } from "./lib/articleQuality";
@@ -324,7 +325,7 @@ async function creditRecoveryAuthority(ctx: MutationCtx, site: Doc<"sites">, job
     cw.profileHash !== confirmedContentProfileHash(site) || cw.connectionHash !== contentConnectionHash(site)) {
     throw new Error("Interrupted content authority changed");
   }
-  if (!pasteDestination(site)) selectionConnection(site);
+  if (!pasteDestination(site)) contentWorkConnection(site);
   await authorizedWorkPage(ctx, site, job);
   if (!(await pricingConfiguration(ctx, site, job))) throw new Error("Interrupted content pricing unavailable");
   const binding = await contentValidationBinding(ctx, site, Date.now(), job);
@@ -643,8 +644,8 @@ export const selectServiceMode = mutation({
       firstDeadlineAt: Date.now() + FIRST_ARTICLE_LEAD_MS } : rawArgs;
     if ((site.serviceMode ?? "legacy_articles") === args.mode) return { changed: false, status: "completed" as const };
     if (args.ownerReviewedOnly && (args.mode !== "growth_first" || args.authorizeAutomaticPublication ||
-      !site.contentSetupRequestedAt || site.contentSchedule || !["github", "wordpress", "manual"].includes(site.publishMethod ?? ""))) {
-      throw new Error("Owner-reviewed setup is for a new GitHub or WordPress connection; existing contracts remain unchanged");
+      !site.contentSetupRequestedAt || site.contentSchedule || !(["github", "wordpress", "manual"].includes(site.publishMethod ?? "") || isApiCmsMethod(site.publishMethod)))) {
+      throw new Error("Owner-reviewed setup is for a new website connection; existing contracts remain unchanged");
     }
     const rollback = args.mode === "legacy_articles";
     if (rollback && args.reviewToken !== undefined && args.reviewToken !== contentConsentToken(site)) throw new Error("Review the current saved setup before switching service");
@@ -732,11 +733,11 @@ export const selectServiceMode = mutation({
     const timezone = args.timezone ?? "UTC";
     try { new Intl.DateTimeFormat("en", { timeZone: timezone }).format(); } catch { throw new Error("Choose a valid timezone"); }
     if (!contentConnectionComplete(site)) {
-      throw new Error("Connect a supported GitHub or conditional WordPress destination first");
+      throw new Error("Connect a supported website destination first");
     }
     // Other platforms (paste your own) are Review first only: Pentra never publishes there.
-    if (pasteDestination(site) && !args.ownerReviewedOnly) throw new Error("Autopilot needs a WordPress or GitHub connection. Choose Review first.");
-    if (!pasteDestination(site)) selectionConnection(site);
+    if (pasteDestination(site) && !args.ownerReviewedOnly) throw new Error("Autopilot needs a connected website (WordPress, Shopify, Webflow, Ghost or GitHub). Choose Review first.");
+    if (!pasteDestination(site)) contentWorkConnection(site);
     if (args.ownerReviewedOnly && !pasteDestination(site) && !publisherDestinationReceiptVerified({ site })) throw new Error("Verify the exact website connection first");
     if (!args.ownerReviewedOnly && (!Number.isSafeInteger(args.intervalMs) || args.intervalMs! < CONTENT_DELIVERY_WINDOW_MS ||
       !Number.isSafeInteger(args.firstDeadlineAt) || args.firstDeadlineAt! < Date.now() + CONTENT_DELIVERY_WINDOW_MS)) throw new Error("Choose a future fixed delivery window and interval");
@@ -800,7 +801,7 @@ export const setAutopilot = mutation({ args: { siteId: v.id("sites"), enabled: v
     if (args.reviewToken !== contentConsentToken(site)) throw new ConvexError("Your saved setup changed. Refresh and try again.");
     if (args.enabled) {
       if (!s.ownerReviewedOnly) return { changed: false };
-      if (pasteDestination(site)) throw new ConvexError("Autopilot needs a WordPress or GitHub connection. Connect one in website settings first.");
+      if (pasteDestination(site)) throw new ConvexError("Autopilot needs a connected website (WordPress, Shopify, Webflow, Ghost or GitHub). Connect one in website settings first.");
       if (!contentConnectionComplete(site) || !publisherDestinationReceiptVerified({ site })) throw new ConvexError("Connect and verify your website first.");
       if (!(await contentEntitlementAuthorized(ctx, site))) throw new ConvexError("Your plan needs to be active in Billing first.");
       const plan = await accountPlan(ctx, site);
@@ -905,7 +906,7 @@ export const readiness = query({
         pricingScope: !pricing ? "unavailable" as const : pricing.validationAuthorizationId ? "validation_run" as const : "ordinary" as const },
       plan: await accountPlan(ctx, site),
       autopilot: { selectable: Boolean(site.contentSetupRequestedAt), on: Boolean(s && !s.ownerReviewedOnly && site.autopilotEnabled && !site.approvalRequired),
-        reviewAvailable: ["github", "wordpress"].includes(site.publishMethod ?? "") || pasteDestination(site),
+        reviewAvailable: ["github", "wordpress"].includes(site.publishMethod ?? "") || isApiCmsMethod(site.publishMethod) || pasteDestination(site),
         autopilotAvailable: !pasteDestination(site),
         adoptable: Boolean(site.serviceMode === "growth_first" && s && !s.autopilotSelectedAt && !s.ownerReviewedOnly) },
       ownerDraft: { maximumMicroUsd: pricing?.budgetMicroUsd ?? null,
@@ -1141,7 +1142,7 @@ export const requestDraft = mutation({
       metadata: v.optional(v.object({ title: v.string(), metaTitle: v.string(), metaDescription: v.string() })) })) },
   handler: async (ctx, args) => {
     const site = await requireOwner(ctx, args.siteId), schedule = site.contentSchedule;
-    if (site.serviceMode !== "growth_first" || !schedule || !(["github", "wordpress"].includes(site.publishMethod ?? "") || pasteDestination(site)) ||
+    if (site.serviceMode !== "growth_first" || !schedule || !(["github", "wordpress"].includes(site.publishMethod ?? "") || isApiCmsMethod(site.publishMethod) || pasteDestination(site)) ||
       !contentConnectionComplete(site) || (!pasteDestination(site) && !publisherDestinationReceiptVerified({ site })) ||
       !await contentEntitlementAuthorized(ctx, site)) throw new ConvexError("Confirm your business, website connection and billing in Settings first");
     if (args.reviewToken !== contentConsentToken(site) || schedule.profileHash !== confirmedContentProfileHash(site) ||

@@ -40,7 +40,7 @@ function projectAcknowledgedRevision(site: Doc<"sites">, article: Doc<"articles"
       originalReceipt.contentHash !== article.publishedContentHash ||
       publicationArtifactHashForAuditVersion(artifactSnapshot(article), article.publicationAuditVersion ?? PUBLICATION_AUDIT_VERSION) !== article.publishedContentHash ||
       receipt.method !== originalReceipt.method ||
-      receipt.status !== ({ github: "committed", wordpress: "published", webhook: "accepted" } as const)[receipt.method] ||
+      receipt.status !== ({ github: "committed", wordpress: "published", webhook: "accepted", shopify: "published", webflow: "published", ghost: "published" } as const)[receipt.method] ||
       base.slug !== article.slug || next.slug !== article.slug ||
       JSON.stringify(base.metaKeywords ?? []) !== JSON.stringify(next.metaKeywords ?? []) ||
       JSON.stringify(next.metaKeywords ?? []) !== JSON.stringify(article.metaKeywords ?? []) ||

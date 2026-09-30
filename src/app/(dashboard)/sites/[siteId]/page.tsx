@@ -6,6 +6,7 @@ import { useAction, useQuery, useMutation } from "convex/react";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { api } from "../../../../../convex/_generated/api";
 import type { Id } from "../../../../../convex/_generated/dataModel";
+import { CMS_DEFAULT_COLLECTION, CMS_PLATFORM_LABELS, CMS_SETUP_STEPS, isApiCmsMethod } from "../../../../../convex/lib/cmsDestinations";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -524,6 +525,7 @@ function OverviewTab({
               site.publishMethod === "github" ? "GitHub" :
               site.publishMethod === "wordpress" ? "WordPress" :
               site.publishMethod === "webhook" ? "Webhook" :
+              isApiCmsMethod(site.publishMethod) ? CMS_PLATFORM_LABELS[site.publishMethod] :
               site.publishMethod === "manual" ? "Copy & Paste" :
               "Not set"
             }
@@ -1100,16 +1102,22 @@ function ConnectionSection({ site }: { site: SiteView }) {
   const [wpAppPassword, setWpAppPassword] = useState("");
   const [webhookUrl, setWebhookUrl] = useState(site.webhookUrl || "");
   const [webhookSecret, setWebhookSecret] = useState("");
+  const [cmsEndpoint, setCmsEndpoint] = useState(site.cmsEndpoint || "");
+  const [cmsClientId, setCmsClientId] = useState(site.cmsClientId || "");
+  const [cmsSecret, setCmsSecret] = useState("");
+  const [cmsCollection, setCmsCollection] = useState(site.cmsCollection || "");
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [connectionVerified, setConnectionVerified] = useState(false);
 
-  const labels = { github: "GitHub", wordpress: "WordPress · Beta", webhook: "Webhook · Beta", manual: "Copy & Paste" } as Record<string, string>;
-  const iconMap = { github: GitBranch, wordpress: Globe, webhook: Webhook, manual: Copy } as Record<string, typeof GitBranch>;
+  const labels = { github: "GitHub", wordpress: "WordPress · Beta", webhook: "Webhook · Beta", manual: "Copy & Paste", ...CMS_PLATFORM_LABELS } as Record<string, string>;
+  const iconMap = { github: GitBranch, wordpress: Globe, webhook: Webhook, manual: Copy, shopify: Globe, webflow: Globe, ghost: Globe } as Record<string, typeof GitBranch>;
   const MethodIcon = iconMap[method] || GitBranch;
   const isGithub = method === "github";
   const isWp = method === "wordpress";
   const isWebhook = method === "webhook";
   const isManual = method === "manual";
+  const isHosted = isApiCmsMethod(method);
+  const hostedAllowed = fullManagedBetaEnabled || contentWordPress;
   const hasGithubToken = !!site.githubConnected;
 
   const inputCls = "w-full rounded-lg border border-white/[0.06] bg-[#0E0F11] px-3 py-2 text-[13px] text-[#F7F8F8] placeholder-[#62666D] outline-none focus:border-[#0EA5E9]/50";
@@ -1127,8 +1135,14 @@ function ConnectionSection({ site }: { site: SiteView }) {
       if (isGithub) { updates.repoOwner = repoOwner.trim() || undefined; updates.repoName = repoName.trim() || undefined; }
       if (isWp) { updates.wpUrl = wpUrl.trim() || undefined; updates.wpUsername = wpUsername.trim() || undefined; updates.wpAppPassword = wpAppPassword.trim() || undefined; }
       if (isWebhook) { updates.webhookUrl = webhookUrl.trim() || undefined; updates.webhookSecret = webhookSecret.trim() || undefined; }
+      if (isHosted) {
+        updates.cmsEndpoint = method === "webflow" ? undefined : cmsEndpoint.trim() || undefined;
+        updates.cmsClientId = method === "shopify" ? cmsClientId.trim() || undefined : undefined;
+        updates.cmsSecret = cmsSecret.trim() || undefined;
+        updates.cmsCollection = method === "ghost" ? undefined : cmsCollection.trim() || undefined;
+      }
       await updateSite(updates);
-      if (isWp || isWebhook || (isGithub && hasGithubToken)) {
+      if (isWp || isWebhook || isHosted || (isGithub && hasGithubToken)) {
         await verifyPublicationDestination({ siteId: site._id });
       }
       setEditing(false);
@@ -1197,6 +1211,9 @@ function ConnectionSection({ site }: { site: SiteView }) {
                 >
                   <option value="github">GitHub</option>
                   <option value="wordpress" disabled={!fullManagedBetaEnabled && !contentWordPress && method !== "wordpress"}>WordPress · Needs the Pentra plugin</option>
+                  <option value="shopify" disabled={!hostedAllowed && method !== "shopify"}>Shopify · store blog</option>
+                  <option value="webflow" disabled={!hostedAllowed && method !== "webflow"}>Webflow · CMS collection</option>
+                  <option value="ghost" disabled={!hostedAllowed && method !== "ghost"}>Ghost · Admin API</option>
                   <option value="webhook" disabled={!fullManagedBetaEnabled && method !== "webhook"}>Signed webhook · Beta</option>
                   <option value="manual">Copy &amp; Paste</option>
                 </select>
@@ -1230,6 +1247,36 @@ function ConnectionSection({ site }: { site: SiteView }) {
                       <input type="password" value={wpAppPassword} onChange={(e) => setWpAppPassword(e.target.value)} placeholder={site.wordpressConfigured ? "Leave blank to keep current password" : "xxxx xxxx xxxx"} className={inputCls} />
                     </div>
                   </div>
+                </>
+              )}
+              {isHosted && (
+                <>
+                  <ol className="list-decimal space-y-1 pl-4 text-[12px] text-[#8A8F98]">
+                    {CMS_SETUP_STEPS[method].map((step) => <li key={step}>{step}</li>)}
+                  </ol>
+                  {method !== "webflow" && (
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[12px] font-medium text-[#8A8F98]">{method === "shopify" ? "Store address" : "Ghost API URL"}</label>
+                      <input value={cmsEndpoint} onChange={(e) => setCmsEndpoint(e.target.value)} placeholder={method === "shopify" ? "your-store.myshopify.com" : "https://yoursite.ghost.io"} className={inputCls} />
+                    </div>
+                  )}
+                  {method === "shopify" && (
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[12px] font-medium text-[#8A8F98]">Client ID</label>
+                      <input value={cmsClientId} onChange={(e) => setCmsClientId(e.target.value)} placeholder="Leave blank if you use an shpat_ access token" className={inputCls} />
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[12px] font-medium text-[#8A8F98]">{method === "shopify" ? "Client secret (or shpat_ access token)" : method === "webflow" ? "Site API token" : "Admin API key"}</label>
+                    <input type="password" value={cmsSecret} onChange={(e) => setCmsSecret(e.target.value)} placeholder={site.cmsSecretConfigured ? "Leave blank to keep the current one" : method === "ghost" ? "id:secret" : ""} className={inputCls} />
+                  </div>
+                  {method !== "ghost" && (
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[12px] font-medium text-[#8A8F98]">{method === "shopify" ? "Blog handle" : "Blog collection slug"}</label>
+                      <input value={cmsCollection} onChange={(e) => setCmsCollection(e.target.value)} placeholder={CMS_DEFAULT_COLLECTION[method] ?? ""} className={inputCls} />
+                    </div>
+                  )}
+                  <p className="text-[11px] text-[#62666D]">Save checks the connection with {CMS_PLATFORM_LABELS[method]} (read-only). Nothing is published until you choose Autopilot or approve an article.</p>
                 </>
               )}
               {isWebhook && (
@@ -1284,6 +1331,17 @@ function ConnectionSection({ site }: { site: SiteView }) {
             return (
               <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (ok ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]")}>
                 {ok ? (<><Check className="h-4 w-4 text-[#22C55E]" /><span className="flex-1 text-[12px] text-[#4ADE80]">WordPress verified for publishing</span></>) : (<><KeyRound className="h-4 w-4 text-[#F59E0B]" /><span className="flex-1 text-[12px] text-[#FBBF24]">WordPress connection not verified</span></>)}
+              </div>
+            );
+          })()}
+
+          {isHosted && (() => {
+            const ok = !!site.publicationAdapterVerified;
+            const name = CMS_PLATFORM_LABELS[method as keyof typeof CMS_PLATFORM_LABELS];
+            return (
+              <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (ok ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]")}>
+                {ok ? (<><Check className="h-4 w-4 text-[#22C55E]" /><span className="flex-1 text-[12px] text-[#4ADE80]">{name} verified for publishing</span></>) : (<><KeyRound className="h-4 w-4 text-[#F59E0B]" /><span className="flex-1 text-[12px] text-[#FBBF24]">{name} connection not verified</span></>)}
+                {!editing && <button onClick={handleVerify} disabled={saving} className="text-[11px] font-medium text-[#0EA5E9] disabled:opacity-50">{saving ? "Checking…" : "Check connection"}</button>}
               </div>
             );
           })()}

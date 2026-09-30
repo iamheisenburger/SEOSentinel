@@ -42,11 +42,14 @@ import {
   wordpressReceiptFromResponse,
 } from "./lib/publicationReceipts";
 import { stripLeadingDocumentTitle } from "./lib/markdownPublishing";
+import { CMS_PLATFORM_LABELS, cmsUrlStructure, isApiCmsMethod } from "./lib/cmsDestinations";
+import { publishToCms, verifyCmsDestination, type CmsRequest, type CmsSite } from "./lib/cmsPublishers";
 import { revisionArticleRecord } from "./lib/revisionArtifact";
 import {
   PUBLICATION_AUDIT_VERSION,
   assertSupportedPublicationAdapterVersion,
   classifyPentraMarkdownDestination,
+  credentialedAdapterMethod,
   publicationAdapterConfigHash,
   publicationAdapterConfigHashForVersion,
   publicationArtifactHashForAuditVersion,
@@ -174,6 +177,11 @@ type SiteRecord = {
   wpAppPassword?: string;
   webhookUrl?: string;
   webhookSecret?: string;
+  cmsEndpoint?: string;
+  cmsClientId?: string;
+  cmsSecret?: string;
+  cmsCollection?: string;
+  siteName?: string;
   publicationAdapterVerifiedAt?: number;
   publicationAdapterVersion?: string;
   publicationAdapterConfigHash?: string;
@@ -202,7 +210,7 @@ type SiteRecord = {
 // ── Shared Utilities ────────────────────────────────────
 
 function assertProductionAdapterVerified(site: SiteRecord): void {
-  if (site.publishMethod !== "wordpress" && site.publishMethod !== "webhook") return;
+  if (!credentialedAdapterMethod(site.publishMethod)) return;
   const expectedHash = publicationAdapterConfigHash(site);
   if (
     !expectedHash ||
@@ -219,7 +227,7 @@ function assertAttemptedAdapterContract(
   article: ArticleRecord,
 ): void {
   const method = article.publicationConfigSnapshot?.method;
-  if (method !== "wordpress" && method !== "webhook") return;
+  if (!credentialedAdapterMethod(method)) return;
   // Additive inference for attempts created before explicit contract fields:
   // only the still-exact verified adapter and immutable renderer seal qualify.
   const adapterVersion = article.publicationAdapterVersionAtAttempt ??
@@ -271,7 +279,7 @@ function attemptedRevisionRendererVersion(
     sealed.rendererVersion ??
     PUBLISHER_RENDERER_VERSION;
   renderSafePublicationHtmlForVersion("", rendererVersion);
-  if (sealed.method !== "wordpress" && sealed.method !== "webhook") {
+  if (!credentialedAdapterMethod(sealed.method)) {
     return rendererVersion;
   }
   const adapterVersion = revision.adapterVersionAtAttempt ??
@@ -500,7 +508,7 @@ type ReceiptRenewalResult = {
 export const renewDestinationReceipts = internalAction({
   args: { cursor: v.optional(v.union(v.string(), v.null())) },
   handler: async (ctx, { cursor }): Promise<ReceiptRenewalResult> => {
-    const page: { isDone: boolean; continueCursor: string; sites: Array<{ siteId: Id<"sites">; method: "github" | "wordpress" }> } =
+    const page: { isDone: boolean; continueCursor: string; sites: Array<{ siteId: Id<"sites">; method: string }> } =
       await ctx.runQuery(internal.sites.destinationReceiptRenewalPage, {
       cursor: cursor ?? null,
       renewBefore: Date.now() - PUBLISHER_RECEIPT_RENEW_AFTER_MS,
@@ -997,7 +1005,7 @@ async function verifyPublicationDestinationHandler(
     siteSnapshot?: SiteRecord;
     beforeExternalRead?: PublisherPreflightFence;
   },
-): Promise<{ ok: true; method: "wordpress" | "webhook"; verifiedAt: number }> {
+): Promise<{ ok: true; method: "wordpress" | "webhook" | "shopify" | "webflow" | "ghost"; verifiedAt: number }> {
   const site = options?.siteSnapshot ??
     (await ctx.runQuery(internal.sites.getFull, { siteId })) as SiteRecord | null;
   if (!site?.userId) throw new Error("Site not found");
@@ -1083,8 +1091,15 @@ async function verifyPublicationDestinationHandler(
     ) {
       throw new Error("Webhook did not acknowledge the signed preflight nonce");
     }
+  } else if (isApiCmsMethod(site.publishMethod)) {
+    const urlStructure = cmsUrlStructure(site);
+    if (!urlStructure || site.urlStructure !== urlStructure) {
+      throw new Error(`${CMS_PLATFORM_LABELS[site.publishMethod]} credentials are incomplete`);
+    }
+    await options?.beforeExternalRead?.();
+    await verifyCmsDestination(site as CmsSite, urlStructure, cmsRequest);
   } else {
-    throw new Error("Only WordPress and webhook destinations require this verification");
+    throw new Error("Only WordPress, webhook, Shopify, Webflow and Ghost destinations require this verification");
   }
 
   await ctx.runMutation(internal.sites.setPublicationAdapterVerificationInternal, {
@@ -1097,7 +1112,7 @@ async function verifyPublicationDestinationHandler(
     siteId,
     receipt,
   });
-  return { ok: true, method: site.publishMethod, verifiedAt };
+  return { ok: true, method: site.publishMethod as "wordpress" | "webhook" | "shopify" | "webflow" | "ghost", verifiedAt };
 }
 
 export const verifyPublicationDestinationInternal = internalAction({
@@ -1178,7 +1193,7 @@ export const verifyLegacyPublicationDestinationInternal = internalAction({
       !configHash ||
       site.autopilotRolloutMode !== "observe" ||
       site.approvalRequired === true ||
-      !["wordpress", "webhook"].includes(site.publishMethod ?? "") ||
+      !credentialedAdapterMethod(site.publishMethod) ||
       site.publicationAdapterVerificationAttemptedAt !== args.attemptedAt
     ) return { verified: false as const, reason: "publisher_preflight_stale" };
 
@@ -1504,6 +1519,64 @@ async function publishToWordPress(
     postId: Number(receipt.externalId),
     receipt,
   };
+}
+
+// ── Hosted platform adapters (Shopify, Webflow, Ghost) ──
+
+/** Every hosted-platform request goes through the pinned public-HTTPS client:
+ * no redirects, public addresses only, JSON responses only. */
+const cmsRequest: CmsRequest = async (url, init) => {
+  const target = new URL(url);
+  const response = await safeRequestPublicHttps(target.href, {
+    method: init.method,
+    expectedHost: target.hostname,
+    headers: init.headers,
+    body: init.body,
+    maxBytes: 2_000_000,
+    allowedContentTypes: [/^application\/json(?:;|$)/i],
+  });
+  return { status: response.status, text: response.text };
+};
+
+async function publishToHostedPlatform(
+  site: SiteRecord,
+  article: ArticleRecord,
+  deliveryKey: string,
+  contentHash: string,
+  rendererVersion: string,
+  beforeExternalMutation: BeforeExternalMutation,
+  hadPriorAttempt: boolean,
+): Promise<{ method: string; postUrl: string; receipt: PublicationReceipt }> {
+  const method = site.publishMethod;
+  if (!isApiCmsMethod(method)) throw new Error("Not a hosted-platform publishing destination");
+  const urlStructure = cmsUrlStructure(site);
+  if (!urlStructure || site.urlStructure !== urlStructure) {
+    throw new Error(`${CMS_PLATFORM_LABELS[method]} destination URL structure changed after verification`);
+  }
+  const html = renderSafePublicationHtmlForVersion(
+    stripLeadingDocumentTitle(article.markdown, article.title),
+    rendererVersion,
+  );
+  const publicUrl = publishedArticlePublicUrl({ domain: site.domain, urlStructure, slug: article.slug });
+  const receipt = await publishToCms({
+    site: site as CmsSite,
+    article: {
+      title: article.title,
+      slug: article.slug,
+      html,
+      metaTitle: article.metaTitle,
+      metaDescription: article.metaDescription,
+      featuredImage: article.featuredImage,
+    },
+    deliveryKey,
+    contentHash,
+    publicUrl,
+    urlStructure,
+    hadPriorAttempt,
+    beforeExternalMutation,
+    request: cmsRequest,
+  });
+  return { method, postUrl: receipt.url, receipt };
 }
 
 // ── Webhook Adapter ─────────────────────────────────────
@@ -2882,6 +2955,19 @@ async function publishArticleHandler(
             lease.publicationDate,
             sealedConfig.rendererVersion ?? PUBLISHER_RENDERER_VERSION,
             beforeExternalMutation,
+          );
+          break;
+        case "shopify":
+        case "webflow":
+        case "ghost":
+          result = await publishToHostedPlatform(
+            { ...deliverySite, publishMethod: method },
+            article as ArticleRecord,
+            deliveryKey,
+            contentHash,
+            sealedConfig.rendererVersion ?? PUBLISHER_RENDERER_VERSION,
+            beforeExternalMutation,
+            hadPriorAttempt,
           );
           break;
         default:

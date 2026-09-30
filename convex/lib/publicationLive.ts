@@ -149,6 +149,9 @@ export function verifiedAuthorityTarget<TId extends string>(input: {
         github: "committed",
         wordpress: "published",
         webhook: "accepted",
+        shopify: "published",
+        webflow: "published",
+        ghost: "published",
       } as const)[receipt.method] ||
       receipt.receivedAt < article.publishedAt! - PUBLICATION_LEASE_MS ||
       receipt.receivedAt > article.publishedAt! + 60_000 ||

@@ -30,7 +30,7 @@ const ASK = [
 ] as const;
 
 const FIT = [
-  "Your site runs on WordPress, or is built from Markdown or MDX files in a GitHub repository (Next.js, Astro, Hugo, Jekyll, Gatsby). On other platforms Pentra writes and you paste.",
+  "Your site runs on WordPress, Shopify, Webflow or Ghost, or is built from Markdown or MDX files in a GitHub repository (Next.js, Astro, Hugo, Jekyll, Gatsby). On other platforms Pentra writes and you paste.",
   "You sell a real product or service and want more customers from Google and AI answers.",
   "You can give SEO time. New articles usually take weeks to months to rank. In 60 days you'll see the full system working and early Search Console data, not a guaranteed traffic spike.",
 ] as const;

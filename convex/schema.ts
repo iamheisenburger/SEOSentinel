@@ -56,12 +56,20 @@ export default defineSchema({
     githubToken: v.optional(v.string()),
 
     // ── Publishing platform ──
-    publishMethod: v.optional(v.string()), // "github" | "wordpress" | "webhook" | "manual"
+    publishMethod: v.optional(v.string()), // "github" | "wordpress" | "webhook" | "shopify" | "webflow" | "ghost" | "manual"
     wpUrl: v.optional(v.string()),
     wpUsername: v.optional(v.string()),
     wpAppPassword: v.optional(v.string()),
     webhookUrl: v.optional(v.string()),
     webhookSecret: v.optional(v.string()),
+    // Hosted platforms published through their official API ("shopify",
+    // "webflow", "ghost"): store/admin URL, optional app client id, the
+    // credential (server-only, like the WordPress app password) and the
+    // blog handle or CMS collection slug.
+    cmsEndpoint: v.optional(v.string()),
+    cmsClientId: v.optional(v.string()),
+    cmsSecret: v.optional(v.string()),
+    cmsCollection: v.optional(v.string()),
     publicationAdapterVerifiedAt: v.optional(v.number()),
     publicationAdapterVersion: v.optional(v.string()),
     publicationAdapterConfigHash: v.optional(v.string()),
@@ -80,6 +88,9 @@ export default defineSchema({
         v.literal("github"),
         v.literal("wordpress"),
         v.literal("webhook"),
+        v.literal("shopify"),
+        v.literal("webflow"),
+        v.literal("ghost"),
       ),
       destinationId: v.string(),
       ownerAccountKey: v.string(),
@@ -970,6 +981,8 @@ export default defineSchema({
         contentDir: v.optional(v.string()),
         wpUrl: v.optional(v.string()),
         webhookUrl: v.optional(v.string()),
+        cmsEndpoint: v.optional(v.string()),
+        cmsCollection: v.optional(v.string()),
         rendererVersion: v.optional(v.string()),
         brandPrimaryColor: v.optional(v.string()),
         brandAccentColor: v.optional(v.string()),
@@ -992,7 +1005,7 @@ export default defineSchema({
     publicUrlCheckError: v.optional(v.string()),
     publicationReceipt: v.optional(
       v.object({
-        method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook")),
+        method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook"), v.literal("shopify"), v.literal("webflow"), v.literal("ghost")),
         deliveryKey: v.string(),
         contentHash: v.string(),
         externalId: v.string(),
@@ -1578,6 +1591,9 @@ export default defineSchema({
         v.literal("github"),
         v.literal("wordpress"),
         v.literal("webhook"),
+        v.literal("shopify"),
+        v.literal("webflow"),
+        v.literal("ghost"),
       ),
       deliveryKey: v.string(),
       contentHash: v.string(),
@@ -1683,7 +1699,7 @@ export default defineSchema({
     baseArtifactHash: v.string(),
     baseArtifact: v.any(),
     baseReceipt: v.object({
-      method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook")),
+      method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook"), v.literal("shopify"), v.literal("webflow"), v.literal("ghost")),
       deliveryKey: v.string(),
       contentHash: v.string(),
       externalId: v.string(),
@@ -1705,7 +1721,7 @@ export default defineSchema({
     adapterConfigHashAtAttempt: v.optional(v.string()),
     rendererVersionAtAttempt: v.optional(v.string()),
     receipt: v.optional(v.object({
-      method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook")),
+      method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook"), v.literal("shopify"), v.literal("webflow"), v.literal("ghost")),
       revisionKey: v.string(),
       deliveryKey: v.string(),
       baseContentHash: v.string(),

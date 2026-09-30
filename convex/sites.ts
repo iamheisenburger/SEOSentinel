@@ -23,10 +23,19 @@ import {
   shouldCancelForEpochTransition,
 } from "./lib/jobRollout";
 import {
+  credentialedAdapterMethod,
   publicationAdapterConfigHash,
   requireSafeGitHubDefaultBranch,
   safeGitHubRepositoryPart,
 } from "./lib/publicationArtifact";
+import {
+  CMS_PLATFORM_LABELS,
+  cmsUrlStructure,
+  isApiCmsMethod,
+  normalizedCmsCollection,
+  normalizedGhostAdminUrl,
+  normalizedShopifyStore,
+} from "./lib/cmsDestinations";
 import {
   PUBLICATION_AUDIT_VERSION,
   sha256Hex,
@@ -228,6 +237,7 @@ const ONE_SETUP_ACTION_OWNER_VALIDATOR = v.union(
 const DELIVERY_CONFIG_KEYS = new Set([
   "domain", "publishMethod", "repoOwner", "repoName", "repoDefaultBranch", "githubToken",
   "wpUrl", "wpUsername", "wpAppPassword", "webhookUrl", "webhookSecret",
+  "cmsEndpoint", "cmsClientId", "cmsSecret", "cmsCollection",
   "urlStructure", "brandPrimaryColor", "brandAccentColor", "brandFontFamily",
   "autopilotEnabled", "cadencePerWeek",
   // These fields participate in the final tenant-topic/approval gate. Once a
@@ -249,6 +259,10 @@ const PUBLISHER_CONNECTION_KEYS = new Set([
   "wpAppPassword",
   "webhookUrl",
   "webhookSecret",
+  "cmsEndpoint",
+  "cmsClientId",
+  "cmsSecret",
+  "cmsCollection",
   "urlStructure",
 ]);
 
@@ -2924,11 +2938,11 @@ export const destinationReceiptRenewalPage = internalQuery({
         const receipt = site.publisherDestinationReceipt;
         const method = site.publishMethod ?? "github";
         return Boolean(site.userId) && !site.deletionStatus && !site.accountDeletionRequestedAt &&
-          (method === "github" || method === "wordpress") &&
+          (method === "github" || method === "wordpress" || isApiCmsMethod(method)) &&
           Boolean(site.autopilotEnabled || site.contentSchedule) &&
           receipt?.status === "verified" && receipt.revokedAt === undefined && receipt.method === method &&
           Number.isFinite(receipt.verifiedAt) && receipt.verifiedAt > 0 && receipt.verifiedAt <= renewBefore;
-      }).map((site) => ({ siteId: site._id, method: (site.publishMethod ?? "github") as "github" | "wordpress" })),
+      }).map((site) => ({ siteId: site._id, method: site.publishMethod ?? "github" })),
     };
   },
 });
@@ -3052,7 +3066,7 @@ export const setPublicationAdapterVerificationInternal = internalMutation({
     const site = await ctx.db.get(args.siteId);
     if (!site) throw new Error("Site not found");
     await assertConfigUnlocked(ctx, site);
-    if (site.publishMethod !== "wordpress" && site.publishMethod !== "webhook") {
+    if (!credentialedAdapterMethod(site.publishMethod)) {
       throw new Error("This publication method does not use adapter verification");
     }
     const currentHash = publicationAdapterConfigHash(site);
@@ -3119,6 +3133,9 @@ export const recordPublisherDestinationReceiptInternal = internalMutation({
         v.literal("github"),
         v.literal("wordpress"),
         v.literal("webhook"),
+        v.literal("shopify"),
+        v.literal("webflow"),
+        v.literal("ghost"),
       ),
       destinationId: v.string(),
       ownerAccountKey: v.string(),
@@ -3279,6 +3296,41 @@ export const patchInternal = internalMutation({
   },
 });
 
+/** Normalize and validate a hosted-platform connection edit. Blank fields keep
+ * the stored value (a credential is never echoed back to the browser). */
+function hostedPlatformConnection(
+  args: { publishMethod?: string; cmsEndpoint?: string; cmsClientId?: string; cmsSecret?: string; cmsCollection?: string },
+  current: Doc<"sites"> | null,
+) {
+  const method = args.publishMethod ?? current?.publishMethod;
+  const provided = [args.cmsEndpoint, args.cmsClientId, args.cmsSecret, args.cmsCollection].some((value) => value?.trim());
+  if (!isApiCmsMethod(method)) {
+    if (provided) throw new Error("Choose Shopify, Webflow or Ghost before entering platform credentials");
+    return {};
+  }
+  const label = CMS_PLATFORM_LABELS[method];
+  const out: { cmsEndpoint?: string; cmsClientId?: string; cmsSecret?: string; cmsCollection?: string } = {};
+  if (args.cmsEndpoint?.trim()) {
+    const endpoint = method === "shopify"
+      ? normalizedShopifyStore(args.cmsEndpoint)
+      : method === "ghost" ? normalizedGhostAdminUrl(args.cmsEndpoint) : null;
+    if (method !== "webflow" && !endpoint) {
+      throw new Error(method === "shopify"
+        ? "Enter your store's address ending in .myshopify.com"
+        : "Enter your Ghost site's https:// address");
+    }
+    if (endpoint) out.cmsEndpoint = endpoint;
+  }
+  if (args.cmsCollection?.trim()) {
+    const collection = normalizedCmsCollection(args.cmsCollection);
+    if (!collection) throw new Error(`Enter the ${label} ${method === "shopify" ? "blog handle" : "collection slug"} in lowercase letters, numbers and dashes`);
+    out.cmsCollection = collection;
+  }
+  if (args.cmsClientId?.trim()) out.cmsClientId = args.cmsClientId.trim();
+  if (args.cmsSecret?.trim()) out.cmsSecret = args.cmsSecret.trim();
+  return out;
+}
+
 export const upsert = mutation({
   args: {
     id: v.optional(v.id("sites")),
@@ -3302,6 +3354,11 @@ export const upsert = mutation({
     wpAppPassword: v.optional(v.string()),
     webhookUrl: v.optional(v.string()),
     webhookSecret: v.optional(v.string()),
+    // Hosted platforms (Shopify, Webflow, Ghost)
+    cmsEndpoint: v.optional(v.string()),
+    cmsClientId: v.optional(v.string()),
+    cmsSecret: v.optional(v.string()),
+    cmsCollection: v.optional(v.string()),
     // AI-analyzed fields
     siteName: v.optional(v.string()),
     siteType: v.optional(v.string()),
@@ -3358,9 +3415,9 @@ export const upsert = mutation({
     const currentSite = args.id ? await requireSiteOwner(ctx, args.id) : null;
     if (
       args.publishMethod &&
-      ["wordpress", "webhook"].includes(args.publishMethod) &&
+      (["wordpress", "webhook"].includes(args.publishMethod) || isApiCmsMethod(args.publishMethod)) &&
       currentSite?.publishMethod !== args.publishMethod &&
-      !(args.publishMethod === "wordpress" && (currentSite?.contentSetupRequestedAt || currentSite?.serviceMode === "growth_first" || (args.contentSetup === true && args.createOnly === true && !args.id))) &&
+      !((args.publishMethod === "wordpress" || isApiCmsMethod(args.publishMethod)) && (currentSite?.contentSetupRequestedAt || currentSite?.serviceMode === "growth_first" || (args.contentSetup === true && args.createOnly === true && !args.id))) &&
       process.env.PENTRA_FULL_MANAGED_BETA_ENABLED !== "true"
     ) {
       throw new Error(
@@ -3512,6 +3569,7 @@ export const upsert = mutation({
       wpAppPassword: args.wpAppPassword,
       webhookUrl: args.webhookUrl,
       webhookSecret: args.webhookSecret,
+      ...hostedPlatformConnection(args, currentSite),
       siteName: args.siteName,
       siteType: args.siteType,
       siteSummary: args.siteSummary,
@@ -3540,6 +3598,14 @@ export const upsert = mutation({
       urlStructure: args.urlStructure,
       updatedAt: now(),
     };
+    // A hosted platform decides its own public article address; Pentra
+    // derives it from the connection so receipts and live checks agree.
+    const hostedTarget = { ...(currentSite ?? {}), ...Object.fromEntries(
+      Object.entries(data).filter(([, value]) => value !== undefined)) } as Doc<"sites">;
+    if (isApiCmsMethod(hostedTarget.publishMethod)) {
+      const structure = cmsUrlStructure(hostedTarget);
+      if (structure) data.urlStructure = structure;
+    }
 
     if (args.id) {
       if (args.createOnly) {
@@ -4388,6 +4454,7 @@ async function requestSiteDeletion(
     githubToken: undefined,
     wpAppPassword: undefined,
     webhookSecret: undefined,
+    cmsSecret: undefined,
     publisherConnectionGeneration:
       (site.publisherConnectionGeneration ?? 0) + 1,
     publisherDestinationReceipt: undefined,
@@ -4485,6 +4552,7 @@ async function revokeSiteCredentialsForAccountDeletion(
     githubToken: undefined,
     wpAppPassword: undefined,
     webhookSecret: undefined,
+    cmsSecret: undefined,
     publisherConnectionGeneration:
       (site.publisherConnectionGeneration ?? 0) + 1,
     publisherDestinationReceipt: undefined,

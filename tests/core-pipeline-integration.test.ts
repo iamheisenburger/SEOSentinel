@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { confirmedContentProfileHash } from "../convex/lib/contentSelection.ts";
 import test, { type TestContext } from "node:test";
 import { createHash } from "node:crypto";
@@ -73,6 +74,8 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   githubBeforeWrite?: () => Promise<void>; githubBeforeFence?: () => Promise<void>; selectedNoop?: boolean;
   githubReadUnavailable?: () => boolean;
   wordpress?: { username: string; password: string; transport: (url: URL, init: RequestInit) => Promise<Response> };
+  /** A hosted platform (Ghost Admin API on the business domain) instead of GitHub. */
+  hosted?: { method: "ghost"; secret: string; transport: (url: URL, init: RequestInit) => Promise<Response> };
   failedOptionalSource?: boolean; liveCorrupt?: "canonical" | "body" | "title";
   evidence?: { sources: Array<{ url: string; title: string; text: string }>; failed?: string[]; brief?: string; competitor?: string };
   webResearch?: { citations: Array<{ url: string; title: string; cited_text: string }>; searches?: number; error?: { status: number; type: string } };
@@ -115,6 +118,9 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
     }
     if (options.wordpress && businesses.some(b => b.domain === url.hostname) && (url.pathname === "/" || url.pathname.startsWith("/wp-json/") || url.pathname.startsWith("/blog/") || /^\/selected-[a-f0-9]+\/$/.test(url.pathname))) {
       return options.wordpress.transport(url, init);
+    }
+    if (options.hosted && businesses.some(b => b.domain === url.hostname) && (url.pathname.startsWith("/ghost/") || /^\/[a-z0-9-]+\/$/.test(url.pathname))) {
+      return options.hosted.transport(url, init);
     }
     if (url.origin === "https://api.telegram.org") {
       assert.match(url.pathname, /^\/botsynthetic-ops-token\/sendMessage$/); assert.equal(init.method, "POST");
@@ -324,8 +330,9 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       planFeatures: ["max_sites_unlimited", "max_articles_150"],
       ...(options.wordpress ? { publishMethod: "wordpress", wpUrl: `https://${b.domain}`, wpUsername: options.wordpress.username,
         wpAppPassword: options.wordpress.password, urlStructure: "/blog/[slug]/" } : {}),
+      ...(options.hosted ? { publishMethod: options.hosted.method, cmsEndpoint: `https://${b.domain}`, cmsSecret: options.hosted.secret, urlStructure: "/[slug]/" } : {}),
     });
-    if (!options.wordpress) f.get(id)!.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: f.get(id)! as never,
+    if (!options.wordpress && !options.hosted) f.get(id)!.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: f.get(id)! as never,
       ownerAccountKey: accountDeletionKey(f.get(id)!.userId), verifiedAt: START });
     f.add("pages", { siteId: id, slug: "/", url: `https://${b.domain}/`, title: b.niche, summary: `${b.name} provides ${b.niche}.`, keywords: b.keywords, createdAt: START - 1000 });
     return { ...b, id };
@@ -1458,7 +1465,7 @@ test("SLC63 other platforms: Pentra researches and writes, the owner pastes; not
   assert.equal(r.destination.kind, "manual"); assert.equal(r.destination.verified, true);
   assert.equal(r.autopilot.autopilotAvailable, false); assert.equal(r.autopilot.reviewAvailable, true);
   await assert.rejects(f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true,
-    reviewToken: r.reviewToken, autopilot: true }), /WordPress or GitHub/);
+    reviewToken: r.reviewToken, autopilot: true }), /Autopilot needs a connected website/);
   await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", ownerReviewedOnly: true,
     confirmBusinessProfile: true, reviewToken: r.reviewToken });
   r = await f.invoke("contentWork:readiness", { siteId: site.id });
@@ -1471,7 +1478,7 @@ test("SLC63 other platforms: Pentra researches and writes, the owner pastes; not
   await assert.rejects(f.invoke("actions/pipeline:publishApproved", { siteId: site.id, articleId: job.articleId }));
   assert.notEqual(f.get(job.articleId)!.status, "published", "Pentra never publishes to a paste-it-yourself site");
   r = await f.invoke("contentWork:readiness", { siteId: site.id });
-  await assert.rejects(f.invoke("contentWork:setAutopilot", { siteId: site.id, enabled: true, reviewToken: r.reviewToken }), /WordPress or GitHub/);
+  await assert.rejects(f.invoke("contentWork:setAutopilot", { siteId: site.id, enabled: true, reviewToken: r.reviewToken }), /Autopilot needs a connected website/);
   // The owner pastes it and gives the live address; Pentra checks the public page before counting it.
   const draft = f.get(job.articleId)!;
   if (draft.status === "ready") {
@@ -6634,4 +6641,106 @@ test("P60 with measured authority, Autopilot writes the search a young site can 
       measured ? "a domain rank 4 site writes the keyword it can win first" : "without authority evidence the ordering is unchanged");
     f.assertOffline();
   });
+});
+
+// ── P61: hosted platforms (Ghost Admin API) end to end ─────────────
+
+type GhostJson = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+const ghostKeyId = "a1".repeat(12), ghostKeySecret = "c3".repeat(32);
+
+/** A synthetic Ghost site: the Admin API (JWT-authenticated) plus the public
+ * pages it serves at /{slug}/ once a post is published. */
+function syntheticGhostSite(domain: string, options: { loseFirstCreateResponse?: boolean; ownerPostAt?: string } = {}) {
+  const posts = new Map<string, GhostJson>();
+  let creates = 0, lost = false;
+  if (options.ownerPostAt) posts.set(options.ownerPostAt, { id: "owner-post", slug: options.ownerPostAt, status: "published", title: "Owner's own post", tags: [] });
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const transport = async (url: URL, init: RequestInit) => {
+    if (url.pathname.startsWith("/ghost/api/admin/")) {
+      const headers = new Headers(init.headers);
+      assert.equal(headers.get("accept-version"), "v5.0");
+      const [header, payload, signature] = (headers.get("authorization") ?? "").replace(/^Ghost /, "").split(".");
+      if (createHmac("sha256", Buffer.from(ghostKeySecret, "hex")).update(`${header}.${payload}`).digest("base64url") !== signature) {
+        return json({ errors: [{ type: "UnauthorizedError" }] }, 401);
+      }
+      const path = url.pathname.slice("/ghost/api/admin".length);
+      if (path === "/site/") return json({ site: { url: `https://${domain}/`, title: "Synthetic Ghost site" } });
+      const bySlug = path.match(/^\/posts\/slug\/([a-z0-9-]+)\/$/);
+      if (bySlug) {
+        const post = posts.get(bySlug[1]);
+        return post ? json({ posts: [post] }) : json({ errors: [{ type: "NotFoundError" }] }, 404);
+      }
+      if (path === "/posts/" && (init.method ?? "GET") === "GET") return json({ posts: [] });
+      assert.equal(path, "/posts/"); assert.equal(init.method, "POST"); assert.equal(url.searchParams.get("source"), "html");
+      creates += 1;
+      const input = JSON.parse(String(init.body)).posts[0];
+      const post = { id: `post-${creates}`, slug: input.slug, title: input.title, status: input.status, html: input.html,
+        meta_title: input.meta_title, meta_description: input.meta_description, tags: input.tags, url: `https://${domain}/${input.slug}/` };
+      posts.set(input.slug, post);
+      if (options.loseFirstCreateResponse && !lost) {
+        lost = true; // Ghost stored the post but the response never arrived.
+        return json({ errors: [{ type: "InternalServerError" }] }, 503);
+      }
+      return json({ posts: [post] }, 201);
+    }
+    const post = posts.get(url.pathname.slice(1, -1));
+    if (!post || post.id === "owner-post") return new Response("Not found", { status: 404, headers: { "content-type": "text/html" } });
+    return new Response(`<html><head><title>${post.meta_title}</title><meta name="description" content="${post.meta_description}">` +
+      `<link rel="canonical" href="${url.href}"></head><body><main><h1>${post.title}</h1>${post.html}</main></body></html>`,
+    { headers: { "content-type": "text/html" } });
+  };
+  return { posts, transport, creates: () => creates };
+}
+
+function ghostHostedSetup(options: Parameters<typeof syntheticGhostSite>[1] = {}) {
+  const business = slcBusinesses[0];
+  const ghost = syntheticGhostSite(business.domain, options);
+  const f = setup({ growthFirst: true, businesses: [business], hosted: { method: "ghost", secret: `${ghostKeyId}:${ghostKeySecret}`, transport: ghost.transport } });
+  return { f, ghost, site: f.sites[0] };
+}
+
+test("Autopilot publishes to a Ghost site end to end: verified connection, one post, exact receipt, live check", async () => {
+  const { f, ghost, site } = ghostHostedSetup();
+  assert.equal(f.get(site.id)!.publisherDestinationReceipt, undefined);
+  await f.invoke("publisher:verifyPublicationDestinationInternal", { siteId: site.id });
+  const receipt = f.get(site.id)!.publisherDestinationReceipt;
+  assert.equal(receipt.method, "ghost");
+  assert.equal(receipt.destinationId, `ghost:https://${site.domain}#posts`);
+  assert.equal(ghost.creates(), 0, "verification is read-only");
+
+  await selectGrowth(f);
+  await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.stage === "verified")));
+  const published = f.tables.articles.filter(a => a.status === "published");
+  assert.equal(published.length, 1);
+  const article = published[0];
+  assert.equal(article.publicationReceipt.method, "ghost");
+  assert.equal(article.publicationReceipt.status, "published");
+  assert.equal(article.publicUrlStatus, "verified");
+  assert.equal(article.publicUrl, `https://${site.domain}/${article.slug.replace(/^\//, "")}/`);
+  assert.equal(ghost.creates(), 1);
+  const post = ghost.posts.get(article.slug.replace(/^\//, ""))!;
+  assert.equal(post.status, "published");
+  assert.deepEqual(post.tags, [{ name: `#pentra-${article.publicationReceipt.deliveryKey.replace(/^pentra:/, "")}` }]);
+  assert.doesNotMatch(post.html, new RegExp(`<h1>${article.title}</h1>`), "Ghost renders the title; the body must not repeat it");
+  f.assertOffline();
+});
+
+test("a lost Ghost create response is reconciled by reading the post back, never by publishing twice", async () => {
+  const { f, ghost, site } = ghostHostedSetup({ loseFirstCreateResponse: true });
+  await f.invoke("publisher:verifyPublicationDestinationInternal", { siteId: site.id });
+  await selectGrowth(f);
+  await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.stage === "verified")), 200, Date.now() + 1e12);
+  assert.equal(ghost.creates(), 1, "the retry confirmed the stored post instead of creating another");
+  const article = f.tables.articles.find(a => a.status === "published")!;
+  assert.equal(article.publicationReceipt.externalId, "post-1");
+  assert.equal(article.publicUrlStatus, "verified");
+  f.assertOffline();
+});
+
+test("Ghost verification refuses a key for a different site and a wrong key, and records no receipt", async () => {
+  const { f, site } = ghostHostedSetup();
+  f.get(site.id)!.cmsSecret = `${ghostKeyId}:${"d4".repeat(32)}`;
+  await assert.rejects(f.invoke("publisher:verifyPublicationDestinationInternal", { siteId: site.id }), /Admin API key was rejected/);
+  assert.equal(f.get(site.id)!.publisherDestinationReceipt, undefined);
+  f.assertOffline();
 });

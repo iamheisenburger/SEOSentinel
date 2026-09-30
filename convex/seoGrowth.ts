@@ -413,6 +413,9 @@ function sourceReceiptMode(
         github: "committed",
         wordpress: "published",
         webhook: "accepted",
+        shopify: "published",
+        webflow: "published",
+        ghost: "published",
       } as const;
       return configSealed &&
         Boolean(

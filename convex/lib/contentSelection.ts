@@ -3,6 +3,7 @@ import { publicationAdapterConfigHash, publicationDeliveryConfig, sha256Hex } fr
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./siteDomainBinding.ts";
 import { containsExecutableMdx, evidenceRequiredParagraphs, STRICT_PUBLICATION_MIN_WORDS, articleWordCeiling } from "./articleQuality.ts";
 import { publishedArticlePublicUrl } from "./publicationLive.ts";
+import { cmsConnectionComplete, isApiCmsMethod } from "./cmsDestinations.ts";
 
 export const CONTENT_PAGE_REVIEW_MS = 7 * 86_400_000;
 export function contentConsentToken(site: Doc<"sites">) {
@@ -77,6 +78,7 @@ export function pasteDestination(site: { publishMethod?: string; contentSetupReq
 export function contentConnectionComplete(site: Doc<"sites">) {
   return site.publishMethod === "github" ? Boolean(site.repoOwner && site.repoName && site.repoDefaultBranch && site.githubToken)
     : site.publishMethod === "wordpress" ? Boolean(site.wpUrl && site.wpUsername && site.wpAppPassword)
+    : isApiCmsMethod(site.publishMethod) ? cmsConnectionComplete(site)
     : pasteDestination(site);
 }
 export function selectedUrl(site: Pick<Doc<"sites">, "domain" | "urlStructure">, slug: string) {

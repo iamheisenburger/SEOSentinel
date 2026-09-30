@@ -1,8 +1,16 @@
 export const PUBLICATION_ADAPTER_VERSION = "verified-publisher-v1";
 export const PUBLISHER_RENDERER_VERSION = "semantic-html-v1";
 
+export type PublicationReceiptMethod =
+  | "github"
+  | "wordpress"
+  | "webhook"
+  | "shopify"
+  | "webflow"
+  | "ghost";
+
 export type PublicationReceipt = {
-  method: "github" | "wordpress" | "webhook";
+  method: PublicationReceiptMethod;
   deliveryKey: string;
   contentHash: string;
   externalId: string;

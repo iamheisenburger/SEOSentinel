@@ -1,3 +1,4 @@
+import { isApiCmsMethod } from "./lib/cmsDestinations";
 import { internal } from "./_generated/api";
 import {
   readPublicationBufferSummaries,
@@ -360,7 +361,7 @@ export const dispatchActiveSites = internalMutation({
           readiness.blockers.length === 1 &&
           readiness.blockers[0] === "publication_adapter_unverified" &&
           site.approvalRequired !== true &&
-          ["wordpress", "webhook"].includes(site.publishMethod ?? "") &&
+          (["wordpress", "webhook"].includes(site.publishMethod ?? "") || isApiCmsMethod(site.publishMethod)) &&
           (legacyFailureNeedsClassification ||
             now - (site.publicationAdapterVerificationAttemptedAt ?? 0) >=
               LEGACY_PUBLISHER_PREFLIGHT_RETRY_MS);

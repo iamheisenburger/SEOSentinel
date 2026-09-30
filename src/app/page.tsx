@@ -83,7 +83,7 @@ function Proof() {
 
 const PILLARS = [
   { title: "Fact-checked, never invented", desc: "Every article is written from the business facts you confirmed, and a separate review blocks any claim it can't support before it goes live." },
-  { title: "Published, then confirmed live", desc: "Pentra publishes to WordPress or your GitHub site, then opens the real page to confirm the exact article is live." },
+  { title: "Published, then confirmed live", desc: "Pentra publishes to WordPress, Shopify, Webflow, Ghost or your GitHub site, then opens the real page to confirm the exact article is live." },
   { title: "Measured in your own data", desc: "Clicks and positions come from your Google Search Console, before and after every article and every improvement." },
 ];
 
@@ -125,7 +125,7 @@ function Statement() {
 
 const STEPS = [
   ["Add your website", "Pentra reads your homepage and suggests your business facts and your booking or signup page. You confirm them."],
-  ["Connect it once", "WordPress with the Pentra plugin, a GitHub-based site, or paste-it-yourself on any other platform. Plus Google Search Console."],
+  ["Connect it once", "WordPress with the Pentra plugin, Shopify, Webflow, Ghost, a GitHub-based site, or paste-it-yourself on any other platform. Plus Google Search Console."],
   ["Choose Autopilot or Review first", "Pick a pace from 1 to 21 articles a week, or approve every article yourself."],
   ["Pentra does the work", "Research, writing, fact check, publishing and a live-page check, for every article, on schedule."],
   ["It keeps improving what works", "Pages sitting just off page one are improved first, and a weekly health check catches what stops Google showing you."],
@@ -205,7 +205,8 @@ function FeatureRows() {
 const PLATFORMS = [
   { name: "WordPress", how: "Install the free Pentra plugin. Articles publish automatically and are confirmed live." },
   { name: "GitHub sites", how: "Next.js, Astro, Hugo, Jekyll, Gatsby and other Markdown or MDX sites. Pentra commits each article." },
-  { name: "Any other platform", how: "Shopify, Webflow, Wix, Squarespace. Pentra writes, you paste, and Pentra checks the page is live." },
+  { name: "Shopify, Webflow and Ghost", how: "Connect through the platform's official API in a few minutes. Articles publish to your blog automatically and are confirmed live." },
+  { name: "Any other platform", how: "Wix, Squarespace and others. Pentra writes, you paste, and Pentra checks the page is live." },
   { name: "Google Search Console", how: "Clicks and positions for every page, so you see what each article and improvement changed." },
 ];
 
@@ -236,7 +237,7 @@ const faqs = [
   },
   {
     q: "Which websites does Pentra work with?",
-    a: "WordPress sites (with the free Pentra publisher plugin) and sites built from Markdown or MDX files in a GitHub repository, such as Next.js, Astro, Hugo, Jekyll and Gatsby. On Shopify, Webflow, Wix, Squarespace or any other platform, Pentra researches and writes each article, you paste it into your blog, and Pentra checks it is live (automatic publishing there is coming soon).",
+    a: "WordPress sites (with the free Pentra publisher plugin), Shopify stores, Webflow CMS sites, Ghost sites, and sites built from Markdown or MDX files in a GitHub repository, such as Next.js, Astro, Hugo, Jekyll and Gatsby. On Wix, Squarespace or any other platform, Pentra researches and writes each article, you paste it into your blog, and Pentra checks it is live (automatic publishing there is coming soon).",
   },
   {
     q: "Is Autopilot safe for my brand?",
@@ -352,13 +353,13 @@ const organizationSchema = {
   applicationCategory: "BusinessApplication",
   operatingSystem: "Web",
   description:
-    "Autopilot SEO: Pentra researches, writes, fact-checks and publishes articles to your WordPress or GitHub-based site on a schedule, improves pages near page one, and reports Search Console results.",
+    "Autopilot SEO: Pentra researches, writes, fact-checks and publishes articles to your WordPress, Shopify, Webflow, Ghost or GitHub-based site on a schedule, improves pages near page one, and reports Search Console results.",
   offers: { "@type": "AggregateOffer", lowPrice: "0", highPrice: "199", priceCurrency: "USD", offerCount: "4" },
   featureList: [
     "Articles written only from confirmed business facts",
     "Independent fact-check review",
     "Autopilot or review-first publishing",
-    "WordPress and GitHub publishing with receipts",
+    "WordPress, Shopify, Webflow, Ghost and GitHub publishing with receipts",
     "Improvement of pages already ranking",
     "Live-page verification",
     "Google Search Console reporting",

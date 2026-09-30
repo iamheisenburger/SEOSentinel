@@ -6,6 +6,7 @@ const SECRET_FIELD_NAMES = [
   "githubToken",
   "wpAppPassword",
   "webhookSecret",
+  "cmsSecret",
   "gscAccessToken",
   "gscRefreshToken",
   "mediumToken",
@@ -23,6 +24,7 @@ type SiteConnectionFlags = {
   wordpressConfigured: boolean;
   webhookConfigured: boolean;
   webhookSecretConfigured: boolean;
+  cmsSecretConfigured: boolean;
   gscConnected: boolean;
   gscGrowthEnabled: boolean;
   mediumConnected: boolean;
@@ -74,6 +76,7 @@ export function sanitizeSiteForClient<T extends SiteRecord>(
     ),
     webhookConfigured: Boolean(site.webhookUrl),
     webhookSecretConfigured: Boolean(site.webhookSecret),
+    cmsSecretConfigured: Boolean(site.cmsSecret),
     gscConnected,
     gscGrowthEnabled: gscConnected && Boolean(
       typeof site.gscScopes === "string" &&

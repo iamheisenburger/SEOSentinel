@@ -10,6 +10,7 @@ import Link from "next/link";
 import { fundingCopy, money, workLabel, stageLabel, shownTime } from "./content-work-overview";
 import { ExactPageControls } from "./content-work-corrections";
 import { PUBLISHER_AUTOPUBLISH_CONSENT_TEXT } from "../../convex/lib/publisherProvisioning";
+import { CMS_PLATFORM_LABELS, isApiCmsMethod } from "../../convex/lib/cmsDestinations";
 import { contentServiceStatus, fundingMessage } from "../lib/content-service-status";
 import { AutopilotSwitch, PentraSetupChoice } from "./pentra-setup-choice";
 
@@ -20,7 +21,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
   const reconfirm = useMutation(api.contentWork.reconfirm);
   const [chosenMode, setMode] = useState<"legacy_articles" | "growth_first" | null>(null);
   const mode = chosenMode ?? (state?.setupPending ? "growth_first" : state?.serviceMode ?? "legacy_articles");
-  const ownerSetup = Boolean(state?.setupPending && (state.destination.kind === "github" || state.destination.kind === "wordpress"));
+  const ownerSetup = Boolean(state?.setupPending && (state.destination.kind === "github" || state.destination.kind === "wordpress" || isApiCmsMethod(state.destination.kind)));
   const [confirmed, setConfirmed] = useState(false), [deadline, setDeadline] = useState("");
   const [confirmedReview, setConfirmedReview] = useState("");
   const [hours, setHours] = useState("24"), [saving, setSaving] = useState(false), [error, setError] = useState("");
@@ -65,7 +66,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
       <h3 className="font-medium">Review your saved setup</h3>
       <p>Business: {state.profile.summary || "Missing"}</p><p>Audience: {state.profile.audience || "Missing"}</p><p>Product or service: {state.profile.productUsage || "Missing"}</p>
       <p>Offerings: {state.profile.offerings.join("; ") || "Not specified"}</p>
-      <p>Exact destination: {state.destination.domain} · {state.destination.kind === "github" ? `${state.destination.repository}, branch ${state.destination.branch}, ${state.destination.contentDirectory}` : state.destination.kind === "wordpress" ? "WordPress with conditional publisher" : "Unsupported for growth-first"}. {state.destination.verified ? "Verified" : "Verification required"}.</p>
+      <p>Exact destination: {state.destination.domain} · {state.destination.kind === "github" ? `${state.destination.repository}, branch ${state.destination.branch}, ${state.destination.contentDirectory}` : state.destination.kind === "wordpress" ? "WordPress with conditional publisher" : isApiCmsMethod(state.destination.kind) ? `${CMS_PLATFORM_LABELS[state.destination.kind]} blog` : "Unsupported for growth-first"}. {state.destination.verified ? "Verified" : "Verification required"}.</p>
       <p>Existing plan entitlement: {state.entitlement ? "Verified" : "Unavailable — verify Billing"}.</p>
       <Link className="underline" href={`/sites/${siteId}?tab=settings`}>Review business and publishing settings</Link> · <Link className="underline" href="/settings/billing">Billing</Link>
       {!state.bindingCurrent && <>
@@ -95,7 +96,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
           reviewAvailable={state.autopilot?.reviewAvailable ?? true} paused={Boolean(state.schedule?.paused)}
           cadencePerWeek={state.plan?.cadencePerWeek ?? null} articlesPerMonth={state.plan?.articlesPerMonth ?? null} />
         <div className="space-y-1.5">
-          <p>Website: <Link className={link} href={`/sites/${state.siteId}?tab=settings`}>{state.destination.domain}</Link> · {state.destination.kind === "wordpress" ? "WordPress" : "GitHub"} · {state.destination.verified ? "connected" : "not connected yet"}</p>
+          <p>Website: <Link className={link} href={`/sites/${state.siteId}?tab=settings`}>{state.destination.domain}</Link> · {state.destination.kind === "wordpress" ? "WordPress" : isApiCmsMethod(state.destination.kind) ? CMS_PLATFORM_LABELS[state.destination.kind] : "GitHub"} · {state.destination.verified ? "connected" : "not connected yet"}</p>
           <p>Status: {delivery.label}. {state.plan && `Your plan includes ${state.plan.articlesPerMonth} new article${state.plan.articlesPerMonth === 1 ? "" : "s"} a month.`}</p>
         </div>
         {!state.entitlement && <p role="alert" className="text-[#F2994A]">Your plan isn&apos;t active. <Link href="/upgrade" className={link}>Plans &amp; billing</Link></p>}
