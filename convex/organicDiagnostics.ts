@@ -37,8 +37,24 @@ export const snapshot = internalQuery({
       notIndexedSample: notIndexed,
     };
 
+    // Autopilot's own page improvements (a slot spent improving a published
+    // page near page one instead of writing a new article): what exists, what ran.
+    const since = Date.now() - 60 * 86_400_000;
+    const recentJobs = (await ctx.db.query("jobs").withIndex("by_site_content_deadline", q => q.eq("siteId", siteId).gte("contentWork.deadlineAt", since)).take(501))
+      .filter(job => job.contentWork);
+    const editablePages = (await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId)).take(501)).filter(page => page.editable);
+    const improvements = {
+      editablePages: editablePages.length,
+      activeEditablePages: editablePages.filter(page => page.editable!.active).length,
+      everImproved: editablePages.filter(page => page.editable!.lastImprovedAt).length,
+      lastImprovedAt: Math.max(0, ...editablePages.map(page => page.editable!.lastImprovedAt ?? 0)) || null,
+      slots60d: count(recentJobs.map(job => `${job.contentWork!.intent}:${job.contentWork!.stage}`)),
+      recentImprove: recentJobs.filter(job => job.contentWork!.intent === "improve").slice(-10)
+        .map(job => ({ at: job.contentWork!.deadlineAt, stage: job.contentWork!.stage, opportunity: (job.contentWork!.opportunity ?? "").slice(0, 160) })),
+    };
+
     if (!gscConnectionMatchesCurrentDomain(site) || !through) {
-      return { domain: site.domain, gscProperty: site.gscProperty ?? null, gscConnected: false, through, articles };
+      return { domain: site.domain, gscProperty: site.gscProperty ?? null, gscConnected: false, through, articles, improvements };
     }
     const start = addSearchConsoleDays(through, -(window - 1));
     const pages = await takeCurrentGscPageRows(ctx, site, 12_000, { startDate: start, endDate: through });
@@ -96,6 +112,7 @@ export const snapshot = internalQuery({
         top: queryList.sort((a, b) => b.impressions - a.impressions).slice(0, 25),
       },
       articles,
+      improvements,
     };
   },
 });
