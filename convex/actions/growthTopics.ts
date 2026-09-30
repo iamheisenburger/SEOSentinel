@@ -3,13 +3,14 @@
 import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { v } from "convex/values";
-import { discoverKeywords, meterDataForSeoCost } from "./seoData";
+import { discoverKeywords, getDomainAuthority, meterDataForSeoCost, type DomainAuthorityEvidence } from "./seoData";
 import { dataForSeoLocationCode } from "../lib/dataForSeoLocale";
 import { contentIntentConflicts, evaluateTopicBusinessFit } from "../lib/autopilotBuffer";
 
 type ResearchContext = { domain: string; language: string; targetCountry: string | null; seeds: string[]; known: string[];
   coverage: string[]; signals: { coreBusinessSignals: string[]; productAnchorSignals: string[]; businessModelSignals: string[] };
-  searchConsole: Array<{ keyword: string; impressions: number; position: number }> };
+  searchConsole: Array<{ keyword: string; impressions: number; position: number }>; tenantAuthority: number | null;
+  canonicalDomain: string; domainRevision: number };
 
 /** Keyword research for an Autopilot site whose topics ran out. The spend is
  * reserved (and bounded) by contentWork.advance before this runs; any failure
@@ -36,14 +37,34 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
       return undefined;
     };
     let found: Awaited<ReturnType<typeof discoverKeywords>> = [];
+    // A site without fresh authority evidence is measured once within this
+    // research run (one backlinks summary, inside the same reservation), so
+    // discovery and topic order keep what it can actually win.
+    let tenantAuthority = context.tenantAuthority;
+    let measured: DomainAuthorityEvidence | null = null;
     const metered = await meterDataForSeoCost(async () => {
       try {
+        if (tenantAuthority === null) {
+          measured = await getDomainAuthority(context.domain);
+          if (measured) tenantAuthority = measured.domainRank;
+        }
         return await discoverKeywords(context.seeds, dataForSeoLocationCode(context.targetCountry ?? undefined), context.language, 80,
           { targetDomain: context.domain, minimumResults: 10, maxLabsSeeds: 5, maxRelatedSeeds: 3, maximumDifficulty: 45,
+            // Keep what this site can win when discovery truncates (its measured authority, if any).
+            ...(tenantAuthority !== null ? { tenantAuthority } : {}),
             excludeKeyword: exclusion });
       } catch { return []; }
     });
     found = metered.result;
+    const evidence = measured as DomainAuthorityEvidence | null;
+    if (evidence) {
+      try {
+        await ctx.runMutation(internal.sites.recordSeoAuthorityEvidenceInternal, { siteId,
+          expectedCanonicalDomain: context.canonicalDomain, expectedDomainRevision: context.domainRevision,
+          domain: evidence.domain, domainRank: evidence.domainRank, referringDomains: evidence.referringDomains,
+          source: evidence.source, measuredAt: evidence.measuredAt });
+      } catch { /* the domain changed meanwhile: keep nothing */ }
+    }
     // Settle at DataForSEO's reported cost. An uncertain total (a request that
     // failed after it was sent) keeps the whole reservation, as before.
     if (!metered.uncertain) {

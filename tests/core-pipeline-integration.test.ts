@@ -6479,6 +6479,8 @@ test("P57 searches the site already appears for become topics when no article of
   assert.ok(fromConsole, JSON.stringify(planned.map(t => t.primaryKeyword)));
   assert.match(fromConsole.notes, /^Search Console: this site was shown 40 times in 28 days/);
   assert.ok(!planned.some(t => t.primaryKeyword === "cheap flights to paris"), "an off-business search is never added");
+  // P60: a site with no authority evidence is measured once inside the research run.
+  assert.equal(typeof f.get(site.id)!.seoAuthorityDomainRank, "number", "research records the site's measured authority");
   f.assertOffline();
 });
 
@@ -6604,4 +6606,32 @@ test("P58 a site out of topics wakes exactly when keyword research may run again
   await pumpUntil(f, () => f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan").length > before,
     20, due + hour);
   f.assertOffline();
+});
+
+test("P60 with measured authority, Autopilot writes the search a young site can win before a bigger one it cannot", async t => {
+  for (const measured of [false, true]) await t.test(measured ? "authority measured" : "no authority evidence", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    f.setIdentity(saved.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+    f.setIdentity(null);
+    const current = f.get(site.id)!;
+    if (measured) Object.assign(current, { seoAuthorityDomain: current.domain, seoAuthorityDomainRank: 4, seoAuthorityReferringDomains: 3,
+      seoAuthoritySource: "dataforseo_backlinks_bulk_pages_summary", seoAuthorityMeasuredAt: f.now() - 86_400_000 });
+    for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+    const base = { siteId: site.id, planningCanonicalDomain: current.canonicalDomain ?? current.domain, planningDomainRevision: current.canonicalDomainRevision ?? 0,
+      secondaryKeywords: [], intent: "informational", status: "planned", priority: 50, keywordDifficultyMeasured: true, createdAt: f.now(), updatedAt: f.now() };
+    const head = f.add("topic_clusters", { ...base, primaryKeyword: "irrigation valve pressure test", label: "Irrigation valve pressure test",
+      searchVolume: 20_000, keywordDifficulty: 40 });
+    const longTail = f.add("topic_clusters", { ...base, primaryKeyword: "irrigation pump leak triage", label: "Irrigation pump leak triage",
+      searchVolume: 60, keywordDifficulty: 8 });
+    f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 5 * 3_600_000;
+    await f.invoke("contentWork:advance", { siteId: site.id });
+    const job = f.tables.jobs.find(j => j.contentWork && j.siteId === site.id)!;
+    assert.ok(job, "an article was started");
+    assert.equal(job.payload.topicId, measured ? longTail : head,
+      measured ? "a domain rank 4 site writes the keyword it can win first" : "without authority evidence the ordering is unchanged");
+    f.assertOffline();
+  });
 });

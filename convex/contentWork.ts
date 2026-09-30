@@ -7,6 +7,8 @@ import { publicationArtifactHash, publicationDeliveryConfig, sha256Hex } from ".
 import { legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain, gscConnectionMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
+import { preSerpWinnability } from "./lib/winnableDiscovery";
+import { measuredAuthorityIsFresh, tenantAuthorityFromStoredEvidence } from "./lib/expectedClickPortfolio";
 import { addSearchConsoleDays, isBrandedSearchQuery, publishedArticlePageUrl } from "./lib/searchPerformance";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
 import { resolvePlanFromFeatures, cadenceFitsOperationalLimit, targetCadenceOptions } from "./planLimits";
@@ -1030,6 +1032,15 @@ export const control = mutation({ args: { siteId: v.id("sites"), action: v.union
     await wake(ctx, site._id);
   } });
 
+/** The site's measured authority (domain rank), when Pentra holds fresh
+ * evidence for its current domain; undefined otherwise. No provider call. */
+export function storedTenantAuthority(site: Doc<"sites">): number | undefined {
+  const authority = tenantAuthorityFromStoredEvidence({ domain: site.seoAuthorityDomain, currentDomain: site.domain,
+    domainRank: site.seoAuthorityDomainRank, referringDomains: site.seoAuthorityReferringDomains,
+    source: site.seoAuthoritySource, measuredAt: site.seoAuthorityMeasuredAt });
+  return measuredAuthorityIsFresh(authority) ? authority.domainRank : undefined;
+}
+
 /** The planned topics Autopilot may still write, best first (read-only). The
  * health check uses the same list to report how many are left. */
 export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: Doc<"sites">,
@@ -1065,8 +1076,15 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
   // weighs more than raw volume (e.g. 100 searches at difficulty 10 beats
   // 1,000 searches at difficulty 40).
   const opportunity = (t: Doc<"topic_clusters">) => Math.log10(1 + (t.searchVolume ?? 0)) * 12 - (t.keywordDifficulty ?? 0) * 0.8;
+  // With measured authority, searched keywords are ordered by the chance this
+  // site can actually win them (Pentra's winnability model): a young domain
+  // writes the easy searches first instead of ones only an incumbent ranks
+  // for. Ordering only: nothing is dropped, so topic supply is unchanged.
+  const authority = storedTenantAuthority(site);
+  const winnability = (t: Doc<"topic_clusters">) => authority === undefined ? 0 : preSerpWinnability({ tenantAuthority: authority,
+    keywordDifficulty: t.keywordDifficulty, keywordDifficultyMeasured: t.keywordDifficultyMeasured, monthlySearches: t.searchVolume });
   planned.sort((a, b) => Number(searched(b)) - Number(searched(a)) ||
-    (searched(a) && searched(b) ? opportunity(b) - opportunity(a) : 0) || (b.priority ?? 0) - (a.priority ?? 0));
+    (searched(a) && searched(b) ? winnability(b) - winnability(a) || opportunity(b) - opportunity(a) : 0) || (b.priority ?? 0) - (a.priority ?? 0));
   return { topics, pageCoverage, fit, competitors, planned, searched };
 }
 const PAIN_POINT_TOPIC_NOTES = "A customer question the owner confirmed. Search forecasts are unknown. Answer it from supported business facts with conditional guidance; never invent experience or external claims.";
@@ -1286,7 +1304,9 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
     coverage = [...new Set([...known, ...inventory.pageCoverage.map(c => normalizeResearchKeyword(c.primaryKeyword ?? ""))].filter(Boolean))];
   } catch { /* an incomplete inventory keeps the topic list only */ }
   return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds, known, coverage,
-    signals: tenantTopicBusinessSignals(site), searchConsole: await searchConsoleTopicCandidates(ctx, site) };
+    signals: tenantTopicBusinessSignals(site), searchConsole: await searchConsoleTopicCandidates(ctx, site),
+    tenantAuthority: storedTenantAuthority(site) ?? null,
+    canonicalDomain: siteCanonicalDomain(site) ?? site.domain, domainRevision: siteCanonicalDomainRevision(site) };
 } });
 
 const urlKey = (url: string) => url.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[#?].*$/, "").replace(/\/+$/, "");
