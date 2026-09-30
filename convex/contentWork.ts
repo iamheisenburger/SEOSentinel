@@ -101,8 +101,14 @@ async function autopilotFailureBackoffUntil(ctx: MutationCtx, siteId: Id<"sites"
 const AUTOPILOT_REPLACEMENT_LEAD_MS = 60 * 60_000;
 function autopilotReplaceable(job: Doc<"jobs">) {
   const cw = job.contentWork;
-  return Boolean(cw && cw.stage === "failed" && cw.intent === "create" && !cw.ownerRequest && cw.retiredAt === undefined &&
-    !cw.replacesJobId && AUTOPILOT_SKIPPABLE_FAILURES.has(cw.failure ?? ""));
+  return Boolean(cw && cw.stage === "failed" && !cw.ownerRequest && cw.retiredAt === undefined && !cw.replacesJobId &&
+    (cw.intent === "create" ? AUTOPILOT_SKIPPABLE_FAILURES.has(cw.failure ?? "") : automaticImprovement(cw)));
+}
+/** Autopilot chose this page improvement or refresh itself. Its failure never
+ * holds the slot: nothing was published for it, so the slot gets a new
+ * article (or moves on), exactly like a skippable failed article. */
+function automaticImprovement(cw: NonNullable<Doc<"jobs">["contentWork"]>) {
+  return cw.intent === "improve" && !cw.ownerRequest;
 }
 /** A content job's reservation is bound to its slot; a slot replacement has its own. */
 function contentSlotTriggerMatches(trigger: string, cw: { deadlineAt: number; replacesJobId?: Id<"jobs"> }) {
@@ -1598,11 +1604,15 @@ export const advance = internalMutation({
     // Only sites that chose Autopilot in the new setup continue past a parked
     // draft; older contracts keep their failed slot exactly as recorded.
     const failure = failedSlot?.contentWork!.failure ?? "";
-    const replaceNextSlot = Boolean(failedSlot && schedule.autopilotSelectedAt && autopilotReplaceable(failedSlot) && waiting.length === 0 &&
+    // Autopilot's own page improvements never hold a slot, whatever the
+    // site's contract: nothing was published for them.
+    const improvementFailed = Boolean(failedSlot && automaticImprovement(failedSlot.contentWork!));
+    const replaceNextSlot = Boolean(failedSlot && (schedule.autopilotSelectedAt || improvementFailed) && autopilotReplaceable(failedSlot) && waiting.length === 0 &&
       !work.some(j => j.contentWork!.replacesJobId === failedSlot._id) && replacementsHealthy(work) &&
       failedSlot.contentWork!.deadlineAt - Date.now() >= AUTOPILOT_REPLACEMENT_LEAD_MS);
-    if (failedSlot && !replaceNextSlot && schedule.autopilotSelectedAt && !failedSlot.contentWork!.ownerRequest && AUTOPILOT_SKIPPABLE_FAILURES.has(failure) &&
-      (failedSlot.articleId || failure !== "bounded_content_quality_exhausted") && failedSlot.contentWork!.intent === "create") {
+    if (failedSlot && !replaceNextSlot && !failedSlot.contentWork!.ownerRequest && (improvementFailed ||
+      (schedule.autopilotSelectedAt && AUTOPILOT_SKIPPABLE_FAILURES.has(failure) &&
+        (failedSlot.articleId || failure !== "bounded_content_quality_exhausted") && failedSlot.contentWork!.intent === "create"))) {
       // Autopilot never stalls on a draft the reviewer would not pass, or on a
       // provider response that was incomplete (nothing was published): any
       // retained draft waits for the owner, the missed slot stays recorded on
@@ -1610,7 +1620,7 @@ export const advance = internalMutation({
       await ctx.db.patch(siteId, { contentSchedule: { ...schedule, nextDeadlineAt: schedule.nextDeadlineAt + schedule.intervalMs },
         updatedAt: Date.now() });
       await wake(ctx, siteId);
-      return { scheduled: 0, mode: "content_slot_parked", blockers: ["owner_review_needed"] };
+      return { scheduled: 0, mode: "content_slot_parked", blockers: [improvementFailed ? "automatic_improvement_failed" : "owner_review_needed"] };
     }
     if (failedSlot && !replaceNextSlot) return { scheduled: 0, mode: "content_failed_slot", blockers: [failedSlot.contentWork!.failure ?? "content_work_failed"] };
     if (waiting.length >= 2) return { scheduled: 0, mode: "buffer_full" };
@@ -1624,7 +1634,8 @@ export const advance = internalMutation({
     }
     const pricing = await pricingConfiguration(ctx, site);
     if (!pricing) return { scheduled: 0, mode: "content_pricing_unavailable" };
-    const improvement = await chooseImprovement(ctx, site, work);
+    // A replacement slot is always a new article, never another improvement.
+    const improvement = replaceNextSlot ? null : await chooseImprovement(ctx, site, work);
     const runway = { planned: 0, searched: 0 };
     let topic = improvement ? await ctx.db.get(await ctx.db.insert("topic_clusters", {
       siteId, planningCanonicalDomain: siteCanonicalDomain(site)!, planningDomainRevision: siteCanonicalDomainRevision(site),

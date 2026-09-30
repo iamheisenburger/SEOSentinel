@@ -5,7 +5,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { confirmedContentProfileHash, contentConnectionHash, assertUnprotectedPage, selectedUrlMatches,
-  CONTENT_PAGE_COOLDOWN_MS, CONTENT_PAGE_REVIEW_MS, parseSelectedMarkdown, selectedGitHubPath, targetedImprovement, contentWords } from "./lib/contentSelection";
+  CONTENT_PAGE_COOLDOWN_MS, CONTENT_PAGE_REVIEW_MS, parseSelectedMarkdown, selectedGitHubPath, targetedImprovement, contentWords, refreshInsertTarget } from "./lib/contentSelection";
 import { contentIssue } from "./lib/contentCustomer";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { accountDeletionKey } from "./lib/accountDeletion";
@@ -14,7 +14,7 @@ import { evaluateTopicBusinessFit, tenantTopicBusinessSignals } from "./lib/auto
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDomainBinding";
 import { stripLeadingDocumentTitle } from "./lib/markdownPublishing";
 import { publicationDeliveryConfig } from "./lib/publicationArtifact";
-import { REFRESH_COOLDOWN_MS, refreshArticleOldEnough, refreshOpportunities, refreshSlotAvailable, refreshWindowStart } from "./lib/articleRefresh";
+import { REFRESH_COOLDOWN_MS, REFRESH_REVIEW_MS, refreshArticleOldEnough, refreshOpportunities, refreshSlotAvailable, refreshWindowStart } from "./lib/articleRefresh";
 import { isBrandedSearchQuery } from "./lib/searchPerformance";
 
 async function owner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
@@ -178,7 +178,8 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
   const refreshAllowed = refreshSlotAvailable(jobs);
   const candidates = pages.filter(p => p.editable?.active && p.editable.connectionHash === contentConnectionHash(site) &&
     p.editable.profileHash === confirmedContentProfileHash(site) &&
-    Date.now() - (p.editable.lastReviewedAt ?? 0) >= CONTENT_PAGE_REVIEW_MS &&
+    // Page-2 refresh candidates are re-checked daily (Search Console moves daily).
+    Date.now() - (p.editable.lastReviewedAt ?? 0) >= (p.editable.origin === "published_refresh" ? REFRESH_REVIEW_MS : CONTENT_PAGE_REVIEW_MS) &&
     Date.now() - (p.editable.lastImprovedAt ?? 0) >= CONTENT_PAGE_COOLDOWN_MS &&
     (p.editable.origin !== "published_refresh" || (refreshAllowed && Date.now() - (p.editable.lastImprovedAt ?? 0) >= REFRESH_COOLDOWN_MS)) &&
     !jobs.some(j => j.contentWork?.targetPageId === p._id && !["verified","failed"].includes(j.contentWork.stage)));
@@ -194,12 +195,15 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
     await ctx.db.patch(page._id, { editable: { ...e, lastReviewedAt: Date.now() } });
     try { assertUnprotectedPage(page.slug, e.title, e.sourceContent); } catch { continue; }
     if (e.origin === "published_refresh") {
-      const best = refreshOpportunities(measurements.rows, page.url).find(o => !isBrandedSearchQuery(o.query, site.domain) &&
-        !e.markdown.toLowerCase().includes(o.query) &&
+      // The page-2 search is usually the article's own keyword, so it is
+      // already in the text: the refresh answers it in a dedicated section.
+      const eligible = refreshOpportunities(measurements.rows, page.url).filter(o => !isBrandedSearchQuery(o.query, site.domain) &&
         evaluateTopicBusinessFit({ keyword: o.query, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible);
+      const best = eligible.find(o => !e.markdown.toLowerCase().includes(o.query)) ?? eligible[0];
       if (!best) continue;
-      const refreshTarget = targetedImprovement(e, site, best.query);
-      if (contentWords(e.markdown) >= 1200 && !refreshTarget) continue;
+      const managed = e.managedArticleId ? await ctx.db.get(e.managedArticleId) : null;
+      const refreshTarget = refreshInsertTarget(e, managed?.articleType);
+      if (!refreshTarget) continue;
       return { page, question: best.query, editTarget: refreshTarget,
         reason: `Refresh of a page-2 article: Search Console shows "${best.query}" at average position ${Math.round(best.position)} with ${best.impressions} impressions in the last 28 days. No claim of causal growth.` };
     }

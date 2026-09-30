@@ -1249,7 +1249,10 @@ export default defineSchema({
         targetPageId: v.optional(v.id("pages")), targetUrl: v.optional(v.string()), brokenUrl: v.optional(v.string()), observedAt: v.number() })),
       targetPageId: v.optional(v.id("pages")), baseRevision: v.optional(v.string()), permissionVersion: v.optional(v.number()),
       opportunity: v.optional(v.string()), revisionId: v.optional(v.id("published_article_revisions")),
-      editTarget: v.optional(v.object({ before: v.string(), sourceBefore: v.string(), maxWords: v.number() })),
+      // mode "insert_section": a refresh adds one new section immediately
+      // before the anchor heading `before` instead of replacing a paragraph.
+      editTarget: v.optional(v.object({ before: v.string(), sourceBefore: v.string(), maxWords: v.number(),
+        mode: v.optional(v.literal("insert_section")) })),
       stage: v.union(v.literal("prepare"), v.literal("review"), v.literal("review_failed"),
         v.literal("ready"), v.literal("publish"), v.literal("verify"), v.literal("verified"), v.literal("failed")),
       deadlineAt: v.number(), windowStartAt: v.number(),

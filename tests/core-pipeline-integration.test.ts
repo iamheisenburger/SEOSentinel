@@ -197,6 +197,29 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
             for (const sentence of sentences) if ((after + " " + sentence).trim().split(/\s+/).length <= edit.maxWords) after = (after + " " + sentence).trim();
             article.markdown = selected[3].replace(edit.before, after);
           }
+          const insert = text.match(/<insert_section>([^\n]+)<\/insert_section>/)?.[1];
+          if (insert) {
+            // A refresh: one new guidance section before the closing block.
+            const edit = JSON.parse(insert);
+            const lines = [
+              `Start with the question a reader brings to ${keyword} and write down what a useful answer must let them decide.`,
+              "Separate the observation, the suspected cause, and the next reversible experiment before changing anything in the working process.",
+              "Ask an accountable colleague to reproduce the example and challenge any missing context before the team relies on it.",
+              "Keep unresolved contradictions visible until a documented explanation supports the decision that follows from them.",
+              "Describe the acceptance condition in plain words and name who can approve the handoff once it is met.",
+              "Prefer a small, reviewable change over a sweeping rewrite, so the effect of each step stays easy to inspect.",
+              "Record which evidence was considered and which question remains open, so a later reviewer can pick the work up without guessing.",
+              "When two readings of the same record are possible, keep both and ask the responsible owner which one guides the next step.",
+              "Close by listing the proposed next action, the reason for it, and the check that will show whether it was completed.",
+              "Invite the people affected to correct the record in their own words before the guidance is shared more widely.",
+              "Review the result against the original scope and drop any suggestion that falls outside it unless the owner approves it.",
+              "Treat the finished checklist as a working draft that the team keeps improving as new questions come in.",
+            ];
+            const half = Math.ceil(lines.length / 2);
+            let body = [lines.slice(0, half).join(" "), lines.slice(half).join(" ")].join("\n\n");
+            while (body.split(/\s+/).length > edit.maxWords) body = body.split(" ").slice(0, -12).join(" ").replace(/[^.]*$/, "").trim();
+            article.markdown = selected[3].replace(edit.insertBeforeLine, `## A working method for ${keyword}\n\n${body}\n\n${edit.insertBeforeLine}`);
+          }
           if (options.selectedNoop) article.markdown = selected[3];
         } else if (options.wordpress) article.slug += "-" + businesses[0].domain.split(".")[0];
         value = options.omitDraftTitle ? Object.fromEntries(Object.entries(article).filter(([key]) => key !== "title")) : article;
@@ -6783,6 +6806,36 @@ test("A refresh adoption of a file the owner later edits is retired before any w
   f.assertOffline();
 });
 
+test("A failed automatic refresh never holds its slot: the site keeps publishing new articles", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const day = 86_400_000, site = await selectGrowth(f, 7 * day);
+  await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.stage === "verified")));
+  const created = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!, article = f.get(created.articleId)!;
+  delete f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!.editable;
+  f.setTime(Math.max(f.now(), article.publishedAt + 29 * day));
+  const date = new Date(f.now() - day).toISOString().slice(0, 10), syncEpoch = `refresh-${date}`;
+  f.get(site.id)!.gscDateEpochs = [...(f.get(site.id)!.gscDateEpochs ?? []), { date, syncEpoch }];
+  f.add("search_performance", { siteId: site.id, date, syncEpoch, page: article.publicUrl, query: String(f.get(article.topicId!)!.primaryKeyword).toLowerCase(),
+    syncVersion: 2, syncedAt: f.now(), clicks: 0, impressions: 40, ctr: 0, position: 14, createdAt: f.now() });
+  f.get(site.id)!.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: f.get(site.id)! as never,
+    ownerAccountKey: accountDeletionKey(f.get(site.id)!.userId), verifiedAt: f.now() });
+  assert.deepEqual(await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id }), { adopted: 1, checked: 1 });
+  // The refresh job's generation fails outright (the writing service returned nothing usable).
+  const refreshJob = () => f.tables.jobs.find(j => j.contentWork?.intent === "improve");
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_work", reason: "synthetic_refresh_failure" });
+  await pumpUntil(f, () => Boolean(refreshJob()), 60, START + 120 * day);
+  const job = refreshJob()!;
+  job.status = "failed"; job.contentWork = { ...job.contentWork, stage: "failed", failure: "content_model_response_invalid" };
+  const slot = job.contentWork.deadlineAt;
+  f.get(site.id)!.contentSchedule = { ...f.get(site.id)!.contentSchedule, nextDeadlineAt: slot };
+  const decision = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.notEqual(decision.mode, "content_failed_slot", JSON.stringify(decision));
+  // The slot is covered by a new article or the schedule moved past it.
+  const covered = f.tables.jobs.some(j => j.contentWork?.intent === "create" && j.contentWork.deadlineAt === slot && j._id !== job._id);
+  assert.ok(covered || f.get(site.id)!.contentSchedule.nextDeadlineAt > slot, JSON.stringify(decision));
+  assert.equal(f.tables.jobs.filter(j => j.contentWork?.intent === "improve").length, 1, "the replacement is never another improvement");
+});
+
 test("Autopilot adopts its own older article on Google page 2 and refreshes it as one slot", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const day = 86_400_000, site = await selectGrowth(f, 7 * day);
@@ -6797,7 +6850,9 @@ test("Autopilot adopts its own older article on Google page 2 and refreshes it a
   f.setTime(Math.max(f.now(), article.publishedAt + 29 * day));
   const date = new Date(f.now() - day).toISOString().slice(0, 10), syncEpoch = `refresh-${date}`;
   f.get(site.id)!.gscDateEpochs = [...(f.get(site.id)!.gscDateEpochs ?? []), { date, syncEpoch }];
-  const query = `${site.keywords[0]} diagnostic decision`;
+  // Real page-2 searches are usually the article's own keyword, already in its text.
+  const query = String(f.get(article.topicId!)!.primaryKeyword).toLowerCase();
+  assert.ok(String(article.markdown).toLowerCase().includes(query), "precondition: the article already uses its keyword");
   f.add("search_performance", { siteId: site.id, date, syncEpoch, page: article.publicUrl, query,
     syncVersion: 2, syncedAt: f.now(), clicks: 0, impressions: 40, ctr: 0, position: 14, createdAt: f.now() });
 
@@ -6831,8 +6886,17 @@ test("Autopilot adopts its own older article on Google page 2 and refreshes it a
   await pumpUntil(f, () => refreshed().length === 1, 400, START + 120 * day);
   const job = refreshed()[0];
   assert.equal(job.contentWork.intent, "improve");
+  assert.equal(job.contentWork.editTarget?.mode, "insert_section");
   assert.match(job.contentWork.opportunity, /Refresh of a page-2 article: Search Console shows ".+" at average position 14 with 40 impressions/);
-  assert.notEqual(f.get(page._id)!.editable.markdown, adoptedMarkdown);
+  const refreshedMarkdown = String(f.get(page._id)!.editable.markdown);
+  assert.notEqual(refreshedMarkdown, adoptedMarkdown);
+  // One new section before the closing block; every existing byte kept.
+  const anchor = job.contentWork.editTarget.before, at = adoptedMarkdown.indexOf(anchor);
+  assert.ok(refreshedMarkdown.startsWith(adoptedMarkdown.slice(0, at)), "text before the new section is unchanged");
+  assert.ok(refreshedMarkdown.trimEnd().endsWith(adoptedMarkdown.slice(at).trimEnd()), "the closing block is unchanged");
+  assert.match(refreshedMarkdown, new RegExp(`## A working method for [^\\n]+\\n\\n[\\s\\S]+\\n\\n${anchor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  const committed = [...f.repositories.get(site.name.toLowerCase())!.files.values()].find(content => content.includes("## A working method for"));
+  assert.ok(committed && committed.includes(anchor), "the refresh reached the site's repository");
   assert.ok(f.get(page._id)!.editable.lastImprovedAt, "the 60-day refresh cooldown starts at the verified refresh");
   f.assertOffline();
 });

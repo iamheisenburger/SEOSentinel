@@ -71,3 +71,57 @@ test("only a file whose whole history is Pentra's own deliveries can be refreshe
     "a history longer than the limit is not proven");
 });
 
+
+import { assertSafeImprovement, refreshInsertTarget } from "../convex/lib/contentSelection.ts";
+
+const para = (seed: string, n = 60) => Array.from({ length: n }, (_, i) => `${seed}${i % 7}`).join(" ") + ".";
+const article = [
+  "Intro paragraph that sets the scene for readers who arrived from search and want a direct answer quickly.",
+  "## How keyword research connects to production", para("research"),
+  "## Where a tool like Pentra fits", para("tool"),
+  "## Final note on scope", para("scope", 30),
+  "## Related reading", "- [One](/blog/one)\n- [Two](/blog/two)",
+].join("\n\n");
+const base = { kind: "github", title: "Guide", markdown: article, sourceContent: `---\ntitle: "Guide"\n---\n\n${article}\n`, header: `---\ntitle: "Guide"\n---\n\n` };
+const guidance = [
+  "Start with the question the reader brings and write down what a useful answer must let them decide before anything else.",
+  "Separate what you observed from what you suspect, and choose one reversible next step that tests the suspicion directly.",
+  "Ask a colleague to reproduce the example and challenge any missing context before the team relies on the conclusion.",
+  "Keep open questions visible and name who can answer each one, so the work does not stall on an unstated assumption.",
+  "Describe the acceptance condition in plain words and agree who approves the result once that condition is met.",
+  "Prefer a small change you can inspect over a sweeping rewrite, so the effect of each step stays easy to see.",
+  "Record which evidence you considered and which question remains open, so a later reviewer can continue without guessing.",
+  "Close by listing the next action, the reason for it, and the check that will show whether it was done.",
+  "Invite the people affected to correct the record in their own words before the guidance is shared more widely.",
+  "Review the result against the original scope and drop anything outside it unless the owner approves it.",
+].join(" ");
+const withSection = (section: string) => article.replace("## Final note on scope", `${section}\n\n## Final note on scope`);
+
+test("a refresh inserts one section before the article's closing block and keeps every other byte", () => {
+  const target = refreshInsertTarget(base, "standard")!;
+  assert.equal(target.mode, "insert_section");
+  assert.equal(target.before, "## Final note on scope", "the earliest heading of the trailing closing run");
+  const section = `## A direct answer for this search\n\n${guidance}`;
+  assert.equal(assertSafeImprovement(base, { title: "Guide", markdown: withSection(section) }, target), `${section}\n\n## Final note on scope`);
+});
+
+test("a refresh section may not change existing text or add unsourced material", () => {
+  const target = refreshInsertTarget(base, "standard")!;
+  const ok = `## A direct answer for this search\n\n${guidance}`;
+  const reject = (markdown: string, pattern: RegExp) =>
+    assert.throws(() => assertSafeImprovement(base, { title: "Guide", markdown }, target), pattern);
+  reject(withSection(ok).replace("Intro paragraph", "Opening paragraph"), /changed existing article text/);
+  reject(withSection(`${ok} Teams that do this see 37 percent more clicks.`), /number the article does not already state/);
+  reject(withSection(`${ok} See [the guide](https://example.com).`), /links, images, HTML or code/);
+  reject(withSection("## Too short\n\nKeep it brief."), /length is outside its bounds/);
+  reject(withSection(`## How keyword research connects to production\n\n${guidance}`), /repeats an existing heading/);
+  reject(withSection(`## A direct answer\n\n${guidance}\n\n## Second section\n\n${guidance}`), /exactly one section/);
+  assert.throws(() => assertSafeImprovement(base, { title: "Other", markdown: withSection(ok) }, target), /title/);
+});
+
+test("no refresh when the article has no closing block or no room under its word ceiling", () => {
+  assert.equal(refreshInsertTarget({ ...base, markdown: article.replace(/## Final note on scope[\s\S]*$/, "") , sourceContent: base.sourceContent }, "standard"), undefined);
+  const long = article.replace("## Final note on scope", `${para("long", 2500)}\n\n## Final note on scope`);
+  assert.equal(refreshInsertTarget({ ...base, markdown: long, sourceContent: `${base.header}${long}\n` }, "standard"), undefined);
+  assert.equal(refreshInsertTarget({ ...base, kind: "wordpress" }, "standard"), undefined);
+});

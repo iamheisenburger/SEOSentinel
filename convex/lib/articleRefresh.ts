@@ -17,6 +17,8 @@ export const REFRESH_MAX_POSITION = 30;
 /** One refresh in every REFRESH_SLOT_SPACING consecutive automatic slots. */
 export const REFRESH_SLOT_SPACING = 4;
 export const REFRESH_WINDOW_DAYS = 28;
+/** A refresh candidate that did not qualify is looked at again the next day. */
+export const REFRESH_REVIEW_MS = 86_400_000;
 
 export type RefreshQueryRow = {
   page?: string;

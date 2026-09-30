@@ -18,7 +18,7 @@ export function contentConsentToken(site: Doc<"sites">) {
   return sha256Hex(JSON.stringify([confirmedContentProfileHash(site), connection]));
 }
 export const CONTENT_PAGE_COOLDOWN_MS = 14 * 86_400_000;
-export type SelectedEditTarget = { before: string; sourceBefore: string; maxWords: number };
+export type SelectedEditTarget = { before: string; sourceBefore: string; maxWords: number; mode?: "insert_section" };
 export const contentWords = (value: string) => value.trim().split(/\s+/).filter(Boolean).length;
 export function preserveWordPressReviewedText(html: string): string {
   return html.split(/(<[^>]*>)/g).map((part, index) => index % 2 ? part : part.split(/(&(?:#[0-9]+|#x[0-9a-f]+|[a-z]+);)/gi)
@@ -57,6 +57,65 @@ export function targetedImprovement(base: { kind: string; markdown: string; sour
     if (maxWords >= 40) return { before, sourceBefore, maxWords };
   }
 }
+/** A refresh of one of Pentra's own published articles adds one new section
+ * (an H2 and 150-350 words) that answers the page-2 search directly, placed
+ * before the article's closing block (related reading, sources, FAQ, final
+ * note, conclusion...). Everything else stays byte-for-byte. */
+export const REFRESH_SECTION_MIN_WORDS = 150;
+export const REFRESH_SECTION_MAX_WORDS = 350;
+const CLOSING_HEADING = /^(?:related\b|further reading|read next|keep reading|sources?\b|references?\b|citations?\b|faqs?\b|frequently asked questions|final\b|conclusion|in conclusion|wrapping up|wrap-up|summary|in summary|key takeaways|takeaways|next steps?\b|(?:the )?bottom line)/i;
+export function refreshInsertTarget(base: { kind: string; markdown: string; sourceContent: string; header?: string },
+  articleType?: string): SelectedEditTarget | undefined {
+  if (base.kind !== "github") return;
+  const headings = base.markdown.split("\n").filter(line => /^## \S/.test(line));
+  let anchor: string | undefined;
+  for (let index = headings.length - 1; index >= 0; index--) {
+    if (!CLOSING_HEADING.test(headings[index].slice(3).trim())) break;
+    anchor = headings[index];
+  }
+  if (!anchor) return;
+  const body = base.header ? base.sourceContent.slice(base.header.length) : base.sourceContent;
+  const once = (text: string) => text.indexOf(anchor!) >= 0 && text.indexOf(anchor!) === text.lastIndexOf(anchor!);
+  if (!once(base.markdown) || !once(body)) return;
+  const maxWords = Math.min(REFRESH_SECTION_MAX_WORDS, articleWordCeiling(articleType) - contentWords(base.markdown));
+  if (maxWords < REFRESH_SECTION_MIN_WORDS) return;
+  return { mode: "insert_section", before: anchor, sourceBefore: anchor, maxWords };
+}
+
+/** The new section may restate the article's own facts, reason about them and
+ * give practical guidance. It may not bring in anything a reviewer would have
+ * to source again: no links, images, HTML, new numbers or unsupported claims. */
+function assertSafeRefreshSection(base: { title: string; markdown: string }, next: { title: string; markdown: string }, target: SelectedEditTarget): string {
+  if (next.title !== base.title) throw new Error("A refresh cannot change the article title");
+  const original = base.markdown.trimEnd(), proposed = next.markdown.trimEnd();
+  const at = original.indexOf(target.before);
+  if (at < 0 || original.indexOf(target.before, at + target.before.length) >= 0) throw new Error("Refresh anchor is missing or ambiguous");
+  const prefix = original.slice(0, at), suffix = original.slice(at);
+  if (!proposed.startsWith(prefix) || !proposed.endsWith(suffix)) throw new Error("A refresh changed existing article text");
+  const inserted = proposed.slice(prefix.length, proposed.length - suffix.length);
+  if (!/\n\s*\n$/.test(inserted) || (prefix && !/\n\s*\n$/.test(prefix))) throw new Error("The refresh section must sit on its own paragraph boundary");
+  const section = inserted.trim();
+  const heading = section.match(/^## ([^\n#]{3,120})\n\s*\n/);
+  if (!heading) throw new Error("The refresh section must start with one H2 heading");
+  const sectionBody = section.slice(heading[0].length).trim();
+  if (/^#{1,2} /m.test(sectionBody)) throw new Error("A refresh adds exactly one section");
+  const words = contentWords(sectionBody);
+  if (words < REFRESH_SECTION_MIN_WORDS || words > target.maxWords) throw new Error("Refresh section length is outside its bounds");
+  if (/https?:|www\.|!\[|\]\(|<\/?[A-Za-z]|[{}]|^\s*(?:import|export)\s/im.test(section)) throw new Error("A refresh section cannot add links, images, HTML or code");
+  const known = (token: string) => original.includes(token);
+  const numbers = section.match(/\d[\d,.]*%?/g) ?? [];
+  if (numbers.some(token => !known(token.replace(/[.,]+$/, "")))) throw new Error("A refresh section cannot introduce a number the article does not already state");
+  const citations = section.match(/\[\d+\]/g) ?? [];
+  if (citations.some(marker => !known(marker))) throw new Error("A refresh section can only reuse the article's existing citations");
+  const existingHeadings = new Set(original.split("\n").filter(line => /^#{2,3} /.test(line)).map(line => line.replace(/^#+\s*/, "").trim().toLowerCase()));
+  if (existingHeadings.has(heading[1].trim().toLowerCase())) throw new Error("The refresh section repeats an existing heading");
+  if (sectionBody.split(/\n\s*\n/).some(paragraph => paragraph.trim().length >= 40 && original.includes(paragraph.trim()))) throw new Error("A refresh section cannot copy existing text");
+  if (evidenceRequiredParagraphs(sectionBody, original).length) throw new Error("The refresh section makes claims the article does not support");
+  assertSafePublishableMarkdown(next.markdown);
+  // The destination replaces the anchor line with the section plus the anchor.
+  return `${section}\n\n${target.sourceBefore}`;
+}
+
 function assertSafePublishableMarkdown(markdown: string) {
   if (containsExecutableMdx(markdown)) throw new Error("Executable/custom MDX is unsupported");
 }
@@ -152,6 +211,7 @@ export function classicHtmlMarkdown(html: string) {
   return markdown;
 }
 export function assertSafeImprovement(base: { title: string; markdown: string }, next: { title: string; markdown: string }, target?: SelectedEditTarget) {
+  if (target?.mode === "insert_section") return assertSafeRefreshSection(base, next, target);
   if (target) {
     if (next.title !== base.title) throw new Error("A targeted improvement cannot change the page title");
     // Markdown transport may add one terminal newline; destination writes use
