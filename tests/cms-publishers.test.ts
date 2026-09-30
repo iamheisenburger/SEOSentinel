@@ -151,6 +151,10 @@ function shopifyServer(options: { scope?: string; primaryHost?: string; existing
     assert.deepEqual(input.image, { url: article.featuredImage, altText: article.title });
     assert.ok(input.metafields.some((m: { namespace: string; key: string; value: string }) => m.namespace === "pentra" && m.key === "delivery_key" && m.value === deliveryKey));
     assert.ok(input.metafields.some((m: { namespace: string; key: string }) => m.namespace === "global" && m.key === "description_tag"));
+    // Shopify rejects any type other than single_line_text_field for the SEO metafields.
+    for (const m of input.metafields as { namespace: string; key: string; type: string; value: string }[]) {
+      if (m.namespace === "global") { assert.equal(m.type, "single_line_text_field", m.key); assert.doesNotMatch(m.value, /\n/); }
+    }
     return { status: 200, body: { data: { articleCreate: options.createErrors?.length
       ? { article: null, userErrors: options.createErrors }
       : { article: { id: "gid://shopify/Article/9", handle: input.handle, isPublished: true, blog: { id: input.blogId } }, userErrors: [] } } } };
@@ -162,6 +166,8 @@ test("Shopify verification exchanges the Dev Dashboard credentials and proves bl
   const ok = shopifyServer();
   assert.deepEqual(await verifyCmsDestination(shopifySite, "/blogs/news/[slug]", ok.request), { method: "shopify", publicHost: "maple.example", collectionId: "gid://shopify/Blog/1" });
   await assert.rejects(verifyCmsDestination(shopifySite, "/blogs/news/[slug]", shopifyServer({ scope: "read_content" }).request), /write_content/);
+  // A Dev Dashboard app released with the online-store-pages scopes can also publish articles.
+  await verifyCmsDestination(shopifySite, "/blogs/news/[slug]", shopifyServer({ scope: "read_online_store_pages write_online_store_pages" }).request);
   await assert.rejects(verifyCmsDestination(shopifySite, "/blogs/news/[slug]", shopifyServer({ primaryHost: "other-store.example" }).request), /primary domain is other-store\.example, but this Pentra website is maple\.example/);
   const legacy = shopifyServer();
   await verifyCmsDestination({ ...shopifySite, cmsClientId: undefined, cmsSecret: `shpat_${"x".repeat(32)}` }, "/blogs/news/[slug]", legacy.request);

@@ -159,7 +159,8 @@ async function shopifyAccessToken(site: CmsSite, request: CmsRequest): Promise<s
   const token = typeof body.access_token === "string" ? body.access_token : "";
   if (!token) throw new Error("Shopify did not return an access token");
   const scopes = typeof body.scope === "string" ? body.scope.split(/[,\s]+/) : [];
-  if (!scopes.includes("write_content")) {
+  // articleCreate accepts either scope.
+  if (!scopes.includes("write_content") && !scopes.includes("write_online_store_pages")) {
     throw new Error("Shopify app cannot publish posts: give it the write_content permission and release it again");
   }
   return token;
@@ -269,7 +270,8 @@ async function publishShopify(args: PublishArgs): Promise<PublicationReceipt> {
     { namespace: SHOPIFY_DELIVERY_NAMESPACE, key: SHOPIFY_DELIVERY_KEY, type: "single_line_text_field", value: args.deliveryKey },
     { namespace: "global", key: "title_tag", type: "single_line_text_field", value: plainText(article.metaTitle ?? article.title, 255) },
     ...(article.metaDescription
-      ? [{ namespace: "global", key: "description_tag", type: "multi_line_text_field", value: plainText(article.metaDescription, 320) }]
+      // Shopify's SEO metafields are both single_line_text_field; any other type is rejected.
+      ? [{ namespace: "global", key: "description_tag", type: "single_line_text_field", value: plainText(article.metaDescription, 320) }]
       : []),
   ];
   const created = await shopifyGraphql(site, token, SHOPIFY_CREATE_MUTATION, {
