@@ -11,7 +11,7 @@ import { safeFetchPublicText } from "../lib/safeOutbound";
 import { verifyLivePublishedRevision } from "../lib/publishedRevision";
 import { verifyLiveCorrectionBody } from "../lib/publishedCorrection";
 import { renderSafePublicationHtml } from "../lib/safeMarkdownHtml";
-import { pentraOwnedMarkdown } from "../lib/articleRefresh";
+import { pentraOwnedMarkdown, pentraOnlyFileHistory, REFRESH_HISTORY_LIMIT } from "../lib/articleRefresh";
 
 const target = { siteId: v.id("sites"), path: v.optional(v.string()), wordpressId: v.optional(v.number()) };
 export const revokeRemote = internalAction({ args: { siteId: v.id("sites"), pageId: v.id("pages"), version: v.number(), attempt: v.optional(v.number()) }, handler: async (ctx, args) => {
@@ -92,14 +92,33 @@ export const select = action({ args: { ...target, revision: v.string(), reviewTo
  * lib/articleRefresh). Read-only on the destination: it reads each file and
  * its live page, and adopts it only when the file is Pentra's own delivery of
  * that exact article. Nothing is written to the website here. */
-export const adoptPublishedForRefreshInternal = internalAction({ args: { siteId: v.id("sites") }, handler: async (ctx, args): Promise<{ adopted: number; checked: number }> => {
+/** The GitHub commits that touched one file on the site's branch, newest first. */
+async function githubFileHistory(site: Doc<"sites">, path: string): Promise<unknown> {
+  const owner = safeGitHubRepositoryPart(site.repoOwner, "owner"), repo = safeGitHubRepositoryPart(site.repoName, "repository"), branch = requireSafeGitHubDefaultBranch(site.repoDefaultBranch);
+  if (!owner || !repo || !site.githubToken) throw new Error("GitHub destination is incomplete");
+  const query = new URLSearchParams({ sha: branch, path, per_page: String(REFRESH_HISTORY_LIMIT) });
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/commits?${query}`, {
+    headers: { Authorization: `Bearer ${site.githubToken}`, Accept: "application/vnd.github+json" }, redirect: "error", signal: AbortSignal.timeout(20000),
+  });
+  if (!response.ok) throw new Error(`GitHub file history unavailable (${response.status})`);
+  return response.json();
+}
+export const adoptPublishedForRefreshInternal = internalAction({ args: { siteId: v.id("sites") }, handler: async (ctx, args): Promise<{ adopted: number; checked: number; retired?: number }> => {
   const context = await ctx.runQuery(internal.selectedPages.refreshAdoptionContext, { siteId: args.siteId });
   if (!context) return { adopted: 0, checked: 0 };
-  let adopted = 0;
+  let adopted = 0, retired = 0;
+  for (const page of await ctx.runQuery(internal.selectedPages.refreshAdoptionsToRecheck, { siteId: args.siteId })) {
+    let history: unknown;
+    try { history = await githubFileHistory(context.site, page.path); } catch { continue; } // unreadable today: re-checked tomorrow
+    if (pentraOnlyFileHistory(history)) continue;
+    if ((await ctx.runMutation(internal.selectedPages.retireRefreshAdoption, { pageId: page.pageId, version: page.version })).retired) retired += 1;
+  }
   for (const candidate of context.candidates) {
     try {
       const source = await renderedSnapshot(await readSelectedSource(context.site, { path: candidate.path }));
       if (source.kind !== "github" || source.url !== candidate.url || !pentraOwnedMarkdown(source.sourceContent, candidate.deliveryKey)) continue;
+      // Customer edits are preserved: a file any non-Pentra commit touched is the owner's.
+      if (!pentraOnlyFileHistory(await githubFileHistory(context.site, candidate.path))) continue;
       const result = await ctx.runMutation(internal.selectedPages.recordRefreshAdoption, {
         siteId: args.siteId, articleId: candidate.articleId, connectionHash: context.connectionHash, profileHash: context.profileHash,
         source: { kind: "github", path: source.path, slug: source.slug, url: source.url, sourceRevision: source.sourceRevision,
@@ -110,7 +129,7 @@ export const adoptPublishedForRefreshInternal = internalAction({ args: { siteId:
       // An unreadable, edited-away or non-Pentra file is simply not adopted.
     }
   }
-  return { adopted, checked: context.candidates.length };
+  return { adopted, checked: context.candidates.length, ...(retired ? { retired } : {}) };
 } });
 
 export const adoptPublishedForRefreshFleet = internalAction({ args: { cursor: v.optional(v.union(v.string(), v.null())) }, handler: async (ctx, { cursor }): Promise<{ sites: number }> => {

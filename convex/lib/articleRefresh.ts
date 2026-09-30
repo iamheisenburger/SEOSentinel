@@ -103,3 +103,23 @@ export function refreshWindowStart(receiptDates: string[]): string | undefined {
   start.setUTCDate(start.getUTCDate() - (REFRESH_WINDOW_DAYS - 1));
   return start.toISOString().slice(0, 10);
 }
+
+/** Every commit Pentra makes to a customer repository carries one of these
+ * messages (publisher.ts). */
+const PENTRA_COMMIT_MESSAGE = /^Pentra (?:publish|revise|improve) pentra:\S+\s/;
+/** How many commits of one file's history are read; a longer history is
+ * treated as not Pentra's alone. */
+export const REFRESH_HISTORY_LIMIT = 30;
+
+/** True only when the file's history (newest first, from GitHub's commits API
+ * filtered to the path) is complete within the limit and every commit is
+ * Pentra's own delivery. One owner commit to the file, however small, means the
+ * owner has edited it, and Autopilot never refreshes it. */
+export function pentraOnlyFileHistory(commits: unknown): boolean {
+  if (!Array.isArray(commits) || commits.length === 0 || commits.length >= REFRESH_HISTORY_LIMIT) return false;
+  return commits.every((entry) => {
+    const message = (entry as { commit?: { message?: unknown } } | null)?.commit?.message;
+    return typeof message === "string" && PENTRA_COMMIT_MESSAGE.test(message);
+  });
+}
+

@@ -282,6 +282,25 @@ export const recordRefreshAdoption = internalMutation({ args: { siteId: v.id("si
     return { adopted: true };
   } });
 
+/** Refresh adoptions no work has started on yet, re-checked against the
+ * file's history (adoptions made before the history check existed, or an owner
+ * who edited the file after adoption). */
+export const refreshAdoptionsToRecheck = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const rows = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId)).take(501);
+  return rows.filter(p => p.editable?.origin === "published_refresh" && p.editable.active && p.editable.kind === "github" &&
+    typeof p.editable.path === "string" && p.editable.lastImprovedAt === undefined && p.editable.lastWorkJobId === undefined)
+    .slice(0, 10).map(p => ({ pageId: p._id, version: p.editable!.version, path: p.editable!.path! }));
+} });
+
+/** Stops a not-yet-started refresh of a file the owner has edited. */
+export const retireRefreshAdoption = internalMutation({ args: { pageId: v.id("pages"), version: v.number() }, handler: async (ctx, { pageId, version }) => {
+  const page = await ctx.db.get(pageId), editable = page?.editable;
+  if (!page || !editable || editable.origin !== "published_refresh" || editable.version !== version || !editable.active ||
+    editable.lastImprovedAt !== undefined || editable.lastWorkJobId !== undefined) return { retired: false };
+  await ctx.db.patch(pageId, { editable: { ...editable, active: false } });
+  return { retired: true };
+} });
+
 /** Sites whose Autopilot may refresh its own older GitHub articles. */
 export const refreshAdoptionFleetPage = internalQuery({ args: { cursor: v.union(v.string(), v.null()) }, handler: async (ctx, { cursor }) => {
   const page = await ctx.db.query("sites").paginate({ cursor, numItems: 50 });

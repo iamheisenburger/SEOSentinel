@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  pentraOnlyFileHistory,
   pentraOwnedMarkdown,
+  REFRESH_HISTORY_LIMIT,
   REFRESH_COOLDOWN_MS,
   refreshArticleOldEnough,
   refreshOpportunities,
@@ -55,3 +57,17 @@ test("the refresh window is the newest 28 days of Search Console receipts", () =
   assert.equal(refreshWindowStart(["2026-08-01", "2026-09-26", "2026-09-10"]), "2026-08-30");
   assert.equal(refreshWindowStart([]), undefined);
 });
+
+test("only a file whose whole history is Pentra's own deliveries can be refreshed", () => {
+  const pentra = (verb: string) => ({ sha: verb, commit: { message: `Pentra ${verb} pentra:3f9a1c: Garden visit checklist` } });
+  assert.equal(pentraOnlyFileHistory([pentra("publish")]), true);
+  assert.equal(pentraOnlyFileHistory([pentra("improve"), pentra("revise"), pentra("publish")]), true);
+  assert.equal(pentraOnlyFileHistory([{ sha: "o", commit: { message: "Fix a typo" } }, pentra("publish")]), false,
+    "one owner commit makes the file the owner's");
+  assert.equal(pentraOnlyFileHistory([{ commit: { message: "Pentra publish without a key" } }]), false);
+  assert.equal(pentraOnlyFileHistory([]), false);
+  assert.equal(pentraOnlyFileHistory({ message: "Not Found" }), false);
+  assert.equal(pentraOnlyFileHistory(Array.from({ length: REFRESH_HISTORY_LIMIT }, () => pentra("improve"))), false,
+    "a history longer than the limit is not proven");
+});
+

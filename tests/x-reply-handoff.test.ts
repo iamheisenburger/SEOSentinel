@@ -59,5 +59,23 @@ test("the page is public, noindex, and never posts", () => {
   // Telegram's browser is not signed in to X: the page hands off to the app on
   // load, and the primary button is the app link, never the web login.
   assert.match(view, /window\.location\.href = links\.app/);
-  assert.match(view, /<a href=\{links\.app\}[^>]*>\s*Open reply in X app/);
+  assert.match(view, /<a href=\{links\.app\}[^>]*>\s*\{isPost \? "Open post in X app" : "Open reply in X app"\}/);
 });
+
+test("an original post draft opens the X app's composer with no reply target", () => {
+  const hash = `#${new URLSearchParams({ kind: "post", text: TEXT })}`;
+  const draft = parseXReplyHandoff(hash);
+  assert.deepEqual(draft, { kind: "post", id: "", text: TEXT, author: "" });
+  const links = xReplyLinks(draft!);
+  assert.equal(links.app, `twitter://post?message=${encodeURIComponent(TEXT)}`);
+  assert.doesNotMatch(links.app, /in_reply_to/);
+  const composer = new URL(links.composer);
+  assert.equal(composer.origin + composer.pathname, "https://x.com/intent/post");
+  assert.equal(composer.searchParams.get("text"), TEXT);
+  assert.equal(composer.searchParams.get("in_reply_to"), null);
+  // A post link never carries a reply target, and a reply still needs one.
+  assert.equal(parseXReplyHandoff(`#${new URLSearchParams({ kind: "post", id: "12", text: TEXT })}`), null);
+  assert.equal(parseXReplyHandoff(`#${new URLSearchParams({ kind: "post", text: " " })}`), null);
+  assert.equal(parseXReplyHandoff(`#${new URLSearchParams({ text: TEXT })}`), null);
+});
+

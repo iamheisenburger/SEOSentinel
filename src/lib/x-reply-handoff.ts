@@ -1,5 +1,6 @@
 /**
- * pentra.dev/x-reply: hands a reply draft from Telegram to X's own composer.
+ * pentra.dev/x-reply: hands a reply draft (or an original post draft) from
+ * Telegram to X's own composer.
  *
  * Telegram opens links in its own browser, which is not signed in to X. This
  * page turns the draft into links that open X's composer with the reply filled
@@ -8,7 +9,9 @@
  * sent to Pentra's server or included in page analytics.
  */
 
-export type XReplyHandoff = { id: string; text: string; author: string };
+/** A reply (id = the post replied to) or, with kind "post", a new original
+ * post with no reply target. */
+export type XReplyHandoff = { id: string; text: string; author: string; kind?: "post" };
 
 const POST_ID = /^\d{1,20}$/;
 const HANDLE = /^[A-Za-z0-9_]{1,15}$/;
@@ -21,6 +24,10 @@ export function parseXReplyHandoff(hash: string, search = ""): XReplyHandoff | n
   const params = new URLSearchParams(raw);
   const id = (params.get("id") ?? "").trim();
   const text = (params.get("text") ?? "").trim();
+  if (params.get("kind") === "post") {
+    if (id || !text || text.length > MAX_REPLY_CHARS) return null;
+    return { kind: "post", id: "", text, author: "" };
+  }
   const author = (params.get("author") ?? "").trim().replace(/^@/, "");
   if (!POST_ID.test(id)) return null;
   if (!text || text.length > MAX_REPLY_CHARS) return null;
@@ -28,8 +35,18 @@ export function parseXReplyHandoff(hash: string, search = ""): XReplyHandoff | n
   return { id, text, author };
 }
 
-export function xReplyLinks({ id, text, author }: XReplyHandoff) {
+export function xReplyLinks({ id, text, author, kind }: XReplyHandoff) {
   const message = encodeURIComponent(text);
+  if (kind === "post") {
+    return {
+      /** The installed X app's composer with the new post filled in. */
+      app: `twitter://post?message=${message}`,
+      /** The X app's home timeline (for "copy, then post by hand"). */
+      sourceApp: "twitter://timeline",
+      composer: `https://x.com/intent/post?text=${message}`,
+      source: "https://x.com/home",
+    };
+  }
   return {
     /** The installed X app's own composer, opened as a reply with the draft
      * filled in. This is the primary path: it never needs a browser sign-in. */

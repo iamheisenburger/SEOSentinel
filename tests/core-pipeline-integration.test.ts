@@ -89,8 +89,8 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   let lostCommitResponsesRemaining = options.lostCommitResponses ?? 0;
   const failedPublications: number[] = [];
   const repositories = new Map<string, { head: string; files: Map<string, string>; blobs: Map<string, string>; trees: Map<string, Fields[]>; commits: Map<string, string>;
-    parents: Map<string, string>; snapshots: Map<string, Map<string, string>>; writes: number }>();
-  for (const b of businesses) repositories.set(b.name.toLowerCase(), { head: sha(b.domain), files: new Map(), blobs: new Map(), trees: new Map(), commits: new Map(), parents: new Map(), snapshots: new Map(), writes: 0 });
+    parents: Map<string, string>; messages: Map<string, string>; snapshots: Map<string, Map<string, string>>; writes: number }>();
+  for (const b of businesses) repositories.set(b.name.toLowerCase(), { head: sha(b.domain), files: new Map(), blobs: new Map(), trees: new Map(), commits: new Map(), parents: new Map(), messages: new Map(), snapshots: new Map(), writes: 0 });
   const f = corePipelineFixture(async (url, init) => {
     if (options.gscFixture && url.origin === "https://oauth2.googleapis.com") {
       assert.equal(url.pathname, "/token"); assert.equal(init.method, "POST");
@@ -248,7 +248,15 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       }
       if (method === "POST" && path === "/git/blobs") { await options.githubBeforeFence?.(); const content = Buffer.from(body.content, "base64").toString(), id = sha(content); repo.blobs.set(id, content); return json({ sha: id }, 201); }
       if (method === "POST" && path === "/git/trees") { const id = sha(JSON.stringify(body)); repo.trees.set(id, body.tree); return json({ sha: id }, 201); }
-      if (method === "POST" && path === "/git/commits") { const id = sha(JSON.stringify(body)); repo.commits.set(id, body.tree); repo.parents.set(id, body.parents[0]); return json({ sha: id }, 201); }
+      if (method === "POST" && path === "/git/commits") { const id = sha(JSON.stringify(body)); repo.commits.set(id, body.tree); repo.parents.set(id, body.parents[0]); repo.messages.set(id, body.message); return json({ sha: id }, 201); }
+      if (method === "GET" && path === "/commits") {
+        // GitHub's history of one file on the branch, newest first.
+        const file = url.searchParams.get("path"), limit = Number(url.searchParams.get("per_page") ?? 30), history: Fields[] = [];
+        for (let id: string | undefined = repo.head; id && repo.commits.has(id) && history.length < limit; id = repo.parents.get(id)) {
+          if ((repo.trees.get(repo.commits.get(id)!) ?? []).some((entry: Fields) => entry.path === file)) history.push({ sha: id, commit: { message: repo.messages.get(id) ?? "" } });
+        }
+        return json(history);
+      }
       if (method === "PATCH" && path === "/git/refs/heads/main") {
         await options.githubBeforeWrite?.();
         if (repo.parents.get(body.sha) !== repo.head) return json({ message: "Synthetic non-fast-forward concurrent customer commit" }, 422);
@@ -6747,6 +6755,34 @@ test("Ghost verification refuses a key for a different site and a wrong key, and
 
 // ── P64: Autopilot refreshes Pentra's own older articles on Google page 2 ──
 
+test("A refresh adoption of a file the owner later edits is retired before any work starts", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const day = 86_400_000, site = await selectGrowth(f, 7 * day);
+  await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.stage === "verified")));
+  const created = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!, article = f.get(created.articleId)!;
+  delete f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!.editable;
+  f.setTime(Math.max(f.now(), article.publishedAt + 29 * day));
+  const date = new Date(f.now() - day).toISOString().slice(0, 10), syncEpoch = `refresh-${date}`;
+  f.get(site.id)!.gscDateEpochs = [...(f.get(site.id)!.gscDateEpochs ?? []), { date, syncEpoch }];
+  f.add("search_performance", { siteId: site.id, date, syncEpoch, page: article.publicUrl, query: `${site.keywords[0]} diagnostic decision`,
+    syncVersion: 2, syncedAt: f.now(), clicks: 0, impressions: 40, ctr: 0, position: 14, createdAt: f.now() });
+  f.get(site.id)!.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: f.get(site.id)! as never,
+    ownerAccountKey: accountDeletionKey(f.get(site.id)!.userId), verifiedAt: f.now() });
+  assert.deepEqual(await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id }), { adopted: 1, checked: 1 });
+  const page = f.tables.pages.find(p => p.url === article.publicUrl && p.editable)!;
+  // The owner then commits an edit to the file.
+  const repo = f.repositories.get(site.name.toLowerCase())!, ownerEdit = "owner-edit-after-adoption";
+  repo.trees.set(`${ownerEdit}-tree`, [{ path: page.editable.path, sha: "owner-blob" }]);
+  repo.commits.set(ownerEdit, `${ownerEdit}-tree`); repo.parents.set(ownerEdit, repo.head); repo.messages.set(ownerEdit, "Update pricing line");
+  repo.head = ownerEdit;
+  assert.deepEqual(await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id }), { adopted: 0, checked: 0, retired: 1 });
+  assert.equal(f.get(page._id)!.editable.active, false);
+  assert.equal(f.get(page._id)!.editable.lastWorkJobId, undefined);
+  // And it is never re-adopted.
+  assert.deepEqual(await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id }), { adopted: 0, checked: 0 });
+  f.assertOffline();
+});
+
 test("Autopilot adopts its own older article on Google page 2 and refreshes it as one slot", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const day = 86_400_000, site = await selectGrowth(f, 7 * day);
@@ -6772,6 +6808,14 @@ test("Autopilot adopts its own older article on Google page 2 and refreshes it a
   assert.equal(context?.candidates?.length, 1, JSON.stringify({ context: context && { candidates: context.candidates },
     summary: f.tables.article_summaries?.filter(r => r.articleId === article._id).map(r => ({ status: r.status, publicUrl: r.publicUrl, publicUrlStatus: r.publicUrlStatus, publishedAt: r.publishedAt })),
     publicUrl: article.publicUrl, schedule: f.get(site.id)!.contentSchedule && { paused: f.get(site.id)!.contentSchedule.paused, autopilot: f.get(site.id)!.contentSchedule.autopilotSelectedAt } }));
+  // Customer edits are preserved: one owner commit to the file and Autopilot leaves it alone.
+  const repo = f.repositories.get(site.name.toLowerCase())!, pentraHead = repo.head, ownerEdit = "owner-edit-commit";
+  repo.trees.set(`${ownerEdit}-tree`, [{ path: context!.candidates[0].path, sha: "owner-blob" }]);
+  repo.commits.set(ownerEdit, `${ownerEdit}-tree`); repo.parents.set(ownerEdit, pentraHead); repo.messages.set(ownerEdit, "Fix a typo");
+  repo.head = ownerEdit;
+  assert.deepEqual(await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id }), { adopted: 0, checked: 1 });
+  assert.ok(!f.tables.pages.some(p => p.url === article.publicUrl && p.editable), "an owner-edited article is never adopted");
+  repo.head = pentraHead;
   assert.deepEqual(await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id }), { adopted: 1, checked: 1 });
   const page = f.tables.pages.find(p => p.url === article.publicUrl && p.editable)!;
   assert.equal(page.editable.origin, "published_refresh");
