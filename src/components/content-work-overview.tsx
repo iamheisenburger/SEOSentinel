@@ -8,6 +8,7 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { contentServiceStatus, fundingMessage } from "../lib/content-service-status";
 import { AdoptAutopilot, AutopilotSwitch } from "./pentra-setup-choice";
 import { topicTitle } from "@/lib/topic-title";
+import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 export const money = (value: number | null) => value === null ? "Unknown" : `$${(value / 1_000_000).toFixed(4)}`;
 export const shownTime = (value: number, zone = "UTC") => new Intl.DateTimeFormat("en", { timeZone: zone, dateStyle: "medium", timeStyle: "long" }).format(value);
 export const fundingCopy = { available: "Internal capacity currently available; every paid admission rechecks it.", blocked: "Admission blocked by the existing spending or entitlement guards.", unknown: "Funding readiness unknown. No extra spending is authorized.", unconfigured: "Provider pricing is not configured. Preparation is not funded." };
@@ -26,7 +27,7 @@ const H2 = "text-[15px] font-semibold text-[#F7F8F8]";
 const BODY = "text-[14px] leading-relaxed text-[#8A8F98]";
 
 export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
-  const state = useQuery(api.contentWork.readiness, { siteId });
+  const state = useVisibleQuery(api.contentWork.readiness, { siteId });
   if (!state || state.siteId !== siteId) return <p className={BODY}>Loading your content service…</p>;
   const s = state.schedule;
   const delivery = contentServiceStatus(state);
@@ -250,7 +251,7 @@ export { topicTitle };
 
 /** What Autopilot will write next, so a hands-off customer can see and steer it. */
 function UpcomingTopics({ siteId }: { siteId: Id<"sites"> }) {
-  const topics = useQuery(api.topics.listBySite, { siteId });
+  const topics = useVisibleQuery(api.topics.listBySite, { siteId });
   const next = (topics ?? []).filter(t => !["used", "queued", "cannibalizing", "disqualified"].includes(t.status ?? ""))
     .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0)).slice(0, 3);
   return <section className={CARD} aria-labelledby="upcoming-topics-heading">

@@ -18,10 +18,11 @@ import { stageLabel } from "@/components/content-work-overview";
 import { useActiveSite } from "@/contexts/site-context";
 import { Zap } from "lucide-react";
 import { manualPublicationBlocker } from "../../../../convex/lib/manualPublication";
+import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 
 export default function ArticlesPage() {
   const { activeSite: site, sites } = useActiveSite();
-  const topics = useQuery(
+  const topics = useVisibleQuery(
     api.topics.listBySite,
     site?._id ? { siteId: site._id } : "skip",
   );
@@ -31,7 +32,7 @@ export default function ArticlesPage() {
   );
   const queueArticle = useMutation(api.jobs.queueArticleNow);
   const requestDraft = useMutation(api.contentWork.requestDraft);
-  const readiness = useQuery(api.contentWork.readiness, site?.serviceMode === "growth_first" ? { siteId: site._id } : "skip");
+  const readiness = useVisibleQuery(api.contentWork.readiness, site?.serviceMode === "growth_first" ? { siteId: site._id } : "skip");
   const draftRequestKey = useRef<{ siteId: string; key: string } | null>(null);
   const [generating, setGenerating] = useState(false);
 

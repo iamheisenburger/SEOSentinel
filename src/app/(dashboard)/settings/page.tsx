@@ -14,6 +14,7 @@ import { useActiveSite } from "@/contexts/site-context";
 import { useUser, useClerk } from "@clerk/nextjs";
 import Link from "next/link";
 import { ContentWorkService } from "@/components/content-work-service";
+import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 
 // Display names for the canonical plan tier resolved by usePlanLimits.
 const PLAN_NAMES: Record<string, string> = {
@@ -310,7 +311,7 @@ export default function SettingsPage() {
   const { activeSite } = useActiveSite();
   const pubSite = activeSite ?? sites?.[0];
   // Same subscription ContentWorkService already holds for this site.
-  const contentState = useQuery(
+  const contentState = useVisibleQuery(
     api.contentWork.readiness,
     pubSite ? { siteId: pubSite._id } : "skip",
   );

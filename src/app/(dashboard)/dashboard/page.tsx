@@ -45,6 +45,7 @@ import {
   autopilotHealthRequiresAttention,
   dashboardAutopilotRequiresAttention,
 } from "../../../../convex/lib/autopilotAlerts";
+import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 
 export default function DashboardPage() {
   const setupMode = typeof window !== "undefined"
@@ -56,7 +57,7 @@ export default function DashboardPage() {
   const { activeSite: site, sites } = useActiveSite();
   const legacySite = site && site.serviceMode !== "growth_first" && !site.contentSetupRequestedAt ? site : null;
   const { userId } = useAuth();
-  const topics = useQuery(
+  const topics = useVisibleQuery(
     api.topics.listBySite,
     legacySite?._id ? { siteId: legacySite._id } : "skip",
   );

@@ -48,6 +48,7 @@ import {
   targetCadenceOptions,
 } from "../../../../../convex/planLimits";
 import { SetupReadiness } from "@/components/onboarding/setup-readiness";
+import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 
 type Tab = "overview" | "articles" | "settings";
 type SiteView = NonNullable<FunctionReturnType<typeof api.sites.get>>;
@@ -82,7 +83,7 @@ export default function SiteDetailPage() {
   const site = useQuery(api.sites.get, { siteId });
   const cadenceCapacity = useQuery(api.sites.getCadenceCapacity, { siteId });
   const articles = useQuery(api.articles.listBySite, { siteId });
-  const topics = useQuery(api.topics.listBySite, { siteId });
+  const topics = useVisibleQuery(api.topics.listBySite, { siteId });
   const deleteSite = useMutation(api.sites.deleteSite);
   const deleteArticle = useMutation(api.articles.deleteArticle);
   const updateSite = useMutation(api.sites.updateSite);

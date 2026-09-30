@@ -33,6 +33,7 @@ import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
 import { cadenceLabel } from "../../../../convex/planLimits";
 import { topicTitle } from "@/lib/topic-title";
+import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 
 /** Format search volume with K/M suffixes */
 function formatVolume(vol: number): string {
@@ -119,7 +120,7 @@ function getArticleTypeInfo(type: string): { label: string; color: string; bg: s
 export default function PlanPage() {
   const { activeSite: site, sites } = useActiveSite();
   const { userId } = useAuth();
-  const topics = useQuery(
+  const topics = useVisibleQuery(
     api.topics.listBySite,
     site?._id ? { siteId: site._id } : "skip",
   );

@@ -13,9 +13,10 @@ import { PUBLISHER_AUTOPUBLISH_CONSENT_TEXT } from "../../convex/lib/publisherPr
 import { CMS_PLATFORM_LABELS, isApiCmsMethod } from "../../convex/lib/cmsDestinations";
 import { contentServiceStatus, fundingMessage } from "../lib/content-service-status";
 import { AutopilotSwitch, PentraSetupChoice } from "./pentra-setup-choice";
+import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 
 export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
-  const state = useQuery(api.contentWork.readiness, { siteId });
+  const state = useVisibleQuery(api.contentWork.readiness, { siteId });
   const select = useMutation(api.contentWork.selectServiceMode);
   const control = useMutation(api.contentWork.control);
   const reconfirm = useMutation(api.contentWork.reconfirm);

@@ -845,12 +845,46 @@ export const setAutopilotCadence = mutation({ args: { siteId: v.id("sites"), rev
     return { changed: true };
   } });
 
+/** The dashboard's live readiness view re-runs every time something it read
+ * changes, and job records carry full model outputs (drafts, reviews,
+ * audits). So it reads open content work exactly (by stage) plus the most
+ * recent finished work, never a site's whole job history, and article
+ * summaries rather than full articles. A changed setup still gets the full
+ * inventory it needs for review. */
+const OPEN_CONTENT_STAGES = ["prepare", "review", "review_failed", "ready", "publish", "verify"] as const;
+const READINESS_RECENT_FINISHED = 20;
+const READINESS_OPEN_PER_STAGE = 50;
+function setupChangeNeeded(site: Doc<"sites">): boolean {
+  let connection: string | undefined;
+  try { connection = contentConnectionHash(site); } catch { /* An incomplete destination cannot be confirmed. */ }
+  const schedule = site.contentSchedule;
+  return Boolean(schedule && (schedule.profileHash !== confirmedContentProfileHash(site) || schedule.connectionHash !== connection));
+}
+async function readinessJobs(ctx: QueryCtx, site: Doc<"sites">): Promise<{ jobs: Doc<"jobs">[]; full: boolean }> {
+  if (setupChangeNeeded(site)) {
+    return { jobs: await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", site._id)).take(LIMIT + 1), full: true };
+  }
+  const open = (await Promise.all(OPEN_CONTENT_STAGES.map(stage => ctx.db.query("jobs")
+    .withIndex("by_site_content_stage", q => q.eq("siteId", site._id).eq("contentWork.stage", stage)).take(READINESS_OPEN_PER_STAGE + 1)))).flat();
+  // An implausibly large open inventory is reviewed in full, never truncated.
+  if (open.length > READINESS_OPEN_PER_STAGE) {
+    return { jobs: await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", site._id)).take(LIMIT + 1), full: true };
+  }
+  const seen = new Set(open.map(j => j._id));
+  const finished = (await ctx.db.query("jobs").withIndex("by_site_content_deadline", q => q.eq("siteId", site._id).gt("contentWork.deadlineAt", 0))
+    .order("desc").take(READINESS_RECENT_FINISHED + open.length)).filter(j => !seen.has(j._id)).slice(0, READINESS_RECENT_FINISHED);
+  return { jobs: [...open, ...finished].sort((a, b) => b._creationTime - a._creationTime), full: false };
+}
+async function articleSummary(ctx: QueryCtx, articleId: Id<"articles">) {
+  return ctx.db.query("article_summaries").withIndex("by_article", q => q.eq("articleId", articleId)).first();
+}
+
 export const readiness = query({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
     const site = await ctx.db.get(siteId), identity = await ctx.auth.getUserIdentity();
     if (!site?.userId || identity?.subject !== site.userId) throw new Error("Not authorized");
-    const jobs = await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", siteId)).take(LIMIT + 1);
+    const { jobs, full: fullInventory } = await readinessJobs(ctx, site);
     const s = site.contentSchedule;
     let verified = false, directory: string | null = null, bindingCurrent = !s;
     try {
@@ -861,7 +895,7 @@ export const readiness = query({
     const reconciliation = await reviewChangedSetup(ctx, site, jobs);
     const pricing = await pricingConfiguration(ctx, site);
     // Every live article on the current domain, however it was approved.
-    const publishedRows = (await ctx.db.query("articles").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published"))
+    const publishedRows = (await ctx.db.query("article_summaries").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published"))
       .order("desc").take(20)).filter(a => articleMatchesCurrentDomain(site, a));
     const publishedTopics = new Set(publishedRows.map(a => a.topicId).filter(Boolean));
     // Results at a glance: live articles on the current domain (lightweight projection rows).
@@ -874,8 +908,8 @@ export const readiness = query({
       for (const row of await ctx.db.query("pasted_publications").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "live")).take(LIMIT)) {
         const seen = pastedLive.get(row.articleId);
         if (seen && seen.publishedAt <= (row.checkedAt ?? row.requestedAt)) continue;
-        const article = await ctx.db.get(row.articleId);
-        if (article?.siteId === siteId) pastedLive.set(row.articleId, { articleId: row.articleId, title: article.title ?? article.slug ?? "Article",
+        const article = await articleSummary(ctx, row.articleId);
+        if (article?.siteId === siteId) pastedLive.set(row.articleId, { articleId: row.articleId, title: article.title || article.slug || "Article",
           publishedAt: row.checkedAt ?? row.requestedAt, url: row.url });
       }
     }
@@ -887,14 +921,14 @@ export const readiness = query({
     // edited version) is resolved for the owner; the miss itself stays recorded.
     const supersededJobs = new Set<string>();
     for (const j of jobs.filter(j => j.contentWork?.stage === "failed" && j.articleId && !j.contentWork.ownerRequest).slice(0, 20)) {
-      const draft = await ctx.db.get(j.articleId!);
-      if (draft && draft.status !== "published" && draft.topicId && publishedTopics.has(draft.topicId)) supersededJobs.add(j._id);
+      const draft = await articleSummary(ctx, j.articleId!);
+      if (draft && draft.siteId === siteId && draft.status !== "published" && draft.topicId && publishedTopics.has(draft.topicId)) supersededJobs.add(j._id);
     }
     // Titles for work still on its way, so the owner sees what is coming, not "New article".
     const upcomingTitles = new Map<string, string>();
     for (const j of jobs.filter(j => j.contentWork && !j.contentWork.ownerRequest && j.contentWork.retiredAt === undefined &&
       !["verified", "failed"].includes(j.contentWork.stage)).slice(0, 10)) {
-      const article = j.articleId ? await ctx.db.get(j.articleId) : null;
+      const article = j.articleId ? await articleSummary(ctx, j.articleId) : null;
       const topicId = (j.payload as { topicId?: Id<"topic_clusters"> } | undefined)?.topicId;
       const topic = !article?.title && topicId ? await ctx.db.get(topicId) : null;
       const title = article?.siteId === siteId ? article.title : topic?.siteId === siteId ? topic.label : undefined;
@@ -922,11 +956,12 @@ export const readiness = query({
         }))[0] ?? null },
       results: { live: liveSummaries.length + pastedLive.size, planUsedThisMonth: site.userId ? (await accountArticlesThisMonth(ctx, site)).used : 0,
         liveThisMonth: liveSummaries.filter(row => (row.publishedAt ?? 0) >= monthStart).length + [...pastedLive.values()].filter(p => p.publishedAt >= monthStart).length },
-      published: [...publishedRows.map(a => ({ articleId: a._id, title: a.title ?? a.slug ?? "Article", publishedAt: a.publishedAt ?? null,
+      published: [...publishedRows.map(a => ({ articleId: a.articleId, title: a.title || a.slug || "Article", publishedAt: a.publishedAt ?? null,
           verified: a.publicUrlStatus === "verified", url: a.publicUrlStatus === "verified" && a.publicUrl?.startsWith("https://") ? a.publicUrl : null })),
         ...[...pastedLive.values()].map(p => ({ ...p, verified: true }))]
         .sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0)).slice(0, 5),
-      complete: jobs.length <= LIMIT, ready: jobs.filter(j => j.contentWork?.stage === "ready" && !j.contentWork.ownerRequest && j.contentWork.retiredAt === undefined &&
+      // The bounded view holds every open item exactly, so counts are complete.
+      complete: fullInventory ? jobs.length <= LIMIT : true, ready: jobs.filter(j => j.contentWork?.stage === "ready" && !j.contentWork.ownerRequest && j.contentWork.retiredAt === undefined &&
         j.contentWork.profileHash === confirmedContentProfileHash(site) && j.contentWork.connectionHash === s?.connectionHash && bindingCurrent).length,
       work: jobs.filter(j => j.contentWork && !j.contentWork.ownerRequest).map(j => {
         const lastReview = j.contentWork!.providerCalls.at(-1);

@@ -44,6 +44,7 @@ import type { Components } from "react-markdown";
 import type { Id } from "../../../../../convex/_generated/dataModel";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 
 const REVIEWED_AMBIGUITY_CONFIRMATION =
   "ABANDON UNVERIFIED DELIVERY AND RETAIN AUDIT";
@@ -365,7 +366,7 @@ export default function ArticleDetailPage() {
   const publishApproved = useAction(api.actions.pipeline.publishApproved);
   const requestDraft = useMutation(api.contentWork.requestDraft);
   const acceptOwnerReviewNotes = useMutation(api.articles.acceptOwnerReviewNotes);
-  const contentReadiness = useQuery(api.contentWork.readiness,
+  const contentReadiness = useVisibleQuery(api.contentWork.readiness,
     article?.siteId && site?.serviceMode === "growth_first" ? { siteId: article.siteId } : "skip");
   const approveArticle = useMutation(api.articles.approve);
   const rejectArticle = useMutation(api.articles.reject);

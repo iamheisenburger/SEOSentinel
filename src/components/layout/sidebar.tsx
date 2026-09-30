@@ -21,9 +21,9 @@ import {
 import { UserButton } from "@clerk/nextjs";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
-import { useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { contentServiceStatus } from "../../lib/content-service-status";
+import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 
 const navSections = [
   {
@@ -56,7 +56,7 @@ export function Sidebar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { isFreePlan, isPlanLoaded } = usePlanLimits();
   const { sites, activeSite, setActiveSiteId } = useActiveSite();
-  const contentState = useQuery(api.contentWork.readiness, activeSite?.serviceMode === "growth_first" ? { siteId: activeSite._id } : "skip");
+  const contentState = useVisibleQuery(api.contentWork.readiness, activeSite?.serviceMode === "growth_first" ? { siteId: activeSite._id } : "skip");
   const deliveryLabel = activeSite?.serviceMode === "growth_first"
     ? contentServiceStatus(contentState?.siteId === activeSite._id ? contentState : null).label
     : contentServiceStatus({ serviceMode: "legacy_articles", enabled: activeSite?.autopilotEnabled }).label;

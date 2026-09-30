@@ -1,6 +1,5 @@
 "use client";
 
-import { useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { useMemo, useState } from "react";
 import Link from "next/link";
@@ -21,9 +20,10 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow, formatDuration, intervalToDuration } from "date-fns";
 import { topicTitle } from "@/lib/topic-title";
+import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 
 export default function JobsPage() {
-  const jobs = useQuery(api.jobs.listAll);
+  const jobs = useVisibleQuery(api.jobs.listAll);
   const [activeTab, setActiveTab] = useState("all");
 
   const filtered = useMemo(() => {
