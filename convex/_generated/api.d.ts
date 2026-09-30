@@ -54,6 +54,7 @@ import type * as lib_articleExecutionBudget from "../lib/articleExecutionBudget.
 import type * as lib_articleGenerationAttempt from "../lib/articleGenerationAttempt.js";
 import type * as lib_articleProviderFailure from "../lib/articleProviderFailure.js";
 import type * as lib_articleQuality from "../lib/articleQuality.js";
+import type * as lib_articleRefresh from "../lib/articleRefresh.js";
 import type * as lib_articleToolResult from "../lib/articleToolResult.js";
 import type * as lib_authorityDifficulty from "../lib/authorityDifficulty.js";
 import type * as lib_authorityDiscoveryBudget from "../lib/authorityDiscoveryBudget.js";
@@ -253,6 +254,7 @@ declare const fullApi: ApiFromModules<{
   "lib/articleGenerationAttempt": typeof lib_articleGenerationAttempt;
   "lib/articleProviderFailure": typeof lib_articleProviderFailure;
   "lib/articleQuality": typeof lib_articleQuality;
+  "lib/articleRefresh": typeof lib_articleRefresh;
   "lib/articleToolResult": typeof lib_articleToolResult;
   "lib/authorityDifficulty": typeof lib_authorityDifficulty;
   "lib/authorityDiscoveryBudget": typeof lib_authorityDiscoveryBudget;

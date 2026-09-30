@@ -693,6 +693,9 @@ export default defineSchema({
       selectedAt: v.number(), lastReviewedAt: v.optional(v.number()), lastImprovedAt: v.optional(v.number()),
       lastWorkJobId: v.optional(v.id("jobs")), latestRevisionId: v.optional(v.id("published_article_revisions")),
       managedArticleId: v.optional(v.id("articles")),
+      // "published_refresh": one of Pentra's own older published articles,
+      // adopted so Autopilot may refresh it when it sits on Google page 2.
+      origin: v.optional(v.literal("published_refresh")),
     })),
     siteId: v.id("sites"),
     url: v.string(),

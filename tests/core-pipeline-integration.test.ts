@@ -6744,3 +6744,51 @@ test("Ghost verification refuses a key for a different site and a wrong key, and
   assert.equal(f.get(site.id)!.publisherDestinationReceipt, undefined);
   f.assertOffline();
 });
+
+// ── P64: Autopilot refreshes Pentra's own older articles on Google page 2 ──
+
+test("Autopilot adopts its own older article on Google page 2 and refreshes it as one slot", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const day = 86_400_000, site = await selectGrowth(f, 7 * day);
+  await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.stage === "verified")));
+  const created = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!, article = f.get(created.articleId)!;
+  // An article published before its page was enrolled for edits (the older fleet).
+  const enrolled = f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!;
+  delete enrolled.editable;
+  assert.deepEqual(await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id }), { adopted: 0, checked: 0 },
+    "a young article without Search Console evidence is not adopted");
+
+  f.setTime(Math.max(f.now(), article.publishedAt + 29 * day));
+  const date = new Date(f.now() - day).toISOString().slice(0, 10), syncEpoch = `refresh-${date}`;
+  f.get(site.id)!.gscDateEpochs = [...(f.get(site.id)!.gscDateEpochs ?? []), { date, syncEpoch }];
+  const query = `${site.keywords[0]} diagnostic decision`;
+  f.add("search_performance", { siteId: site.id, date, syncEpoch, page: article.publicUrl, query,
+    syncVersion: 2, syncedAt: f.now(), clicks: 0, impressions: 40, ctr: 0, position: 14, createdAt: f.now() });
+
+  // Production renews the destination receipt every day; the synthetic clock jumped four weeks.
+  f.get(site.id)!.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: f.get(site.id)! as never,
+    ownerAccountKey: accountDeletionKey(f.get(site.id)!.userId), verifiedAt: f.now() });
+  const context = await f.invoke("selectedPages:refreshAdoptionContext", { siteId: site.id });
+  assert.equal(context?.candidates?.length, 1, JSON.stringify({ context: context && { candidates: context.candidates },
+    summary: f.tables.article_summaries?.filter(r => r.articleId === article._id).map(r => ({ status: r.status, publicUrl: r.publicUrl, publicUrlStatus: r.publicUrlStatus, publishedAt: r.publishedAt })),
+    publicUrl: article.publicUrl, schedule: f.get(site.id)!.contentSchedule && { paused: f.get(site.id)!.contentSchedule.paused, autopilot: f.get(site.id)!.contentSchedule.autopilotSelectedAt } }));
+  assert.deepEqual(await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id }), { adopted: 1, checked: 1 });
+  const page = f.tables.pages.find(p => p.url === article.publicUrl && p.editable)!;
+  assert.equal(page.editable.origin, "published_refresh");
+  assert.equal(page.editable.managedArticleId, article._id);
+  const adoptedMarkdown = String(page.editable.markdown);
+  // Adoption is read-only on the destination and idempotent.
+  const writes = f.repositories.get(site.name.toLowerCase())!.writes;
+  assert.deepEqual(await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id }), { adopted: 0, checked: 0 });
+  assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, writes);
+
+  const refreshed = () => f.tables.jobs.filter(j => j.contentWork?.targetPageId === page._id && j.contentWork?.stage === "verified");
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_work", reason: "synthetic_refresh_evidence" });
+  await pumpUntil(f, () => refreshed().length === 1, 400, START + 120 * day);
+  const job = refreshed()[0];
+  assert.equal(job.contentWork.intent, "improve");
+  assert.match(job.contentWork.opportunity, /Refresh of a page-2 article: Search Console shows ".+" at average position 14 with 40 impressions/);
+  assert.notEqual(f.get(page._id)!.editable.markdown, adoptedMarkdown);
+  assert.ok(f.get(page._id)!.editable.lastImprovedAt, "the 60-day refresh cooldown starts at the verified refresh");
+  f.assertOffline();
+});

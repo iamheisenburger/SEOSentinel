@@ -11,6 +11,7 @@ import { safeFetchPublicText } from "../lib/safeOutbound";
 import { verifyLivePublishedRevision } from "../lib/publishedRevision";
 import { verifyLiveCorrectionBody } from "../lib/publishedCorrection";
 import { renderSafePublicationHtml } from "../lib/safeMarkdownHtml";
+import { pentraOwnedMarkdown } from "../lib/articleRefresh";
 
 const target = { siteId: v.id("sites"), path: v.optional(v.string()), wordpressId: v.optional(v.number()) };
 export const revokeRemote = internalAction({ args: { siteId: v.id("sites"), pageId: v.id("pages"), version: v.number(), attempt: v.optional(v.number()) }, handler: async (ctx, args) => {
@@ -84,4 +85,38 @@ export const select = action({ args: { ...target, revision: v.string(), reviewTo
   }
   return ctx.runMutation(internal.selectedPages.recordSelection, { siteId: site._id, connectionHash: contentConnectionHash(site),
     profileHash: confirmedContentProfileHash(site), source: { ...source, ...(permission ? { permission } : {}) } });
+} });
+
+/** Adopt up to three of this site's older Pentra articles that sit on
+ * Google page 2, so Autopilot can refresh them (at most one slot in four; see
+ * lib/articleRefresh). Read-only on the destination: it reads each file and
+ * its live page, and adopts it only when the file is Pentra's own delivery of
+ * that exact article. Nothing is written to the website here. */
+export const adoptPublishedForRefreshInternal = internalAction({ args: { siteId: v.id("sites") }, handler: async (ctx, args): Promise<{ adopted: number; checked: number }> => {
+  const context = await ctx.runQuery(internal.selectedPages.refreshAdoptionContext, { siteId: args.siteId });
+  if (!context) return { adopted: 0, checked: 0 };
+  let adopted = 0;
+  for (const candidate of context.candidates) {
+    try {
+      const source = await renderedSnapshot(await readSelectedSource(context.site, { path: candidate.path }));
+      if (source.kind !== "github" || source.url !== candidate.url || !pentraOwnedMarkdown(source.sourceContent, candidate.deliveryKey)) continue;
+      const result = await ctx.runMutation(internal.selectedPages.recordRefreshAdoption, {
+        siteId: args.siteId, articleId: candidate.articleId, connectionHash: context.connectionHash, profileHash: context.profileHash,
+        source: { kind: "github", path: source.path, slug: source.slug, url: source.url, sourceRevision: source.sourceRevision,
+          sourceContent: source.sourceContent, markdown: source.markdown, title: source.title, metaTitle: source.metaTitle,
+          description: source.description, ...(source.header ? { header: source.header } : {}) } });
+      if (result.adopted) adopted += 1;
+    } catch {
+      // An unreadable, edited-away or non-Pentra file is simply not adopted.
+    }
+  }
+  return { adopted, checked: context.candidates.length };
+} });
+
+export const adoptPublishedForRefreshFleet = internalAction({ args: { cursor: v.optional(v.union(v.string(), v.null())) }, handler: async (ctx, { cursor }): Promise<{ sites: number }> => {
+  const page: { isDone: boolean; continueCursor: string; siteIds: Id<"sites">[] } =
+    await ctx.runQuery(internal.selectedPages.refreshAdoptionFleetPage, { cursor: cursor ?? null });
+  for (const siteId of page.siteIds) await ctx.scheduler.runAfter(0, internal.actions.selectedPages.adoptPublishedForRefreshInternal, { siteId });
+  if (!page.isDone) await ctx.scheduler.runAfter(0, internal.actions.selectedPages.adoptPublishedForRefreshFleet, { cursor: page.continueCursor });
+  return { sites: page.siteIds.length };
 } });

@@ -25,6 +25,9 @@ crons.interval("publisher-destination-receipt-renewal", { hours: 6 }, internal.p
 // nudged, and the operator's Telegram gets a report (daily, and within six
 // hours of any problem). Requires PENTRA_OPS_TELEGRAM_BOT_TOKEN/_CHAT_ID.
 crons.daily("content-health-daily", { hourUTC: 3, minuteUTC: 30 }, internal.contentHealth.runContentHealth, { notify: "always" });
+// Pentra's own older articles on Google page 2 become refreshable (read-only
+// adoption, up to three a site a day; refreshes take at most one slot in four).
+crons.daily("published-article-refresh-adoption", { hourUTC: 4, minuteUTC: 10 }, internal.actions.selectedPages.adoptPublishedForRefreshFleet, {});
 crons.interval("content-health-watch", { hours: 6 }, internal.contentHealth.runContentHealth, { notify: "problems" });
 crons.interval(
   "growth-loop-ga-rollout-start",

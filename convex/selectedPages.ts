@@ -13,6 +13,9 @@ import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
 import { evaluateTopicBusinessFit, tenantTopicBusinessSignals } from "./lib/autopilotBuffer";
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDomainBinding";
 import { stripLeadingDocumentTitle } from "./lib/markdownPublishing";
+import { publicationDeliveryConfig } from "./lib/publicationArtifact";
+import { REFRESH_COOLDOWN_MS, refreshArticleOldEnough, refreshOpportunities, refreshSlotAvailable, refreshWindowStart } from "./lib/articleRefresh";
+import { isBrandedSearchQuery } from "./lib/searchPerformance";
 
 async function owner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
   const site = await ctx.db.get(siteId), identity = await ctx.auth.getUserIdentity();
@@ -170,20 +173,36 @@ export const workContext = internalQuery({ args: { siteId: v.id("sites"), jobId:
 export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jobs: Doc<"jobs">[]) {
   const pages = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", site._id)).take(501);
   if (pages.length > 500) return null;
+  // Refreshes of Pentra's own older articles take at most one slot in four
+  // and revisit the same article at most every 60 days (lib/articleRefresh).
+  const refreshAllowed = refreshSlotAvailable(jobs);
   const candidates = pages.filter(p => p.editable?.active && p.editable.connectionHash === contentConnectionHash(site) &&
     p.editable.profileHash === confirmedContentProfileHash(site) &&
     Date.now() - (p.editable.lastReviewedAt ?? 0) >= CONTENT_PAGE_REVIEW_MS &&
     Date.now() - (p.editable.lastImprovedAt ?? 0) >= CONTENT_PAGE_COOLDOWN_MS &&
+    (p.editable.origin !== "published_refresh" || (refreshAllowed && Date.now() - (p.editable.lastImprovedAt ?? 0) >= REFRESH_COOLDOWN_MS)) &&
     !jobs.some(j => j.contentWork?.targetPageId === p._id && !["verified","failed"].includes(j.contentWork.stage)));
   if (!candidates.length) return null;
   let measurements: Awaited<ReturnType<typeof takeCurrentGscQueryRows>>;
-  try { measurements = await takeCurrentGscQueryRows(ctx, site, 1000); } catch { return null; }
+  // The newest 28 days of Search Console data, not the oldest rows first.
+  const windowStart = refreshWindowStart((site.gscDateEpochs ?? []).map(receipt => receipt.date));
+  try { measurements = await takeCurrentGscQueryRows(ctx, site, 3000, windowStart ? { startDate: windowStart } : undefined); } catch { return null; }
   // "Money pages" first: a page already ranking on positions 4-20 is the
   // cheapest to lift onto page one, so it is considered before the rest.
   for (const page of moneyPagesFirst(candidates, measurements.rows)) {
     const e = page.editable!;
     await ctx.db.patch(page._id, { editable: { ...e, lastReviewedAt: Date.now() } });
     try { assertUnprotectedPage(page.slug, e.title, e.sourceContent); } catch { continue; }
+    if (e.origin === "published_refresh") {
+      const best = refreshOpportunities(measurements.rows, page.url).find(o => !isBrandedSearchQuery(o.query, site.domain) &&
+        !e.markdown.toLowerCase().includes(o.query) &&
+        evaluateTopicBusinessFit({ keyword: o.query, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible);
+      if (!best) continue;
+      const refreshTarget = targetedImprovement(e, site, best.query);
+      if (contentWords(e.markdown) >= 1200 && !refreshTarget) continue;
+      return { page, question: best.query, editTarget: refreshTarget,
+        reason: `Refresh of a page-2 article: Search Console shows "${best.query}" at average position ${Math.round(best.position)} with ${best.impressions} impressions in the last 28 days. No claim of causal growth.` };
+    }
     const rows = measurements.rows.filter(r => r.page === page.url && r.impressions > 0 &&
       (!e.lastImprovedAt || r.date > new Date(e.lastImprovedAt).toISOString().slice(0, 10)) &&
       !e.markdown.toLowerCase().includes(r.query.toLowerCase()) &&
@@ -200,3 +219,73 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
   }
   return null;
 }
+
+/** Pentra's own older published articles that could be refreshed: live for
+ * 28+ days on the current GitHub destination, not yet an editable page, and
+ * showing a page-2 search in the last 28 days of Search Console data. */
+export const refreshAdoptionContext = internalQuery({ args: { siteId: v.id("sites"), limit: v.optional(v.number()) }, handler: async (ctx, args) => {
+  const site = await ctx.db.get(args.siteId);
+  if (!site || site.deletionStatus || site.accountDeletionRequestedAt || site.serviceMode !== "growth_first" ||
+    !site.contentSchedule || site.contentSchedule.ownerReviewedOnly || site.contentSchedule.paused || site.publishMethod !== "github" || !site.userId) return null;
+  try { selectionConnection(site); } catch { return null; }
+  let connectionHash: string;
+  try { connectionHash = contentConnectionHash(site); } catch { return null; }
+  const windowStart = refreshWindowStart((site.gscDateEpochs ?? []).map(receipt => receipt.date));
+  if (!windowStart) return { site, connectionHash, profileHash: confirmedContentProfileHash(site), candidates: [] };
+  const measurements = await takeCurrentGscQueryRows(ctx, site, 6000, { startDate: windowStart });
+  const pages = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", site._id)).take(501);
+  if (pages.length > 500) return null;
+  const adopted = new Set(pages.filter(p => p.editable).map(p => p.url));
+  const summaries = (await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", site._id).eq("status", "published")).take(2001))
+    .filter(row => row.publicUrl && row.publicUrlStatus === "verified" && refreshArticleOldEnough(row.publishedAt, Date.now()) && !adopted.has(row.publicUrl));
+  const scored = summaries.map(row => ({ row, best: refreshOpportunities(measurements.rows, row.publicUrl!)
+    .find(o => !isBrandedSearchQuery(o.query, site.domain)) }))
+    .filter(entry => entry.best).sort((a, b) => b.best!.impressions - a.best!.impressions)
+    .slice(0, Math.max(1, Math.min(args.limit ?? 3, 5)));
+  const candidates = [];
+  for (const { row } of scored) {
+    const article = await ctx.db.get(row.articleId);
+    if (!article || article.siteId !== site._id || article.status !== "published" || article.publicationReceipt?.method !== "github" ||
+      !article.publicationDeliveryHash || article.contentWorkSourceJobId) continue;
+    const slug = article.slug.replace(/^\//, "");
+    const contentDir = publicationDeliveryConfig(site).contentDir;
+    if (!contentDir) continue;
+    candidates.push({ articleId: article._id, path: `${contentDir}/${slug}.md`, url: row.publicUrl!,
+      deliveryKey: `pentra:${article.publicationDeliveryHash}` });
+  }
+  return { site, connectionHash, profileHash: confirmedContentProfileHash(site), candidates };
+} });
+
+/** Adopt one verified Pentra-owned article as a refreshable page. Consent is
+ * the site's Autopilot setup, which covers Pentra's own published pages only;
+ * the action proved ownership from the file's own frontmatter. */
+export const recordRefreshAdoption = internalMutation({ args: { siteId: v.id("sites"), articleId: v.id("articles"),
+  connectionHash: v.string(), profileHash: v.string(), source: imported },
+  handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId), article = await ctx.db.get(args.articleId);
+    if (!site || !article || article.siteId !== site._id || article.status !== "published" || site.serviceMode !== "growth_first" ||
+      !site.contentSchedule || site.contentSchedule.ownerReviewedOnly || site.publishMethod !== "github" || args.source.kind !== "github") return { adopted: false };
+    selectionConnection(site);
+    if (contentConnectionHash(site) !== args.connectionHash || confirmedContentProfileHash(site) !== args.profileHash ||
+      !selectedUrlMatches(site, args.source.slug, args.source.url) || article.publicUrl !== args.source.url) return { adopted: false };
+    assertUnprotectedPage(args.source.slug, args.source.title, args.source.sourceContent);
+    const rows = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", site._id)).take(501);
+    if (rows.length > 500) return { adopted: false };
+    const matches = rows.filter(p => p.url === args.source.url);
+    if (matches.length > 1 || matches[0]?.editable) return { adopted: false }; // never overrides an owner selection or revocation
+    const { slug, url, ...source } = args.source;
+    const editable = { ...source, version: 1, active: true, connectionHash: args.connectionHash, profileHash: args.profileHash,
+      selectedAt: Date.now(), managedArticleId: article._id, origin: "published_refresh" as const };
+    if (matches[0]) await ctx.db.patch(matches[0]._id, { editable });
+    else await ctx.db.insert("pages", { siteId: site._id, url, slug, title: source.title, editable,
+      canonicalDomain: siteCanonicalDomain(site)!, domainRevision: siteCanonicalDomainRevision(site), createdAt: Date.now() });
+    return { adopted: true };
+  } });
+
+/** Sites whose Autopilot may refresh its own older GitHub articles. */
+export const refreshAdoptionFleetPage = internalQuery({ args: { cursor: v.union(v.string(), v.null()) }, handler: async (ctx, { cursor }) => {
+  const page = await ctx.db.query("sites").paginate({ cursor, numItems: 50 });
+  return { isDone: page.isDone, continueCursor: page.continueCursor,
+    siteIds: page.page.filter(site => !site.deletionStatus && site.serviceMode === "growth_first" && site.publishMethod === "github" &&
+      site.contentSchedule && !site.contentSchedule.ownerReviewedOnly && !site.contentSchedule.paused).map(site => site._id) };
+} });
