@@ -62,14 +62,15 @@ async function accountPlan(ctx: QueryCtx | MutationCtx, site: Doc<"sites">) {
 }
 /** New owner drafts used this UTC month across the account's sites, against
  * the plan allowance. Null for the scoped owner validation grant. */
-async function ownerDraftAllowance(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, validationScoped: boolean) {
+async function ownerDraftAllowance(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, validationScoped: boolean, displayedUsed?: number) {
   if (validationScoped || !site.userId) return null;
   const entitlement = await ctx.db.query("account_plan_entitlements").withIndex("by_user", q => q.eq("userId", site.userId!)).unique();
   const tier = resolvePlanFromFeatures(entitlement?.planFeatures ?? site.planFeatures ?? []).tier;
   // One monthly allowance per plan: Autopilot articles and new owner drafts
   // count against the same number the pricing page promises (and the
   // dashboard shows), so the two can never add up past the plan.
-  const { used } = await accountArticlesThisMonth(ctx, site);
+  // The dashboard passes the stored count; a new draft is always checked live.
+  const used = displayedUsed ?? (await accountArticlesThisMonth(ctx, site)).used;
   return { tier, used, limit: OWNER_DRAFTS_PER_MONTH[tier] as number };
 }
 const LIMIT = 1000;
@@ -203,7 +204,31 @@ async function accountArticlesThisMonth(ctx: QueryCtx | MutationCtx, site: Doc<"
     used += siteJobs.filter(j => j.contentWork && j.contentWork.intent === "create" && j.createdAt >= monthStart && !replaced.has(j._id) &&
       (j.contentWork.ownerRequest ? !j.contentWork.ownerRequest.sourceArticleId : j.contentWork.retiredAt === undefined)).length;
   }
-  return { used, nextMonthStart: Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1) };
+  return { used, monthStart, nextMonthStart: Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1) };
+}
+/** Counting the month live reads every article job of the month on every site
+ * of the account, and the dashboard re-reads it on every refresh, so the cost
+ * grew all month. Work that starts, converts or retires an article stores the
+ * exact count instead; admission and new owner drafts still enforce the live
+ * count, so the plan's monthly allowance is unchanged. */
+async function storeAccountUsage(ctx: MutationCtx, userId: string, monthStart: number, used: number) {
+  const row = await ctx.db.query("account_content_usage").withIndex("by_user_month", q => q.eq("userId", userId).eq("monthStart", monthStart)).first();
+  // Only a changed count is written, so open dashboards do not re-run for nothing.
+  if (!row) await ctx.db.insert("account_content_usage", { userId, monthStart, used, updatedAt: Date.now() });
+  else if (row.used !== used) await ctx.db.patch(row._id, { used, updatedAt: Date.now() });
+}
+async function refreshAccountUsage(ctx: MutationCtx, site: Doc<"sites">) {
+  if (!site.userId) return;
+  const month = await accountArticlesThisMonth(ctx, site);
+  await storeAccountUsage(ctx, site.userId, month.monthStart, month.used);
+}
+/** The month's usage as the dashboard shows it: the stored count, or the live
+ * count when none is stored for this month yet. */
+async function displayedAccountUsage(ctx: QueryCtx, site: Doc<"sites">) {
+  if (!site.userId) return 0;
+  const now = new Date(), monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  const row = await ctx.db.query("account_content_usage").withIndex("by_user_month", q => q.eq("userId", site.userId!).eq("monthStart", monthStart)).first();
+  return row ? row.used : (await accountArticlesThisMonth(ctx, site)).used;
 }
 async function pricingConfiguration(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, job?: Doc<"jobs">) {
   // Deployment-owned pricing is deliberately absent by default. Selection is
@@ -622,6 +647,7 @@ async function confirmChangedSetup(ctx: MutationCtx, site: Doc<"sites">, reviewT
       await archiveRetiredContentArtifact(ctx, retired);
       await closeRetiredContentAccounting(ctx, retired);
     }
+    if (review.stale.length) await refreshAccountUsage(ctx, site);
     if (review.pristineLease) {
       await closePristineSetupLease(ctx, site);
     }
@@ -686,6 +712,7 @@ export const selectServiceMode = mutation({
         await archiveRetiredContentArtifact(ctx, retired);
         await closeRetiredContentAccounting(ctx, retired);
       }
+      if (review.stale.length) await refreshAccountUsage(ctx, site);
       for (const job of jobs) if (job.contentWork?.stage === "verified" && job.status === "pending") await closeVerifiedContentWake(ctx, job);
       jobs = await jobsForSite(ctx, site._id);
       // A provider-free correction may have a prepared revision before its
@@ -934,6 +961,7 @@ export const readiness = query({
       const title = article?.siteId === siteId ? article.title : topic?.siteId === siteId ? topic.label : undefined;
       if (title) upcomingTitles.set(j._id, title);
     }
+    const usedThisMonth = await displayedAccountUsage(ctx, site);
     return { siteId, setupPending: Boolean(site.contentSetupRequestedAt && !site.serviceMode), serviceMode: site.serviceMode ?? "legacy_articles", reviewToken: contentConsentToken(site),
       profile: { name: site.siteName ?? site.domain, summary: site.siteSummary ?? "", audience: site.targetAudienceSummary ?? "", productUsage: site.productUsage ?? "", offerings: site.keyFeatures ?? [], questions: site.painPoints ?? [] },
       destination: { kind: site.publishMethod ?? "manual", domain: site.domain, repository: site.publishMethod === "github" ? `${site.repoOwner ?? ""}/${site.repoName ?? ""}` : null,
@@ -950,11 +978,11 @@ export const readiness = query({
         autopilotAvailable: !pasteDestination(site),
         adoptable: Boolean(site.serviceMode === "growth_first" && s && !s.autopilotSelectedAt && !s.ownerReviewedOnly) },
       ownerDraft: { maximumMicroUsd: pricing?.budgetMicroUsd ?? null,
-        allowance: pricing ? await ownerDraftAllowance(ctx, site, Boolean(pricing.validationAuthorizationId)) : null,
+        allowance: pricing ? await ownerDraftAllowance(ctx, site, Boolean(pricing.validationAuthorizationId), usedThisMonth) : null,
         latest: jobs.filter(j => j.contentWork?.ownerRequest).sort((a, b) => b.createdAt - a.createdAt).slice(0, 1).map(j => ({
           jobId: j._id, articleId: j.articleId, stage: j.contentWork!.stage, issue: contentIssue(j.contentWork!.failure),
         }))[0] ?? null },
-      results: { live: liveSummaries.length + pastedLive.size, planUsedThisMonth: site.userId ? (await accountArticlesThisMonth(ctx, site)).used : 0,
+      results: { live: liveSummaries.length + pastedLive.size, planUsedThisMonth: usedThisMonth,
         liveThisMonth: liveSummaries.filter(row => (row.publishedAt ?? 0) >= monthStart).length + [...pastedLive.values()].filter(p => p.publishedAt >= monthStart).length },
       published: [...publishedRows.map(a => ({ articleId: a.articleId, title: a.title || a.slug || "Article", publishedAt: a.publishedAt ?? null,
           verified: a.publicUrlStatus === "verified", url: a.publicUrlStatus === "verified" && a.publicUrl?.startsWith("https://") ? a.publicUrl : null })),
@@ -1263,6 +1291,7 @@ export const requestDraft = mutation({
       await archiveRetiredContentArtifact(ctx, retired);
     }
     await ctx.db.patch(topic._id, { status: "queued", updatedAt: requestedAt });
+    await refreshAccountUsage(ctx, site);
     await ctx.scheduler.runAfter(0, internal.actions.pipeline.processNextJob, { siteId: site._id, jobId });
     return { jobId, created: true };
   },
@@ -1297,6 +1326,8 @@ async function reviseFailedWork(ctx: MutationCtx, site: Doc<"sites">, failed: Do
       contentWork: { ...cw, intent: "create", targetPageId: undefined, baseRevision: undefined, permissionVersion: undefined,
         opportunity: undefined, revisionId: undefined, editTarget: undefined, stage: "prepare", replacements: 1,
         discardedArticleIds: [...cw.discardedArticleIds, failed.articleId] }, updatedAt: Date.now() });
+    // A page improvement that becomes a new article now counts toward the month.
+    if (cw.intent !== "create") await refreshAccountUsage(ctx, site);
     await ctx.db.patch(replacement._id, { status: "queued", updatedAt: Date.now() });
     return { scheduled: 1, mode: "buffer_fill", activeJobId: failed._id };
   }
@@ -1703,6 +1734,7 @@ export const advance = internalMutation({
     // account. When it is used up, the next article waits for the new month.
     if (schedule.autopilotSelectedAt && !improvement && site.userId) {
       const plan = await accountPlan(ctx, site), month = await accountArticlesThisMonth(ctx, site);
+      await storeAccountUsage(ctx, site.userId, month.monthStart, month.used);
       if (month.used >= plan.articlesPerMonth) {
         if (waiting.length === 0 && schedule.nextDeadlineAt < month.nextMonthStart + 12 * 3_600_000) {
           await ctx.db.patch(siteId, { contentSchedule: { ...schedule, nextDeadlineAt: month.nextMonthStart + 12 * 3_600_000 }, updatedAt: Date.now() });
@@ -1754,6 +1786,7 @@ export const advance = internalMutation({
     if (!reserved.ok) throw new Error("Content reservation changed inside admission");
     await ctx.db.patch(jobId, { providerSpendReservationId: reserved.reservationId });
     await ctx.db.patch(topic._id, { status: "queued", updatedAt: Date.now() });
+    if (!improvement) await refreshAccountUsage(ctx, site);
     if (improvement) await ctx.db.patch(improvement.page._id, { editable: { ...improvement.page.editable!, lastWorkJobId: jobId } });
     // Research the next keywords before the searched ones run out, instead of
     // waiting for an empty inventory (which costs slots at a fast cadence).

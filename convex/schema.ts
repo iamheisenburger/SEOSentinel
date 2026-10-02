@@ -624,6 +624,14 @@ export default defineSchema({
   // even an Enterprise account cannot make one mutation unbounded. While a
   // new receipt is reconciling, paid/write execution fails closed; the prior
   // tenant data remains readable and untouched.
+  // The account's new articles this UTC month as the dashboard shows them.
+  // Written by the mutations that start, convert or retire article work.
+  account_content_usage: defineTable({
+    userId: v.string(),
+    monthStart: v.number(),
+    used: v.number(),
+    updatedAt: v.number(),
+  }).index("by_user_month", ["userId", "monthStart"]),
   account_plan_entitlements: defineTable({
     userId: v.string(),
     planFeatures: v.array(v.string()),

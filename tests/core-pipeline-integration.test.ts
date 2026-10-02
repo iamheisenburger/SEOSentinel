@@ -422,6 +422,27 @@ test("ordinary core path plans fresh synthetic topics through real admission and
   f.assertOffline();
 });
 
+/** The dashboard shows the account's stored monthly usage without re-reading
+ * every job of the month, and the stored count equals the exact live count. */
+async function storedUsageMatchesLive(f: ReturnType<typeof setup>, siteId: string) {
+  const userId = f.get(siteId)!.userId, today = new Date(f.now());
+  const monthStart = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1);
+  f.setIdentity(userId);
+  const start = f.queryReads.length;
+  const shown = (await f.invoke("contentWork:readiness", { siteId })).results.planUsedThisMonth;
+  // The month count reads each site's jobs from the month start (the bounded recent-history read is separate).
+  const monthReads = f.queryReads.slice(start).filter(read => read.table === "jobs" && read.index === "by_site_content_deadline" &&
+    read.range.some(r => r.key === "contentWork.deadlineAt" && r.op === "gte" && r.value === monthStart));
+  const rows = f.tables.account_content_usage, stored = rows.filter(row => row.userId === userId && row.monthStart === monthStart);
+  for (const row of stored) rows.splice(rows.indexOf(row), 1);
+  const live = (await f.invoke("contentWork:readiness", { siteId })).results.planUsedThisMonth;
+  rows.push(...stored);
+  f.setIdentity(null);
+  assert.equal(stored.length, 1, "one stored count per account and month");
+  assert.deepEqual(monthReads, [], "the dashboard does not re-read every job of the month");
+  assert.equal(shown, live, "the stored count equals the live count");
+  return shown as number;
+}
 function diagnostic(f: ReturnType<typeof setup>) {
   return JSON.stringify({ jobs: f.tables.jobs.map(j => ({ id: j._id, type: j.type, status: j.status, error: j.error })),
     articles: f.tables.articles.map(a => ({ id: a._id, siteId: a.siteId, status: a.status, issues: a.publicationGateIssues, publicUrlStatus: a.publicUrlStatus })),
@@ -975,6 +996,8 @@ test("SLC57 public plans cap new drafts per month before any paid call", async (
   r = await f.invoke("contentWork:readiness", { siteId: site.id });
   const base = { siteId: site.id, reviewToken: r.reviewToken, maximumMicroUsd: r.ownerDraft.maximumMicroUsd };
   const first = await f.invoke("contentWork:requestDraft", { ...base, requestKey: "free-plan-first-article" });
+  assert.equal(await storedUsageMatchesLive(f, site.id), 1, "a new owner draft is counted for the dashboard");
+  f.setIdentity(saved.userId);
   await pumpUntil(f, () => ["ready", "failed"].includes(f.get(first.jobId)!.contentWork.stage));
   const job = f.get(first.jobId)!;
   assert.equal(job.contentWork.stage, "ready", diagnostic(f));
@@ -1275,6 +1298,26 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     const second = await f.invoke("contentWork:advance", { siteId: site.id });
     assert.equal(second.mode, "quota_reached", "the free plan's three articles this month are already started");
     assert.equal(f.tables.jobs.filter(j => j.contentWork).length, 3);
+    // The two earlier articles were added outside admission: the admission
+    // check counted live and stored the exact number for the dashboard.
+    assert.equal(await storedUsageMatchesLive(f, site.id), 3, "a full month is shown exactly");
+    const stored = structuredClone(f.tables.account_content_usage);
+    f.setTime(f.now() + 60_000);
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "quota_reached");
+    assert.deepEqual(f.tables.account_content_usage, stored, "an unchanged count is not rewritten");
+    f.assertOffline();
+  });
+  await t.test("dashboard_shows_the_stored_monthly_usage", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await selectGrowth(f);
+    Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+    assert.equal(f.tables.account_content_usage.length, 0);
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_fill");
+    assert.equal(await storedUsageMatchesLive(f, site.id), 1, "an admitted article is counted for the dashboard");
+    f.setIdentity(f.get(site.id)!.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    if (r.ownerDraft.allowance) assert.equal(r.ownerDraft.allowance.used, 1, "the draft allowance shows the same count");
+    f.setIdentity(null);
     f.assertOffline();
   });
 });
@@ -1417,6 +1460,8 @@ test("SLC67 the owner edits business facts: saving re-confirms, old prepared wor
   assert.equal(updated.siteSummary, facts.summary); assert.deepEqual(updated.keyFeatures, ["Check-ups", "Whitening"]);
   assert.deepEqual(updated.painPoints, ["How long does whitening last?"]);
   assert.ok(f.get(oldReady._id)!.contentWork.retiredAt, "work prepared from the old facts is set aside, not published");
+  assert.equal(await storedUsageMatchesLive(f, site.id), 0, "set-aside automatic work no longer counts toward the month");
+  f.setIdentity(saved.userId);
   assert.equal(f.get(oldFeatureTopic), null, "a planned topic copied from a fact the owner removed is dropped");
   assert.ok(f.get(researchedTopic), "a researched search keyword stays");
   assert.equal(updated.autopilotEnabled, true); assert.equal(updated.approvalRequired, false);
@@ -1574,6 +1619,8 @@ test("SLC55 owner edits retain the source and costs, require a new review and ex
   const args = { ...base, requestKey: "owner-explicit-edited-review", edit: { articleId: source._id,
     artifactHash: publicationArtifactHash(source as never), markdown: `${source.markdown}\n\nCheck your approved business information before choosing the next step.` } };
   const edited = await f.invoke("contentWork:requestDraft", args), editedJob = f.get(edited.jobId)!;
+  assert.equal(await storedUsageMatchesLive(f, site._id), 1, "an edit of a draft is not a new article");
+  f.setIdentity(site.userId);
   assert.notEqual(edited.jobId, original.jobId);
   assert.notEqual(editedJob.articleId, source._id);
   assert.equal(f.get(editedJob.articleId)!.markdown, args.edit.markdown);
@@ -3939,6 +3986,8 @@ test("SLC60 autopilot accepts style-only notes and never stalls on a draft the r
     assert.equal(first.mode, "buffer_replacement", JSON.stringify(first));
     const replacement = f.get(first.activeJobId)!;
     assert.equal(replacement.contentWork.replacesJobId, failed._id);
+    assert.equal(await storedUsageMatchesLive(f, site.id), f.tables.jobs.filter(j => j.contentWork?.intent === "create").length - 1,
+      "a replaced slot counts once");
     assert.equal(replacement.contentWork.deadlineAt, deadline, "the replacement takes the same slot");
     assert.equal(f.get(failed._id)!.contentWork.failure, "bounded_content_quality_exhausted", "the failed job stays on record");
     assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline, "the slot is kept, not skipped");
