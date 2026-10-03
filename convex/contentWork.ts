@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ConvexError, v } from "convex/values";
 import { contentIntentConflicts, evaluateTopicBusinessFit, tenantDiscoveryAnchors, tenantTopicBusinessSignals, isSealedReady } from "./lib/autopilotBuffer";
+import { normalizeResearchKeyword, researchSeedsForRound, searchLikePhrase, searchSeedLength } from "./lib/researchSeeds";
 import { publicationArtifactHash, publicationDeliveryConfig, sha256Hex } from "./lib/publicationArtifact";
 import { legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain, gscConnectionMatchesCurrentDomain } from "./lib/siteDomainBinding";
@@ -1344,31 +1345,29 @@ export const advanceOwnerDraft = internalMutation({ args: { jobId: v.id("jobs") 
   if (result.scheduled) await ctx.scheduler.runAfter(0, internal.actions.pipeline.processNextJob, { siteId: site._id, jobId });
 } });
 
-export const normalizeResearchKeyword = (keyword: string) => keyword.trim().toLowerCase().replace(/\s+/g, " ");
-/** Seeds for one research run. The same seeds return the same keywords, so
- * each run starts further along the pool: the owner's business anchors, then
- * keywords this site already wrote for that people search (both stay on the
- * confirmed business). The first run uses the pool's start, as before. */
-export function rotatedResearchSeeds(anchors: string[], searchedKeywords: string[], round: number) {
-  const pool = [...new Set([...anchors, ...searchedKeywords].map(normalizeResearchKeyword).filter(Boolean))];
-  if (pool.length === 0) return [];
-  const start = (Math.max(0, round - 1) * 5) % pool.length;
-  return [...pool.slice(start), ...pool.slice(0, start)].slice(0, 15);
-}
+export { normalizeResearchKeyword } from "./lib/researchSeeds";
 
 /** Seeds and locale for Autopilot keyword research (no secrets), plus the
  * keywords the site already has so research looks past them. */
 export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await ctx.db.get(siteId);
   if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return null;
-  const anchors = tenantDiscoveryAnchors([...(site.anchorKeywords ?? []), ...(site.keyFeatures ?? []), ...(site.painPoints ?? []),
-    site.productUsage, site.niche, site.blogTheme], 40);
   const topics = await takeCurrentDomainTopics(ctx, site, LIMIT + 1);
+  const signals = tenantTopicBusinessSignals(site);
+  const onBusiness = (keyword: string) => evaluateTopicBusinessFit({ keyword, label: keyword.replace(/^./, c => c.toUpperCase()), ...signals }).eligible;
+  const searches = await searchConsoleSearches(ctx, site);
+  // Seeds that are real searches: keywords this site wrote that people search
+  // for, then the Search Console searches it is shown for (on its business).
   const written = topics.filter(t => ["used", "queued"].includes(t.status ?? "") && (t.searchVolume ?? 0) > 0 &&
     (t.keywordDifficulty ?? 0) <= WINNABLE_KEYWORD_DIFFICULTY)
-    .sort((a, b) => (b.searchVolume ?? 0) - (a.searchVolume ?? 0)).map(t => t.primaryKeyword)
-    .filter(k => { const n = normalizeResearchKeyword(k).split(" ").length; return n >= 2 && n <= 6; }).slice(0, 20);
-  const seeds = rotatedResearchSeeds(anchors, written, site.contentSchedule.topicsResearchRound ?? 1);
+    .sort((a, b) => (b.searchVolume ?? 0) - (a.searchVolume ?? 0)).map(t => t.primaryKeyword);
+  const shown = searches.filter(q => q.impressions >= 5 && !isBrandedSearchQuery(q.keyword, site.domain))
+    .sort((a, b) => b.impressions - a.impressions).map(q => q.keyword);
+  const demand = [...written, ...shown].filter(k => searchSeedLength(k) && onBusiness(k)).slice(0, 160);
+  const seeds = researchSeedsForRound({ demand,
+    owner: tenantDiscoveryAnchors([...(site.anchorKeywords ?? []), ...(site.keyFeatures ?? [])], 40).filter(k => searchLikePhrase(k)),
+    profile: tenantDiscoveryAnchors([...(site.painPoints ?? []), site.productUsage, site.niche, site.blogTheme], 40).filter(k => searchLikePhrase(k)),
+    round: site.contentSchedule.topicsResearchRound ?? 1 });
   const known = [...new Set(topics.slice(0, LIMIT).map(t => normalizeResearchKeyword(t.primaryKeyword)))];
   // Everything a new article must not repeat: topics plus published articles and pages.
   let coverage = known;
@@ -1377,7 +1376,7 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
     coverage = [...new Set([...known, ...inventory.pageCoverage.map(c => normalizeResearchKeyword(c.primaryKeyword ?? ""))].filter(Boolean))];
   } catch { /* an incomplete inventory keeps the topic list only */ }
   return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds, known, coverage,
-    signals: tenantTopicBusinessSignals(site), searchConsole: await searchConsoleTopicCandidates(ctx, site),
+    signals, searchConsole: searchConsoleTopicCandidatesFrom(site, searches),
     tenantAuthority: storedTenantAuthority(site) ?? null,
     canonicalDomain: siteCanonicalDomain(site) ?? site.domain, domainRevision: siteCanonicalDomainRevision(site) };
 } });
@@ -1389,6 +1388,12 @@ const urlKey = (url: string) => url.trim().toLowerCase().replace(/^https?:\/\//,
  * searches it already ranks top-3 for, and searches answered by a published
  * article are left out. Free: the rows are already synced. */
 export async function searchConsoleTopicCandidates(ctx: QueryCtx, site: Doc<"sites">) {
+  return searchConsoleTopicCandidatesFrom(site, await searchConsoleSearches(ctx, site));
+}
+/** The last 28 days of Search Console searches the site was shown for, one row
+ * per search (impressions, average position, and whether one of its own
+ * published articles was the page shown). Empty without current data. */
+async function searchConsoleSearches(ctx: QueryCtx, site: Doc<"sites">) {
   try {
     const through = site.gscDataThrough;
     if (!through || !gscConnectionMatchesCurrentDomain(site)) return [];
@@ -1405,12 +1410,14 @@ export async function searchConsoleTopicCandidates(ctx: QueryCtx, site: Doc<"sit
       byQuery.set(query, entry);
     }
     return [...byQuery.entries()].map(([keyword, q]) => ({ keyword, impressions: q.impressions,
-      position: q.impressions ? Math.round(q.weighted / q.impressions * 10) / 10 : 0, article: q.article }))
-      .filter(q => !q.article && q.impressions >= 5 && q.position > 3 && q.keyword.length <= 80 &&
-        q.keyword.split(" ").length >= 2 && q.keyword.split(" ").length <= 8 && !isBrandedSearchQuery(q.keyword, site.domain))
-      .sort((a, b) => b.impressions - a.impressions).slice(0, 40)
-      .map(({ keyword, impressions, position }) => ({ keyword, impressions, position }));
+      position: q.impressions ? Math.round(q.weighted / q.impressions * 10) / 10 : 0, article: q.article }));
   } catch { return []; }
+}
+function searchConsoleTopicCandidatesFrom(site: Doc<"sites">, searches: Awaited<ReturnType<typeof searchConsoleSearches>>) {
+  return searches.filter(q => !q.article && q.impressions >= 5 && q.position > 3 && q.keyword.length <= 80 &&
+      q.keyword.split(" ").length >= 2 && q.keyword.split(" ").length <= 8 && !isBrandedSearchQuery(q.keyword, site.domain))
+    .sort((a, b) => b.impressions - a.impressions).slice(0, 40)
+    .map(({ keyword, impressions, position }) => ({ keyword, impressions, position }));
 }
 
 /** Close Autopilot's keyword-research reservation: settled at the provider's
@@ -1438,8 +1445,11 @@ export const closeTopicResearchReservation = internalMutation({ args: { siteId: 
 export const addResearchedTopics = internalMutation({ args: { siteId: v.id("sites"),
   keywords: v.array(v.object({ keyword: v.string(), searchVolume: v.number(), difficulty: v.number(), difficultyMeasured: v.boolean(),
     // Search Console: the site already appears for this search (volume = impressions in 28 days).
-    source: v.optional(v.literal("search_console")), position: v.optional(v.number()) })) },
-  handler: async (ctx, { siteId, keywords }) => {
+    source: v.optional(v.literal("search_console")), position: v.optional(v.number()) })),
+    // What the research run saw (seeds and discovery counts), kept with its outcome.
+    research: v.optional(v.object({ seeds: v.array(v.string()), searchConsole: v.number(), discovered: v.optional(v.number()),
+      excludedKnown: v.optional(v.number()), excludedFit: v.optional(v.number()), excludedIntent: v.optional(v.number()) })) },
+  handler: async (ctx, { siteId, keywords, research }) => {
     const site = await ctx.db.get(siteId);
     if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return { added: 0 };
     let inventory;
@@ -1449,16 +1459,18 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
     // written, so it is not added (it would only take a research slot).
     const taken: { primaryKeyword: string }[] = [...inventory.topics, ...inventory.pageCoverage];
     let added = 0;
+    const skipped = { shape: 0, difficulty: 0, competitor: 0, fit: 0, intent: 0 };
     // Searches the site already appears for come first: they are the nearest wins.
     const fromSearchConsole = (k: { source?: string }) => Number(k.source === "search_console");
     for (const k of [...keywords].sort((a, b) => fromSearchConsole(b) - fromSearchConsole(a) || b.searchVolume - a.searchVolume)) {
       if (added >= 15) break;
       const keyword = k.keyword.trim().toLowerCase().replace(/\s+/g, " ");
-      if (keyword.split(" ").length < 2 || keyword.length > 80 || k.difficulty > WINNABLE_KEYWORD_DIFFICULTY ||
-        namesCompetitor(keyword, competitorNamesFor(site))) continue;
+      if (keyword.split(" ").length < 2 || keyword.length > 80) { skipped.shape++; continue; }
+      if (k.difficulty > WINNABLE_KEYWORD_DIFFICULTY) { skipped.difficulty++; continue; }
+      if (namesCompetitor(keyword, competitorNamesFor(site))) { skipped.competitor++; continue; }
       const proposal = { primaryKeyword: keyword, label: keyword.replace(/^./, c => c.toUpperCase()) };
-      if (!evaluateTopicBusinessFit({ keyword, label: proposal.label, ...signals }).eligible) continue;
-      if (taken.some(t => contentIntentConflicts(proposal, t))) continue;
+      if (!evaluateTopicBusinessFit({ keyword, label: proposal.label, ...signals }).eligible) { skipped.fit++; continue; }
+      if (taken.some(t => contentIntentConflicts(proposal, t))) { skipped.intent++; continue; }
       await ctx.db.insert("topic_clusters", { siteId, ...proposal, planningCanonicalDomain: siteCanonicalDomain(site)!,
         planningDomainRevision: siteCanonicalDomainRevision(site), secondaryKeywords: [], intent: "informational",
         priority: Math.max(1, Math.min(90, Math.round(Math.log10(1 + k.searchVolume) * 20 - k.difficulty / 5))), status: "planned",
@@ -1470,7 +1482,13 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
       taken.push(proposal); added++;
     }
     // Record the outcome (an empty result backs off) and let a waiting slot continue either way.
-    if (site.contentSchedule) await ctx.db.patch(siteId, { contentSchedule: { ...site.contentSchedule, topicsReplenishAdded: added }, updatedAt: Date.now() });
+    const receipt = { at: Date.now(), seeds: research?.seeds ?? [], searchConsole: research?.searchConsole ?? 0,
+      ...(research?.discovered !== undefined ? { discovered: research.discovered, excludedKnown: research.excludedKnown ?? 0,
+        excludedFit: research.excludedFit ?? 0, excludedIntent: research.excludedIntent ?? 0 } : {}),
+      offered: keywords.length, added, skippedShape: skipped.shape, skippedDifficulty: skipped.difficulty,
+      skippedCompetitor: skipped.competitor, skippedFit: skipped.fit, skippedIntent: skipped.intent };
+    if (site.contentSchedule) await ctx.db.patch(siteId, { contentSchedule: { ...site.contentSchedule, topicsReplenishAdded: added,
+      topicsResearchReceipt: receipt }, updatedAt: Date.now() });
     await wake(ctx, siteId);
     return { added };
   } });

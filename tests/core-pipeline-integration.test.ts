@@ -6415,12 +6415,22 @@ test("P55 research looks past keywords the site already has", async () => {
     planningCanonicalDomain: saved.canonicalDomain ?? saved.domain, planningDomainRevision: saved.canonicalDomainRevision ?? 0,
     secondaryKeywords: [], intent: "informational", priority: 50, status: "used", searchVolume: 100, keywordDifficulty: 5,
     keywordDifficultyMeasured: true, createdAt: f.now(), updatedAt: f.now() });
-  assert.equal((await f.invoke("contentWork:growthTopicContext", { siteId: site.id })).known.length, 6, "the fixture topics belong to the site");
+  const context = await f.invoke("contentWork:growthTopicContext", { siteId: site.id });
+  assert.equal(context.known.length, 6, "the fixture topics belong to the site");
+  // Research is seeded with searches people make (keywords the site wrote that have search demand), not only profile text.
+  assert.ok(context.seeds.some((seed: string) => P55_RESEARCH.slice(0, 6).includes(seed)), JSON.stringify(context.seeds));
+  assert.ok(context.seeds.every((seed: string) => !/^(to|of|for|with|and|the|a|an) |(^| )\d+( |$)| (to|of|t|don)$/.test(seed)), `no profile fragments: ${context.seeds}`);
   for (const topic of f.tables.topic_clusters) if (topic.siteId === site.id) topic.status = "used";
   f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 5 * hour;
   assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "topics_researching");
   await pumpUntil(f, () => f.get(site.id)!.contentSchedule.topicsReplenishAdded !== undefined, 20, f.now() + hour);
   const added = f.get(site.id)!.contentSchedule.topicsReplenishAdded;
+  // The run's receipt explains its outcome: seeds asked, what discovery found and why candidates were skipped.
+  const receipt = f.get(site.id)!.contentSchedule.topicsResearchReceipt;
+  assert.equal(receipt.added, added); assert.ok(receipt.seeds.length > 0 && receipt.offered >= added, JSON.stringify(receipt));
+  assert.ok(receipt.discovered >= receipt.excludedKnown && receipt.excludedKnown >= 6, `covered keywords are counted, not added: ${JSON.stringify(receipt)}`);
+  f.setIdentity(null);
+  assert.deepEqual((await f.invoke("contentHealth:siteHealth", { siteId: site.id })).lastResearch, receipt, "the health check shows the receipt");
   assert.ok(f.discoveryCalls.some(c => c.endpoint === "suggestions"), `the next source was asked: ${JSON.stringify(f.discoveryCalls)}`);
   assert.ok(added >= 3, `new keywords were added (${added})`);
   const planned = f.tables.topic_clusters.filter(t => t.siteId === site.id && t.status === "planned").map(t => t.primaryKeyword);

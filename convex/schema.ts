@@ -22,6 +22,14 @@ export default defineSchema({
       topicsReplenishAdded: v.optional(v.number()),
       // Research runs so far; rotates which business anchors seed the next one.
       topicsResearchRound: v.optional(v.number()),
+      // What the last research run saw: its seeds, what discovery found and
+      // why candidates were not added (counts only).
+      topicsResearchReceipt: v.optional(v.object({
+        at: v.number(), seeds: v.array(v.string()), searchConsole: v.number(),
+        discovered: v.optional(v.number()), excludedKnown: v.optional(v.number()), excludedFit: v.optional(v.number()),
+        excludedIntent: v.optional(v.number()), offered: v.number(), added: v.number(),
+        skippedShape: v.number(), skippedDifficulty: v.number(), skippedCompetitor: v.number(), skippedFit: v.number(), skippedIntent: v.number(),
+      })),
     })),
     userId: v.optional(v.string()), // Clerk user ID
     domain: v.string(),

@@ -156,6 +156,7 @@ import type * as lib_publicationReceipts from "../lib/publicationReceipts.js";
 import type * as lib_publishedCorrection from "../lib/publishedCorrection.js";
 import type * as lib_publishedRevision from "../lib/publishedRevision.js";
 import type * as lib_publisherProvisioning from "../lib/publisherProvisioning.js";
+import type * as lib_researchSeeds from "../lib/researchSeeds.js";
 import type * as lib_revisionArtifact from "../lib/revisionArtifact.js";
 import type * as lib_safeMarkdownHtml from "../lib/safeMarkdownHtml.js";
 import type * as lib_safeOutbound from "../lib/safeOutbound.js";
@@ -356,6 +357,7 @@ declare const fullApi: ApiFromModules<{
   "lib/publishedCorrection": typeof lib_publishedCorrection;
   "lib/publishedRevision": typeof lib_publishedRevision;
   "lib/publisherProvisioning": typeof lib_publisherProvisioning;
+  "lib/researchSeeds": typeof lib_researchSeeds;
   "lib/revisionArtifact": typeof lib_revisionArtifact;
   "lib/safeMarkdownHtml": typeof lib_safeMarkdownHtml;
   "lib/safeOutbound": typeof lib_safeOutbound;

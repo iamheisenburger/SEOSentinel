@@ -37,6 +37,8 @@ export type SiteHealth = {
   plannedTopics: number | null;
   lastResearchAt: number | null;
   lastResearchAdded: number | null;
+  /** What the last keyword research saw (seeds, found, why candidates were skipped). */
+  lastResearch?: NonNullable<Doc<"sites">["contentSchedule"]>["topicsResearchReceipt"] | null;
   researchDueAt: number | null;
   nudge: boolean;
 };
@@ -135,7 +137,8 @@ async function siteHealthFor(ctx: QueryCtx, site: Doc<"sites">, now: number): Pr
   });
   return { siteId: site._id, domain: site.canonicalDomain ?? site.domain, ...verdict, lastPublishedAt, nextDeadlineAt, intervalMs: schedule.intervalMs,
     readyForNextSlots, strandedReady, destinationVerified, topicsLeft, plannedTopics,
-    lastResearchAt: schedule.topicsReplenishedAt ?? null, lastResearchAdded: schedule.topicsReplenishAdded ?? null, researchDueAt };
+    lastResearchAt: schedule.topicsReplenishedAt ?? null, lastResearchAdded: schedule.topicsReplenishAdded ?? null,
+    lastResearch: schedule.topicsResearchReceipt ?? null, researchDueAt };
 }
 
 export const healthPage = internalQuery({

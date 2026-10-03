@@ -37,6 +37,8 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
       return undefined;
     };
     let found: Awaited<ReturnType<typeof discoverKeywords>> = [];
+    type DiscoverySeen = { unique: number; excluded: { already_known: number; product_fit: number; existing_intent: number } };
+    let discovery = null as DiscoverySeen | null;
     // A site without fresh authority evidence is measured once within this
     // research run (one backlinks summary, inside the same reservation), so
     // discovery and topic order keep what it can actually win.
@@ -52,7 +54,7 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
           { targetDomain: context.domain, minimumResults: 10, maxLabsSeeds: 5, maxRelatedSeeds: 3, maximumDifficulty: 45,
             // Keep what this site can win when discovery truncates (its measured authority, if any).
             ...(tenantAuthority !== null ? { tenantAuthority } : {}),
-            excludeKeyword: exclusion });
+            excludeKeyword: exclusion, onDiagnostics: d => { discovery = d; } });
       } catch { return []; }
     });
     found = metered.result;
@@ -78,6 +80,11 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
     const keywords = [...searchConsole, ...found.slice(0, 60).map(k => ({ keyword: k.keyword, searchVolume: Math.max(0, Math.round(k.searchVolume || 0)),
       difficulty: Math.max(0, Math.min(100, Math.round(k.difficulty || 0))), difficultyMeasured: Boolean(k.difficultyMeasured) }))];
     // Always report back (even empty) so a waiting Autopilot slot continues.
-    const result: { added: number } = await ctx.runMutation(internal.contentWork.addResearchedTopics, { siteId, keywords });
+    // What this run saw is kept with the outcome, so a thin run can be explained.
+    const seen = discovery;
+    const research = { seeds: context.seeds.slice(0, 15), searchConsole: searchConsole.length,
+      ...(seen ? { discovered: seen.unique, excludedKnown: seen.excluded.already_known, excludedFit: seen.excluded.product_fit,
+        excludedIntent: seen.excluded.existing_intent } : {}) };
+    const result: { added: number } = await ctx.runMutation(internal.contentWork.addResearchedTopics, { siteId, keywords, research });
     return result;
   } });
