@@ -6414,6 +6414,11 @@ test("P72 after a parked slot the next article is pulled in no earlier than the 
   assert.equal(quality.summariesRead, quality.rejectedDrafts, JSON.stringify(quality));
   assert.ok(quality.topIssues.length >= 1 && quality.topIssues[0].count >= 2, JSON.stringify(quality));
   if (process.env.PENTRA_SOAK_VERBOSE) console.log(JSON.stringify(quality));
+  // ...and exports exactly those drafts (plus published controls) for an offline gate replay.
+  const replay = await f.invoke("organicDiagnostics:qualityReplayExport", { siteId: site.id });
+  assert.equal(replay.rows.filter((r: { kind: string }) => r.kind === "rejected").length, quality.rejectedDrafts);
+  assert.ok(replay.rows.some((r: { kind: string; markdown: string }) => r.kind === "published" && r.markdown.length > 0));
+  assert.ok(replay.rows.every((r: { publicationGateIssues?: string[]; kind: string }) => r.kind !== "rejected" || (r.publicationGateIssues ?? []).length > 0));
   f.assertOffline();
 });
 

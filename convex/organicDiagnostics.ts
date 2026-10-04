@@ -100,6 +100,7 @@ async function qualityFailures(ctx: QueryCtx, siteId: Doc<"sites">["_id"], recen
   const key = (text: string, length: number) => text.toLowerCase().replace(/\d+(?:\.\d+)?/g, "#").replace(/["'`]+[^"'`]{0,80}["'`]+/g, "\"…\"")
     .replace(/\s+/g, " ").trim().slice(0, length);
   const issues = new Map<string, number>(), notes = new Map<string, number>(), scores: number[] = [];
+  const mdxSamples: { slug: string; triggers: string[] }[] = [];
   let found = 0;
   for (const id of rejectedIds.slice(0, 60)) {
     const summary = await ctx.db.query("article_summaries").withIndex("by_article", q => q.eq("articleId", id as Doc<"articles">["_id"])).first();
@@ -108,6 +109,10 @@ async function qualityFailures(ctx: QueryCtx, siteId: Doc<"sites">["_id"], recen
     if (typeof summary.editorialQualityScore === "number") scores.push(summary.editorialQualityScore);
     for (const issue of new Set((summary.publicationGateIssues ?? []).map(i => key(i, 110)))) issues.set(issue, (issues.get(issue) ?? 0) + 1);
     for (const note of new Set((summary.editorialQualityNotes ?? []).map(n => key(n, 90)))) notes.set(note, (notes.get(note) ?? 0) + 1);
+    if (mdxSamples.length < 8 && (summary.publicationGateIssues ?? []).some(i => i.startsWith("Raw HTML and executable MDX"))) {
+      const article = await ctx.db.get(id as Doc<"articles">["_id"]);
+      if (article && article.siteId === siteId) mdxSamples.push({ slug: article.slug, triggers: executableMdxTriggers(article.markdown) });
+    }
   }
   const top = (m: Map<string, number>, n: number) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([text, count]) => ({ count, text }));
   scores.sort((a, b) => a - b);
@@ -115,8 +120,63 @@ async function qualityFailures(ctx: QueryCtx, siteId: Doc<"sites">["_id"], recen
     passedAfterRevision: finished.filter(j => j.contentWork!.stage === "verified" && j.contentWork!.revisions > 0).length,
     replacedFirstTopic: finished.filter(j => j.contentWork!.stage === "verified" && j.contentWork!.replacements > 0).length,
     rejectedDrafts: rejectedIds.length, summariesRead: found, editorialScoreMedian: scores.length ? scores[Math.floor(scores.length / 2)] : null,
-    topIssues: top(issues, 15), topNotes: top(notes, 10) };
+    topIssues: top(issues, 15), topNotes: top(notes, 10), mdxSamples };
 }
+
+/** What made containsExecutableMdx reject a draft: each match with a little
+ * context and whether it sits inside a code fence. */
+function executableMdxTriggers(markdown: string) {
+  const fences: [number, number][] = [];
+  for (const m of markdown.matchAll(/^\s*```[\s\S]*?^\s*```/gm)) fences.push([m.index!, m.index! + m[0].length]);
+  const inFence = (at: number) => fences.some(([a, b]) => at >= a && at < b);
+  const out: string[] = [];
+  const patterns: [string, RegExp][] = [["brace", /[{}]/g], ["esm", /^\s*(?:import|export)\b/gm], ["tag", /<\/?[A-Za-z!][^\n>]{0,60}>?/g], ["fragment", /<>|<\/>/g]];
+  for (const [name, re] of patterns) {
+    for (const m of markdown.matchAll(re)) {
+      if (out.length >= 6) break;
+      const at = m.index!;
+      out.push(`${name}${inFence(at) ? "(code)" : ""}: ${JSON.stringify(markdown.slice(Math.max(0, at - 40), at + 50))}`);
+    }
+  }
+  return out;
+}
+
+/** Operator replay data (read-only, ONE site): the automatic drafts the quality
+ * check rejected over the last 21 days, plus the most recent published ones as
+ * a control, with exactly the fields the publication gate reads. A gate or
+ * repair change is replayed offline against these real drafts before it ships. */
+export const qualityReplayExport = internalQuery({
+  args: { siteId: v.id("sites"), rejected: v.optional(v.number()), published: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId);
+    if (!site || site.deletionStatus) throw new Error("Site not found");
+    const since = Date.now() - 21 * 86_400_000;
+    const jobs = (await ctx.db.query("jobs").withIndex("by_site_content_deadline", q => q.eq("siteId", args.siteId).gte("contentWork.deadlineAt", since)).take(501))
+      .filter(j => j.contentWork && j.contentWork.intent === "create" && !j.contentWork.ownerRequest && j.createdAt >= since);
+    const rejectedIds = [...new Set(jobs.flatMap(j => [...j.contentWork!.discardedArticleIds,
+      ...(j.contentWork!.stage === "failed" && j.articleId ? [j.articleId] : [])]).map(String))]
+      .slice(0, Math.max(0, Math.min(args.rejected ?? 20, 40)));
+    const publishedIds = jobs.filter(j => j.contentWork!.stage === "verified" && j.articleId).sort((a, b) => b.createdAt - a.createdAt)
+      .map(j => String(j.articleId)).slice(0, Math.max(0, Math.min(args.published ?? 6, 15)));
+    const rows = [];
+    for (const [kind, ids] of [["rejected", rejectedIds], ["published", publishedIds]] as const) {
+      for (const id of ids) {
+        const a = await ctx.db.get(id as Doc<"articles">["_id"]);
+        if (!a || a.siteId !== args.siteId) continue;
+        rows.push({ kind, id: a._id, slug: a.slug, status: a.status, createdAt: a.createdAt, articleType: a.articleType,
+          title: a.title, markdown: a.markdown, metaTitle: a.metaTitle, metaDescription: a.metaDescription,
+          featuredImage: a.featuredImage, reviewedMediaUrls: a.reviewedMediaUrls, wordCount: a.wordCount,
+          factCheckScore: a.factCheckScore, factCheckNotes: a.factCheckNotes, editorialQualityScore: a.editorialQualityScore,
+          editorialQualityNotes: a.editorialQualityNotes, mediaQualityStatus: a.mediaQualityStatus, mediaQualityNotes: a.mediaQualityNotes,
+          productEvidenceStatus: a.productEvidenceStatus, productEvidenceSnapshot: a.productEvidenceSnapshot, productEvidenceHash: a.productEvidenceHash,
+          claimEvidenceStatus: a.claimEvidenceStatus, claimEvidence: a.claimEvidence, sources: a.sources,
+          ownerQualityWaiver: a.ownerQualityWaiver, qualityRevisionCount: a.qualityRevisionCount,
+          publicationGateStatus: a.publicationGateStatus, publicationGateIssues: a.publicationGateIssues, publicationGateWarnings: a.publicationGateWarnings });
+      }
+    }
+    return { domain: site.domain, at: Date.now(), rows };
+  },
+});
 
 /** Read-only organic health snapshot for ONE site (operator diagnostics).
  * Aggregates only: no OAuth material, no other tenant, nothing written. */
