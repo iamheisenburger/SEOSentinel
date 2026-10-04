@@ -50,3 +50,19 @@ test("the widening never removes a keyword the strict gate accepts", () => {
   }
   assert.equal(fits("lead qualification chatbot"), true);
 });
+
+test("a searched phrase may be read in reverse or around an audience word, and nothing that passed before fails", () => {
+  // Real searches leadpilot.chat appears for on page 2 that the exact-order phrase test rejected.
+  for (const keyword of ["qualified b2b leads", "b2b qualified leads", "qualified leads b2b", "chatbot qualification questions"]) {
+    assert.equal(evaluateTopicBusinessFit({ keyword, ...qualifier }).eligible, true, keyword);
+  }
+  // A hyphenated compound keeps its order, and unrelated searches still fail.
+  const seo = tenantTopicBusinessSignals({ siteType: "SaaS Product", niche: "AI SEO content automation",
+    siteSummary: "Writes and publishes SEO articles automatically.", anchorKeywords: ["AI SEO content generator", "automated SEO content creation"],
+    keyFeatures: ["Content refresh automation"] });
+  assert.equal(evaluateTopicBusinessFit({ keyword: "user-generated content", ...seo }).eligible, false);
+  assert.equal(evaluateTopicBusinessFit({ keyword: "ai content generation for seo", ...seo }).eligible, true);
+  for (const keyword of ["sales jobs near me", "lead poisoning symptoms", "cheap flights to paris", "celebrity gossip news today"]) {
+    assert.equal(evaluateTopicBusinessFit({ keyword, ...qualifier }).eligible, false, keyword);
+  }
+});

@@ -1121,6 +1121,8 @@ export function tenantCoreVocabulary(productAnchorSignals: string[]): Set<string
   return promoted;
 }
 
+const AUDIENCE_SEGMENT_WORDS = new Set(["b2b", "b2c", "saas", "smb", "smbs", "enterprise", "startup", "startups", "ecommerce"]);
+
 function longestSharedContiguousRootRun(
   left: string[],
   right: string[],
@@ -1216,13 +1218,24 @@ export function businessSignalMatch(
   // therefore need an ordered contiguous distinctive phrase in one actual
   // tenant signal. "Research quality in AI-generated content" cannot become
   // the unrelated product entity "research question generator".
-  const keywordSequence = distinctiveRelevanceRootSequence(keywordWords, promoted);
+  // The phrase may also be read in reverse ("qualified leads" / "leads
+  // qualified": searchers order the same words either way) and without
+  // audience words, which qualify a concept rather than form it ("qualified
+  // b2b leads" is "qualified leads" for B2B). Both only ever add a match: the
+  // exact contiguous reading is always tried too, and a hyphenated compound
+  // fixes its own order ("user-generated content" is not a "content
+  // generator"). Audience words still count as matched or unsupported
+  // subject words above.
+  const withoutAudience = (words: string[]) => words.filter((word) => !AUDIENCE_SEGMENT_WORDS.has(word));
+  const reversible = !/\w-\w/.test(keyword);
+  const keywordReadings = [keywordWords, withoutAudience(keywordWords)]
+    .map((words) => distinctiveRelevanceRootSequence(words, promoted))
+    .flatMap((sequence) => reversible ? [sequence, [...sequence].reverse()] : [sequence]);
   const cohesiveMatchedCount = businessSignals.reduce((highest, signal) => {
-    const sequence = distinctiveRelevanceRootSequence(relevanceTokens(signal), promoted);
-    return Math.max(
-      highest,
-      longestSharedContiguousRootRun(keywordSequence, sequence),
-    );
+    const signalWords = relevanceTokens(signal);
+    const signalReadings = [signalWords, withoutAudience(signalWords)].map((words) => distinctiveRelevanceRootSequence(words, promoted));
+    return Math.max(highest, ...keywordReadings.flatMap((reading) =>
+      signalReadings.map((sequence) => longestSharedContiguousRootRun(reading, sequence))));
   }, 0);
   const eligible = keywordRoots.size === 1
     ? matched.length === 1
