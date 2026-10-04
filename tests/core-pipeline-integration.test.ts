@@ -6939,6 +6939,13 @@ test("Autopilot adopts its own older article on Google page 2 and refreshes it a
   const writes = f.repositories.get(site.name.toLowerCase())!.writes;
   assert.deepEqual(await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id }), { adopted: 0, checked: 0 });
   assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, writes);
+  // The operator snapshot explains the refresh gate in the chooser's own terms.
+  const gatesBefore = (await f.invoke("organicDiagnostics:snapshot", { siteId: site.id })).improvements.gates;
+  assert.equal(gatesBefore.gates.connectionChanged + gatesBefore.gates.profileChanged + gatesBefore.gates.inactive, 0, JSON.stringify(gatesBefore));
+  assert.equal(gatesBefore.opportunities.refreshPages, 1, JSON.stringify(gatesBefore));
+  assert.equal(gatesBefore.opportunities.insertTarget, 1, JSON.stringify(gatesBefore));
+  assert.deepEqual(gatesBefore.samples.map((sample: { blockedBy: string }) => sample.blockedBy), ["ready"]);
+  assert.equal(gatesBefore.chooserRowsCapped, false);
 
   const refreshed = () => f.tables.jobs.filter(j => j.contentWork?.targetPageId === page._id && j.contentWork?.stage === "verified");
   await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_work", reason: "synthetic_refresh_evidence" });
@@ -6957,5 +6964,10 @@ test("Autopilot adopts its own older article on Google page 2 and refreshes it a
   const committed = [...f.repositories.get(site.name.toLowerCase())!.files.values()].find(content => content.includes("## A working method for"));
   assert.ok(committed && committed.includes(anchor), "the refresh reached the site's repository");
   assert.ok(f.get(page._id)!.editable.lastImprovedAt, "the 60-day refresh cooldown starts at the verified refresh");
+  const snapshotAfter = await f.invoke("organicDiagnostics:snapshot", { siteId: site.id });
+  assert.ok(!snapshotAfter.improvements.gates.samples.some((sample: { url: string; blockedBy: string }) => sample.url === page.url && sample.blockedBy === "ready")
+    || snapshotAfter.improvements.gates.gates.improvedRecently + snapshotAfter.improvements.gates.gates.refreshSlotOrCooldown >= 1,
+    "a refreshed page waits out its cooldown");
+  assert.ok(snapshotAfter.improvements.everImproved >= 1);
   f.assertOffline();
 });

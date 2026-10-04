@@ -1,8 +1,90 @@
-import { internalQuery } from "./_generated/server";
+import { internalQuery, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { addSearchConsoleDays, isBrandedSearchQuery, publishedArticlePageUrl } from "./lib/searchPerformance";
 import { articleMatchesCurrentDomain, gscConnectionMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { takeCurrentGscPageRows, takeCurrentGscQueryRows } from "./lib/currentGscRows";
+import type { Doc } from "./_generated/dataModel";
+import { CONTENT_PAGE_COOLDOWN_MS, CONTENT_PAGE_REVIEW_MS, confirmedContentProfileHash, contentConnectionHash, refreshInsertTarget } from "./lib/contentSelection";
+import { REFRESH_COOLDOWN_MS, REFRESH_REVIEW_MS, refreshOpportunities, refreshSlotAvailable, refreshWindowStart } from "./lib/articleRefresh";
+import { evaluateTopicBusinessFit, tenantTopicBusinessSignals } from "./lib/autopilotBuffer";
+
+/** The page-improvement chooser reads at most this many Search Console rows (selectedPages.chooseImprovement). */
+const CHOOSER_GSC_ROW_LIMIT = 3000;
+
+/** Why Autopilot has (or has not) refreshed or improved its editable pages:
+ * each gate chooseImprovement applies, counted over the pages, plus the
+ * Search Console opportunities each page would have in the chooser's window.
+ * Read-only: nothing is patched (the chooser itself marks pages reviewed). */
+async function improvementGates(ctx: QueryCtx, site: Doc<"sites">, editablePages: Doc<"pages">[], recentJobs: Doc<"jobs">[]) {
+  const now = Date.now();
+  let connection: string | null = null;
+  try { connection = contentConnectionHash(site); } catch { connection = null; }
+  const profile = confirmedContentProfileHash(site);
+  const slotAvailable = refreshSlotAvailable(recentJobs);
+  const gates = { inactive: 0, connectionChanged: 0, profileChanged: 0, reviewedRecently: 0, improvedRecently: 0,
+    refreshSlotOrCooldown: 0, inFlight: 0, passGates: 0 };
+  const current: Doc<"pages">[] = [];
+  for (const page of editablePages) {
+    const e = page.editable!;
+    if (!e.active) { gates.inactive++; continue; }
+    if (e.connectionHash !== connection) { gates.connectionChanged++; continue; }
+    if (e.profileHash !== profile) { gates.profileChanged++; continue; }
+    current.push(page);
+    if (now - (e.lastReviewedAt ?? 0) < (e.origin === "published_refresh" ? REFRESH_REVIEW_MS : CONTENT_PAGE_REVIEW_MS)) { gates.reviewedRecently++; continue; }
+    if (now - (e.lastImprovedAt ?? 0) < CONTENT_PAGE_COOLDOWN_MS) { gates.improvedRecently++; continue; }
+    if (e.origin === "published_refresh" && (!slotAvailable || now - (e.lastImprovedAt ?? 0) < REFRESH_COOLDOWN_MS)) { gates.refreshSlotOrCooldown++; continue; }
+    if (recentJobs.some(j => j.contentWork?.targetPageId === page._id && !["verified", "failed"].includes(j.contentWork.stage))) { gates.inFlight++; continue; }
+    gates.passGates++;
+  }
+  // Opportunities over every current page (whatever its review timing), in
+  // exactly the rows the chooser would read.
+  const windowStart = refreshWindowStart((site.gscDateEpochs ?? []).map(receipt => receipt.date));
+  if (!windowStart) return { origins: originCount(editablePages), slotAvailable, gates, opportunities: null };
+  const chooserRows = await takeCurrentGscQueryRows(ctx, site, CHOOSER_GSC_ROW_LIMIT, { startDate: windowStart });
+  const fullRows = await takeCurrentGscQueryRows(ctx, site, 12_000, { startDate: windowStart });
+  const signals = tenantTopicBusinessSignals(site);
+  const opportunity = { refreshPages: 0, withOpportunity: 0, withOpportunityInFullWindow: 0, onBusiness: 0, insertTarget: 0 };
+  const samples: { url: string; query: string | null; position: number | null; impressions: number | null; blockedBy: string }[] = [];
+  for (const page of current.filter(p => p.editable!.origin === "published_refresh")) {
+    const e = page.editable!;
+    opportunity.refreshPages++;
+    const all = refreshOpportunities(fullRows.rows, page.url);
+    if (all.length) opportunity.withOpportunityInFullWindow++;
+    const seen = refreshOpportunities(chooserRows.rows, page.url);
+    let blockedBy = "no opportunity";
+    if (seen.length) {
+      opportunity.withOpportunity++;
+      const fit = seen.filter(o => !isBrandedSearchQuery(o.query, site.domain) &&
+        evaluateTopicBusinessFit({ keyword: o.query, label: e.title, ...signals }).eligible);
+      blockedBy = "off business";
+      if (fit.length) {
+        opportunity.onBusiness++;
+        const managed = e.managedArticleId ? await ctx.db.get(e.managedArticleId) : null;
+        blockedBy = refreshInsertTarget(e, managed?.articleType) ? "ready" : "no insert target";
+        if (blockedBy === "ready") opportunity.insertTarget++;
+      }
+    } else if (all.length) blockedBy = "outside chooser rows";
+    if (samples.length < 8) samples.push({ url: page.url, query: (seen[0] ?? all[0])?.query ?? null,
+      position: (seen[0] ?? all[0]) ? Math.round((seen[0] ?? all[0]).position * 10) / 10 : null,
+      impressions: (seen[0] ?? all[0])?.impressions ?? null, blockedBy });
+  }
+  return { origins: originCount(editablePages), slotAvailable, gates, windowStart,
+    chooserRows: chooserRows.rows.length, chooserRowsCapped: chooserRows.exhausted, fullWindowRows: fullRows.rows.length,
+    opportunities: opportunity, samples };
+}
+function originCount(pages: Doc<"pages">[]) {
+  return pages.reduce<Record<string, number>>((acc, p) => { const k = p.editable!.origin ?? "selected"; acc[k] = (acc[k] ?? 0) + 1; return acc; }, {});
+}
+/** The last three days of content slots: deadline, outcome and any rebinding. */
+function recentSlots(recentJobs: Doc<"jobs">[]) {
+  const since = Date.now() - 3 * 86_400_000;
+  const iso = (at?: number) => at ? new Date(at).toISOString().slice(5, 16) : null;
+  return recentJobs.filter(j => j.contentWork!.deadlineAt >= since && !j.contentWork!.ownerRequest)
+    .sort((a, b) => a.contentWork!.deadlineAt - b.contentWork!.deadlineAt)
+    .map(j => ({ deadline: iso(j.contentWork!.deadlineAt), created: iso(j.createdAt), intent: j.contentWork!.intent, stage: j.contentWork!.stage,
+      published: iso(j.contentWork!.publishedAt), failure: j.contentWork!.failure ?? null, replaces: Boolean(j.contentWork!.replacesJobId),
+      rebinds: (j.contentWork!.slotRebinds ?? []).map(r => `${iso(r.fromDeadlineAt)}->${iso(r.toDeadlineAt)} ${r.reason}`) }));
+}
 
 /** Read-only organic health snapshot for ONE site (operator diagnostics).
  * Aggregates only: no OAuth material, no other tenant, nothing written. */
@@ -53,8 +135,10 @@ export const snapshot = internalQuery({
         .map(job => ({ at: job.contentWork!.deadlineAt, stage: job.contentWork!.stage, opportunity: (job.contentWork!.opportunity ?? "").slice(0, 160) })),
     };
 
+    const gates = await improvementGates(ctx, site, editablePages, recentJobs);
+    const slots = recentSlots(recentJobs);
     if (!gscConnectionMatchesCurrentDomain(site) || !through) {
-      return { domain: site.domain, gscProperty: site.gscProperty ?? null, gscConnected: false, through, articles, improvements };
+      return { domain: site.domain, gscProperty: site.gscProperty ?? null, gscConnected: false, through, articles, improvements: { ...improvements, gates }, slots };
     }
     const start = addSearchConsoleDays(through, -(window - 1));
     const pages = await takeCurrentGscPageRows(ctx, site, 12_000, { startDate: start, endDate: through });
@@ -112,7 +196,8 @@ export const snapshot = internalQuery({
         top: queryList.sort((a, b) => b.impressions - a.impressions).slice(0, 25),
       },
       articles,
-      improvements,
+      improvements: { ...improvements, gates },
+      slots,
     };
   },
 });
