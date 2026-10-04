@@ -344,12 +344,41 @@ const FACTUAL_CLAIM_PATTERN =
  * expression survive a line-oriented regular expression.
  */
 export function containsExecutableMdx(markdown: string): boolean {
+  // Code (fenced blocks and inline spans) renders literally in MDX and in
+  // plain Markdown, so a tag or an import line inside it is text: an SEO
+  // article must be able to write `<title>`. Template engines (Liquid, Hugo)
+  // still expand {{ }} and {% %} inside code, so those stay blocked there.
+  const code: string[] = [];
+  const prose = markdown
+    .replace(/^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$/gm, (block) => { code.push(block); return " "; })
+    .replace(/(`+)(?!`)([^\n]*?[^`\n])\1(?!`)/g, (span) => { code.push(span); return " "; });
   return (
-    /[{}]/.test(markdown) ||
-    /^\s*(?:import|export)\b/m.test(markdown) ||
-    /<\/?[A-Za-z!][\s\S]*?>/.test(markdown) ||
-    /<>|<\/>/.test(markdown)
+    /[{}]/.test(prose) ||
+    /^\s*(?:import|export)\b/m.test(prose) ||
+    /<\/?[A-Za-z!][\s\S]*?>/.test(prose) ||
+    /<>|<\/>/.test(prose) ||
+    code.some((part) => /\{\{|\{%|%\}|\}\}/.test(part))
   );
+}
+
+/** The writer occasionally closes the article field itself and keeps writing
+ * its other tool fields inside it as XML-style tags ("...\n</markdown>\n
+ * <metaTitle>...</metaTitle>\n<metaDescription>...", sometimes a <sources>
+ * array). That trailer is never article content, and left in place it fails
+ * the raw-HTML check and costs the whole draft. Only a trailer that starts at
+ * one of those field tags on its own line and carries a closing field tag is
+ * cut; anything else is left for the gate. */
+const LEAKED_FIELD_TAG = "(?:markdown|metaTitle|metaDescription|metaKeywords|sources|title|notes)";
+export function stripLeakedToolFieldTrailer(markdown: string): string {
+  let text = markdown.replace(/^\s*<markdown>[ \t]*\n/, "");
+  const start = new RegExp(`\\n[ \\t]*(?:</markdown>|<(?:metaTitle|metaDescription|metaKeywords|sources)\\b[^>\\n]*>)`).exec(text);
+  if (start) {
+    const trailer = text.slice(start.index);
+    if (new RegExp(`</${LEAKED_FIELD_TAG}>`).test(trailer) && trailer.length <= 40_000) {
+      text = text.slice(0, start.index).trimEnd() + "\n";
+    }
+  }
+  return text === markdown ? markdown : text;
 }
 
 function evidenceTokens(value: string): Set<string> {
@@ -1397,6 +1426,52 @@ export function pruneUnsupportedEvidenceSentences(args: {
   }
   const markdown = out.join("\n").replace(/\n{3,}/g, "\n\n").trim() + (args.markdown.endsWith("\n") ? "\n" : "");
   return { markdown: removed.length ? markdown : args.markdown, removed };
+}
+
+/**
+ * The cited-source half of the same rule (the Sep 25 redesign covered only
+ * uncited sentences, while web research was off). A sentence carrying an
+ * inline citation must match the preserved excerpt of every source it cites,
+ * by exactly the test the claim-to-evidence audit applies: each cited
+ * proposition shares the source's wording (overlap >= 0.3) and every number
+ * and named phrase in it appears in the excerpt. A sentence that cites a
+ * missing source, a source without a hash-valid excerpt, or a source that does
+ * not say what it claims is removed before any paid review, instead of the
+ * audit rejecting the whole draft for it. Deleting text cannot add a claim;
+ * the reviewers still audit the exact result. Headings, tables, code and
+ * source rows are never edited.
+ */
+export function pruneMismatchedCitedSentences(args: {
+  markdown: string;
+  sources: PublicationSource[];
+}): { markdown: string; removed: string[] } {
+  const citationMatches = (sentence: string, citation: number) => {
+    const source = args.sources[citation - 1];
+    const excerpt = source?.excerpt;
+    if (!excerpt || excerpt.trim().length < 160 || !source.contentHash || sha256Hex(excerpt) !== source.contentHash) return false;
+    const bound = citationBoundClaimSegments(sentence, citation);
+    return (bound.length > 0 ? bound : [sentence]).every((claim) =>
+      overlapRatio(claim, excerpt) >= 0.3 && exactClaimDetailsPresent(claim, excerpt));
+  };
+  const removed: string[] = [];
+  let insideFence = false;
+  const lines = args.markdown.split("\n").map((line) => {
+    if (/^\s*```/.test(line)) { insideFence = !insideFence; return line; }
+    if (insideFence || !line.trim() || /^\s*(?:#|\||<!--)/.test(line) || /^\s*[-*]\s+https?:\/\//i.test(line) ||
+      isSourceBibliographyEntry(line) || inlineCitationNumbers(line).length === 0) return line;
+    const prefix = line.match(/^(\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+|>\s*)?)/)?.[0] ?? "";
+    const sentences = line.slice(prefix.length).split(/(?<=[.!?])\s+(?=[A-Z*"'\[])/);
+    const kept = sentences.filter((sentence) => {
+      const citations = inlineCitationNumbers(sentence);
+      const drop = citations.length > 0 && !citations.every((citation) => citationMatches(sentence, citation));
+      if (drop) removed.push(sentence.trim());
+      return !drop;
+    }).join(" ").trim();
+    return kept && !/^(?:\*\*[^*]+\*\*|__[^_]+__)[:.]?$/.test(kept) ? `${prefix}${kept}` : "";
+  });
+  if (!removed.length) return { markdown: args.markdown, removed };
+  const markdown = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim() + (args.markdown.endsWith("\n") ? "\n" : "");
+  return { markdown, removed };
 }
 
 /**

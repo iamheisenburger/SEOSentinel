@@ -896,6 +896,30 @@ test("plain-Markdown publication rejects multiline and component MDX", () => {
   );
   assert.equal(containsExecutableMdx("<Dangerous\n value={secret}\n/>"), true);
   assert.equal(containsExecutableMdx("<>hidden expression</>"), true);
+  // Code renders literally: an SEO article can name `<title>` or show an import line.
+  assert.equal(containsExecutableMdx("A mismatch between a page's `<title>` and its body is a signal."), false);
+  assert.equal(containsExecutableMdx("Add this:\n\n```html\n<meta name=\"description\" content=\"x\">\n```\n"), false);
+  assert.equal(containsExecutableMdx("```js\nimport x from \"y\";\nexport const z = { a: 1 };\n```"), false);
+  // ...but template engines still expand {{ }} and {% %} inside code, and prose stays strict.
+  assert.equal(containsExecutableMdx("Use `{{ page.title }}` in Jekyll."), true);
+  assert.equal(containsExecutableMdx("```liquid\n{% if x %}\n```"), true);
+  assert.equal(containsExecutableMdx("A `code` span, then <b>raw</b> HTML."), true);
+  assert.equal(containsExecutableMdx("An unclosed `<title> span and <script>"), true);
+});
+
+test("a tool-field trailer leaked into the article body is cut before review; real content is never cut", async () => {
+  const { stripLeakedToolFieldTrailer } = await import("../convex/lib/articleQuality.ts");
+  const body = "# Lead scoring\n\nScore fit and intent separately.\n\nRecalibrate it once you have enough data.";
+  const leaked = `${body}\n</markdown>\n<metaTitle>Lead Scoring: A Practical Guide</metaTitle>\n<metaDescription>Learn how.</metaDescription>\n<metaKeywords">["lead scoring"]</metaKeywords>\n<sources>[{"title":"T","url":"https://example.org"}]</sources>`;
+  assert.equal(stripLeakedToolFieldTrailer(leaked), `${body}\n`);
+  assert.equal(containsExecutableMdx(stripLeakedToolFieldTrailer(leaked)), false);
+  assert.equal(stripLeakedToolFieldTrailer(`<markdown>\n${body}\n</markdown>\n<metaTitle>T</metaTitle>`), `${body}\n`);
+  assert.equal(stripLeakedToolFieldTrailer(`${body}\n<metaTitle>T</metaTitle>\n<metaDescription>D</metaDescription>`), `${body}\n`);
+  // Untouched: no trailer, a tag mid-article without a closing field tag, prose mentioning the tag.
+  assert.equal(stripLeakedToolFieldTrailer(body), body);
+  const mid = `${body}\n<metaTitle is the tag people mean when they talk about titles.\n\nMore content follows.`;
+  assert.equal(stripLeakedToolFieldTrailer(mid), mid);
+  assert.equal(stripLeakedToolFieldTrailer("Write the `<metaTitle>` field last."), "Write the `<metaTitle>` field last.");
 });
 
 test("surfaces deterministic uncited numeric guidance for remediation", () => {
@@ -2173,6 +2197,48 @@ test("generation and both recovery selection points share the non-regression rul
   assert.equal((pipeline.slice(0, recoveryStart).match(/articleReviewImprovesWithoutRegression\(\{/g) ?? []).length, 1);
   assert.equal((pipeline.slice(recoveryStart).match(/articleReviewImprovesWithoutRegression\(\{/g) ?? []).length, 2);
   assert.match(pipeline, /!recoveryBaseline \|\| postAuditPass <= 1/);
+});
+
+test("pre-review pruning removes cited sentences their preserved source does not support, and keeps matching ones word for word", async () => {
+  const { pruneMismatchedCitedSentences, validateClaimEvidenceLedger, evidenceRequiredParagraphs, inlineCitationNumbers } = await import("../convex/lib/articleQuality.ts");
+  const excerpt = "The 2025 Search Console guide explains that pages ranking in positions 8 to 20 receive impressions but few clicks, " +
+    "and that refreshing those pages with a direct answer to the query is the cheapest way to move them onto page one. " +
+    "It recommends checking the Performance report weekly and comparing average position over 28 days.";
+  const sources = [{ url: "https://example.gov/guide", title: "Guide", excerpt, contentHash: sha256Hex(excerpt) },
+    { url: "https://example.org/broken", title: "Broken", excerpt: "x".repeat(200), contentHash: "0".repeat(64) }];
+  const markdown = [
+    "# Refreshing pages",
+    "",
+    "Pages ranking in positions 8 to 20 receive impressions but few clicks [1]. Refreshing those pages with a direct answer is the cheapest way onto page one [1]. Start with your top five pages.",
+    "",
+    "Refreshed pages gain 47% more clicks within 30 days [1].",
+    "",
+    "- Check the Performance report weekly [1].",
+    "- Google rewards fresh content with a ranking boost [2].",
+    "- Cite a study nobody preserved [3].",
+    "",
+    "| Step | Source |",
+    "| --- | --- |",
+    "| Refresh | weekly [1] |",
+    "",
+    "1. Guide - https://example.gov/guide",
+    "",
+  ].join("\n");
+  const { markdown: pruned, removed } = pruneMismatchedCitedSentences({ markdown, sources });
+  assert.deepEqual(removed, [
+    "Refreshed pages gain 47% more clicks within 30 days [1].",
+    "Google rewards fresh content with a ranking boost [2].",
+    "Cite a study nobody preserved [3].",
+  ], "a number the source lacks, a source with an invalid hash and a missing source are each removed");
+  assert.match(pruned, /Pages ranking in positions 8 to 20 receive impressions but few clicks \[1\]\. Refreshing those pages with a direct answer is the cheapest way onto page one \[1\]\. Start with your top five pages\./,
+    "matching cited sentences and uncited advice stay word for word");
+  assert.match(pruned, /- Check the Performance report weekly \[1\]\.\n\n\| Step \| Source \|\n\| --- \| --- \|\n\| Refresh \| weekly \[1\] \|/, "tables are never edited; emptied list items go");
+  assert.match(pruned, /1\. Guide - https:\/\/example\.gov\/guide/, "source rows are never edited");
+  assert.equal(pruneMismatchedCitedSentences({ markdown: "No citations here. Only advice.", sources }).removed.length, 0);
+  // What remains passes the audit's own cited-source test for an exact-copy ledger.
+  const ledger = evidenceRequiredParagraphs(pruned, "").map(claim => ({ claim, citationNumbers: inlineCitationNumbers(claim), supported: true, reason: "exact paragraph copy" }));
+  const result = validateClaimEvidenceLedger({ markdown: pruned, sources, researchEvidence: "", productEvidence: "", claimEvidence: ledger });
+  assert.ok(!result.issues.some(issue => /does not deterministically match|cites missing source|preserved content hash/.test(issue)), JSON.stringify(result.issues));
 });
 
 test("pre-review pruning removes unsupported checkable claims and keeps advice, supported product facts and structure", async () => {

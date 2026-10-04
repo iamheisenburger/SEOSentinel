@@ -48,6 +48,8 @@ import {
   removeUncitedQuantifiedSentences,
   removeUnsupportedClaimSentences,
   pruneUnsupportedEvidenceSentences,
+  pruneMismatchedCitedSentences,
+  stripLeakedToolFieldTrailer,
   unverifiedClaimsFromFactCheckNotes,
   onlyEvidenceDefects,
   removeUnverifiedInlineCitations,
@@ -4946,6 +4948,8 @@ async function handleArticle(
     outputSchema: ArticleSchema,
     maxTokens: 16384,
   });
+  // The other tool fields sometimes leak into the article body as XML-style tags.
+  article.markdown = stripLeakedToolFieldTrailer(article.markdown);
 
   // ── Programmatic competitor scrub (safety net) ──
   // Even with prompt instructions, LLMs sometimes mention competitors.
@@ -7216,8 +7220,10 @@ async function reviewExistingArticleHandler(
 
     if (contentProviderMayRepairDraft()) {
       reviewMarkdown = pruneUnsupportedEvidenceSentences({
-        markdown: normalizeArticleHeadings(reviewMarkdown, article.title), productEvidence, productEvidenceHash,
+        markdown: normalizeArticleHeadings(stripLeakedToolFieldTrailer(reviewMarkdown), article.title), productEvidence, productEvidenceHash,
       }).markdown;
+      // Cited sentences the preserved source does not support go the same way.
+      reviewMarkdown = pruneMismatchedCitedSentences({ markdown: reviewMarkdown, sources }).markdown;
     }
     let reviewed = await factCheckArticle(
       reviewMarkdown,
