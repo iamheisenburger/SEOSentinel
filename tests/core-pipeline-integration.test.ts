@@ -6408,6 +6408,12 @@ test("P72 after a parked slot the next article is pulled in no earlier than the 
   const gaps = published.slice(1).map((t, i) => t - published[i]);
   assert.ok(Math.min(...gaps) >= 4 * hour - 60_000, `deliveries stay paced: ${summary}`);
   assert.ok(published.length >= 7, `the cadence keeps publishing after the parked slot: ${summary}`);
+  // The operator diagnostic says why drafts were rejected, from the reviews recorded on them.
+  const quality = (await f.invoke("organicDiagnostics:snapshot", { siteId: site.id })).quality;
+  assert.ok(quality.failedSlots >= 2 && quality.rejectedDrafts >= quality.failedSlots, JSON.stringify(quality));
+  assert.equal(quality.summariesRead, quality.rejectedDrafts, JSON.stringify(quality));
+  assert.ok(quality.topIssues.length >= 1 && quality.topIssues[0].count >= 2, JSON.stringify(quality));
+  if (process.env.PENTRA_SOAK_VERBOSE) console.log(JSON.stringify(quality));
   f.assertOffline();
 });
 

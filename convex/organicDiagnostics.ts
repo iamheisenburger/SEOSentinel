@@ -86,6 +86,38 @@ function recentSlots(recentJobs: Doc<"jobs">[]) {
       rebinds: (j.contentWork!.slotRebinds ?? []).map(r => `${iso(r.fromDeadlineAt)}->${iso(r.toDeadlineAt)} ${r.reason}`) }));
 }
 
+/** Why automatic drafts fail review, over the last 21 days: every draft the
+ * quality check rejected (failed slots, and first topics a slot replaced),
+ * tallied by the issues and editor notes the final review recorded on it.
+ * Read-only; reads only this site's article summaries. */
+async function qualityFailures(ctx: QueryCtx, siteId: Doc<"sites">["_id"], recentJobs: Doc<"jobs">[]) {
+  const since = Date.now() - 21 * 86_400_000;
+  const creates = recentJobs.filter(j => j.contentWork!.intent === "create" && !j.contentWork!.ownerRequest && j.createdAt >= since);
+  const finished = creates.filter(j => ["verified", "failed"].includes(j.contentWork!.stage));
+  const failed = finished.filter(j => j.contentWork!.stage === "failed");
+  const rejectedIds = [...new Set(creates.flatMap(j => [...j.contentWork!.discardedArticleIds,
+    ...(j.contentWork!.stage === "failed" && j.articleId ? [j.articleId] : [])]).map(String))];
+  const key = (text: string, length: number) => text.toLowerCase().replace(/\d+(?:\.\d+)?/g, "#").replace(/["'`]+[^"'`]{0,80}["'`]+/g, "\"…\"")
+    .replace(/\s+/g, " ").trim().slice(0, length);
+  const issues = new Map<string, number>(), notes = new Map<string, number>(), scores: number[] = [];
+  let found = 0;
+  for (const id of rejectedIds.slice(0, 60)) {
+    const summary = await ctx.db.query("article_summaries").withIndex("by_article", q => q.eq("articleId", id as Doc<"articles">["_id"])).first();
+    if (!summary || summary.siteId !== siteId) continue;
+    found++;
+    if (typeof summary.editorialQualityScore === "number") scores.push(summary.editorialQualityScore);
+    for (const issue of new Set((summary.publicationGateIssues ?? []).map(i => key(i, 110)))) issues.set(issue, (issues.get(issue) ?? 0) + 1);
+    for (const note of new Set((summary.editorialQualityNotes ?? []).map(n => key(n, 90)))) notes.set(note, (notes.get(note) ?? 0) + 1);
+  }
+  const top = (m: Map<string, number>, n: number) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([text, count]) => ({ count, text }));
+  scores.sort((a, b) => a - b);
+  return { days: 21, createJobs: creates.length, finished: finished.length, failedSlots: failed.length,
+    passedAfterRevision: finished.filter(j => j.contentWork!.stage === "verified" && j.contentWork!.revisions > 0).length,
+    replacedFirstTopic: finished.filter(j => j.contentWork!.stage === "verified" && j.contentWork!.replacements > 0).length,
+    rejectedDrafts: rejectedIds.length, summariesRead: found, editorialScoreMedian: scores.length ? scores[Math.floor(scores.length / 2)] : null,
+    topIssues: top(issues, 15), topNotes: top(notes, 10) };
+}
+
 /** Read-only organic health snapshot for ONE site (operator diagnostics).
  * Aggregates only: no OAuth material, no other tenant, nothing written. */
 export const snapshot = internalQuery({
@@ -137,8 +169,9 @@ export const snapshot = internalQuery({
 
     const gates = await improvementGates(ctx, site, editablePages, recentJobs);
     const slots = recentSlots(recentJobs);
+    const quality = await qualityFailures(ctx, siteId, recentJobs);
     if (!gscConnectionMatchesCurrentDomain(site) || !through) {
-      return { domain: site.domain, gscProperty: site.gscProperty ?? null, gscConnected: false, through, articles, improvements: { ...improvements, gates }, slots };
+      return { domain: site.domain, gscProperty: site.gscProperty ?? null, gscConnected: false, through, articles, improvements: { ...improvements, gates }, slots, quality };
     }
     const start = addSearchConsoleDays(through, -(window - 1));
     const pages = await takeCurrentGscPageRows(ctx, site, 12_000, { startDate: start, endDate: through });
@@ -198,6 +231,7 @@ export const snapshot = internalQuery({
       articles,
       improvements: { ...improvements, gates },
       slots,
+      quality,
     };
   },
 });
