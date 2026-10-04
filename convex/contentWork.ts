@@ -1770,8 +1770,15 @@ export const advance = internalMutation({
     if (schedule.autopilotSelectedAt && !schedule.ownerReviewedOnly && !schedule.paused &&
       (waiting.length === 0 || (waiting.length === 1 && waiting[0].contentWork!.deadlineAt === schedule.nextDeadlineAt))) {
       const rhythm = (await accountPlan(ctx, site)).autopilotIntervalMs, now = Date.now();
-      const nextDeadlineAt = waiting.length === 0 && schedule.nextDeadlineAt > now + rhythm
-        ? now + Math.min(rhythm, FIRST_ARTICLE_LEAD_MS) : schedule.nextDeadlineAt;
+      let nextDeadlineAt = schedule.nextDeadlineAt;
+      if (waiting.length === 0 && schedule.nextDeadlineAt > now + rhythm) {
+        // Deliveries are spaced (catchUpPaceAt), so a slot pulled in right
+        // after one would be missed by design: it lands no earlier than the
+        // spacing allows, with its delivery window opening exactly then.
+        const paceAt = await catchUpPaceAt(ctx, siteId, rhythm);
+        nextDeadlineAt = Math.min(schedule.nextDeadlineAt,
+          Math.max(now + Math.min(rhythm, FIRST_ARTICLE_LEAD_MS), paceAt > 0 ? paceAt + CONTENT_DELIVERY_WINDOW_MS : 0));
+      }
       if (rhythm !== schedule.intervalMs || nextDeadlineAt !== schedule.nextDeadlineAt) slot = { ...schedule, intervalMs: rhythm, nextDeadlineAt };
     }
     const deadlineAt = slot.nextDeadlineAt + waiting.length * slot.intervalMs;

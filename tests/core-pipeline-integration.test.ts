@@ -6333,12 +6333,16 @@ test("P54 soak: seven days at 21 a week keep publishing through review failures,
     .map(j => j.contentWork.publishedAt).sort((a, b) => a - b);
   const perDay = Array.from({ length: 7 }, (_, d) => published.filter(t => t >= START + d * day && t < START + (d + 1) * day).length);
   const s = f.get(site.id)!.contentSchedule;
+  // Deliveries after their own slot's deadline (with the cron's few minutes of slack).
+  const lateDeliveries = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "verified" && j.contentWork.intent === "create" &&
+    j.contentWork.publishedAt > j.contentWork.deadlineAt + 10 * 60_000);
   const stranded = f.tables.jobs.filter(j => j.siteId === site.id && j.status === "done" && j.contentWork?.stage === "ready" &&
     !j.contentWork.ownerRequest && j.contentWork.retiredAt === undefined && j.contentWork.deadlineAt < s.nextDeadlineAt);
   const summary = JSON.stringify({ perDay, total: published.length, intervalH: s.intervalMs / hour, publishedH: published.map(t => +((t - START) / hour).toFixed(1)),
     cadence: f.get(site.id)!.cadencePerWeek, jobs: f.tables.jobs.filter(j => j.contentWork).map(j => [j.contentWork.stage, +((j.contentWork.deadlineAt - START) / hour).toFixed(1), j.status]),
     nextDeadlineAt: s.nextDeadlineAt - f.now(), stranded: stranded.length,
     failed: f.tables.jobs.filter(j => j.contentWork?.stage === "failed").map(j => j.contentWork.failure),
+    late: lateDeliveries.map(j => [+((j.contentWork.deadlineAt - START) / hour).toFixed(2), +((j.contentWork.publishedAt - j.contentWork.deadlineAt) / hour).toFixed(2), j.createdAt >= faults.reviewFirstAt && j.createdAt < faults.backToAutopilotAt + 2 * hour]),
     reports: f.telegramMessages.length });
   if (process.env.PENTRA_SOAK_VERBOSE) console.log(summary);
   // Days without an owner-imposed pause publish (almost) every slot; the review-first day is allowed to be quiet.
@@ -6351,6 +6355,59 @@ test("P54 soak: seven days at 21 a week keep publishing through review failures,
   f.setIdentity(owner);
   assert.equal((await f.invoke("contentWork:readiness", { siteId: site.id })).destination.verified, true, "the 72h receipt never lapsed");
   f.setIdentity(null);
+  f.assertOffline();
+});
+
+// --- P72: a parked slot's pulled-forward article must be deliverable on time ------------------------
+// leadpilot.chat, Oct 4 2026: two articles in a row failed review, so the 08:48 slot was parked. Right
+// after the 00:44 delivery, Autopilot pulled the next slot in to "now + 2 h" (02:46), but deliveries are
+// spaced at least 4 h apart, so that article could only go out at 04:44: a deadline missed by design.
+test("P72 after a parked slot the next article is pulled in no earlier than the delivery spacing allows, and lands on time", async () => {
+  const hour = 3_600_000, day = 24 * hour;
+  const topics = ["valve inspection workflow", "leak alert triage", "pump service checklist", "seasonal shutdown planning",
+    "pressure test documentation", "maintenance scheduling software", "sprinkler zone audit", "drip line flushing routine",
+    "backflow test records", "controller schedule review", "soil moisture sensor calibration", "nozzle replacement log",
+    "winterization job sheet", "spring startup inspection", "mainline break response", "filter cleaning interval"]
+    .map(t => `irrigation ${t}`);
+  const opts: Parameters<typeof setup>[0] = { growthFirst: true, businesses: [{ ...slcBusinesses[0], cadence: 21, keywords: topics }], budgetMicroUsd: 2_000_000 };
+  const f = setup(opts); const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const end = START + 3 * day, lowQualityAt = START + day + hour;
+  let nextCron = START + 3 * hour, nextRenewal = START + 6 * hour, lowQualityDone = false;
+  const failedCreates = () => f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.intent === "create" && j.contentWork.stage === "failed").length;
+  for (let step = 0; step < 20_000 && f.now() < end; step++) {
+    const pending = f.tables._scheduled_functions.filter(r => r.state.kind === "pending").sort((a, b) => a.at - b.at)[0];
+    const at = Math.min(pending?.at ?? Infinity, nextCron, nextRenewal, end);
+    f.setTime(Math.max(f.now() + 1, at));
+    // Two automatic articles in a row fail review (no replacement is allowed after that), then quality recovers.
+    if (!lowQualityDone && f.now() >= lowQualityAt) { opts.quality = "low"; lowQualityDone = true; }
+    if (opts.quality === "low" && failedCreates() >= 2) opts.quality = undefined;
+    if (f.now() >= nextRenewal) { await f.invoke("publisher:renewDestinationReceipts", {}); nextRenewal += 6 * hour; continue; }
+    if (f.now() >= nextCron) {
+      await f.invoke("autopilot:dispatchActiveSites", { trigger: "natural", cronSlotUTC: "00:00" });
+      nextCron += 3 * hour; continue;
+    }
+    if (pending && pending.at <= f.now()) await f.runNextScheduled();
+    f.assertOffline();
+  }
+  const verified = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "verified" && j.contentWork.intent === "create")
+    .sort((a, b) => a.contentWork.publishedAt - b.contentWork.publishedAt);
+  const parked = f.trace.filter(t => t.name === "actions/scheduler:scheduleCadence" && t.args.siteId === site.id && t.result?.mode === "content_slot_parked");
+  const summary = JSON.stringify({ failed: failedCreates(), parked: parked.length,
+    slots: f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork).map(j => [j.contentWork.stage, +((j.contentWork.deadlineAt - START) / hour).toFixed(2),
+      j.contentWork.publishedAt ? +((j.contentWork.publishedAt - START) / hour).toFixed(2) : null]) });
+  if (process.env.PENTRA_SOAK_VERBOSE) console.log(summary);
+  assert.ok(failedCreates() >= 2 && parked.length >= 1, `the failed slot was parked: ${summary}`);
+  for (const job of verified) {
+    assert.ok(job.contentWork.publishedAt <= job.contentWork.deadlineAt + 10 * 60_000,
+      `every article lands by its own deadline (slot ${((job.contentWork.deadlineAt - START) / hour).toFixed(2)} h): ${summary}`);
+  }
+  const published = verified.map(j => j.contentWork.publishedAt);
+  const gaps = published.slice(1).map((t, i) => t - published[i]);
+  assert.ok(Math.min(...gaps) >= 4 * hour - 60_000, `deliveries stay paced: ${summary}`);
+  assert.ok(published.length >= 7, `the cadence keeps publishing after the parked slot: ${summary}`);
   f.assertOffline();
 });
 
