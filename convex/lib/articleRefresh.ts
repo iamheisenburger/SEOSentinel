@@ -72,6 +72,15 @@ export function refreshSlotAvailable(jobs: RefreshSlotJob[]): boolean {
   return !recent.some((job) => job.contentWork!.intent === "improve");
 }
 
+/** Pentra's own article that the page-2 refresh may reach: an older article
+ * adopted for refresh, or one Autopilot wrote and enrolled for edits when it
+ * was published (a managed GitHub page, enrolled at publication) that has now
+ * been live for at least 28 days. Owner-selected pages are never refreshed. */
+export function refreshablePentraPage(editable: { origin?: string; managedArticleId?: unknown; kind: string; selectedAt: number }, now: number): boolean {
+  return editable.origin === "published_refresh" || (editable.origin === undefined && Boolean(editable.managedArticleId) &&
+    editable.kind === "github" && now - editable.selectedAt >= REFRESH_MIN_AGE_MS);
+}
+
 export function refreshArticleOldEnough(publishedAt: number | undefined, now: number): boolean {
   return typeof publishedAt === "number" && Number.isFinite(publishedAt) && now - publishedAt >= REFRESH_MIN_AGE_MS;
 }

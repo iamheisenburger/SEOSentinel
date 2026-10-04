@@ -6963,6 +6963,54 @@ test("A failed automatic refresh never holds its slot: the site keeps publishing
   assert.equal(f.tables.jobs.filter(j => j.contentWork?.intent === "improve").length, 1, "the replacement is never another improvement");
 });
 
+// --- P76: every article Autopilot writes is enrolled for edits when it is published, and the page-2 refresh
+// only looked at adopted (never-enrolled) older articles, so for a customer whose articles are all written by
+// Autopilot it could never fire (leadpilot.chat: 37 enrolled pages, 0 refreshes). Enrolled articles 28+ days
+// old now take the same refresh path.
+test("P76 an article Autopilot wrote and enrolled at publication gets the page-2 refresh once it is 28 days old", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const day = 86_400_000, site = await selectGrowth(f, 7 * day);
+  await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.stage === "verified")));
+  const created = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!, article = f.get(created.articleId)!;
+  const page = f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!;
+  assert.ok(page && page.editable.origin === undefined && page.editable.kind === "github", "precondition: enrolled at publication, not adopted");
+  const enrolledMarkdown = String(page.editable.markdown);
+  const query = String(f.get(article.topicId!)!.primaryKeyword).toLowerCase();
+  const addPage2Search = () => {
+    const date = new Date(f.now() - day).toISOString().slice(0, 10), syncEpoch = `refresh-${date}`;
+    f.get(site.id)!.gscDateEpochs = [...(f.get(site.id)!.gscDateEpochs ?? []), { date, syncEpoch }];
+    f.add("search_performance", { siteId: site.id, date, syncEpoch, page: article.publicUrl, query,
+      syncVersion: 2, syncedAt: f.now(), clicks: 0, impressions: 40, ctr: 0, position: 14, createdAt: f.now() });
+    f.get(site.id)!.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: f.get(site.id)! as never,
+      ownerAccountKey: accountDeletionKey(f.get(site.id)!.userId), verifiedAt: f.now() });
+  };
+  // Too young: two weeks after publication the article is not a refresh candidate.
+  f.setTime(Math.max(f.now(), page.editable.selectedAt + 14 * day));
+  addPage2Search();
+  const young = (await f.invoke("organicDiagnostics:snapshot", { siteId: site.id })).improvements.gates;
+  assert.equal(young.opportunities.refreshPages, 0, JSON.stringify(young));
+  // 29 days after publication, Search Console shows it on page 2.
+  f.setTime(Math.max(f.now(), page.editable.selectedAt + 29 * day));
+  addPage2Search();
+  const gates = (await f.invoke("organicDiagnostics:snapshot", { siteId: site.id })).improvements.gates;
+  assert.equal(gates.opportunities.refreshPages, 1, JSON.stringify(gates));
+  assert.deepEqual(gates.samples.map((sample: { blockedBy: string }) => sample.blockedBy), ["ready"], JSON.stringify(gates));
+  const refreshed = () => f.tables.jobs.filter(j => j.contentWork?.targetPageId === page._id && j.contentWork?.stage === "verified");
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_work", reason: "synthetic_refresh_evidence" });
+  await pumpUntil(f, () => refreshed().length === 1, 400, START + 120 * day);
+  const job = refreshed()[0];
+  assert.equal(job.contentWork.intent, "improve");
+  assert.equal(job.contentWork.editTarget?.mode, "insert_section");
+  assert.match(job.contentWork.opportunity, /Refresh of a page-2 article: Search Console shows ".+" at average position 14 with 80 impressions/);
+  const refreshedMarkdown = String(f.get(page._id)!.editable.markdown);
+  const anchor = job.contentWork.editTarget.before, at = enrolledMarkdown.indexOf(anchor);
+  assert.ok(at > 0 && refreshedMarkdown.startsWith(enrolledMarkdown.slice(0, at)), "text before the new section is unchanged");
+  assert.ok(refreshedMarkdown.trimEnd().endsWith(enrolledMarkdown.slice(at).trimEnd()), "the closing block is unchanged");
+  assert.equal(f.get(page._id)!.editable.origin, undefined, "the page stays Autopilot's own enrolled page");
+  assert.ok(f.get(page._id)!.editable.lastImprovedAt, "the 60-day refresh cooldown starts");
+  f.assertOffline();
+});
+
 test("Autopilot adopts its own older article on Google page 2 and refreshes it as one slot", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const day = 86_400_000, site = await selectGrowth(f, 7 * day);

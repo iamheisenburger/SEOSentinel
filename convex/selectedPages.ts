@@ -14,7 +14,7 @@ import { evaluateTopicBusinessFit, tenantTopicBusinessSignals } from "./lib/auto
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDomainBinding";
 import { stripLeadingDocumentTitle } from "./lib/markdownPublishing";
 import { publicationDeliveryConfig } from "./lib/publicationArtifact";
-import { REFRESH_COOLDOWN_MS, REFRESH_REVIEW_MS, refreshArticleOldEnough, refreshOpportunities, refreshSlotAvailable, refreshWindowStart } from "./lib/articleRefresh";
+import { REFRESH_COOLDOWN_MS, REFRESH_REVIEW_MS, refreshArticleOldEnough, refreshablePentraPage, refreshOpportunities, refreshSlotAvailable, refreshWindowStart } from "./lib/articleRefresh";
 import { isBrandedSearchQuery } from "./lib/searchPerformance";
 
 async function owner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
@@ -175,13 +175,18 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
   if (pages.length > 500) return null;
   // Refreshes of Pentra's own older articles take at most one slot in four
   // and revisit the same article at most every 60 days (lib/articleRefresh).
-  const refreshAllowed = refreshSlotAvailable(jobs);
+  const refreshAllowed = refreshSlotAvailable(jobs), now = Date.now();
+  // Pentra's own articles (adopted older ones, and the ones Autopilot wrote
+  // and enrolled at publication once they are 28 days old) may take the
+  // page-2 refresh when a refresh slot is free and the 60-day cooldown is over.
+  const refreshDue = (e: NonNullable<Doc<"pages">["editable"]>) => refreshablePentraPage(e, now) &&
+    refreshAllowed && now - (e.lastImprovedAt ?? 0) >= REFRESH_COOLDOWN_MS;
   const candidates = pages.filter(p => p.editable?.active && p.editable.connectionHash === contentConnectionHash(site) &&
     p.editable.profileHash === confirmedContentProfileHash(site) &&
     // Page-2 refresh candidates are re-checked daily (Search Console moves daily).
-    Date.now() - (p.editable.lastReviewedAt ?? 0) >= (p.editable.origin === "published_refresh" ? REFRESH_REVIEW_MS : CONTENT_PAGE_REVIEW_MS) &&
-    Date.now() - (p.editable.lastImprovedAt ?? 0) >= CONTENT_PAGE_COOLDOWN_MS &&
-    (p.editable.origin !== "published_refresh" || (refreshAllowed && Date.now() - (p.editable.lastImprovedAt ?? 0) >= REFRESH_COOLDOWN_MS)) &&
+    now - (p.editable.lastReviewedAt ?? 0) >= (p.editable.origin === "published_refresh" || refreshDue(p.editable) ? REFRESH_REVIEW_MS : CONTENT_PAGE_REVIEW_MS) &&
+    now - (p.editable.lastImprovedAt ?? 0) >= CONTENT_PAGE_COOLDOWN_MS &&
+    (p.editable.origin !== "published_refresh" || refreshDue(p.editable)) &&
     !jobs.some(j => j.contentWork?.targetPageId === p._id && !["verified","failed"].includes(j.contentWork.stage)));
   if (!candidates.length) return null;
   let measurements: Awaited<ReturnType<typeof takeCurrentGscQueryRows>>;
@@ -194,19 +199,22 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
     const e = page.editable!;
     await ctx.db.patch(page._id, { editable: { ...e, lastReviewedAt: Date.now() } });
     try { assertUnprotectedPage(page.slug, e.title, e.sourceContent); } catch { continue; }
-    if (e.origin === "published_refresh") {
+    if (refreshDue(e)) {
       // The page-2 search is usually the article's own keyword, so it is
       // already in the text: the refresh answers it in a dedicated section.
       const eligible = refreshOpportunities(measurements.rows, page.url).filter(o => !isBrandedSearchQuery(o.query, site.domain) &&
         evaluateTopicBusinessFit({ keyword: o.query, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible);
       const best = eligible.find(o => !e.markdown.toLowerCase().includes(o.query)) ?? eligible[0];
-      if (!best) continue;
-      const managed = e.managedArticleId ? await ctx.db.get(e.managedArticleId) : null;
-      const refreshTarget = refreshInsertTarget(e, managed?.articleType);
-      if (!refreshTarget) continue;
-      return { page, question: best.query, editTarget: refreshTarget,
-        reason: `Refresh of a page-2 article: Search Console shows "${best.query}" at average position ${Math.round(best.position)} with ${best.impressions} impressions in the last 28 days. No claim of causal growth.` };
+      const managed = best && e.managedArticleId ? await ctx.db.get(e.managedArticleId) : null;
+      const refreshTarget = best ? refreshInsertTarget(e, managed?.articleType) : undefined;
+      if (best && refreshTarget) {
+        return { page, question: best.query, editTarget: refreshTarget,
+          reason: `Refresh of a page-2 article: Search Console shows "${best.query}" at average position ${Math.round(best.position)} with ${best.impressions} impressions in the last 28 days. No claim of causal growth.` };
+      }
     }
+    // An adopted article is only ever refreshed; an article Autopilot wrote
+    // can still get the ordinary targeted improvement below.
+    if (e.origin === "published_refresh") continue;
     const rows = measurements.rows.filter(r => r.page === page.url && r.impressions > 0 &&
       (!e.lastImprovedAt || r.date > new Date(e.lastImprovedAt).toISOString().slice(0, 10)) &&
       !e.markdown.toLowerCase().includes(r.query.toLowerCase()) &&

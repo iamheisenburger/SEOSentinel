@@ -5,7 +5,7 @@ import { articleMatchesCurrentDomain, gscConnectionMatchesCurrentDomain } from "
 import { takeCurrentGscPageRows, takeCurrentGscQueryRows } from "./lib/currentGscRows";
 import type { Doc } from "./_generated/dataModel";
 import { CONTENT_PAGE_COOLDOWN_MS, CONTENT_PAGE_REVIEW_MS, confirmedContentProfileHash, contentConnectionHash, refreshInsertTarget } from "./lib/contentSelection";
-import { REFRESH_COOLDOWN_MS, REFRESH_REVIEW_MS, refreshOpportunities, refreshSlotAvailable, refreshWindowStart } from "./lib/articleRefresh";
+import { REFRESH_COOLDOWN_MS, REFRESH_REVIEW_MS, refreshablePentraPage, refreshOpportunities, refreshSlotAvailable, refreshWindowStart } from "./lib/articleRefresh";
 import { evaluateTopicBusinessFit, tenantTopicBusinessSignals } from "./lib/autopilotBuffer";
 
 /** The page-improvement chooser reads at most this many Search Console rows (selectedPages.chooseImprovement). */
@@ -30,9 +30,10 @@ async function improvementGates(ctx: QueryCtx, site: Doc<"sites">, editablePages
     if (e.connectionHash !== connection) { gates.connectionChanged++; continue; }
     if (e.profileHash !== profile) { gates.profileChanged++; continue; }
     current.push(page);
-    if (now - (e.lastReviewedAt ?? 0) < (e.origin === "published_refresh" ? REFRESH_REVIEW_MS : CONTENT_PAGE_REVIEW_MS)) { gates.reviewedRecently++; continue; }
+    const refreshDue = refreshablePentraPage(e, now) && slotAvailable && now - (e.lastImprovedAt ?? 0) >= REFRESH_COOLDOWN_MS;
+    if (now - (e.lastReviewedAt ?? 0) < (e.origin === "published_refresh" || refreshDue ? REFRESH_REVIEW_MS : CONTENT_PAGE_REVIEW_MS)) { gates.reviewedRecently++; continue; }
     if (now - (e.lastImprovedAt ?? 0) < CONTENT_PAGE_COOLDOWN_MS) { gates.improvedRecently++; continue; }
-    if (e.origin === "published_refresh" && (!slotAvailable || now - (e.lastImprovedAt ?? 0) < REFRESH_COOLDOWN_MS)) { gates.refreshSlotOrCooldown++; continue; }
+    if (e.origin === "published_refresh" && !refreshDue) { gates.refreshSlotOrCooldown++; continue; }
     if (recentJobs.some(j => j.contentWork?.targetPageId === page._id && !["verified", "failed"].includes(j.contentWork.stage))) { gates.inFlight++; continue; }
     gates.passGates++;
   }
@@ -45,7 +46,9 @@ async function improvementGates(ctx: QueryCtx, site: Doc<"sites">, editablePages
   const signals = tenantTopicBusinessSignals(site);
   const opportunity = { refreshPages: 0, withOpportunity: 0, withOpportunityInFullWindow: 0, onBusiness: 0, insertTarget: 0 };
   const samples: { url: string; query: string | null; position: number | null; impressions: number | null; blockedBy: string }[] = [];
-  for (const page of current.filter(p => p.editable!.origin === "published_refresh")) {
+  // Every page the refresh may reach: adopted articles and Autopilot's own
+  // articles 28+ days after publication.
+  for (const page of current.filter(p => refreshablePentraPage(p.editable!, now))) {
     const e = page.editable!;
     opportunity.refreshPages++;
     const all = refreshOpportunities(fullRows.rows, page.url);
