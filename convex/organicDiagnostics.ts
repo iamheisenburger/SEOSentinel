@@ -78,14 +78,16 @@ async function improvementGates(ctx: QueryCtx, site: Doc<"sites">, editablePages
 function originCount(pages: Doc<"pages">[]) {
   return pages.reduce<Record<string, number>>((acc, p) => { const k = p.editable!.origin ?? "selected"; acc[k] = (acc[k] ?? 0) + 1; return acc; }, {});
 }
-/** The last three days of content slots: deadline, outcome and any rebinding. */
+/** Content slots worked on in the last three days: deadline, outcome and any
+ * rebinding. A site that is behind works on slots whose deadline passed days
+ * ago, so a job counts when its deadline, creation or last update is recent. */
 function recentSlots(recentJobs: Doc<"jobs">[]) {
   const since = Date.now() - 3 * 86_400_000;
   const iso = (at?: number) => at ? new Date(at).toISOString().slice(5, 16) : null;
-  return recentJobs.filter(j => j.contentWork!.deadlineAt >= since && !j.contentWork!.ownerRequest)
-    .sort((a, b) => a.contentWork!.deadlineAt - b.contentWork!.deadlineAt)
-    .map(j => ({ deadline: iso(j.contentWork!.deadlineAt), created: iso(j.createdAt), intent: j.contentWork!.intent, stage: j.contentWork!.stage,
-      published: iso(j.contentWork!.publishedAt), failure: j.contentWork!.failure ?? null, replaces: Boolean(j.contentWork!.replacesJobId),
+  return recentJobs.filter(j => (j.contentWork!.deadlineAt >= since || j.createdAt >= since || j.updatedAt >= since) && !j.contentWork!.ownerRequest)
+    .sort((a, b) => a.contentWork!.deadlineAt - b.contentWork!.deadlineAt || a.createdAt - b.createdAt)
+    .map(j => ({ deadline: iso(j.contentWork!.deadlineAt), created: iso(j.createdAt), updated: iso(j.updatedAt), intent: j.contentWork!.intent, stage: j.contentWork!.stage,
+      revisions: j.contentWork!.revisions, published: iso(j.contentWork!.publishedAt), failure: j.contentWork!.failure ?? null, replaces: Boolean(j.contentWork!.replacesJobId),
       rebinds: (j.contentWork!.slotRebinds ?? []).map(r => `${iso(r.fromDeadlineAt)}->${iso(r.toDeadlineAt)} ${r.reason}`) }));
 }
 
@@ -119,7 +121,12 @@ async function qualityFailures(ctx: QueryCtx, siteId: Doc<"sites">["_id"], recen
   }
   const top = (m: Map<string, number>, n: number) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([text, count]) => ({ count, text }));
   scores.sort((a, b) => a - b);
-  return { days: 21, createJobs: creates.length, finished: finished.length, failedSlots: failed.length,
+  // Why the failed slots failed: a slot can fail without a rejected draft
+  // (provider refusal, incomplete response), which the draft tallies miss.
+  const failureCodes = failed.reduce<Record<string, number>>((acc, j) => {
+    const code = j.contentWork!.failure ?? "unknown"; acc[code] = (acc[code] ?? 0) + 1; return acc;
+  }, {});
+  return { days: 21, createJobs: creates.length, finished: finished.length, failedSlots: failed.length, failureCodes,
     passedAfterRevision: finished.filter(j => j.contentWork!.stage === "verified" && j.contentWork!.revisions > 0).length,
     replacedFirstTopic: finished.filter(j => j.contentWork!.stage === "verified" && j.contentWork!.replacements > 0).length,
     rejectedDrafts: rejectedIds.length, summariesRead: found, editorialScoreMedian: scores.length ? scores[Math.floor(scores.length / 2)] : null,

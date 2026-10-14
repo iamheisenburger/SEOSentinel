@@ -6423,8 +6423,16 @@ test("P72 after a parked slot the next article is pulled in no earlier than the 
   assert.ok(Math.min(...gaps) >= 4 * hour - 60_000, `deliveries stay paced: ${summary}`);
   assert.ok(published.length >= 7, `the cadence keeps publishing after the parked slot: ${summary}`);
   // The operator diagnostic says why drafts were rejected, from the reviews recorded on them.
-  const quality = (await f.invoke("organicDiagnostics:snapshot", { siteId: site.id })).quality;
+  const diagnostic = await f.invoke("organicDiagnostics:snapshot", { siteId: site.id });
+  const quality = diagnostic.quality;
   assert.ok(quality.failedSlots >= 2 && quality.rejectedDrafts >= quality.failedSlots, JSON.stringify(quality));
+  // Every failed slot is tallied by its failure code, drafts or not.
+  assert.equal((Object.values(quality.failureCodes) as number[]).reduce((a, b) => a + b, 0), quality.failedSlots, JSON.stringify(quality));
+  // Slots worked on in the last three days are listed even when their deadline is older.
+  const recentWork = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork && !j.contentWork.ownerRequest &&
+    j.contentWork.deadlineAt >= f.now() - 60 * 86_400_000 &&
+    [j.contentWork.deadlineAt, j.createdAt, j.updatedAt].some(at => at >= f.now() - 3 * 86_400_000));
+  assert.equal(diagnostic.slots.length, recentWork.length, JSON.stringify(diagnostic.slots));
   assert.equal(quality.summariesRead, quality.rejectedDrafts, JSON.stringify(quality));
   assert.ok(quality.topIssues.length >= 1 && quality.topIssues[0].count >= 2, JSON.stringify(quality));
   if (process.env.PENTRA_SOAK_VERBOSE) console.log(JSON.stringify(quality));
