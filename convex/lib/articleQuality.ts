@@ -1125,7 +1125,14 @@ const INCOMPLETE_META_PHRASE_END_PATTERN =
 const INCOMPLETE_TRANSITIVE_META_END_PATTERN =
   /\b(?:captures?|compares?|covers?|delivers?|explains?|includes?|offers?|provides?|reveals?|requires?|shows?)$/i;
 
-export const STRICT_PUBLICATION_MIN_WORDS = 1200;
+/** Publication floor for strict (autonomous) articles. Deleting unsupported
+ * sentences is how a draft gets safe, so a draft that was written to depth
+ * and then pruned must not be thrown away for landing a little short: the
+ * floor sits below the writer's depth target (ARTICLE_DEPTH_BASE_WORDS plus
+ * its reserve, 1,500 words) to leave room for that pruning. */
+export const STRICT_PUBLICATION_MIN_WORDS = 1000;
+/** The depth the writer is asked for starts from this (plus a reserve). */
+export const ARTICLE_DEPTH_BASE_WORDS = 1200;
 
 export function articleWordCeiling(articleType?: string): number {
   switch (articleType) {

@@ -57,6 +57,7 @@ import {
   removeUnverifiedInlineCitations,
   selectReviewedProductImage,
   STRICT_PUBLICATION_MIN_WORDS,
+  ARTICLE_DEPTH_BASE_WORDS,
   uncitedEvidenceRequiredParagraphs,
   validateClaimEvidenceLedger,
 } from "../lib/articleQuality";
@@ -160,6 +161,7 @@ import {
   strictEvidenceSources,
 } from "../lib/sourceQuality";
 import { anthropicResponseText, plainTextMaxTokens } from "../lib/anthropicText";
+import { configuredCallToAction, firstPartyProductEvidence } from "../lib/productEvidence";
 import {
   safeFetchPublicText as fetchPublicText,
   validatePublicHttpsUrl,
@@ -4483,7 +4485,7 @@ async function handleArticle(
     : (topic?.articleType ?? "standard");
   const maximumWords = articleWordCeiling(effectiveArticleType);
   const generationTargetWords = initialArticleDepthTarget({
-    minimumWords,
+    minimumWords: Math.max(minimumWords, ARTICLE_DEPTH_BASE_WORDS),
     maximumWords,
     requestedWords: options?.targetWords,
   });
@@ -4798,9 +4800,8 @@ async function handleArticle(
     `Tone: ${site.tone ?? "professional"} — maintain this tone throughout the entire article.`,
     site.language && site.language !== "en" ? `Language: Write the ENTIRE article in ${site.language}. All headings, body text, FAQ, key takeaways, and meta fields must be in ${site.language}.` : `Language: English`,
     (() => {
-      const ctaLabel = site.ctaText || `Try ${productName}`;
-      const ctaLink = site.ctaUrl || `https://${site.domain.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
-      return `CTA: Include at most one relevant Markdown CTA linking to [${ctaLabel}](${ctaLink}), after the article has delivered its answer. Omit it when the product is not a natural next step.`;
+      const cta = configuredCallToAction(site, productName);
+      return `CTA: Include at most one relevant Markdown CTA linking to [${cta.label}](${cta.url}), after the article has delivered its answer. Omit it when the product is not a natural next step.`;
     })(),
     site.anchorKeywords?.length ? `Anchor vocabulary: Use these terms only where they improve precision; never force or repeat them for density: ${site.anchorKeywords.join(", ")}` : "",
     site.sourceCitations !== false
@@ -4871,7 +4872,7 @@ async function handleArticle(
     `- HYPOTHETICALS: Label invented examples explicitly as hypothetical and never present their details or results as evidence.`,
     `- PRACTICAL VALUE: Give the reader a concrete answer and a useful next step: an evidence-grounded explanation, a decision framework with explicit trade-offs, or a reader-run check with inputs and observable results. Label proposed frameworks as recommendations, not established industry facts. Do not claim uniqueness, competitor inferiority, or guaranteed traffic.`,
     `- COMPARISONS: A documented capability does not establish that competing tools lack it or that it produces better results. Omit unsupported superlatives and comparative outcome claims. Where useful, propose a conditional test the reader can evaluate using their own data.`,
-    `- METADATA: The title and description must accurately describe the finished article. Do not promise templates, benchmarks, features, outcomes or coverage that the article does not actually provide.`,
+    `- METADATA: The title and description must accurately describe the finished article. Do not promise templates, benchmarks, features, outcomes or coverage that the article does not actually provide. Never call the article evidence-based, data-driven, research-backed or proven unless it cites supplied sources.`,
     `- ORIGINAL VALUE IS NOT INVENTED EXPERIENCE: Never manufacture first-hand framing. Do not write that anyone analysed, measured, tested, tracked, or observed anything unless that measurement appears in the supplied evidence. Differentiation must come from verified mechanics and reasoning, never from fabricated experience.`,
     `- NO META-TALK: Output article content only. No explanations outside the JSON.`,
     `- Site screenshot (if provided in <images>) goes ONLY in the ${productName} product section — nowhere else.`,
@@ -5055,20 +5056,7 @@ async function handleArticle(
   ].filter(
     (name) => name.trim().toLowerCase() !== productName.trim().toLowerCase(),
   );
-  const productEvidence = [
-    `Name: ${productName}`,
-    `Domain: ${site.domain}`,
-    site.siteSummary ? `Summary: ${site.siteSummary}` : "",
-    site.keyFeatures?.length
-      ? `Configured features:\n${site.keyFeatures.map((feature: string) => `- ${feature}`).join("\n")}`
-      : "",
-    site.pricingInfo ? `Configured pricing:\n${site.pricingInfo}` : "",
-    siteData.homepage ? `Crawled homepage:\n${siteData.homepage.slice(0, 4000)}` : "",
-    siteData.features ? `Crawled features page:\n${siteData.features.slice(0, 4000)}` : "",
-    siteData.pricing ? `Crawled pricing page:\n${siteData.pricing.slice(0, 4000)}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const productEvidence = firstPartyProductEvidence({ productName, site, crawled: siteData });
   const productEvidenceHash = productEvidence
     ? sha256Hex(productEvidence)
     : undefined;
@@ -7124,22 +7112,7 @@ async function reviewExistingArticleHandler(
       );
     }
 
-    const productEvidence = [
-      `Name: ${productName}`,
-      `Domain: ${site.domain}`,
-      site.siteSummary ? `Summary: ${site.siteSummary}` : "",
-      site.keyFeatures?.length
-        ? `Configured features:\n${site.keyFeatures
-            .map((feature: string) => `- ${feature}`)
-            .join("\n")}`
-        : "",
-      site.pricingInfo ? `Configured pricing:\n${site.pricingInfo}` : "",
-      siteData.homepage ? `Crawled homepage:\n${siteData.homepage.slice(0, 4000)}` : "",
-      siteData.features ? `Crawled features page:\n${siteData.features.slice(0, 4000)}` : "",
-      siteData.pricing ? `Crawled pricing page:\n${siteData.pricing.slice(0, 4000)}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+    const productEvidence = firstPartyProductEvidence({ productName, site, crawled: siteData });
     const productEvidenceHash = productEvidence
       ? sha256Hex(productEvidence)
       : undefined;
