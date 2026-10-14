@@ -58,6 +58,7 @@ import {
   selectReviewedProductImage,
   STRICT_PUBLICATION_MIN_WORDS,
   ARTICLE_DEPTH_BASE_WORDS,
+  repairClaimLedgerByDeletion,
   uncitedEvidenceRequiredParagraphs,
   validateClaimEvidenceLedger,
 } from "../lib/articleQuality";
@@ -2091,6 +2092,10 @@ async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
   let markdown = args.markdown;
   let audit = await auditFinalArticle(args);
   if (contentProviderActive()) {
+    // Pentra deletes only text it wrote itself. An owner's edit, an
+    // improvement of an existing page, a correction or a rollback carries the
+    // customer's words: it is reviewed exactly as written, never pruned.
+    if (!contentProviderMayRepairDraft()) return { markdown, audit, deterministicPruningApplied: false };
     // Autopilot cannot pay for a second audit inside one review (the provider
     // ledger replays the first), so it used to keep every sentence the audit
     // marked unsupported and fail the draft for a paid revision to delete
@@ -2105,10 +2110,17 @@ async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
       if (next === pruned) kept.push(entry);
       else pruned = next;
     }
+    // Then delete what the deterministic ledger check would reject: tables
+    // whose unit is unsupported, and sentences inside "supported" entries
+    // that the hash-valid first-party snapshot does not contain. Deletion
+    // only; whatever cannot be repaired this way still fails closed.
+    const repaired = repairClaimLedgerByDeletion({ markdown: pruned, productEvidence: args.productEvidence,
+      productEvidenceHash: args.productEvidence ? sha256Hex(args.productEvidence) : undefined, claimEvidence: kept });
+    pruned = repaired.markdown;
     if (pruned === markdown || calculateArticleStats(pruned).wordCount < args.minWords) {
       return { markdown, audit, deterministicPruningApplied: false };
     }
-    return { markdown: pruned, audit: { ...audit, claimEvidence: kept }, deterministicPruningApplied: true };
+    return { markdown: pruned, audit: { ...audit, claimEvidence: repaired.claimEvidence }, deterministicPruningApplied: true };
   }
   let deterministicPruningApplied = false;
 

@@ -1495,6 +1495,75 @@ export function pruneMismatchedCitedSentences(args: {
  * at least three meaningful claim tokens and 60% claim-token coverage, which
  * keeps short or generic audit labels from deleting unrelated prose.
  */
+/** Lines of a Markdown table (every non-empty line starts with "|"). */
+function isMarkdownTable(block: string): boolean {
+  const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
+  return lines.length >= 2 && lines.every((line) => line.startsWith("|"));
+}
+
+/** Remove one exact block (compared line by line, ignoring outer whitespace). */
+function removeExactBlock(markdown: string, block: string): string {
+  const target = block.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (target.length === 0) return markdown;
+  const lines = markdown.split("\n");
+  for (let start = 0; start + target.length <= lines.length; start++) {
+    if (target.every((line, offset) => lines[start + offset].trim() === line)) {
+      lines.splice(start, target.length);
+      return lines.join("\n").replace(/\n{3,}/g, "\n\n");
+    }
+  }
+  return markdown;
+}
+
+/**
+ * Autopilot's exact-result repair: delete what the deterministic claim ledger
+ * would reject, so the gate converges instead of discarding the draft. It
+ * only ever deletes text, never adds or rewords a claim:
+ * - a table whose ledger unit is unsupported is removed whole (sentence
+ *   deletion cannot reach table cells);
+ * - inside an uncited entry the auditor called supported, each sentence that
+ *   needs evidence the hash-valid first-party snapshot does not contain is
+ *   deleted, from the article and from the entry alike.
+ * A signal only a whole paragraph carries, a cited entry and an invalid
+ * snapshot are left as they are, so validateClaimEvidenceLedger still fails
+ * them closed. The caller re-validates the exact result.
+ */
+export function repairClaimLedgerByDeletion(args: {
+  markdown: string;
+  productEvidence: string;
+  productEvidenceHash?: string;
+  claimEvidence: ClaimEvidenceEntry[];
+}): { markdown: string; claimEvidence: ClaimEvidenceEntry[]; removed: number } {
+  let markdown = args.markdown;
+  let removed = 0;
+  const snapshotValid = !!args.productEvidenceHash && sha256Hex(args.productEvidence) === args.productEvidenceHash;
+  const supports = (claim: string) => snapshotValid && productEvidenceSupportsClaim(claim, args.productEvidence);
+  const claimEvidence: ClaimEvidenceEntry[] = [];
+  for (const entry of args.claimEvidence) {
+    if (isSourceBibliographyEntry(entry.claim)) { claimEvidence.push(entry); continue; }
+    if (!entry.supported) {
+      const next = isMarkdownTable(entry.claim) ? removeExactBlock(markdown, entry.claim) : markdown;
+      if (next !== markdown) { markdown = next; removed++; continue; }
+      claimEvidence.push(entry);
+      continue;
+    }
+    if (!snapshotValid || entry.citationNumbers.length > 0 || supports(entry.claim) ||
+      !requiresClaimEvidence(entry.claim, args.productEvidence)) { claimEvidence.push(entry); continue; }
+    const unsupported = claimSentenceSegments(entry.claim)
+      .filter((sentence) => requiresClaimEvidence(sentence, args.productEvidence) && !supports(sentence));
+    if (unsupported.length === 0) { claimEvidence.push(entry); continue; }
+    const nextMarkdown = removeUnsupportedClaimSentences(markdown, unsupported);
+    if (nextMarkdown === markdown) { claimEvidence.push(entry); continue; }
+    markdown = nextMarkdown;
+    removed += unsupported.length;
+    const claim = removeUnsupportedClaimSentences(entry.claim, unsupported).trim();
+    // An entry left with nothing to audit is dropped; whatever remains of its
+    // paragraph must still bind to the ledger or fail closed.
+    if (claim.length >= 12) claimEvidence.push({ ...entry, claim });
+  }
+  return { markdown, claimEvidence, removed };
+}
+
 export function removeUnsupportedClaimSentences(
   markdown: string,
   unsupportedClaims: string[],
