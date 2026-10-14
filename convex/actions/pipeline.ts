@@ -50,6 +50,8 @@ import {
   pruneUnsupportedEvidenceSentences,
   pruneMismatchedCitedSentences,
   stripLeakedToolFieldTrailer,
+  applyFactCheckFindings,
+  stripArticleScriptBlocks,
   unverifiedClaimsFromFactCheckNotes,
   onlyEvidenceDefects,
   removeUnverifiedInlineCitations,
@@ -1743,14 +1745,22 @@ async function factCheckArticle(
     findingsOnly ? markdown : reviewed.markdown ?? markdown,
     sources?.length ?? 0,
   );
+  if (findingsOnly) {
+    // Remove the unverified sentences now instead of failing the draft and
+    // paying for a revision round to delete them (owner decision, Oct 14).
+    const applied = applyFactCheckFindings({ markdown, unverifiedClaims: reviewed.unverifiedClaims ?? [],
+      claimCount: reviewed.claimCount, verifiedCount: reviewed.verifiedCount,
+      confidenceScore: normalizedFactCheckConfidence(reviewed) });
+    return { ...reviewed, confidenceScore: applied.confidenceScore,
+      unverifiedClaims: reviewed.unverifiedClaims ?? [], markdown: applied.markdown };
+  }
   return {
     ...reviewed,
     confidenceScore: normalizedFactCheckConfidence(reviewed),
-    unverifiedClaims: findingsOnly ? reviewed.unverifiedClaims ?? [] : [],
-    markdown:
-      findingsOnly ? markdown : (sources?.length ?? 0) === 0
-        ? removeUncitedQuantifiedSentences(citationSafeMarkdown)
-        : citationSafeMarkdown,
+    unverifiedClaims: [],
+    markdown: (sources?.length ?? 0) === 0
+      ? removeUncitedQuantifiedSentences(citationSafeMarkdown)
+      : citationSafeMarkdown,
   };
 }
 
@@ -7220,7 +7230,7 @@ async function reviewExistingArticleHandler(
 
     if (contentProviderMayRepairDraft()) {
       reviewMarkdown = pruneUnsupportedEvidenceSentences({
-        markdown: normalizeArticleHeadings(stripLeakedToolFieldTrailer(reviewMarkdown), article.title), productEvidence, productEvidenceHash,
+        markdown: normalizeArticleHeadings(stripArticleScriptBlocks(stripLeakedToolFieldTrailer(reviewMarkdown)), article.title), productEvidence, productEvidenceHash,
       }).markdown;
       // Cited sentences the preserved source does not support go the same way.
       reviewMarkdown = pruneMismatchedCitedSentences({ markdown: reviewMarkdown, sources }).markdown;

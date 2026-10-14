@@ -2423,3 +2423,49 @@ test("related-reading anchors are complete phrases, never cut mid-title", async 
     }
   });
 }
+
+test("a findings-only fact check removes the unverified sentences at once and scores what remains", async () => {
+  const { applyFactCheckFindings } = await import("../convex/lib/articleQuality.ts");
+  const markdown = [
+    "# Lead scoring", "",
+    "Score fit and intent separately so one strong signal does not hide a weak one.",
+    "Most teams that score leads see a 37% lift in pipeline within a quarter.",
+    "Review the weights every month against closed deals.", "",
+    "HubSpot reports that 68% of marketers use lead scoring to prioritise follow-up.", "",
+  ].join("\n");
+  const applied = applyFactCheckFindings({ markdown, claimCount: 6, verifiedCount: 4,
+    unverifiedClaims: ["Most teams that score leads see a 37% lift in pipeline within a quarter.",
+      "HubSpot reports that 68% of marketers use lead scoring to prioritise follow-up."], confidenceScore: 67 });
+  assert.equal(applied.removedClaims, 2);
+  assert.equal(applied.confidenceScore, 100, "every remaining claim is one the checker verified");
+  assert.doesNotMatch(applied.markdown, /37%|68%/);
+  assert.match(applied.markdown, /Score fit and intent separately[\s\S]*Review the weights every month/, "advice stays word for word");
+  // A listed claim no sentence matches still counts against the score.
+  const partial = applyFactCheckFindings({ markdown, claimCount: 6, verifiedCount: 4,
+    unverifiedClaims: ["Most teams that score leads see a 37% lift in pipeline within a quarter.", "Gartner predicts 90% of buyers will self-serve by 2030."] });
+  assert.equal(partial.removedClaims, 1);
+  assert.equal(partial.confidenceScore, 80);
+  // Without claim counts the checker's own score is kept.
+  assert.equal(applyFactCheckFindings({ markdown, unverifiedClaims: [], confidenceScore: 91 }).confidenceScore, 91);
+});
+
+test("autopilot accepts the reviewer's style score from 70, never a factual or safety issue", async () => {
+  const { ownerWaivableIssue } = await import("../convex/lib/articleQuality.ts");
+  const facts = { factCheckScore: 100, claimEvidenceStatus: "passed" };
+  for (const score of [70, 79, 84]) assert.equal(ownerWaivableIssue(`Editorial quality score is ${score}; strict minimum is 85.`, facts, "autopilot"), true, String(score));
+  assert.equal(ownerWaivableIssue("Editorial quality score is 69; strict minimum is 85.", facts, "autopilot"), false);
+  assert.equal(ownerWaivableIssue("Fact-check score is 80; strict minimum is 85.", facts, "autopilot"), false);
+  assert.equal(ownerWaivableIssue("Raw HTML and executable MDX are disabled in publication content.", facts, "autopilot"), false);
+  assert.equal(ownerWaivableIssue("Strict publication requires a completed claim-to-evidence audit.", { factCheckScore: 100, claimEvidenceStatus: "failed" }, "autopilot"), false);
+});
+
+test("a script block the writer put in the article body is removed; code examples are kept", async () => {
+  const { stripArticleScriptBlocks } = await import("../convex/lib/articleQuality.ts");
+  const body = "# Title\n\nUseful prose.\n\n<script type=\"application/ld+json\">\n{\"@type\":\"FAQPage\"}\n</script>\n\nMore prose.\n";
+  const stripped = stripArticleScriptBlocks(body);
+  assert.doesNotMatch(stripped, /<script/);
+  assert.match(stripped, /Useful prose\.\n\nMore prose\./);
+  const code = "Embed it:\n\n```html\n<script src=\"https://example.org/widget.js\"></script>\n```\n";
+  assert.equal(stripArticleScriptBlocks(code), code);
+  assert.equal(stripArticleScriptBlocks("No scripts."), "No scripts.");
+});

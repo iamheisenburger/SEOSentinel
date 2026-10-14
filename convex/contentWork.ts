@@ -80,7 +80,11 @@ const LIMIT = 1000;
  * deadline, attempts and spending; the schedule continues with the next slot. */
 const AUTOPILOT_SKIPPABLE_FAILURES = new Set(["bounded_content_quality_exhausted", "content_model_response_invalid", "candidate_rejected_before_draft",
   // The writing service stayed busy (rate limited or overloaded) through every retry: nothing was written or charged for it.
-  "content_provider_unavailable"]);
+  "content_provider_unavailable",
+  // The provider refused for lack of credit (a verified refusal receipt, nothing published). Oct 5-14 2026 one such
+  // slot froze both owner sites for nine days after the credit was restored; the refused job keeps its receipt and
+  // hold exactly as recorded, and the schedule moves on.
+  "content_provider_credit_unavailable"]);
 /** After repeated failed automatic articles, the next attempt waits (2h, then
  * 4h; never longer than one cadence interval) instead of retrying at once: a failure
  * that persists (a reviewer regression, a provider outage) must not burn

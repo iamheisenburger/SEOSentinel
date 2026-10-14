@@ -6422,6 +6422,51 @@ test("P72 after a parked slot the next article is pulled in no earlier than the 
   f.assertOffline();
 });
 
+// --- P78: a provider credit refusal must not freeze Autopilot ----------------------------------------
+// Oct 5-14 2026: the Anthropic credit ran out; one refused slot on each owner site held the schedule for nine
+// days, long after credit was restored ("Our team must restore it"). Autopilot now moves past the refused
+// slot like any other unpublished failure; the refused job keeps its receipt and hold exactly as recorded.
+test("P78 Autopilot keeps publishing after a provider credit refusal; the refused job's receipt and hold stay as recorded", async () => {
+  const hour = 3_600_000, day = 24 * hour;
+  const topics = ["valve inspection workflow", "leak alert triage", "pump service checklist", "seasonal shutdown planning",
+    "pressure test documentation", "maintenance scheduling software", "sprinkler zone audit", "drip line flushing routine",
+    "backflow test records", "controller schedule review", "soil moisture sensor calibration", "nozzle replacement log",
+    "winterization job sheet", "spring startup inspection"].map(t => `irrigation ${t}`);
+  const opts: Parameters<typeof setup>[0] = { growthFirst: true, businesses: [{ ...slcBusinesses[0], cadence: 21, keywords: topics }], budgetMicroUsd: 2_000_000 };
+  const f = setup(opts); const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const end = START + 3 * day, outageAt = START + day + hour;
+  let nextCron = START + 3 * hour, nextRenewal = START + 6 * hour, outageDone = false;
+  const refused = () => f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.failure === "content_provider_credit_unavailable");
+  for (let step = 0; step < 20_000 && f.now() < end; step++) {
+    const pending = f.tables._scheduled_functions.filter(r => r.state.kind === "pending").sort((a, b) => a.at - b.at)[0];
+    const at = Math.min(pending?.at ?? Infinity, nextCron, nextRenewal, end);
+    f.setTime(Math.max(f.now() + 1, at));
+    // The credit runs out for one slot, then the owner tops it up.
+    if (!outageDone && f.now() >= outageAt) { opts.providerError = { tool: "submit_article", status: 400, type: "invalid_request_error",
+      message: "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits." }; outageDone = true; }
+    if (opts.providerError && refused().length >= 1) opts.providerError = undefined;
+    if (f.now() >= nextRenewal) { await f.invoke("publisher:renewDestinationReceipts", {}); nextRenewal += 6 * hour; continue; }
+    if (f.now() >= nextCron) { await f.invoke("autopilot:dispatchActiveSites", { trigger: "natural", cronSlotUTC: "00:00" }); nextCron += 3 * hour; continue; }
+    if (pending && pending.at <= f.now()) await f.runNextScheduled();
+    f.assertOffline();
+  }
+  const published = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "verified" && j.contentWork.intent === "create")
+    .map(j => j.contentWork.publishedAt).sort((a, b) => a - b);
+  const s = f.get(site.id)!.contentSchedule;
+  const summary = JSON.stringify({ refused: refused().length, publishedH: published.map(t => +((t - START) / hour).toFixed(1)),
+    next: (s.nextDeadlineAt - START) / hour, now: (f.now() - START) / hour });
+  assert.ok(refused().length >= 1, `the credit refusal happened: ${summary}`);
+  const job = refused()[0];
+  assert.equal(job.contentWork.stage, "failed");
+  assert.equal(job.contentWork.providerCalls.at(-1).state, "rejected", "the refusal receipt is kept");
+  assert.ok(published.filter(t => t > job.updatedAt).length >= 3, `publishing resumed after the refusal: ${summary}`);
+  assert.ok(f.now() - s.nextDeadlineAt < 8 * hour, `the schedule is not frozen on the refused slot: ${summary}`);
+  f.assertOffline();
+});
+
 test("P54 the Websites page counts come from light bounded indexes and match the dashboard", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 }), site = await selectGrowth(f);
   await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);

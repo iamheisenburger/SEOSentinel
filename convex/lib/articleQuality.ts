@@ -78,13 +78,17 @@ export function preservedResearchEvidenceSnapshot(
 /** Reviewer notes that may be accepted on an exact unpublished draft.
  * The site owner, reading the draft, may accept judgement-based editorial
  * notes and a borderline fact-check confidence (70–84) — the reviewer's score,
- * not a listed factual defect. Pentra's autopilot may only accept style notes
- * (editorial 80–84) when the fact check itself passed. Safety, metadata,
+ * not a listed factual defect. Pentra's autopilot may accept style notes
+ * (editorial 70–84) when the fact check itself passed. Safety, metadata,
  * rendering, word-count and evidence-for-numbers checks are never waivable. */
 export const AUTOPILOT_ACCEPTANCE = "pentra-autopilot";
 export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number; claimEvidenceStatus?: string }, actor: "owner" | "autopilot" = "owner"): boolean {
   const editorial = /^Editorial quality score is (\d+); strict minimum is 85\.$/.exec(issue);
-  if (editorial) return Number(editorial[1]) >= (actor === "owner" ? 70 : 80);
+  // The editorial score is the reviewer's judgement of style, not a fact
+  // check. Owner decision (Sep 25, Oct 14 2026): it must not throw away
+  // drafts and their spend. Autopilot accepts the same 70+ the owner may;
+  // a draft under 70 still gets its bounded rewrite.
+  if (editorial) return Number(editorial[1]) >= 70;
   if (issue === PENDING_INTERNAL_LINK_ISSUE) return true;
   const factual = /^Fact-check score is (\d+); strict minimum is 85\.$/.exec(issue);
   if (factual) return actor === "owner" && Number(factual[1]) >= 70;
@@ -1531,6 +1535,48 @@ export function removeUnsupportedClaimSentences(
     })
     .join("\n")
     .replace(/\n{3,}/g, "\n\n");
+}
+
+/**
+ * Apply a findings-only fact check to the exact draft at once: every sentence
+ * it listed as unverified is removed (the same deletion a revision would make,
+ * without paying for another round), and the confidence is recomputed over
+ * the claims that remain. If all unverified claims were found and removed,
+ * every remaining claim is one the checker verified. Claims it listed but
+ * that no sentence matches stay counted against the score. Deleting text can
+ * never add a claim, and the exact-prose audit still runs on the result.
+ */
+export function applyFactCheckFindings(args: {
+  markdown: string;
+  unverifiedClaims: string[];
+  claimCount?: number;
+  verifiedCount?: number;
+  confidenceScore?: number;
+}): { markdown: string; removedClaims: number; confidenceScore?: number } {
+  let markdown = args.markdown, removedClaims = 0;
+  for (const claim of args.unverifiedClaims) {
+    const next = removeUnsupportedClaimSentences(markdown, [claim]);
+    if (next !== markdown) { removedClaims += 1; markdown = next; }
+  }
+  const { claimCount, verifiedCount } = args;
+  const countsValid = Number.isInteger(claimCount) && Number.isInteger(verifiedCount) && (claimCount ?? 0) > 0 &&
+    (verifiedCount ?? -1) >= 0 && (verifiedCount ?? 0) <= (claimCount ?? 0);
+  if (!countsValid) return { markdown, removedClaims, confidenceScore: args.confidenceScore };
+  const unverified = claimCount! - verifiedCount!;
+  const remainingUnverified = Math.max(0, unverified - Math.min(removedClaims, unverified));
+  const remaining = verifiedCount! + remainingUnverified;
+  return { markdown, removedClaims, confidenceScore: remaining > 0 ? Math.round((verifiedCount! / remaining) * 100) : 100 };
+}
+
+/** Structured data belongs to the renderer: a <script> block the writer put in
+ * the article body (usually JSON-LD) fails the gate and costs the draft. It is
+ * removed outside code fences; code examples are left alone. */
+export function stripArticleScriptBlocks(markdown: string): string {
+  const parts = markdown.split(/(^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$)/m);
+  const out = parts.map((part, index) => index % 2 === 1 ? part
+    : part.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "").replace(/<script\b[^>]*\/>/gi, ""));
+  const joined = out.join("").replace(/\n{3,}/g, "\n\n");
+  return joined === markdown ? markdown : joined;
 }
 
 export function selectReviewedProductImage(
