@@ -6,8 +6,15 @@ import { v } from "convex/values";
 import Anthropic from "@anthropic-ai/sdk";
 import type { ActionCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
+import { anthropicResponseText, plainTextMaxTokens } from "../lib/anthropicText";
 
-const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
+// Haiku 4.5 retires from Oct 15 2026; follow the article model unless the
+// operator pins one for syndication.
+const ARTICLE_CLAUDE_MODEL = process.env.ARTICLE_PRIMARY_MODEL?.startsWith("claude-")
+  ? process.env.ARTICLE_PRIMARY_MODEL
+  : undefined;
+const CLAUDE_MODEL =
+  process.env.SYNDICATION_MODEL ?? ARTICLE_CLAUDE_MODEL ?? "claude-haiku-5-5";
 
 async function requireOwnedArticle(
   ctx: ActionCtx,
@@ -52,7 +59,8 @@ async function generateLinkedInPost(opts: {
 
   const response = await client.messages.create({
     model: CLAUDE_MODEL,
-    max_tokens: 512,
+    // Room for adaptive thinking before the ~200-word post.
+    max_tokens: plainTextMaxTokens(512),
     messages: [
       {
         role: "user",
@@ -75,8 +83,11 @@ Rules:
     ],
   });
 
-  const textBlock = response.content.find((b) => b.type === "text");
-  return textBlock?.text ?? `${title}\n\nRead the full article: ${articleUrl}\n\n${hashtags}`;
+  try {
+    return anthropicResponseText(response);
+  } catch {
+    return `${title}\n\nRead the full article: ${articleUrl}\n\n${hashtags}`;
+  }
 }
 
 // ────────────────────────────────────────────────────────────

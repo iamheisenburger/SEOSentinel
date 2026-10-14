@@ -159,6 +159,7 @@ import {
 import {
   strictEvidenceSources,
 } from "../lib/sourceQuality";
+import { anthropicResponseText, plainTextMaxTokens } from "../lib/anthropicText";
 import {
   safeFetchPublicText as fetchPublicText,
   validatePublicHttpsUrl,
@@ -1154,15 +1155,12 @@ async function callClaude(
     const client = anthropicClient();
     const response = await client.messages.create({
       model: defaultModel,
-      max_tokens: maxTokens,
+      max_tokens: plainTextMaxTokens(maxTokens),
       system,
       messages: [{ role: "user", content: userMessage }],
     });
-    const block = response.content[0];
-    if (block.type !== "text") {
-      throw new Error("Unexpected response type from Claude");
-    }
-    return block.text;
+    // Haiku 5.5 may answer with a thinking block first: read text by type.
+    return anthropicResponseText(response);
   } catch (error) {
     const failure = classifyArticleProviderFailure(error);
     if (!failure.fallbackEligible) {
