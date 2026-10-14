@@ -3924,6 +3924,20 @@ test("SLC60 autopilot accepts style-only notes and never stalls on a draft the r
     assert.equal(f.get(site.id)!.approvalRequired, false);
     f.assertOffline();
   });
+  await t.test("style_score_70s_accepted_at_first_review", async () => {
+    // P78 (owner decision Oct 14): a style score in the 70s no longer throws the draft away.
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000,
+      auditResponse: (value: Fields) => ({ ...value, score: 72, materialDefects: ["Label the checklist as the author's method."] }) });
+    const site = await selectGrowth(f);
+    Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+    await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length >= 1 || f.tables.jobs.some(j => j.contentWork?.stage === "failed"));
+    const ready = f.tables.jobs.find(j => j.contentWork?.stage === "ready");
+    assert.ok(ready, diagnostic(f));
+    assert.equal(f.get(ready.articleId)!.ownerQualityWaiver?.userId, "pentra-autopilot");
+    assert.equal(ready.contentWork.revisions, 0, "accepted at the first review: no paid rewrite");
+    assert.equal(f.modelCalls.filter(c => c.tools?.[0]?.name === "remediate_final_article").length, 0);
+    f.assertOffline();
+  });
   await t.test("factual_failure_parks_for_owner", async () => {
     const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], quality: "low", budgetMicroUsd: 2_000_000 });
     const site = await selectGrowth(f);

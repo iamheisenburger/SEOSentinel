@@ -2090,7 +2090,26 @@ async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
 }> {
   let markdown = args.markdown;
   let audit = await auditFinalArticle(args);
-  if (contentProviderActive()) return { markdown, audit, deterministicPruningApplied: false };
+  if (contentProviderActive()) {
+    // Autopilot cannot pay for a second audit inside one review (the provider
+    // ledger replays the first), so it used to keep every sentence the audit
+    // marked unsupported and fail the draft for a paid revision to delete
+    // them. Delete them now; an entry whose sentence is not found keeps its
+    // "unsupported" verdict, so the ledger still fails closed. The
+    // deterministic ledger check then runs on the exact result.
+    let pruned = markdown;
+    const kept: typeof audit.claimEvidence = [];
+    for (const entry of audit.claimEvidence) {
+      if (entry.supported) { kept.push(entry); continue; }
+      const next = removeUnsupportedClaimSentences(pruned, [entry.claim]);
+      if (next === pruned) kept.push(entry);
+      else pruned = next;
+    }
+    if (pruned === markdown || calculateArticleStats(pruned).wordCount < args.minWords) {
+      return { markdown, audit, deterministicPruningApplied: false };
+    }
+    return { markdown: pruned, audit: { ...audit, claimEvidence: kept }, deterministicPruningApplied: true };
+  }
   let deterministicPruningApplied = false;
 
   // A fresh audit can expose another unsupported proposition after the first

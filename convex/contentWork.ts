@@ -29,7 +29,7 @@ import { assertSafeImprovement } from "./lib/contentSelection";
 import { authorizedWorkPage, chooseImprovement, contentWorkConnection, enrollVerifiedCreation } from "./selectedPages";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes } from "./articles";
-import { AUTOPILOT_ACCEPTANCE } from "./lib/articleQuality";
+import { AUTOPILOT_ACCEPTANCE, ownerWaivableIssue } from "./lib/articleQuality";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
 import { auditResultHash, contradictoryContentAudit, inconsistentAuditFeedback, internalContentProcessingError, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
@@ -1851,9 +1851,19 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">, r
   // On a site whose owner consented to automatic publication, a new article
   // whose fact check passed and whose only remaining notes are style notes is
   // accepted by autopilot instead of spending more revisions chasing a score.
-  if (stage === "review_failed" && !cw.ownerRequest && cw.intent === "create" && !rejectionIssues?.length) {
+  // A failed first review reports its issues here; when every one of them is a
+  // note autopilot may accept, it is accepted now instead of after a paid
+  // rewrite (Oct 14: 33 of 39 LeadPilot articles paid for at least one).
+  const autopilotAcceptable = !rejectionIssues?.length ||
+    rejectionIssues.every(issue => ownerWaivableIssue(issue, article!, "autopilot"));
+  if (stage === "review_failed" && !cw.ownerRequest && cw.intent === "create" && autopilotAcceptable) {
     const site = await ctx.db.get(job.siteId!);
-    if (site && site.serviceMode === "growth_first" && site.autopilotEnabled && !site.approvalRequired &&
+    const topic = article.topicId ? await ctx.db.get(article.topicId) : null;
+    // The review's own target check: the measured keyword must still fit the
+    // business and the final title. Accepted notes never bypass it.
+    const aligned = !site || !topic || evaluateTopicBusinessFit({ keyword: topic.primaryKeyword, label: article.title,
+      ...tenantTopicBusinessSignals(site) }).eligible;
+    if (site && aligned && site.serviceMode === "growth_first" && site.autopilotEnabled && !site.approvalRequired &&
       site.contentSchedule && !site.contentSchedule.ownerReviewedOnly && site.contentSchedule.autopilotSelectedAt &&
       site.contentSchedule.autopublishConsentAt && article.status !== "published" && !article.publicationAttemptedAt) {
       const accepted = await sealAcceptedReviewNotes(ctx, site, article, AUTOPILOT_ACCEPTANCE);
@@ -1863,7 +1873,7 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">, r
       }
     }
   }
-  let selectedFailure: string | undefined = rejectionIssues?.length ? "content_review_rejected" : undefined;
+  let selectedFailure: string | undefined = rejectionIssues?.length && stage !== "ready" ? "content_review_rejected" : undefined;
   if (stage === "ready" && cw.intent === "improve") {
     const site = await ctx.db.get(job.siteId!);
     try {
