@@ -151,9 +151,17 @@ export function selectedUrlMatches(site: Doc<"sites">, slug: string, url: string
     return parsed.origin === origin && !parsed.search && !parsed.hash && !parsed.username && !parsed.password && parsed.pathname !== "/";
   } catch { return false; }
 }
-export function assertUnprotectedPage(slug: string, title: string, content: string) {
-  if (/(?:^|[\s/_-])(pricing|checkout|cart|legal|privacy|terms|refund|billing)(?:$|[\s/_-])/i.test(slug + " " + title) ||
-    /pentra[-_]protected\s*[:=]\s*(?:true|1)/i.test(content)) throw new Error("Protected page cannot be selected for autonomous editing");
+/** A customer's pricing, checkout and legal pages are never edited
+ * autonomously; nor is any page carrying the explicit pentra-protected marker.
+ * An article Pentra itself wrote is not one of those pages just because its
+ * title says "pricing" or "terms" ("Localized keyword research: finding the
+ * terms local buyers use"), so for Pentra's own articles only the explicit
+ * marker counts. */
+export function assertUnprotectedPage(slug: string, title: string, content: string, options?: { pentraCreated?: boolean }) {
+  const protectedName = /(?:^|[\s/_-])(pricing|checkout|cart|legal|privacy|terms|refund|billing)(?:$|[\s/_-])/i.test(slug + " " + title);
+  if ((protectedName && !options?.pentraCreated) || /pentra[-_]protected\s*[:=]\s*(?:true|1)/i.test(content)) {
+    throw new Error("Protected page cannot be selected for autonomous editing");
+  }
 }
 export function selectedGitHubPath(site: Doc<"sites">, path: string) {
   const root = publicationDeliveryConfig(site).contentDir;

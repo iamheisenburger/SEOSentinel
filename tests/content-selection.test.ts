@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { assertSafeImprovement, assertUnprotectedPage, classicHtmlMarkdown, contentConnectionHash,
@@ -23,6 +24,20 @@ test("selected source rejects executable MDX, custom frontmatter/layouts, ambigu
 test("pricing, checkout/legal and explicitly protected pages cannot be selected", () => {
   for (const slug of ["pricing", "checkout", "privacy-policy", "terms-of-service", "legal"]) assert.throws(() => assertUnprotectedPage(slug, "Page", raw));
   assert.throws(() => assertUnprotectedPage("guide", "Guide", raw + "\npentra-protected: true"));
+});
+test("an article Pentra wrote is not a protected page because its title says terms or pricing", () => {
+  const title = "Localized Keyword Research: Finding the Terms Local Buyers Use";
+  assert.throws(() => assertUnprotectedPage("localized-keyword-research", title, raw), "a customer page with that title stays protected");
+  assert.doesNotThrow(() => assertUnprotectedPage("localized-keyword-research", title, raw, { pentraCreated: true }));
+  assert.doesNotThrow(() => assertUnprotectedPage("saas-pricing-pages", "SaaS Pricing Pages That Convert", raw, { pentraCreated: true }));
+  // The explicit marker still protects Pentra's own article.
+  assert.throws(() => assertUnprotectedPage("guide", "Guide", raw + "\npentra-protected: true", { pentraCreated: true }));
+});
+test("a verified article is recorded even when refresh enrollment refuses it", () => {
+  const source = readFileSync("convex/contentWork.ts", "utf8");
+  const verified = source.slice(source.indexOf("export async function contentWorkVerified"), source.indexOf("export async function closeContentWorkHold"));
+  assert.match(verified, /try \{ await enrollVerifiedCreation\(ctx, site, article, job\); \}\s*catch/);
+  assert.ok(verified.indexOf("enrollVerifiedCreation") < verified.indexOf('stage: "verified"'));
 });
 test("improvements preserve source/title and reject monitoring, no-op and destructive rewriting", () => {
   const base = { title: "Guide", markdown: "Original confirmed customer fact." };

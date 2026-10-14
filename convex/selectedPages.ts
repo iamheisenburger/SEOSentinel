@@ -60,7 +60,7 @@ export async function enrollVerifiedCreation(ctx: MutationCtx, site: Doc<"sites"
   if (source.kind === "github" && (!source.path || selectedGitHubPath(site, source.path) !== slug || !/^[a-f0-9]{40}$/.test(source.sourceRevision))) throw new Error("Managed GitHub source does not match its created path");
   if (source.kind === "wordpress" && (String(source.resourceId) !== article.publicationReceipt.externalId || !/^[a-f0-9]{64}$/.test(source.permission ?? "") || !/^[a-f0-9]{64}$/.test(source.sourceRevision))) throw new Error("Managed WordPress receipt lost its exact resource grant");
   if (source.permissionRevokedAtReceipt) return; // Historical delivery never renews remote edit permission.
-  assertUnprotectedPage(article.slug, article.title, source.sourceContent);
+  assertUnprotectedPage(article.slug, article.title, source.sourceContent, { pentraCreated: true });
   const rows = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", site._id)).take(501);
   if (rows.length > 500) throw new Error("Managed page inventory is incomplete");
   const matches = rows.filter(p => p.url === article.publicUrl);
@@ -153,7 +153,7 @@ export async function authorizedWorkPage(ctx: QueryCtx | MutationCtx, site: Doc<
   if (!page || !e?.active || page.siteId !== site._id || job.siteId !== site._id || e.version !== cw.permissionVersion ||
     e.sourceRevision !== cw.baseRevision || e.profileHash !== confirmedContentProfileHash(site) ||
     e.connectionHash !== contentConnectionHash(site) || !selectedUrlMatches(site, page.slug, page.url)) throw new Error("Selected-page permission, source or destination changed");
-  assertUnprotectedPage(page.slug, e.title, e.sourceContent);
+  assertUnprotectedPage(page.slug, e.title, e.sourceContent, { pentraCreated: Boolean(e.managedArticleId) });
   return page;
 }
 export const workContext = internalQuery({ args: { siteId: v.id("sites"), jobId: v.optional(v.id("jobs")), articleId: v.optional(v.id("articles")) },

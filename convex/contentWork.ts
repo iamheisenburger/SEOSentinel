@@ -1903,7 +1903,15 @@ export async function contentWorkVerified(ctx: MutationCtx, site: Doc<"sites">, 
   // require a separate current page selection when its binding changed.
   let currentBinding = false;
   try { currentBinding = job.contentWork.profileHash === confirmedContentProfileHash(site) && job.contentWork.connectionHash === contentConnectionHash(site); } catch { /* Disconnected. */ }
-  if (job.contentWork.intent === "create" && currentBinding) await enrollVerifiedCreation(ctx, site, article, job);
+  if (job.contentWork.intent === "create" && currentBinding) {
+    // Enrolling the article for later refreshes is optional and only ever
+    // grants edit permission; it must never stop a live, verified article
+    // from being recorded (Oct 14: a title containing "terms" threw here on
+    // every retry and held pentra.dev's whole schedule at public_url_pending).
+    // Every check runs before its single write, so a refusal writes nothing.
+    try { await enrollVerifiedCreation(ctx, site, article, job); }
+    catch (error) { console.warn(`Verified article ${article._id} not enrolled for refreshes: ${error instanceof Error ? error.message : "unknown"}`); }
+  }
   await ctx.db.patch(job._id, { contentWork: { ...job.contentWork, stage: "verified", publishedAt: article.publishedAt, verifiedAt: checkedAt } });
   await closeVerifiedContentWake(ctx, (await ctx.db.get(job._id))!);
   if (job.contentWork.ownerRequest) return;
