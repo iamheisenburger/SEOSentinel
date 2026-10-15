@@ -74,6 +74,7 @@ import type * as lib_cadenceRevision from "../lib/cadenceRevision.js";
 import type * as lib_cadenceSettings from "../lib/cadenceSettings.js";
 import type * as lib_cmsDestinations from "../lib/cmsDestinations.js";
 import type * as lib_cmsPublishers from "../lib/cmsPublishers.js";
+import type * as lib_coherentDeletion from "../lib/coherentDeletion.js";
 import type * as lib_contentAudit from "../lib/contentAudit.js";
 import type * as lib_contentCorrection from "../lib/contentCorrection.js";
 import type * as lib_contentCorrectionProof from "../lib/contentCorrectionProof.js";
@@ -278,6 +279,7 @@ declare const fullApi: ApiFromModules<{
   "lib/cadenceSettings": typeof lib_cadenceSettings;
   "lib/cmsDestinations": typeof lib_cmsDestinations;
   "lib/cmsPublishers": typeof lib_cmsPublishers;
+  "lib/coherentDeletion": typeof lib_coherentDeletion;
   "lib/contentAudit": typeof lib_contentAudit;
   "lib/contentCorrection": typeof lib_contentCorrection;
   "lib/contentCorrectionProof": typeof lib_contentCorrectionProof;

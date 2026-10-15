@@ -1,6 +1,7 @@
 import { classifyEvidenceSource } from "./sourceQuality.ts";
 import { publicationArtifactHash, sha256Hex } from "./publicationArtifact.ts";
 import { markdownCitationMarkers, removeUnverifiedMarkdownCitations } from "./markdownCitations.ts";
+import { deleteSentencesCoherently } from "./coherentDeletion.ts";
 
 export type PublicationQualityMode = "standard" | "strict";
 
@@ -1351,20 +1352,8 @@ export function uncitedEvidenceRequiredParagraphs(markdown: string,
  * softens a number and runs only after unverified citation ordinals are gone.
  */
 export function removeUncitedQuantifiedSentences(markdown: string): string {
-  return markdown
-    .split("\n")
-    .map((line) => {
-      if (!line.trim() || /^\s*(?:#|```|\|)/.test(line)) return line;
-      const sentences = line.split(/(?<=[.!?])\s+(?=[A-Z*"'\[])/);
-      return sentences
-        .filter(
-          (sentence) =>
-            uncitedEvidenceRequiredParagraphs(sentence).length === 0,
-        )
-        .join(" ")
-        .trimEnd();
-    })
-    .join("\n");
+  // Coherence-safe: a sentence that cannot be deleted cleanly stays for the review.
+  return deleteSentencesCoherently(markdown, (sentence) => uncitedEvidenceRequiredParagraphs(sentence).length > 0).markdown;
 }
 
 /** Sentences a findings-only fact check listed as unverified, as persisted in
@@ -1401,42 +1390,15 @@ export function pruneUnsupportedEvidenceSentences(args: {
 }): { markdown: string; removed: string[] } {
   const productValid = !!args.productEvidenceHash && sha256Hex(args.productEvidence) === args.productEvidenceHash;
   const supported = (text: string) => productValid && productEvidenceSupportsClaim(text, args.productEvidence);
-  const removed: string[] = [];
-  let insideFence = false;
-  const lines = args.markdown.split("\n").map((line) => {
-    if (/^\s*```/.test(line)) { insideFence = !insideFence; return line; }
-    if (insideFence || !line.trim() || /^\s*(?:#|\||<!--)/.test(line) || /^\s*[-*]\s+https?:\/\//i.test(line) ||
-      isSourceBibliographyEntry(line)) return line;
-    if (inlineCitationNumbers(line).length === 0 && !requiresClaimEvidence(line, args.productEvidence)) return line;
-    if (supported(line)) return line;
-    const prefix = line.match(/^(\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+|>\s*)?)/)?.[0] ?? "";
-    const sentences = line.slice(prefix.length).split(/(?<=[.!?])\s+(?=[A-Z*"'\[])/);
-    const kept = sentences.filter((sentence) => {
-      const drop = inlineCitationNumbers(sentence).length === 0 &&
-        requiresClaimEvidence(sentence, args.productEvidence) && !supported(sentence);
-      if (drop) removed.push(sentence.trim());
-      return !drop;
-    }).join(" ").trim();
-    // A list item or paragraph whose only content was unsupported goes away;
-    // a bold lead-in left without its sentence goes with it.
-    return kept && !/^(?:\*\*[^*]+\*\*|__[^_]+__)[:.]?$/.test(kept) ? `${prefix}${kept}` : "";
-  });
-  // Drop headings whose whole section was removed.
-  const out: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const heading = /^(#{1,6})\s/.exec(lines[i]);
-    if (heading) {
-      let j = i + 1;
-      while (j < lines.length && !lines[j].trim()) j++;
-      const next = j < lines.length ? /^(#{1,6})\s/.exec(lines[j]) : null;
-      if (j >= lines.length || (next && next[1].length <= heading[1].length)) {
-        if (removed.length) continue;
-      }
-    }
-    out.push(lines[i]);
-  }
-  const markdown = out.join("\n").replace(/\n{3,}/g, "\n\n").trim() + (args.markdown.endsWith("\n") ? "\n" : "");
-  return { markdown: removed.length ? markdown : args.markdown, removed };
+  // Coherence-safe (see deleteSentencesCoherently): a sentence that cannot be
+  // deleted without breaking its list, paragraph or quotation is held for the
+  // review and the writer, never left as a scar.
+  const { markdown, removed } = deleteSentencesCoherently(args.markdown,
+    (sentence) => inlineCitationNumbers(sentence).length === 0 && requiresClaimEvidence(sentence, args.productEvidence) && !supported(sentence),
+    { skipLine: (line) => isSourceBibliographyEntry(line) ||
+      (inlineCitationNumbers(line).length === 0 && !requiresClaimEvidence(line, args.productEvidence)) || supported(line) });
+  if (!removed.length) return { markdown: args.markdown, removed };
+  return { markdown: markdown.trim() + (args.markdown.endsWith("\n") ? "\n" : ""), removed };
 }
 
 /**
@@ -1464,25 +1426,12 @@ export function pruneMismatchedCitedSentences(args: {
     return (bound.length > 0 ? bound : [sentence]).every((claim) =>
       overlapRatio(claim, excerpt) >= 0.3 && exactClaimDetailsPresent(claim, excerpt));
   };
-  const removed: string[] = [];
-  let insideFence = false;
-  const lines = args.markdown.split("\n").map((line) => {
-    if (/^\s*```/.test(line)) { insideFence = !insideFence; return line; }
-    if (insideFence || !line.trim() || /^\s*(?:#|\||<!--)/.test(line) || /^\s*[-*]\s+https?:\/\//i.test(line) ||
-      isSourceBibliographyEntry(line) || inlineCitationNumbers(line).length === 0) return line;
-    const prefix = line.match(/^(\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+|>\s*)?)/)?.[0] ?? "";
-    const sentences = line.slice(prefix.length).split(/(?<=[.!?])\s+(?=[A-Z*"'\[])/);
-    const kept = sentences.filter((sentence) => {
-      const citations = inlineCitationNumbers(sentence);
-      const drop = citations.length > 0 && !citations.every((citation) => citationMatches(sentence, citation));
-      if (drop) removed.push(sentence.trim());
-      return !drop;
-    }).join(" ").trim();
-    return kept && !/^(?:\*\*[^*]+\*\*|__[^_]+__)[:.]?$/.test(kept) ? `${prefix}${kept}` : "";
-  });
+  const { markdown, removed } = deleteSentencesCoherently(args.markdown, (sentence) => {
+    const citations = inlineCitationNumbers(sentence);
+    return citations.length > 0 && !citations.every((citation) => citationMatches(sentence, citation));
+  }, { skipLine: (line) => isSourceBibliographyEntry(line) || inlineCitationNumbers(line).length === 0 });
   if (!removed.length) return { markdown: args.markdown, removed };
-  const markdown = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim() + (args.markdown.endsWith("\n") ? "\n" : "");
-  return { markdown, removed };
+  return { markdown: markdown.trim() + (args.markdown.endsWith("\n") ? "\n" : ""), removed };
 }
 
 /**
@@ -1589,7 +1538,9 @@ export function repairClaimLedgerByDeletion(args: {
     if (nextMarkdown === markdown) { claimEvidence.push(entry); continue; }
     markdown = nextMarkdown;
     removed += unsupported.length;
-    const claim = removeUnsupportedClaimSentences(entry.claim, unsupported).trim();
+    // The ledger entry keeps exactly the sentences the article still has.
+    const claim = entry.claim.split(/(?<=[.!?])\s+(?=[A-Z*"'\[“‘])/)
+      .filter((sentence) => markdown.includes(sentence.trim())).join(" ").trim();
     // An entry left with nothing to audit is dropped; whatever remains of its
     // paragraph must still bind to the ledger or fail closed.
     if (claim.length >= 12) claimEvidence.push({ ...entry, claim });
@@ -1601,10 +1552,19 @@ export function removeUnsupportedClaimSentences(
   markdown: string,
   unsupportedClaims: string[],
 ): string {
+  return deleteUnsupportedClaimSentences(markdown, unsupportedClaims).markdown;
+}
+
+/** The same deletion, also reporting which matched sentences were held
+ * because deleting them would break the article (they need the writer). */
+export function deleteUnsupportedClaimSentences(
+  markdown: string,
+  unsupportedClaims: string[],
+): { markdown: string; removed: string[]; held: string[] } {
   const claims = unsupportedClaims
     .map((claim) => ({ claim, tokens: evidenceTokens(claim) }))
     .filter(({ claim, tokens }) => claim.trim().length >= 12 && tokens.size >= 3);
-  if (claims.length === 0) return markdown;
+  if (claims.length === 0) return { markdown, removed: [], held: [] };
 
   const matchesUnsupportedClaim = (sentence: string) => {
     const sentenceTokens = evidenceTokens(sentence);
@@ -1616,34 +1576,9 @@ export function removeUnsupportedClaimSentences(
     });
   };
 
-  let insideFence = false;
-  return markdown
-    .split("\n")
-    .map((line) => {
-      if (/^\s*```/.test(line)) {
-        insideFence = !insideFence;
-        return line;
-      }
-      if (
-        insideFence ||
-        !line.trim() ||
-        /^\s*(?:#|\|)/.test(line) ||
-        /^\s*[-*]\s+https?:\/\//i.test(line)
-      ) {
-        return line;
-      }
-
-      const prefix = line.match(/^(\s*(?:[-*+]\s+|\d+[.)]\s+|>\s*)?)/)?.[0] ?? "";
-      const body = line.slice(prefix.length);
-      const kept = body
-        .split(/(?<=[.!?])\s+(?=[A-Z*"'\[])/)
-        .filter((sentence) => !matchesUnsupportedClaim(sentence))
-        .join(" ")
-        .trim();
-      return kept ? `${prefix}${kept}` : "";
-    })
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n");
+  // Coherence-safe: a match that cannot be deleted cleanly stays, so the
+  // ledger still fails closed and the writer rewrites the passage.
+  return deleteSentencesCoherently(markdown, matchesUnsupportedClaim);
 }
 
 /**

@@ -47,6 +47,7 @@ import {
   repairDanglingStructuredIntroductions,
   removeUncitedQuantifiedSentences,
   removeUnsupportedClaimSentences,
+  deleteUnsupportedClaimSentences,
   pruneUnsupportedEvidenceSentences,
   pruneMismatchedCitedSentences,
   stripLeakedToolFieldTrailer,
@@ -7177,12 +7178,16 @@ async function reviewExistingArticleHandler(
     // previous review named (unsupported ledger claims, unverified fact-check
     // claims). Deleting text cannot add a claim, costs nothing, and converges;
     // a model rewrite is only needed for editorial defects.
-    const evidenceRepairOnly = contentProviderMayRepairDraft() && incrementRevision && onlyEvidenceDefects(storedDefects);
+    let evidenceRepairOnly = contentProviderMayRepairDraft() && incrementRevision && onlyEvidenceDefects(storedDefects);
     if (contentProviderMayRepairDraft() && incrementRevision) {
-      reviewMarkdown = removeUnsupportedClaimSentences(reviewMarkdown, [
+      const deletion = deleteUnsupportedClaimSentences(reviewMarkdown, [
         ...(article.claimEvidence ?? []).filter((entry) => !entry.supported).map((entry) => entry.claim),
         ...unverifiedClaimsFromFactCheckNotes(article.factCheckNotes),
       ]);
+      reviewMarkdown = deletion.markdown;
+      // A named sentence that could not be deleted without breaking its list,
+      // paragraph or quotation is rewritten by the writer instead.
+      if (deletion.held.length > 0) evidenceRepairOnly = false;
     }
     if (incrementRevision && storedDefects.length > 0 && !evidenceRepairOnly) {
       // A stored score is not a current proof. Audit the existing length-valid
