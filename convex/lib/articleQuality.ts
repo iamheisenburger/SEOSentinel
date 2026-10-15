@@ -1495,6 +1495,24 @@ export function pruneMismatchedCitedSentences(args: {
  * at least three meaningful claim tokens and 60% claim-token coverage, which
  * keeps short or generic audit labels from deleting unrelated prose.
  */
+/** Sentences about Pentra's own drafting process are never reader content:
+ * "No external sources were verified for this draft, so the guidance below
+ * is a set of reader-run checks..." opened published pentra.dev articles on
+ * Oct 15. Each such sentence is deleted from prose lines (headings, tables
+ * and code are left alone); nothing else changes. */
+const DRAFT_PROCESS_NOTE = /\bthis draft\b|\bno (?:external |retained |verified )?(?:sources?|research) (?:were|was) (?:verified|supplied|retained|preserved|available|used)\b/i;
+export function stripDraftProcessNotes(markdown: string): string {
+  let insideFence = false;
+  return markdown.split("\n").map((line) => {
+    if (/^\s*```/.test(line)) { insideFence = !insideFence; return line; }
+    if (insideFence || !line.trim() || /^\s*(?:#|\|)/.test(line) || !DRAFT_PROCESS_NOTE.test(line)) return line;
+    const prefix = line.match(/^(\s*(?:[-*+]\s+|\d+[.)]\s+|>\s*)?)/)?.[0] ?? "";
+    const kept = line.slice(prefix.length).split(/(?<=[.!?])\s+(?=[A-Z*"'\[])/)
+      .filter((sentence) => !DRAFT_PROCESS_NOTE.test(sentence)).join(" ").trim();
+    return kept ? `${prefix}${kept}` : "";
+  }).join("\n").replace(/\n{3,}/g, "\n\n");
+}
+
 /** Title and description words that claim an evidence base. Without cited
  * sources they are an unsupported promise the reviewer marks as a material
  * defect on every pass ("SaaS Lead Scoring: An Evidence-Based Framework"),
