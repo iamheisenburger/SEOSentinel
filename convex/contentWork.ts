@@ -235,6 +235,18 @@ async function displayedAccountUsage(ctx: QueryCtx, site: Doc<"sites">) {
   const row = await ctx.db.query("account_content_usage").withIndex("by_user_month", q => q.eq("userId", site.userId!).eq("monthStart", monthStart)).first();
   return row ? row.used : (await accountArticlesThisMonth(ctx, site)).used;
 }
+/** Optional writer pricing inside a deployment pricing JSON: the model that
+ * writes and rewrites articles ("writer": {model, inputMicroUsdPerToken,
+ * outputMicroUsdPerToken}); every check keeps the main model. Invalid or
+ * absent means the main model does everything. */
+export function writerPricing(raw: unknown): { model: string; inputMicroUsdPerToken: number; outputMicroUsdPerToken: number } | undefined {
+  const w = raw && typeof raw === "object" ? (raw as { writer?: unknown }).writer : undefined;
+  if (!w || typeof w !== "object") return undefined;
+  const { model, inputMicroUsdPerToken, outputMicroUsdPerToken } = w as Record<string, unknown>;
+  if (typeof model !== "string" || !model.startsWith("claude-") ||
+    ![inputMicroUsdPerToken, outputMicroUsdPerToken].every(n => Number.isSafeInteger(n) && (n as number) > 0)) return undefined;
+  return { model, inputMicroUsdPerToken: inputMicroUsdPerToken as number, outputMicroUsdPerToken: outputMicroUsdPerToken as number };
+}
 async function pricingConfiguration(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, job?: Doc<"jobs">) {
   // Deployment-owned pricing is deliberately absent by default. Selection is
   // consent, not activation. An optional selector enables only the immutable
@@ -248,6 +260,7 @@ async function pricingConfiguration(ctx: QueryCtx | MutationCtx, site: Doc<"site
     [pub.inputMicroUsdPerToken, pub.outputMicroUsdPerToken, pub.budgetMicroUsd].every(n => Number.isSafeInteger(n) && n > 0)
     ? { model: pub.model as string, inputMicroUsdPerToken: pub.inputMicroUsdPerToken as number,
         outputMicroUsdPerToken: pub.outputMicroUsdPerToken as number, budgetMicroUsd: pub.budgetMicroUsd as number,
+        ...(writerPricing(pub) ? { writer: writerPricing(pub)! } : {}),
         validationAuthorizationId: undefined as Id<"provider_budget_authorizations"> | undefined } : null;
   const scoped = Boolean(p && typeof p === "object" && "validationAuthorizationId" in p);
   const cw = job?.contentWork;
@@ -271,7 +284,7 @@ async function pricingConfiguration(ctx: QueryCtx | MutationCtx, site: Doc<"site
       validationAuthorizationId = binding.id;
     } else if (cw?.pricing.validationAuthorizationId !== undefined) return null;
     return { ...(cw ? cw.pricing : { model: p.model as string, inputMicroUsdPerToken: p.inputMicroUsdPerToken as number,
-      outputMicroUsdPerToken: p.outputMicroUsdPerToken as number }),
+      outputMicroUsdPerToken: p.outputMicroUsdPerToken as number, ...(writerPricing(p) ? { writer: writerPricing(p)! } : {}) }),
       ...(validationAuthorizationId ? { validationAuthorizationId } : {}), budgetMicroUsd: cw?.budgetMicroUsd ?? p.budgetMicroUsd as number };
   } catch { return null; }
 }

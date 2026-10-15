@@ -26,6 +26,9 @@ export const contentProviderMayRepairDraft = () => {
   return !!cw && cw.intent === "create" && !cw.ownerRequest?.sourceArticleId && !cw.operation && !cw.editTarget;
 };
 
+/** Tools that write article prose (first draft and rewrites). */
+const WRITER_TOOLS = new Set(["submit_article", "remediate_final_article"]);
+
 /** No SDK retry, model fallback, repair ladder or optional paid service. The
  * same durable job owns every bounded call and its ambiguous-response receipt.
  * Deployment pricing must be reviewed before activation; there is no default. */
@@ -48,13 +51,16 @@ export async function contentStructuredCall(args: { system: string; userMessage:
     semanticClarificationOf = { key: original.key, requestHash: original.requestHash, resultHash: auditResultHash(original.result) };
   }
   const previous = current.providerCalls.find(c => (c.logicalKey ?? c.key) === logicalKey);
-  const request = contentToolRequest({ ...args, model: p.model,
+  // Writing and rewriting may use a stronger model; every check keeps the
+  // main one. A job keeps the pricing it was created with.
+  const price = WRITER_TOOLS.has(args.toolName) && p.writer ? p.writer : p;
+  const request = contentToolRequest({ ...args, model: price.model,
     ...(clarifyAudit ? { userMessage: semanticAuditPrompt(args.userMessage, clarifyAudit.originalResult) } : {}) }, previous?.requestHash);
   // UTF-8 bytes upper-bound text tokens; explicit overhead covers tool/chat
   // framing. No images, cached/premium tool use, web search or thinking enabled.
   const inputBound = Buffer.byteLength(JSON.stringify(request), "utf8") + 8192;
   if (inputBound > 200_000) throw new Error("Content request exceeds priced input bound");
-  const ceilingMicroUsd = inputBound * p.inputMicroUsdPerToken + request.max_tokens * p.outputMicroUsdPerToken;
+  const ceilingMicroUsd = inputBound * price.inputMicroUsdPerToken + request.max_tokens * price.outputMicroUsdPerToken;
   const admission = await s.ctx.runMutation(internal.contentWork.beginProviderCall, { jobId: s.job._id, workerToken: s.workerToken,
     key: logicalKey, requestHash: sha256Hex(JSON.stringify(request)), ceilingMicroUsd,
     ...(semanticClarificationOf ? { semanticClarificationOf } : {}) });
@@ -87,7 +93,7 @@ export async function contentStructuredCall(args: { system: string; userMessage:
   if (!Number.isSafeInteger(input) || !Number.isSafeInteger(output) || input < 0 || output < 0 || input > inputBound || output > request.max_tokens) throw new Error("Provider usage receipt missing or over bound");
   const result = response.content.find(block => block.type === "tool_use" && block.name === args.toolName);
   await s.ctx.runMutation(internal.contentWork.completeProviderCall, { jobId: s.job._id, workerToken: s.workerToken, key,
-    actualMicroUsd: input * p.inputMicroUsdPerToken + output * p.outputMicroUsdPerToken,
+    actualMicroUsd: input * price.inputMicroUsdPerToken + output * price.outputMicroUsdPerToken,
     ...(result?.type === "tool_use" ? { result: result.input } : {}) });
   if (!result || result.type !== "tool_use") throw new Error(args.toolName === "audit_final_article"
     ? clarifyAudit ? "content_audit_clarification_invalid" : "content_audit_response_invalid"

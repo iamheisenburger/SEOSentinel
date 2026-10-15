@@ -1278,6 +1278,8 @@ export default defineSchema({
       approvedArtifactHash: v.optional(v.string()),
       budgetMicroUsd: v.number(),
       pricing: v.object({ model: v.string(), inputMicroUsdPerToken: v.number(), outputMicroUsdPerToken: v.number(),
+        // Optional model for writing and rewriting only; checks use `model`.
+        writer: v.optional(v.object({ model: v.string(), inputMicroUsdPerToken: v.number(), outputMicroUsdPerToken: v.number() })),
         validationAuthorizationId: v.optional(v.id("provider_budget_authorizations")) }),
       providerCalls: v.array(v.object({ key: v.string(), ceilingMicroUsd: v.number(),
         semanticClarificationOf: v.optional(v.object({ key: v.string(), requestHash: v.string(), resultHash: v.string() })),

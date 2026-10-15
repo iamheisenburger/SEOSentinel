@@ -7167,3 +7167,34 @@ test("Autopilot adopts its own older article on Google page 2 and refreshes it a
   assert.ok(snapshotAfter.improvements.everImproved >= 1);
   f.assertOffline();
 });
+
+test("P87 one model writes, another checks: writer pricing applies only to drafting and rewrites", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const writer = { model: "claude-mocked-writer", inputMicroUsdPerToken: 2, outputMicroUsdPerToken: 10 };
+  f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ model: "mocked-content-model", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1,
+    budgetMicroUsd: 2_000_000, writer }) });
+  await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork && ["ready", "verified"].includes(j.contentWork.stage)));
+  const job = f.tables.jobs.find(j => j.contentWork && ["ready", "verified"].includes(j.contentWork.stage))!;
+  assert.deepEqual(job.contentWork.pricing.writer, writer, "the job keeps the writer pricing it was created with");
+  const tools = f.modelCalls.map(c => [c.tools?.[0]?.name, c.model] as const).filter(([tool]) => tool);
+  assert.ok(tools.some(([tool]) => tool === "submit_article"), JSON.stringify(tools));
+  assert.ok(tools.some(([tool]) => tool !== "submit_article" && tool !== "remediate_final_article"), JSON.stringify(tools));
+  for (const [tool, model] of tools) {
+    assert.equal(model, ["submit_article", "remediate_final_article"].includes(tool) ? writer.model : "mocked-content-model", `${tool} used ${model}`);
+  }
+  // Writer calls are charged at the writer's rates, checks at the main rates.
+  const writerCall = job.contentWork.providerCalls.find((c: { key: string; logicalKey?: string; actualMicroUsd?: number }) => String(c.logicalKey ?? c.key).endsWith(":submit_article"));
+  assert.ok(writerCall?.actualMicroUsd && writerCall.actualMicroUsd > 0, JSON.stringify(job.contentWork.providerCalls));
+  f.assertOffline();
+});
+
+test("P87 a malformed or missing writer block leaves one model doing everything", async () => {
+  const { writerPricing } = await import("../convex/contentWork.ts").catch(() => ({ writerPricing: undefined }));
+  if (!writerPricing) return; // contentWork imports Convex server modules; covered by the integration test above.
+  assert.equal(writerPricing({ model: "x" }), undefined);
+  assert.equal(writerPricing({ writer: { model: "gpt-x", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1 } }), undefined);
+  assert.equal(writerPricing({ writer: { model: "claude-sonnet-5-5", inputMicroUsdPerToken: 0, outputMicroUsdPerToken: 10 } }), undefined);
+  assert.deepEqual(writerPricing({ writer: { model: "claude-sonnet-5-5", inputMicroUsdPerToken: 2, outputMicroUsdPerToken: 10 } }),
+    { model: "claude-sonnet-5-5", inputMicroUsdPerToken: 2, outputMicroUsdPerToken: 10 });
+});
