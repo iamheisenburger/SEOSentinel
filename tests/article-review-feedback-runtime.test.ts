@@ -22,7 +22,7 @@ const markdown = `# Archive review workflow\n\n${Array.from({ length: 45 }, () =
   "Write down the outcome you need before comparing possible approaches. Inspect your own records and note what remains unknown. Choose a next action only after reviewing those observations with the people responsible for the work.",
 ).join("\n\n")}`;
 type Audit = { score: number; notes: string[]; materialDefects: string[]; claimEvidence: [] };
-type ProviderRequest = { tool_choice: { name: string }; messages: Array<{ content: string }>; model: string };
+type ProviderRequest = { tools: Array<{ name: string }>; tool_choice: { type: string; name?: string }; messages: Array<{ content: string }>; model: string };
 type ReviewArgs = { siteId: string; articleId: string; incrementRevision: boolean };
 type ReviewResult = { readyForPublication: boolean; editorialQualityScore: number; factCheckScore: number; qualityRevisionCount: number };
 type PersistedReview = { editorialQualityNotes: string[]; markdown: string; qualityRevisionCount: number };
@@ -46,7 +46,7 @@ function fixture(siteId: string, audit: Audit) {
     const request: ProviderRequest = JSON.parse(String(init?.body));
     requests.push(request);
     assert.ok(requests.length <= 20, "Provider replay must remain bounded");
-    const name = request.tool_choice.name;
+    const name = request.tools[0].name;
     const reviewedMarkdown = name === "review_article"
       ? request.messages[0].content.split("Article to review:\n")[1] : markdown;
     const factualScore = behavior.factScoreFor?.(reviewedMarkdown) ?? 95;
@@ -120,7 +120,7 @@ test("required editorial corrections survive persistence and reach the next boun
     assert.equal(firstRequestCount, 6, "The unchanged candidate must terminate after one guarded pass");
     const second = await f.run(true);
     const edit = f.requests[firstRequestCount + 2];
-    assert.equal(edit.tool_choice.name, "remediate_final_article");
+    assert.equal(edit.tools[0].name, "remediate_final_article");
     const notes = edit.messages[0].content.split("INDEPENDENT AUDIT NOTES:\n")[1].split("\n\nFIRST-PARTY PRODUCT EVIDENCE:")[0];
     for (const correction of corrections) assert.ok(notes.includes(correction), "Next attempt must receive every material correction in this fixture");
     assert.ok(notes.indexOf(corrections[0]) < notes.indexOf("General review observation 0"));
@@ -247,7 +247,7 @@ test("an already incomplete stored draft cannot be selected as a fallback over a
   f.article.markdown = "A short unfinished draft.";
   f.article.editorialQualityNotes = [`Material editorial defect 1: ${corrections[0]}`];
   const result = await f.run(true);
-  assert.equal(f.requests[0].tool_choice.name, "remediate_final_article");
+  assert.equal(f.requests[0].tools[0].name, "remediate_final_article");
   assert.equal(f.writes[0].markdown, markdown);
   assert.equal(result.readyForPublication, false);
   assert.equal(result.qualityRevisionCount, 1);

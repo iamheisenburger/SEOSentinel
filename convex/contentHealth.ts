@@ -115,7 +115,7 @@ async function siteHealthFor(ctx: QueryCtx, site: Doc<"sites">, now: number): Pr
   const covered = upcoming.some(j => automatic(j) && !["failed", "verified"].includes(j.contentWork!.stage) && j.contentWork!.deadlineAt === nextDeadlineAt);
   // Failures within the last two days that still hold money or need an operator.
   const unresolved = [...upcoming, ...behind].filter(j => automatic(j) && j.status === "failed" && j.contentWork!.stage === "failed" &&
-    j.updatedAt > now - 2 * 86_400_000 && (j.contentWork!.failure ?? "") === "content_provider_credit_unavailable")
+    j.updatedAt > now - 2 * 86_400_000 && ["content_provider_credit_unavailable", "content_provider_request_rejected"].includes(j.contentWork!.failure ?? ""))
     .map(j => contentIssue(j.contentWork!.failure) ?? j.contentWork!.failure ?? "failed");
   const published = await ctx.db.query("articles").withIndex("by_site_status_created", q => q.eq("siteId", site._id).eq("status", "published"))
     .order("desc").take(5);

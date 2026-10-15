@@ -21,3 +21,15 @@ export function legacyCreditRefusal(detail: string | undefined) {
     return { requestId: body.request_id as string };
   } catch { return null; }
 }
+
+/** The API refused the request itself before any model ran: the request was
+ * malformed for that model (400), the key cannot use it (401/403), the model
+ * does not exist (404) or the request is too large (413). Repeating the same
+ * request gets the same answer, so it is a definitive refusal, not a lost
+ * response. Oct 15 2026: Sonnet 5.5 refused forced tool_choice with a 400 and,
+ * unrecorded, every such job ended "ambiguous" and froze the owner's slot. */
+const REQUEST_REFUSALS: Record<number, string> = { 400: "invalid_request_error", 401: "authentication_error",
+  403: "permission_error", 404: "not_found_error", 413: "request_too_large" };
+export function isProviderRequestRefusal(status: unknown, type: unknown) {
+  return typeof status === "number" && REQUEST_REFUSALS[status] === type;
+}

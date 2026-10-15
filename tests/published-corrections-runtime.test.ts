@@ -103,7 +103,7 @@ function fixture() {
       const reply = replies.shift(); assert.ok(reply, "Unexpected paid replay");
       return new Response(JSON.stringify({ id: "local-audit", type: "message", role: "assistant", model: request.model,
         stop_reason: "tool_use", usage: { input_tokens: 1, output_tokens: 1 },
-        content: [{ type: "tool_use", id: "local-tool", name: request.tool_choice.name, input: reply }],
+        content: [{ type: "tool_use", id: "local-tool", name: request.tools[0].name, input: reply }],
       }), { headers: { "Content-Type": "application/json" } });
     };
     runInNewContext(source, { module: runtime, exports: runtime.exports, require: createRequire(import.meta.url),

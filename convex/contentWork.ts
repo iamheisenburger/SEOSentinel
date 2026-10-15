@@ -6,7 +6,7 @@ import { ConvexError, v } from "convex/values";
 import { contentIntentConflicts, evaluateTopicBusinessFit, tenantDiscoveryAnchors, tenantTopicBusinessSignals, isSealedReady } from "./lib/autopilotBuffer";
 import { normalizeResearchKeyword, researchSeedsForRound, searchLikePhrase, searchSeedLength } from "./lib/researchSeeds";
 import { publicationArtifactHash, publicationDeliveryConfig, sha256Hex } from "./lib/publicationArtifact";
-import { legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
+import { isProviderRequestRefusal, legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain, gscConnectionMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
 import { preSerpWinnability } from "./lib/winnableDiscovery";
@@ -84,7 +84,14 @@ const AUTOPILOT_SKIPPABLE_FAILURES = new Set(["bounded_content_quality_exhausted
   // The provider refused for lack of credit (a verified refusal receipt, nothing published). Oct 5-14 2026 one such
   // slot froze both owner sites for nine days after the credit was restored; the refused job keeps its receipt and
   // hold exactly as recorded, and the schedule moves on.
-  "content_provider_credit_unavailable"]);
+  "content_provider_credit_unavailable",
+  // The API refused the request before any model ran (e.g. a model that does not accept the request shape): nothing
+  // was written or charged. The operator is alerted by content health; the schedule moves on meanwhile.
+  "content_provider_request_rejected",
+  // A writing call whose answer was lost (a transport error or timeout). Its spend ceiling stays held and the call is
+  // never replayed, but nothing was published, so the slot is recorded as missed and the schedule continues instead of
+  // freezing until someone reconciles it (Oct 15 2026: one froze pentra.dev's schedule).
+  "content_provider_result_ambiguous_reconciliation_required"]);
 /** After repeated failed automatic articles, the next attempt waits (2h, then
  * 4h; never longer than one cadence interval) instead of retrying at once: a failure
  * that persists (a reviewer regression, a provider outage) must not burn
@@ -1036,7 +1043,9 @@ export const readiness = query({
         failure: supersededJobs.has(j._id) ? "Replaced by your edited version of this article, which is now live. The missed slot stays on record."
           : parkedByAutopilot(j) ? j.contentWork!.failure === "content_model_response_invalid"
             ? "Pentra's writing service returned an incomplete response for this article, so nothing was published. Your schedule continued with the next article."
-            : "Pentra held this draft back because its fact check wasn't confident enough. It won't be published; your schedule continued with the next article."
+            : ["bounded_content_quality_exhausted", "candidate_rejected_before_draft"].includes(j.contentWork!.failure ?? "")
+              ? "Pentra held this draft back because its fact check wasn't confident enough. It won't be published; your schedule continued with the next article."
+              : "Pentra's writing service could not complete this article, so nothing was published. Your schedule continued with the next article."
           : rejectedReview ? "Review handling has been repaired. Resume to recheck this retained work within its existing revision and spending limits. The article has not been approved."
           : creditRetry ? "Pentra has restored generation for this interrupted work. You can retry it once; the original deadline and earlier attempt remain recorded."
           : contentIssue(j.contentWork!.failure ?? j.error) }; }) };
@@ -2027,9 +2036,14 @@ export async function recoverContentWork(ctx: MutationCtx, job: Doc<"jobs">, err
   // was busy, nothing was written, and it is not a Pentra processing error.
   const lastCall = cw.providerCalls.at(-1);
   const providerBusy = lastCall?.state === "rejected" && ["rate_limit_error", "overloaded_error"].includes(lastCall.rejectionCode ?? "");
+  // The API refused the request itself (not research, which is optional and
+  // handled where it runs): retrying would send the same refused request.
+  const requestRefused = lastCall?.state === "rejected" && !String(lastCall.logicalKey ?? lastCall.key).includes(":web_research:") &&
+    isProviderRequestRefusal(lastCall.rejectionStatus, lastCall.rejectionCode);
   const used = cw.providerCalls.reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
   const failure = uncertain ? "content_provider_result_ambiguous_reconciliation_required"
     : creditUnavailable ? "content_provider_credit_unavailable"
+    : requestRefused ? "content_provider_request_rejected"
     : error === "content_model_response_invalid" ? error
     : /^content_audit_/.test(error) ? error
     : /Content work (budget exhausted|rollover blocked)/.test(error) ? error
@@ -2167,7 +2181,9 @@ export const recordProviderRejection = internalMutation({
     const known = (args.status === 400 && args.code === "provider_credit_unavailable") ||
       (args.status === 429 && args.code === "rate_limit_error") || ([503, 529].includes(args.status) && args.code === "overloaded_error") ||
       // A web research request the API rejects outright (e.g. search not enabled for the account).
-      ([400, 403].includes(args.status) && ["invalid_request_error", "permission_error"].includes(args.code) && args.key.includes(":web_research:"));
+      ([400, 403].includes(args.status) && ["invalid_request_error", "permission_error"].includes(args.code) && args.key.includes(":web_research:")) ||
+      // Any request the API refused before a model ran, with the provider's request id (see isProviderRequestRefusal).
+      (isProviderRequestRefusal(args.status, args.code) && validProviderRequestId(args.requestId));
     if (!known || (args.code === "provider_credit_unavailable" && !validProviderRequestId(args.requestId)) ||
       !job || job.status !== "running" || job.workerToken !== args.workerToken || (job.leaseExpiresAt ?? 0) <= Date.now() ||
       !cw || !call || call.state === "completed") throw new Error("Content rejection receipt invalid; original ceiling retained");
@@ -2179,6 +2195,7 @@ export const recordProviderRejection = internalMutation({
     await ctx.db.patch(job._id, { contentWork: { ...cw, providerCalls: cw.providerCalls.map(c => c.key === args.key
       ? { ...c, state: "rejected" as const, rejectionStatus: args.status, rejectionCode: args.code,
         ...(args.code === "provider_credit_unavailable" ? { rejectionRequestId: args.requestId, rejectionRecordedAt: Date.now(),
-          rejectionStage: cw.stage as "prepare" | "review" } : {}) } : c) } });
+          rejectionStage: cw.stage as "prepare" | "review" }
+          : isProviderRequestRefusal(args.status, args.code) && args.requestId ? { rejectionRequestId: args.requestId } : {}) } : c) } });
   },
 });

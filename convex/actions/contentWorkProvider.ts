@@ -6,7 +6,7 @@ import type { ActionCtx } from "../_generated/server";
 import type { Doc } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import { sha256Hex } from "../lib/publicationArtifact";
-import { isProviderCreditRefusal, validProviderRequestId } from "../lib/contentProviderRefusal";
+import { isProviderCreditRefusal, isProviderRequestRefusal, validProviderRequestId } from "../lib/contentProviderRefusal";
 import { auditResultHash, contradictoryContentAudit, semanticAuditPrompt, SEMANTIC_AUDIT_SUFFIX } from "../lib/contentAudit";
 import { classifyEvidenceSource } from "../lib/sourceQuality";
 import { safeFetchPublicText } from "../lib/safeOutbound";
@@ -80,10 +80,17 @@ export async function contentStructuredCall(args: { system: string; userMessage:
       const requestId = error.requestID ?? body?.request_id;
       const creditUnavailable = isProviderCreditRefusal(error.status, code, message) && validProviderRequestId(requestId) &&
         (!error.requestID || !body?.request_id || error.requestID === body.request_id);
-      if (creditUnavailable || (error.status === 429 && code === "rate_limit_error") || ([503, 529].includes(error.status ?? 0) && code === "overloaded_error")) {
+      // A request the API refused outright (wrong shape for the model, unknown
+      // model, key without access) is definitive too when the provider's own
+      // request id proves the answer came from the API: no model ran, and the
+      // same request would be refused again.
+      const requestRefused = !creditUnavailable && isProviderRequestRefusal(error.status, code) && validProviderRequestId(requestId) &&
+        (!error.requestID || !body?.request_id || error.requestID === body.request_id);
+      if (creditUnavailable || requestRefused || (error.status === 429 && code === "rate_limit_error") || ([503, 529].includes(error.status ?? 0) && code === "overloaded_error")) {
         await s.ctx.runMutation(internal.contentWork.recordProviderRejection, { jobId: s.job._id, workerToken: s.workerToken, key,
           status: error.status!, code: creditUnavailable ? "provider_credit_unavailable" : code!,
-          ...(creditUnavailable ? { requestId: requestId! } : {}) });
+          ...(creditUnavailable || requestRefused ? { requestId: requestId! } : {}) });
+        if (requestRefused) console.warn(`[content provider] ${request.model} refused ${args.toolName}: ${error.status} ${code}: ${String(message ?? "").slice(0, 300)}`);
       }
     }
     if (clarifyAudit) throw new Error("content_audit_clarification_provider_failed", { cause: error });

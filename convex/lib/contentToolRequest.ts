@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { jsonSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/json-schema";
 import { sha256Hex } from "./publicationArtifact.ts";
+import { forcedToolChoiceSupported, structuredToolChoice, toolOnlyInstruction } from "./toolChoice.ts";
 
 export function contentToolRequest(args: { model: string; system: string; userMessage: string;
   toolName: string; toolDescription: string; inputSchema: Anthropic.Tool.InputSchema; maxTokens?: number }, savedRequestHash?: string) {
@@ -11,9 +12,13 @@ export function contentToolRequest(args: { model: string; system: string; userMe
   // The exact old hash alone selects old bytes. A changed prompt/schema still
   // fails the existing admission hash check; this is not permission to replay.
   if (savedRequestHash === sha256Hex(JSON.stringify(legacy))) return legacy;
-  return { ...legacy, tools: [{ ...legacy.tools[0], strict: true,
+  const strict = { ...legacy, tools: [{ ...legacy.tools[0], strict: true,
     // SDK transformation preserves constraint descriptions and removes fields
     // rejected by strict sampling. Original parsing/quality gates still apply.
     input_schema: jsonSchemaOutputFormat(args.inputSchema as Parameters<typeof jsonSchemaOutputFormat>[0]).schema as Anthropic.Tool.InputSchema }],
   };
+  // Models that accept a forced tool keep these exact bytes (and hashes).
+  if (forcedToolChoiceSupported(args.model)) return strict;
+  return { ...strict, system: `${args.system}\n\n${toolOnlyInstruction(args.toolName)}`,
+    tool_choice: structuredToolChoice(args.model, args.toolName) };
 }

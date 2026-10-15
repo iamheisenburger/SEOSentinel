@@ -4940,6 +4940,8 @@ test("SLC37 explicit provider credit refusal remains identifiable without releas
 });
 
 test("SLC37 other HTTP failures cannot masquerade as the observed credit refusal or release money", async () => {
+  // P88: a refusal of the request itself (400 invalid_request_error, 401, 404) with the provider's request id is a
+  // definitive request rejection, never a credit refusal; anything else stays ambiguous. Neither releases money or replays.
   for (const error of [
     { status: 400, type: "invalid_request_error", message: "Unknown model parameter." },
     { status: 400, type: "api_error", message: "Your credit balance is too low to access the Anthropic API." },
@@ -4951,9 +4953,11 @@ test("SLC37 other HTTP failures cannot masquerade as the observed credit refusal
     const f = await scopedPricingFixture({}, {}, { providerError: { tool: "submit_article", ...error } });
     await f.admit(0); const job = f.tables.jobs[0], holds = JSON.stringify(f.tables.provider_spend_reservations);
     await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
-    const failed = f.get(job._id)!;
-    assert.equal(failed.contentWork.failure, "content_provider_result_ambiguous_reconciliation_required", JSON.stringify(error));
-    assert.equal(failed.contentWork.providerCalls[0].state, "started");
+    const failed = f.get(job._id)!, refused = error.type !== "api_error";
+    assert.equal(failed.contentWork.failure, refused ? "content_provider_request_rejected" : "content_provider_result_ambiguous_reconciliation_required", JSON.stringify(error));
+    assert.equal(failed.contentWork.providerCalls[0].state, refused ? "rejected" : "started");
+    if (refused) assert.equal(failed.contentWork.providerCalls[0].rejectionCode, error.type);
+    for (let i = 0; i < 2; i++) { f.restartRuntime(); await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id }); }
     assert.equal(f.modelCalls.length, 1); assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds); f.assertOffline();
   }
 });
@@ -4990,7 +4994,7 @@ test("SLC37 credit rejection receipts are worker-bound, idempotent, non-replayab
   const started = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken, key: "credit-call", ceilingMicroUsd: 100 });
   const args = { jobId: job._id, workerToken, key: started.key, status: 400, code: "provider_credit_unavailable", requestId: "req_syntheticreceipt" };
   const holds = JSON.stringify(f.tables.provider_spend_reservations);
-  for (const bad of [{ workerToken: "wrong-worker" }, { status: 401 }, { code: "invalid_request_error" }, { key: "missing-call" }]) {
+  for (const bad of [{ workerToken: "wrong-worker" }, { status: 401 }, { code: "api_error" }, { code: "invalid_request_error", requestId: "not-a-request-id" }, { key: "missing-call" }]) {
     await assert.rejects(f.invoke("contentWork:recordProviderRejection", { ...args, ...bad }), /receipt invalid/);
   }
   await Promise.all([f.invoke("contentWork:recordProviderRejection", args), f.invoke("contentWork:recordProviderRejection", args)]);
@@ -7197,4 +7201,74 @@ test("P87 a malformed or missing writer block leaves one model doing everything"
   assert.equal(writerPricing({ writer: { model: "claude-sonnet-5-5", inputMicroUsdPerToken: 0, outputMicroUsdPerToken: 10 } }), undefined);
   assert.deepEqual(writerPricing({ writer: { model: "claude-sonnet-5-5", inputMicroUsdPerToken: 2, outputMicroUsdPerToken: 10 } }),
     { model: "claude-sonnet-5-5", inputMicroUsdPerToken: 2, outputMicroUsdPerToken: 10 });
+});
+
+test("P88 a writer that cannot be forced to a tool answers through it unforced; checks stay forced", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const writer = { model: "claude-sonnet-5-5", inputMicroUsdPerToken: 2, outputMicroUsdPerToken: 10 };
+  f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ model: "claude-haiku-5-5", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1,
+    budgetMicroUsd: 2_000_000, writer }) });
+  await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork && ["ready", "verified"].includes(j.contentWork.stage)));
+  const structured = f.modelCalls.filter(c => c.tool_choice && c.tools?.[0]?.name !== "web_search");
+  const writes = structured.filter(c => ["submit_article", "remediate_final_article"].includes(c.tools[0].name));
+  assert.ok(writes.length > 0 && writes.length < structured.length, JSON.stringify(structured.map(c => c.tools[0].name)));
+  for (const c of writes) {
+    assert.equal(c.model, "claude-sonnet-5-5");
+    assert.deepEqual(c.tool_choice, { type: "auto", disable_parallel_tool_use: true });
+    assert.match(String(c.system), new RegExp(`Answer only by calling the ${c.tools[0].name} tool`));
+  }
+  for (const c of structured.filter(c => !writes.includes(c))) {
+    assert.equal(c.model, "claude-haiku-5-5");
+    assert.equal(c.tool_choice.type, "tool");
+    assert.doesNotMatch(String(c.system), /Answer only by calling/);
+  }
+  f.assertOffline();
+});
+
+test("P88 a request the API refuses fails definitively, is never resent, and the schedule moves on", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000,
+    providerError: { tool: "submit_article", status: 400, type: "invalid_request_error", message: "tool_choice: type \"tool\" and \"any\" are not supported for this model." } });
+  const site = await selectGrowth(f);
+  f.get(site.id)!.contentSchedule.autopilotSelectedAt = START;
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "failed"));
+  const failed = f.tables.jobs.find(j => j.contentWork?.stage === "failed")!;
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.contentWork.failure, "content_provider_request_rejected", diagnostic(f));
+  const call = failed.contentWork.providerCalls.at(-1);
+  assert.equal(call.state, "rejected"); assert.equal(call.rejectionStatus, 400); assert.equal(call.rejectionCode, "invalid_request_error");
+  assert.equal(f.modelCalls.filter(c => c.tools?.[0]?.name === "submit_article").length, 1, "the refused request is not resent");
+  const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  assert.equal(failed.contentWork.deadlineAt, deadline);
+  const result = await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+  assert.equal(result.mode, "content_slot_parked", JSON.stringify(result));
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline + f.get(site.id)!.contentSchedule.intervalMs);
+  assert.equal(f.get(failed._id)!.contentWork.failure, "content_provider_request_rejected", "the miss stays recorded");
+  assert.equal(f.tables.articles.filter(a => a.status === "published").length, 0);
+  f.assertOffline();
+});
+
+test("P88 a lost provider answer is never replayed but no longer freezes the schedule", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], quality: "low", budgetMicroUsd: 2_000_000 });
+  const site = await selectGrowth(f);
+  f.get(site.id)!.contentSchedule.autopilotSelectedAt = START;
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "failed"));
+  const failed = f.tables.jobs.find(j => j.contentWork?.stage === "failed")!;
+  // The terminal state a writing call with a lost answer leaves behind.
+  failed.contentWork.failure = "content_provider_result_ambiguous_reconciliation_required";
+  failed.articleId = undefined;
+  const holds = JSON.stringify(f.tables.provider_spend_reservations), calls = JSON.stringify(failed.contentWork.providerCalls);
+  const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  const result = await f.invoke("actions/scheduler:scheduleCadence", { siteId: site.id });
+  assert.equal(result.mode, "content_slot_parked", JSON.stringify(result));
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline + f.get(site.id)!.contentSchedule.intervalMs);
+  assert.equal(f.get(failed._id)!.contentWork.failure, "content_provider_result_ambiguous_reconciliation_required", "the miss stays recorded");
+  assert.equal(JSON.stringify(f.get(failed._id)!.contentWork.providerCalls), calls, "its calls are untouched");
+  assert.equal(JSON.stringify(f.tables.provider_spend_reservations), holds, "its spend stays held");
+  f.setIdentity(f.get(site.id)!.userId);
+  const readiness = await f.invoke("contentWork:readiness", { siteId: site.id });
+  const item = readiness.work.find((w: { jobId: string }) => w.jobId === failed._id);
+  assert.equal(item.parked, true); assert.match(item.failure, /could not complete this article.*schedule continued/);
+  f.setIdentity(null);
+  f.assertOffline();
 });

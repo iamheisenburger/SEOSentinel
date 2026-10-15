@@ -164,6 +164,7 @@ import {
   strictEvidenceSources,
 } from "../lib/sourceQuality";
 import { anthropicResponseText, plainTextMaxTokens } from "../lib/anthropicText";
+import { forcedToolChoiceSupported, structuredToolChoice, toolOnlyInstruction } from "../lib/toolChoice";
 import { configuredCallToAction, firstPartyProductEvidence } from "../lib/productEvidence";
 import {
   safeFetchPublicText as fetchPublicText,
@@ -1244,7 +1245,7 @@ async function callClaudeStructured<T>(args: {
       const response = await client.messages.create({
         model: defaultModel,
         max_tokens: args.maxTokens ?? 8192,
-        system: args.system,
+        system: forcedToolChoiceSupported(defaultModel) ? args.system : `${args.system}\n\n${toolOnlyInstruction(args.toolName)}`,
         messages: [{
           role: "user",
           content: `${args.userMessage}${correction}`,
@@ -1257,11 +1258,7 @@ async function callClaudeStructured<T>(args: {
             strict: true,
           },
         ],
-        tool_choice: {
-          type: "tool",
-          name: args.toolName,
-          disable_parallel_tool_use: true,
-        },
+        tool_choice: structuredToolChoice(defaultModel, args.toolName),
       });
 
       const toolUse = response.content.find(
