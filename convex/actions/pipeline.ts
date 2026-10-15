@@ -59,6 +59,7 @@ import {
   STRICT_PUBLICATION_MIN_WORDS,
   ARTICLE_DEPTH_BASE_WORDS,
   repairClaimLedgerByDeletion,
+  stripUnsourcedQualityClaims,
   uncitedEvidenceRequiredParagraphs,
   validateClaimEvidenceLedger,
 } from "../lib/articleQuality";
@@ -4990,6 +4991,13 @@ async function handleArticle(
   });
   // The other tool fields sometimes leak into the article body as XML-style tags.
   article.markdown = stripLeakedToolFieldTrailer(article.markdown);
+  // With no cited research, "evidence-based"/"data-driven" in the title or
+  // description is an unsupported promise the reviewer rejects every time.
+  if (researchSources.length === 0) {
+    article.title = stripUnsourcedQualityClaims(article.title);
+    if (article.metaTitle) article.metaTitle = stripUnsourcedQualityClaims(article.metaTitle);
+    if (article.metaDescription) article.metaDescription = stripUnsourcedQualityClaims(article.metaDescription);
+  }
 
   // ── Programmatic competitor scrub (safety net) ──
   // Even with prompt instructions, LLMs sometimes mention competitors.

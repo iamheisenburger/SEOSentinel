@@ -6422,6 +6422,19 @@ test("P72 after a parked slot the next article is pulled in no earlier than the 
   const gaps = published.slice(1).map((t, i) => t - published[i]);
   assert.ok(Math.min(...gaps) >= 4 * hour - 60_000, `deliveries stay paced: ${summary}`);
   assert.ok(published.length >= 7, `the cadence keeps publishing after the parked slot: ${summary}`);
+  // A topic whose drafts failed every pass is retired from Autopilot, so a later slot never buys it again.
+  const exhausted = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.failure === "bounded_content_quality_exhausted" && !j.contentWork.ownerRequest);
+  const exhaustedTopicIds = new Set(exhausted.flatMap(j => [...j.contentWork.discardedArticleIds, ...(j.articleId ? [j.articleId] : [])])
+    .map(id => f.get(id)?.topicId).filter(Boolean));
+  assert.ok(exhaustedTopicIds.size >= 1, `the scenario exhausts at least one topic: ${summary}`);
+  for (const topicId of exhaustedTopicIds) {
+    const topic = f.get(topicId)!;
+    assert.equal(topic.status, "disqualified", JSON.stringify(topic));
+    assert.equal(topic.contentFeasibilityStatus, "quality_exhausted");
+    const lastFailure = Math.max(...exhausted.map(j => j.updatedAt));
+    assert.ok(!f.tables.jobs.some(j => j.siteId === site.id && j.createdAt > lastFailure && j.articleId && f.get(j.articleId)?.topicId === topicId),
+      "no later Autopilot job drafts a retired topic");
+  }
   // The operator diagnostic says why drafts were rejected, from the reviews recorded on them.
   const diagnostic = await f.invoke("organicDiagnostics:snapshot", { siteId: site.id });
   const quality = diagnostic.quality;

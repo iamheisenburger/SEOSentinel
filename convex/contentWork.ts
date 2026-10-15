@@ -18,7 +18,7 @@ import { jobAuthorizedForExecution } from "./lib/jobRollout";
 import { inspectSharedProviderBudget, reserveSharedProviderBudget, settleSharedProviderReservation, releaseSharedProviderReservation } from "./lib/providerSpendReservation";
 import { contentValidationBinding } from "./lib/providerBudgetAuthorization";
 import { planCheckpointTopicDeletionLocked, planCheckpointTopicExecutionLocked } from "./lib/planCandidateCheckpoint";
-import { terminalContentFeasibility } from "./lib/topicLifecycle";
+import { CONTENT_FEASIBILITY_VERSION, terminalContentFeasibility } from "./lib/topicLifecycle";
 import type { CadenceScheduleResult } from "./lib/autopilotRunOutcome";
 import { liveAutopilotReadiness, publicationDestinationBlockers } from "./lib/autopilotReadiness";
 import { PUBLISHED_REVISION_LEASE_MS } from "./lib/publishedRevision";
@@ -1338,7 +1338,31 @@ async function reviseFailedWork(ctx: MutationCtx, site: Doc<"sites">, failed: Do
   }
   await ctx.db.patch(failed._id, { status: "failed", contentWork: { ...cw, stage: "failed", failure: "bounded_content_quality_exhausted" }, updatedAt: Date.now() });
   await settleFailedContentWork(ctx, failed._id);
+  if (!cw.ownerRequest && cw.intent === "create") {
+    await retireQualityExhaustedTopics(ctx, site, [...cw.discardedArticleIds, ...(failed.articleId ? [failed.articleId] : [])]);
+  }
   return { scheduled: 0, mode: "content_quality_exhausted" };
+}
+
+/** A topic whose Autopilot drafts failed review on every pass (first draft and
+ * both revisions) is not picked again automatically. Review settlement used to
+ * hand it back as "planned", so the next slot bought the same failing topic:
+ * LeadPilot's "saas lead scoring framework" was drafted and rejected five
+ * times between Oct 14 15:03Z and Oct 15 11:17Z. The topic stays on record
+ * with the reviewer's last issues; an owner can still request it. */
+async function retireQualityExhaustedTopics(ctx: MutationCtx, site: Doc<"sites">, articleIds: Id<"articles">[]) {
+  const now = Date.now();
+  for (const articleId of articleIds) {
+    const article = await ctx.db.get(articleId);
+    if (!article || article.siteId !== site._id || !article.topicId) continue;
+    const topic = await ctx.db.get(article.topicId);
+    if (!topic || topic.siteId !== site._id || terminalContentFeasibility(topic.contentFeasibilityStatus) ||
+      !["planned", "pending", "queued"].includes(topic.status ?? "planned")) continue;
+    await ctx.db.patch(topic._id, { status: "disqualified", contentFeasibilityStatus: "quality_exhausted",
+      contentFeasibilityVersion: CONTENT_FEASIBILITY_VERSION, contentFeasibilityIssues: (article.publicationGateIssues ?? []).slice(0, 8),
+      contentFeasibilityCheckedAt: now,
+      disqualifiedReason: "Autopilot drafts of this topic failed review on every pass; it is not retried automatically.", updatedAt: now });
+  }
 }
 
 export const advanceOwnerDraft = internalMutation({ args: { jobId: v.id("jobs") }, handler: async (ctx, { jobId }) => {

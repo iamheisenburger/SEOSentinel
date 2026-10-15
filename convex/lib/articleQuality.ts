@@ -1495,6 +1495,21 @@ export function pruneMismatchedCitedSentences(args: {
  * at least three meaningful claim tokens and 60% claim-token coverage, which
  * keeps short or generic audit labels from deleting unrelated prose.
  */
+/** Title and description words that claim an evidence base. Without cited
+ * sources they are an unsupported promise the reviewer marks as a material
+ * defect on every pass ("SaaS Lead Scoring: An Evidence-Based Framework"),
+ * and the writer kept using them despite the instruction. Removed
+ * deterministically, fixing the article before the next word. */
+const UNSOURCED_QUALITY_CLAIM = /\b(an?\s+)?(?:evidence[- ]based|data[- ]driven|research[- ]backed|science[- ]backed)\s+/gi;
+export function stripUnsourcedQualityClaims(text: string): string {
+  return text.replace(UNSOURCED_QUALITY_CLAIM, (match: string, determiner: string | undefined, offset: number, whole: string) => {
+    if (!determiner) return "";
+    const next = whole.slice(offset + match.length);
+    const capital = determiner[0] === "A";
+    return /^[aeiou]/i.test(next) ? (capital ? "An " : "an ") : (capital ? "A " : "a ");
+  }).replace(/ {2,}/g, " ").trim();
+}
+
 /** Lines of a Markdown table (every non-empty line starts with "|"). */
 function isMarkdownTable(block: string): boolean {
   const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
