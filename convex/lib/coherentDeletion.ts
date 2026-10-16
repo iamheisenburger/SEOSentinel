@@ -44,6 +44,18 @@ function nextProseBody(lines: string[], index: number, fence: boolean[]) {
   return undefined;
 }
 
+/** The block answers the question on the line before it (an FAQ written as a
+ * bold question, Oct 16 2026: "**Is there a free way to try it?**" was left
+ * with no answer). Deleting the answer strands the question. */
+function answersPreviousQuestion(lines: string[], index: number) {
+  for (let j = index - 1; j >= 0; j--) {
+    if (!lines[j].trim()) continue;
+    if (headingLevel(lines[j])) return false;
+    return /\?\s*(?:\*\*|__|\*|_)?\s*$/.test(lines[j]);
+  }
+  return false;
+}
+
 /** The last remaining item of a list that a "...as follows:" line introduces. */
 function lastItemOfIntroducedList(lines: string[], index: number) {
   if (!/^\s*[-*+]\s+/.test(lines[index])) return false;
@@ -105,7 +117,8 @@ export function deleteSentencesCoherently(
       // step, never the last content under a heading, never a block the next
       // one refers back to.
       const next = nextProseBody(lines, i, fence);
-      if (ORDERED_ITEM.test(line) || (next !== undefined && LEANS_ON_PREVIOUS.test(next)) || lastItemOfIntroducedList(lines, i)) { hold(); continue; }
+      if (ORDERED_ITEM.test(line) || (next !== undefined && LEANS_ON_PREVIOUS.test(next)) || lastItemOfIntroducedList(lines, i) ||
+        answersPreviousQuestion(lines, i)) { hold(); continue; }
       if (onlyContentInSection(lines, i)) {
         // The section's only content: the section goes with it (heading
         // included, unless subsections follow), except a numbered step or

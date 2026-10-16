@@ -79,3 +79,13 @@ test("headings, tables, code and URLs are never edited; nothing removed returns 
   assert.equal(r.markdown, md);
   assert.equal(r.removed.length, 0);
 });
+
+test("an FAQ answer is never deleted out from under its question", () => {
+  const md = "## FAQ\n\n**Does it work offline?**\nYes, it keeps a local copy.\n\n**Is there a free way to try it?**\nUNSUPPORTED free trial details.\n\n## Related reading";
+  const r = deleteSentencesCoherently(md, flagged);
+  assert.equal(r.markdown, md);
+  assert.deepEqual(r.held, ["UNSUPPORTED free trial details."]);
+  const sameLine = "## FAQ\n\n**Is there a free way to try it?** UNSUPPORTED free trial details.\n\n**Other?** Fine.";
+  assert.equal(deleteSentencesCoherently(sameLine, flagged).markdown, "## FAQ\n\n**Other?** Fine.",
+    "a question and answer on one line go together: no stranded question");
+});
