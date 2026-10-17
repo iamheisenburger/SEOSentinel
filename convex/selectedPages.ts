@@ -11,7 +11,7 @@ import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning
 import { accountDeletionKey } from "./lib/accountDeletion";
 import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
 import { evaluateTopicBusinessFit, tenantTopicBusinessSignals } from "./lib/autopilotBuffer";
-import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDomainBinding";
+import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopicsByContentFeasibility } from "./lib/siteDomainBinding";
 import { stripLeadingDocumentTitle } from "./lib/markdownPublishing";
 import { publicationDeliveryConfig } from "./lib/publicationArtifact";
 import { REFRESH_COOLDOWN_MS, REFRESH_REVIEW_MS, refreshArticleOldEnough, refreshablePentraPage, refreshOpportunities, refreshSlotAvailable, refreshWindowStart } from "./lib/articleRefresh";
@@ -168,6 +168,23 @@ export const workContext = internalQuery({ args: { siteId: v.id("sites"), jobId:
     return page ? { job, page, site } : null;
   } });
 
+const improvementText = (text: string | undefined) => (text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+/** One page improvement: the reader search it answers on one page title. */
+export const improvementKey = (question: string, pageTitle: string) => `${improvementText(question)}\u0000${improvementText(pageTitle)}`;
+
+/** Page work Autopilot already tried and the review rejected on every pass,
+ * within the refresh cooldown. A failed improvement becomes a replacement
+ * article on the same job (its page link and intent are rewritten), so no job
+ * remembers it; its retired quality_exhausted topic does. Without this the same
+ * refresh was bought again every slot: LeadPilot's "lead scoring saas" refresh
+ * of its SaaS lead scoring article ran 9 times on Oct 16-17 (three paid
+ * reviews each, never published), and each slot's new article got one review. */
+export async function exhaustedImprovementKeys(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, now: number) {
+  const retired = await takeCurrentDomainTopicsByContentFeasibility(ctx, site, "quality_exhausted", 1000);
+  return new Set(retired.filter(t => now - (t.contentFeasibilityCheckedAt ?? t.updatedAt ?? 0) < REFRESH_COOLDOWN_MS)
+    .map(t => improvementKey(t.primaryKeyword, t.label)));
+}
+
 /** Reuse the daily ingestion's exact tenant/date/epoch receipts. Weekly bounded
  * selection is discretionary; absent metrics do not veto unrelated creation. */
 export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jobs: Doc<"jobs">[]) {
@@ -189,6 +206,7 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
     (p.editable.origin !== "published_refresh" || refreshDue(p.editable)) &&
     !jobs.some(j => j.contentWork?.targetPageId === p._id && !["verified","failed"].includes(j.contentWork.stage)));
   if (!candidates.length) return null;
+  const exhausted = await exhaustedImprovementKeys(ctx, site, now);
   let measurements: Awaited<ReturnType<typeof takeCurrentGscQueryRows>>;
   // The newest 28 days of Search Console data, not the oldest rows first.
   const windowStart = refreshWindowStart((site.gscDateEpochs ?? []).map(receipt => receipt.date));
@@ -203,6 +221,7 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
       // The page-2 search is usually the article's own keyword, so it is
       // already in the text: the refresh answers it in a dedicated section.
       const eligible = refreshOpportunities(measurements.rows, page.url).filter(o => !isBrandedSearchQuery(o.query, site.domain) &&
+        !exhausted.has(improvementKey(o.query, e.title)) &&
         evaluateTopicBusinessFit({ keyword: o.query, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible);
       const best = eligible.find(o => !e.markdown.toLowerCase().includes(o.query)) ?? eligible[0];
       const managed = best && e.managedArticleId ? await ctx.db.get(e.managedArticleId) : null;
@@ -217,12 +236,12 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
     if (e.origin === "published_refresh") continue;
     const rows = measurements.rows.filter(r => r.page === page.url && r.impressions > 0 &&
       (!e.lastImprovedAt || r.date > new Date(e.lastImprovedAt).toISOString().slice(0, 10)) &&
-      !e.markdown.toLowerCase().includes(r.query.toLowerCase()) &&
+      !e.markdown.toLowerCase().includes(r.query.toLowerCase()) && !exhausted.has(improvementKey(r.query, e.title)) &&
       evaluateTopicBusinessFit({ keyword: r.query, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible)
       .sort((a,b) => Number(nearPageOne(b)) - Number(nearPageOne(a)) || b.impressions - a.impressions);
     // An actual first-party reader question may be useful without Search Console.
     const question = rows[0]?.query ?? (site.painPoints ?? []).find(q => q.endsWith("?") &&
-      !e.markdown.toLowerCase().includes(q.toLowerCase()) && evaluateTopicBusinessFit({ keyword: q, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible);
+      !e.markdown.toLowerCase().includes(q.toLowerCase()) && !exhausted.has(improvementKey(q, e.title)) && evaluateTopicBusinessFit({ keyword: q, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible);
     if (!question) continue;
     const editTarget = targetedImprovement(e, site, question);
     if (contentWords(e.markdown) >= 1200 && !editTarget) continue;

@@ -7095,6 +7095,41 @@ test("P76 an article Autopilot wrote and enrolled at publication gets the page-2
   f.assertOffline();
 });
 
+// --- P91: a failed page improvement becomes a replacement article on the same job (its page link and intent are
+// rewritten), so nothing remembered it: LeadPilot re-bought the same "lead scoring saas" refresh every 4 h slot
+// (9 times Oct 16-17, three paid reviews each, never published). Its retired quality_exhausted topic now blocks the
+// same page + search for the refresh cooldown, and the slot goes to a new article instead.
+test("P91 a page refresh the review rejected on every pass is not bought again for the same page and search", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const day = 86_400_000, site = await selectGrowth(f, 7 * day);
+  await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.stage === "verified")));
+  const created = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!, article = f.get(created.articleId)!;
+  const page = f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!;
+  const query = String(f.get(article.topicId!)!.primaryKeyword).toLowerCase();
+  f.setTime(Math.max(f.now(), page.editable.selectedAt + 29 * day));
+  const date = new Date(f.now() - day).toISOString().slice(0, 10), syncEpoch = `refresh-${date}`;
+  f.get(site.id)!.gscDateEpochs = [...(f.get(site.id)!.gscDateEpochs ?? []), { date, syncEpoch }];
+  f.add("search_performance", { siteId: site.id, date, syncEpoch, page: article.publicUrl, query,
+    syncVersion: 2, syncedAt: f.now(), clicks: 0, impressions: 40, ctr: 0, position: 14, createdAt: f.now() });
+  f.get(site.id)!.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: f.get(site.id)! as never,
+    ownerAccountKey: accountDeletionKey(f.get(site.id)!.userId), verifiedAt: f.now() });
+  // The same refresh was tried before and retired after failing review on every pass (what reviseFailedWork records).
+  f.add("topic_clusters", { ...f.tables.topic_clusters.find(t => t.siteId === site.id)!, _id: undefined,
+    primaryKeyword: query, label: ` ${String(page.editable.title).toUpperCase()} `, status: "disqualified",
+    contentFeasibilityStatus: "quality_exhausted", contentFeasibilityCheckedAt: f.now() - 2 * day,
+    notes: "Refresh of a page-2 article: earlier attempt", createdAt: f.now() - 3 * day, updatedAt: f.now() - 2 * day });
+  const before = new Set(f.tables.jobs.map(j => String(j._id)));
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_work", reason: "synthetic_refresh_evidence" });
+  await pumpUntil(f, () => f.tables.jobs.some(j => !before.has(String(j._id)) && j.contentWork), 400, START + 120 * day);
+  const fresh = f.tables.jobs.filter(j => !before.has(String(j._id)) && j.contentWork);
+  assert.ok(fresh.length >= 1, "the slot still gets work");
+  assert.ok(fresh.every(j => j.contentWork.intent === "create" && j.contentWork.targetPageId !== page._id),
+    JSON.stringify(fresh.map(j => ({ intent: j.contentWork.intent, opportunity: j.contentWork.opportunity }))));
+  assert.ok(!f.tables.topic_clusters.some(t => t.siteId === site.id && String(t.notes ?? "").startsWith("Refresh of a page-2 article: Search Console")),
+    "no new refresh topic is minted for the retired page + search");
+  f.assertOffline();
+});
+
 test("Autopilot adopts its own older article on Google page 2 and refreshes it as one slot", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const day = 86_400_000, site = await selectGrowth(f, 7 * day);
