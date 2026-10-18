@@ -66,6 +66,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   longManagedPage?: boolean; gscFixture?: boolean; omitDraftTitle?: boolean; convexSerialization?: boolean;
   gscSitemap?: { robots?: string; submitStatus?: number; submitted: string[] };
   auditResponse?: (audit: Fields, request: Fields) => unknown;
+  metadataResponse?: (metadata: Fields, request: Fields) => unknown;
   remediationNote?: string;
   emptyReviewResponse?: boolean;
   liveTitleBrand?: string;
@@ -235,7 +236,10 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
           materialDefects: options.quality === "low" ? ["Replace repetitive advice with a worked decision example tied to this business."] : [],
           claimEvidence: claims.map((claim: Fields) => ({ claim: claim.paragraph, citationNumbers: [...claim.paragraph.matchAll(/\[(\d+)\]/g)].map((match: string[]) => Number(match[1])), supported: true, reason: "Synthetic source fixture supports the register fields." })) };
         if (options.auditResponse) value = options.auditResponse(value as Fields, body);
-      } else if (tool === "submit_final_metadata") { assert.ok(keyword); value = { title: titleFor(keyword), metaTitle: titleFor(keyword).slice(0, 60), metaDescription: description }; }
+      } else if (tool === "submit_final_metadata") {
+        assert.ok(keyword); value = { title: titleFor(keyword), metaTitle: titleFor(keyword).slice(0, 60), metaDescription: description };
+        if (options.metadataResponse) value = options.metadataResponse(value as Fields, body);
+      }
       else assert.fail(`Unexpected Anthropic tool ${tool}`);
       if (tool === "remediate_final_article" && options.remediationNote !== undefined) value = { ...(value as Fields), notes: options.remediationNote };
       return json({ id: `synthetic-message-${modelCalls.length}`, type: "message", role: "assistant", model: body.model, stop_reason: "tool_use", stop_sequence: null,
@@ -1778,6 +1782,54 @@ test("SLC55 a failed owner edit stays bounded and never replaces the customer's 
   assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0); f.assertOffline();
 });
 
+test("P95 a Pentra-written revision rewrites metadata the reviewer rejected; an owner's own metadata is never rewritten", async t => {
+  const rewritten = "Decide whether this workflow suits your team, then run its review questions on a sample record before you rely on it.";
+  const metadataDefect = "The meta description promises a documented workflow and a careful handoff the body does not deliver; reword the metaDescription to match the body's scope.";
+  await t.test("pentra_written", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000,
+      metadataResponse: metadata => ({ ...metadata, metaDescription: rewritten }),
+      auditResponse: (audit, request) => String(request.messages[0].content).includes(rewritten) ? audit
+        : { ...audit, score: 62, materialDefects: [metadataDefect] } });
+    await selectGrowth(f);
+    await pumpUntil(f, () => f.tables.jobs.some(j => ["ready", "failed"].includes(j.contentWork?.stage)));
+    const ready = f.tables.jobs.find(j => j.contentWork?.stage === "ready");
+    assert.ok(ready, diagnostic(f));
+    assert.equal(ready.contentWork.revisions, 1, "one revision repaired it"); assert.equal(ready.contentWork.replacements, 0);
+    const metadataCalls = f.modelCalls.filter(c => c.tools?.[0]?.name === "submit_final_metadata");
+    assert.equal(metadataCalls.length, 1, "one checkpointed metadata call, only on the revision that needed it");
+    assert.ok(String(metadataCalls[0].messages[0].content).includes(metadataDefect), "the reviewer's metadata defect is the feedback");
+    assert.ok(ready.contentWork.providerCalls.some((c: Fields) => c.logicalKey === "0:1:review:submit_final_metadata" && c.state === "completed"));
+    const article = f.get(ready.articleId)!;
+    assert.equal(article.metaDescription, rewritten); assert.equal(article.editorialQualityScore, 93);
+    f.assertOffline();
+  });
+  await t.test("owner_written", async () => {
+    const ownerMetaTitle = "Review your content workflow";
+    const f = await scopedPricingFixture({}, {}, { metadataResponse: metadata => ({ ...metadata, metaDescription: rewritten }),
+      auditResponse: (audit, request) => !String(request.messages[0].content).includes(`"metaTitle":"${ownerMetaTitle}"`) ? audit
+        : { ...audit, score: 62, materialDefects: ["The meta title 'Review your content workflow' does not name the topic; reword the metaTitle."] } });
+    const site = f.get(f.sites[0].id)!;
+    for (const s of f.sites.slice(0, 2)) f.get(s.id)!.contentSchedule.paused = true;
+    f.setIdentity(site.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site._id });
+    const base = { siteId: site._id, reviewToken: r.reviewToken, maximumMicroUsd: r.ownerDraft.maximumMicroUsd };
+    const original = await f.invoke("contentWork:requestDraft", { ...base, requestKey: "p95-owner-metadata-original" });
+    await pumpUntil(f, () => f.get(original.jobId)!.contentWork.stage === "ready");
+    const source = structuredClone(f.get(f.get(original.jobId)!.articleId)!);
+    const metadata = { title: source.title, metaTitle: ownerMetaTitle,
+      metaDescription: "Use this practical review checklist to confirm your business information, evaluate content choices and decide what to publish next." };
+    const edited = await f.invoke("contentWork:requestDraft", { ...base, requestKey: "p95-owner-metadata-edit",
+      edit: { articleId: source._id, artifactHash: publicationArtifactHash(source as never), markdown: source.markdown, metadata } });
+    await pumpUntil(f, () => f.get(edited.jobId)!.contentWork.stage === "failed");
+    const job = f.get(edited.jobId)!, article = f.get(job.articleId)!;
+    assert.equal(job.contentWork.revisions, 2, "the owner's draft was revised and re-reviewed");
+    assert.equal(f.modelCalls.filter(c => c.tools?.[0]?.name === "submit_final_metadata").length, 0, "no metadata rewrite was bought for customer text");
+    assert.equal(article.metaTitle, metadata.metaTitle); assert.equal(article.metaDescription, metadata.metaDescription);
+    assert.equal(article.title, metadata.title);
+    assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0); f.assertOffline();
+  });
+});
+
 test("SLC55 a completed empty provider review stops immediately without cached-response retry loops", async () => {
   const f = await scopedPricingFixture({}, {}, { emptyReviewResponse: true }), site = f.get(f.sites[0].id)!;
   for (const s of f.sites.slice(0, 2)) f.get(s.id)!.contentSchedule.paused = true;
@@ -2109,6 +2161,33 @@ test("SLC48 restart after persisted clarification but before article application
   await pumpUntil(f, () => f.get(job._id)!.contentWork.stage === "verified" && f.tables.jobs.filter(j => j.siteId === job.siteId && j.contentWork?.stage === "ready").length === 2, 240);
   assert.ok(f.tables.jobs.some(j => j.siteId === job.siteId && j.createdAt > f.get(job._id)!.contentWork.verifiedAt && j.contentWork?.stage === "ready"));
   assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, 800); template.assertOffline(); f.assertOffline();
+});
+
+test("P95 a material defect that asks for no change is clarified once; a real defect is kept without clarification", async () => {
+  for (const selfNegating of [true, false]) {
+    const defect = selfNegating
+      ? "Claim unit 4 includes a call to action; it has no externally verifiable proposition and is supported as-is."
+      : "The meta title promises installation steps the body says it does not give; reword the metaTitle to match the body.";
+    const f = await scopedPricingFixture({}, {}, { auditResponse: (audit, request) => isAuditClarification(request) ? audit
+      : { ...audit, score: 62, materialDefects: [defect] } });
+    await f.admit(0); const job = f.tables.jobs[0];
+    for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    const after = f.get(job._id)!, clarifications = after.contentWork.providerCalls.filter((c: Fields) => c.semanticClarificationOf);
+    assert.equal(clarifications.length, selfNegating ? 1 : 0, `selfNegating=${selfNegating}`);
+    const original = after.contentWork.providerCalls.find((c: Fields) => c.logicalKey?.endsWith(":audit_final_article"));
+    assert.equal(original.result.score, 62, "the provider's original score is retained, never promoted locally");
+    if (selfNegating) {
+      const request = f.modelCalls.find(isAuditClarification)!;
+      assert.match(request.messages[0].content, /These entries ask for no change, so they are not material defects/);
+      assert.equal(after.contentWork.stage, "ready", "the provider re-scored the exact draft");
+      assert.equal(f.get(after.articleId)!.editorialQualityScore, 93);
+    } else {
+      assert.equal(after.contentWork.stage, "review_failed");
+      assert.equal(f.get(after.articleId)!.editorialQualityScore, 62);
+      assert.ok(f.get(after.articleId)!.editorialQualityNotes.includes(`Material editorial defect 1: ${defect}`));
+    }
+    assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0); f.assertOffline();
+  }
 });
 
 test("SLC47 valid failing audit or failing clarification enters bounded revision without score promotion", async () => {

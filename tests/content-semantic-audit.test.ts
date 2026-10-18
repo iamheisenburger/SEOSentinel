@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { auditResultHash, auditResultJson, contradictoryContentAudit, semanticAuditPrompt } from "../convex/lib/contentAudit.ts";
+import { auditResultHash, auditResultJson, contradictoryContentAudit, selfNegatingMaterialDefects, semanticAuditPrompt } from "../convex/lib/contentAudit.ts";
 import { convexToJson, jsonToConvex } from "convex/values";
 import { sha256Hex } from "../convex/lib/publicationArtifact.ts";
 import { contentServiceStatus } from "../src/lib/content-service-status.ts";
@@ -19,6 +19,29 @@ test("semantic clarification accepts only complete contradictory audits, never p
     { ...clean, score: 83, materialDefects: [""] }, { ...clean, score: 83, claimEvidence: [{ supported: true }] }]) {
     assert.equal(contradictoryContentAudit(value), false); assert.throws(() => semanticAuditPrompt("Article", value));
   }
+});
+
+test("P95 a material defect must name a change: entries that ask for none make the audit contradictory", () => {
+  const noChange = [
+    "Claim unit 4 includes a call to action; it has no externally verifiable proposition and is supported as-is.",
+    "The FAQ answers are acceptable as written; no change is needed.",
+  ];
+  const real = [
+    "Metadata title/metaTitle 'Choose, Install and Test It' implies installation instructions that the body states it does not provide; adjust to avoid an implied promise.",
+    "Section 'Check your setup' ends with 'Stop there' without defining what result passes, leaving the decision gate unclear.",
+    // Mixed: it says one part is fine but still asks for a concrete change.
+    "None required for factual support; however, the 'Where Pentra fits' section should note that pricing was not visible.",
+  ];
+  assert.deepEqual(selfNegatingMaterialDefects([...noChange, ...real]), noChange);
+  for (const defect of noChange) {
+    const audit = { ...clean, score: 62, materialDefects: [real[0], defect] };
+    assert.equal(contradictoryContentAudit(audit), true);
+    const prompt = semanticAuditPrompt("SAME ARTICLE", audit);
+    assert.match(prompt, /Do not raise the score/); assert.ok(prompt.includes(JSON.stringify([defect])));
+  }
+  for (const defect of real) assert.equal(contradictoryContentAudit({ ...clean, score: 62, materialDefects: [defect] }), false);
+  // A score/defect mismatch keeps its exact earlier clarification text.
+  assert.doesNotMatch(semanticAuditPrompt("SAME ARTICLE", { ...clean, score: 83 }), /ask for no change/);
 });
 
 test("SLC48 real Convex serialization keeps nested audit hashes and clarification request text stable without changing values or array order", () => {

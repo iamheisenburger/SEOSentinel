@@ -36,7 +36,7 @@ export async function contentStructuredCall(args: { system: string; userMessage:
   toolDescription: string; inputSchema: Anthropic.Tool.InputSchema; maxTokens?: number }, clarifyAudit?: { originalResult: unknown }) {
   const s = scope.getStore();
   if (!s?.job.contentWork) throw new Error("Missing content provider scope");
-  if (!["submit_article", "review_article", "remediate_final_article", "audit_final_article"].includes(args.toolName)) throw new Error(`Unpriced content tool: ${args.toolName}`);
+  if (!["submit_article", "review_article", "remediate_final_article", "audit_final_article", "submit_final_metadata"].includes(args.toolName)) throw new Error(`Unpriced content tool: ${args.toolName}`);
   const cw = s.job.contentWork, p = cw.pricing;
   const baseKey = `${cw.replacements}:${cw.revisions}:${s.phase}:${args.toolName}`;
   const logicalKey = baseKey + (clarifyAudit ? SEMANTIC_AUDIT_SUFFIX : "");
