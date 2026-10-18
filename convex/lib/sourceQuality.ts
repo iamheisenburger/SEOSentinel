@@ -136,7 +136,11 @@ export function classifyEvidenceSource(value: string): EvidenceSourceQuality {
     // help.vendor rather than vendor/docs. This is a documentation candidate,
     // not an academic tier or proof of any claim: capture and exact-proposition
     // review still apply. Known community/blog hosts remain excluded below.
-    /^(?:www\.)?(?:docs?|documentation|developers?|support|help|reference|api)\.[^.]+\./.test(host);
+    // learn.microsoft.com (formerly docs.microsoft.com), knowledge.hubspot.com,
+    // faq.whatsapp.com and kb.* are the same first-party help documentation
+    // under another subdomain name (Oct 18 2026: lead-scoring and chat-widget
+    // research found only these and kept zero sources).
+    /^(?:www\.)?(?:docs?|documentation|developers?|support|help|helpcenter|help-center|reference|api|learn|knowledge|kb|faq)\.[^.]+\./.test(host);
   if (looksLikeDocumentation && !matchesAnyHost(host, LOW_AUTHORITY_HOSTS)) {
     return {
       url: normalized,

@@ -2449,6 +2449,52 @@ test("a findings-only fact check removes the unverified sentences at once and sc
   assert.equal(applyFactCheckFindings({ markdown, unverifiedClaims: [], confidenceScore: 91 }).confidenceScore, 91);
 });
 
+test("P93 a plain call-to-action sentence is an invitation, not a claim, in the ledger and the fact check", async () => {
+  const { isCallToActionSentence, applyFactCheckFindings, validateClaimEvidenceLedger } = await import("../convex/lib/articleQuality.ts");
+  const pentra = "Name: Pentra\nDomain: pentra.dev\nPentra publishes articles to WordPress.";
+  const leadpilot = "Name: LeadPilot\nDomain: leadpilot.chat\nLeadPilot saves contact details with intent, fit, timing and score.";
+  const cta = "If that sounds useful, you can [Try Pentra](https://pentra.dev/sign-up).";
+  assert.equal(isCallToActionSentence(cta, pentra), true);
+  assert.equal(isCallToActionSentence("If you want to see how conversation-based qualification and handoff would work on your own site, you can [Build your LeadPilot agent](https://leadpilot.chat/sign-up).", leadpilot), true);
+  // Anything that asserts something around or inside the link stays a claim.
+  for (const claim of [
+    "LeadPilot captures every lead automatically, so [Try LeadPilot](https://leadpilot.chat/sign-up).",
+    "Teams see 3x more leads: [Try LeadPilot](https://leadpilot.chat/sign-up).",
+    "If that sounds useful, [Get more leads with LeadPilot](https://leadpilot.chat/sign-up).",
+    "Pentra publishes to WordPress automatically, and you can [Try Pentra](https://pentra.dev/sign-up).",
+    "According to a study, chat converts better, so [Try LeadPilot](https://leadpilot.chat/sign-up).",
+    "To see it on your own site, [start free](https://leadpilot.chat/sign-up).",
+  ]) assert.equal(isCallToActionSentence(claim, claim.includes("Pentra") ? pentra : leadpilot), false, claim);
+  // The ledger no longer demands an entry for the invitation.
+  const markdown = ["# Rank checks", "", "Write down the query, the date and the position before you change a page.", "", cta, ""].join("\n");
+  const ledger = validateClaimEvidenceLedger({ markdown, sources: [], researchEvidence: "", productEvidence: pentra,
+    productEvidenceHash: undefined, claimEvidence: [] });
+  assert.equal(ledger.requiredClaimCount, 0);
+  assert.equal(ledger.passed, true);
+  // A fact check that listed the invitation anyway neither cuts it nor counts it.
+  const applied = applyFactCheckFindings({ markdown, unverifiedClaims: [cta], claimCount: 3, verifiedCount: 2, confidenceScore: 67, productEvidence: pentra });
+  assert.equal(applied.markdown, markdown);
+  assert.deepEqual(applied.unverifiedClaims, []);
+  assert.equal(applied.confidenceScore, 100);
+  // Without the product evidence a product claim cannot pass as an invitation.
+  const claimCta = "Pentra publishes to WordPress automatically, and you can [Try Pentra](https://pentra.dev/sign-up).";
+  const kept = applyFactCheckFindings({ markdown: markdown + "\n" + claimCta, unverifiedClaims: [claimCta], claimCount: 3, verifiedCount: 2, productEvidence: pentra });
+  assert.deepEqual(kept.unverifiedClaims, [claimCta]);
+});
+
+test("P93 first-party help documentation under learn., knowledge., kb. and faq. hosts is documentation", async () => {
+  const { classifyEvidenceSource } = await import("../convex/lib/sourceQuality.ts");
+  for (const url of ["https://learn.microsoft.com/en-us/dynamics365/sales/configure-predictive-lead-scoring",
+    "https://knowledge.hubspot.com/scoring/understand-the-lead-scoring-tool", "https://faq.whatsapp.com/1234", "https://kb.example.com/article/1"]) {
+    const quality = classifyEvidenceSource(url);
+    assert.equal(quality.strictEligible, true, url);
+    assert.equal(quality.tier, "official-doc", url);
+  }
+  for (const url of ["https://www.hubspot.com/learn/lead-scoring", "https://blog.hubspot.com/marketing/lead-scoring", "https://learn.medium.com/x"]) {
+    assert.equal(classifyEvidenceSource(url).strictEligible, false, url);
+  }
+});
+
 test("autopilot accepts the reviewer's style score from 70, never a factual or safety issue", async () => {
   const { ownerWaivableIssue } = await import("../convex/lib/articleQuality.ts");
   const facts = { factCheckScore: 100, claimEvidenceStatus: "passed" };

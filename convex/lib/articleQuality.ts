@@ -774,6 +774,30 @@ function isStandaloneCallToActionLink(paragraph: string): boolean {
   );
 }
 
+/** "If that sounds useful, you can [Try Pentra](https://pentra.dev/sign-up)."
+ * One sentence holding one link with a short action label, around words that
+ * assert nothing, is an invitation, not a claim (Oct 18 2026: the auditor left
+ * exactly this sentence out of the ledger and the fact check listed it as
+ * unverified, so a fully supported draft could not publish). The label must
+ * be a plain action ("Try Pentra", "Build your LeadPilot agent"); a label or
+ * lead-in carrying a number, citation, outcome or comparison stays a claim. */
+const CTA_LABEL_VERB = /^(?:try|start|build|create|get started|see|book|sign up|join|explore|open|read|set up|request|contact|talk to|visit)\b/i;
+const CTA_LABEL_CLAIM = /\b(?:more|less|fewer|faster|better|best|increase|boost|double|triple|grow|save|cut|reduce|free|guarantee\w*|proven|instant\w*|minutes?|seconds?|hours?|days?)\b/i;
+export function isCallToActionSentence(paragraph: string, productEvidence = ""): boolean {
+  if (isStandaloneCallToActionLink(paragraph)) return true;
+  if (paragraph.includes("\n") || claimSentenceSegments(paragraph).length !== 1) return false;
+  const links = [...paragraph.matchAll(/\[([^\]]+)\]\((https:\/\/[^)\s]+)\)/g)];
+  if (links.length !== 1) return false;
+  const label = links[0][1].replace(/[*_]/g, "").trim();
+  if (label.split(/\s+/).length > 6 || /\d|[%$€£]/.test(label) || !CTA_LABEL_VERB.test(label) ||
+    CTA_LABEL_CLAIM.test(label) || HYPE_PATTERN.test(label)) return false;
+  const rest = paragraph.replace(links[0][0], " ").replace(/[*_]/g, "").replace(/\s+/g, " ").trim();
+  if (rest.split(/\s+/).filter(Boolean).length > 25 || /\d|[%$€£]/.test(rest) ||
+    inlineCitationNumbers(paragraph).length > 0 || CTA_LABEL_CLAIM.test(rest) ||
+    hasEvidenceClaimSignal(rest, productEvidence)) return false;
+  return true;
+}
+
 function isSourceBibliographyEntry(paragraph: string): boolean {
   const rows = paragraph.split(/\r?\n/).map(row => row.trim()).filter(Boolean);
   return rows.length > 0 && rows.every(row =>
@@ -822,7 +846,7 @@ function requiresClaimEvidence(value: string, productEvidence: string): boolean 
     isReaderMeasurementInstruction(value, productEvidence) ||
     isExplicitAuthorFramework(value, productEvidence) ||
     isReaderRunProcedure(value, productEvidence) ||
-    isStandaloneCallToActionLink(value)
+    isCallToActionSentence(value, productEvidence)
   ) return false;
   return hasEvidenceClaimSignal(value, productEvidence);
 }
@@ -1596,20 +1620,29 @@ export function applyFactCheckFindings(args: {
   claimCount?: number;
   verifiedCount?: number;
   confidenceScore?: number;
-}): { markdown: string; removedClaims: number; confidenceScore?: number } {
+  productEvidence?: string;
+}): { markdown: string; removedClaims: number; confidenceScore?: number; unverifiedClaims: string[] } {
   let markdown = args.markdown, removedClaims = 0;
+  const unverifiedClaims: string[] = [];
   for (const claim of args.unverifiedClaims) {
+    // The checker is told never to list advice; a plain call-to-action link it
+    // listed anyway asserts nothing. It is kept in the article and is not
+    // counted as an unverified fact (the deletion would only cut the CTA).
+    if (isCallToActionSentence(claim.trim(), args.productEvidence ?? "") &&
+      args.markdown.includes(claim.trim())) { removedClaims += 1; continue; }
+    unverifiedClaims.push(claim);
     const next = removeUnsupportedClaimSentences(markdown, [claim]);
     if (next !== markdown) { removedClaims += 1; markdown = next; }
   }
   const { claimCount, verifiedCount } = args;
   const countsValid = Number.isInteger(claimCount) && Number.isInteger(verifiedCount) && (claimCount ?? 0) > 0 &&
     (verifiedCount ?? -1) >= 0 && (verifiedCount ?? 0) <= (claimCount ?? 0);
-  if (!countsValid) return { markdown, removedClaims, confidenceScore: args.confidenceScore };
+  if (!countsValid) return { markdown, removedClaims, confidenceScore: args.confidenceScore, unverifiedClaims };
   const unverified = claimCount! - verifiedCount!;
   const remainingUnverified = Math.max(0, unverified - Math.min(removedClaims, unverified));
   const remaining = verifiedCount! + remainingUnverified;
-  return { markdown, removedClaims, confidenceScore: remaining > 0 ? Math.round((verifiedCount! / remaining) * 100) : 100 };
+  return { markdown, removedClaims, unverifiedClaims,
+    confidenceScore: remaining > 0 ? Math.round((verifiedCount! / remaining) * 100) : 100 };
 }
 
 /** Structured data belongs to the renderer: a <script> block the writer put in

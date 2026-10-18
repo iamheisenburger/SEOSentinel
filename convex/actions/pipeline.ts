@@ -1751,9 +1751,9 @@ async function factCheckArticle(
     // paying for a revision round to delete them (owner decision, Oct 14).
     const applied = applyFactCheckFindings({ markdown, unverifiedClaims: reviewed.unverifiedClaims ?? [],
       claimCount: reviewed.claimCount, verifiedCount: reviewed.verifiedCount,
-      confidenceScore: normalizedFactCheckConfidence(reviewed) });
+      confidenceScore: normalizedFactCheckConfidence(reviewed), productEvidence });
     return { ...reviewed, confidenceScore: applied.confidenceScore,
-      unverifiedClaims: reviewed.unverifiedClaims ?? [], markdown: applied.markdown };
+      unverifiedClaims: applied.unverifiedClaims, markdown: applied.markdown };
   }
   return {
     ...reviewed,
@@ -1927,6 +1927,7 @@ async function auditFinalArticle(args: {
       "An unsupported operational number, unlabeled invented scenario, or product capability absent from first-party evidence caps the score below 85.",
       "The detector's required claim units are a coverage floor, not exhaustive. Return exactly one claimEvidence entry for every supplied claim unit, in the same order, and copy that unit's complete paragraph verbatim into claim. Do not omit, merge, summarize, or split a claim unit. Independently inspect the entire article and append any additional externally verifiable factual paragraphs not covered by those units. Copy each additional paragraph verbatim and do not duplicate entries. An empty ledger is valid only when neither the detector nor your independent review identifies a factual assertion requiring evidence.",
       "Mark a claim unit supported only when the supplied evidence directly supports every externally verifiable proposition in it; citation presence alone is not evidence. If only part is supported, mark the whole unit unsupported and explain the unsupported proposition.",
+      "supported=false means the unit contains a specific externally verifiable proposition that the evidence does not support, and reason must quote that proposition. A unit whose every sentence is advice, a reader instruction or decision question, an explicitly labelled hypothetical, the author's own framing or scope disclaimer, or a call to action has no externally verifiable proposition: return it with supported=true and a reason saying so. Never mark a unit unsupported while stating that it needs no evidence.",
       "Do not put editorial summaries, descriptions of what the article says, or recommendations clearly framed as advice into claimEvidence. They are not externally verifiable evidence claims.",
       "The first-party product evidence is a separate unnumbered snapshot. For a product claim supported only by that snapshot, return an empty citationNumbers array. Never invent a citation ordinal for product evidence or for a source absent from the supplied source array.",
       "Do not reward length, keyword repetition, entity coverage, or promotional language.",
@@ -4641,8 +4642,9 @@ async function handleArticle(
         system: [
           "You research sources for a fact-checked article. Use web search to find authoritative primary sources:",
           "government (.gov), academic (.edu, journals, PubMed, arXiv), standards bodies, and official documentation",
-          "(for example Google Search Central for search topics). Avoid blogs, vendor marketing, forums, social media and news aggregators.",
-          "Then write a short research brief of the facts most useful to the article. Quote only what the sources say; do not add facts of your own.",
+          "(for example Google Search Central for search topics). For how a software category or platform works, the vendor's own help centre or product documentation",
+          "(docs, help, support, learn or knowledge-base pages) counts as official documentation. Avoid blogs, vendor marketing, forums, social media and news aggregators.",
+          "Then write a short research brief of the facts most useful to the article, citing the page each fact comes from. Quote only what the sources say; do not add facts of your own.",
         ].join(" "),
         userMessage: [
           `Article topic: ${topic.label}`,
