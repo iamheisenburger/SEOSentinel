@@ -422,6 +422,14 @@ test("ordinary core path plans fresh synthetic topics through real admission and
   f.assertOffline();
 });
 
+/** P92: the exact monthly recount runs in bounded pages after every change
+ * (work created outside admission, as these synthetic jobs are, is counted by it). */
+async function recountUsage(f: ReturnType<typeof setup>, siteId: string) {
+  const userId = f.get(siteId)!.userId, today = new Date(f.now());
+  const monthStart = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1);
+  const siteIds = f.tables.sites.filter(row => row.userId === userId).map(row => row._id);
+  await f.invoke("contentWork:recountAccountUsageStep", { userId, monthStart, siteIds, siteIndex: 0, cursor: null, used: 0, candidates: [], replaced: [] });
+}
 /** The dashboard shows the account's stored monthly usage without re-reading
  * every job of the month, and the stored count equals the exact live count. */
 async function storedUsageMatchesLive(f: ReturnType<typeof setup>, siteId: string) {
@@ -983,6 +991,41 @@ test("SLC56 new GitHub customers complete owner-reviewed drafts without granting
   });
 });
 
+// --- P92: the monthly allowance count read every article job of the month on every site of the account in ONE
+// execution. Job documents carry their provider checkpoints (drafts, reviews, research), so on Oct 18 2026 the
+// owner account passed Convex's 16 MB per-execution read limit and every Autopilot run on both sites failed inside
+// admission ("Too many bytes read", contentWork:advance). Admission now reads the stored count (each admission adds
+// its article at once) and the exact recount runs afterwards in bounded pages.
+test("P92 admission never reads the whole month of article jobs; the exact recount runs in bounded pages", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_fill");
+  const firstJob = f.tables.jobs.find(j => j.contentWork)!;
+  Object.assign(firstJob, { status: "done" }); firstJob.contentWork.stage = "ready";
+  f.get(site.id)!.contentSchedule.active = true;
+  // A busy month: 30 earlier article jobs on record.
+  for (let n = 0; n < 30; n++) {
+    const earlier = structuredClone(firstJob);
+    earlier._id = `${firstJob._id}-month-${n}`; earlier.contentWork.stage = "verified";
+    f.tables.jobs.push(earlier);
+  }
+  const today = new Date(f.now()), monthStart = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1);
+  const monthWide = (from: number) => f.queryReads.slice(from).filter(read => read.table === "jobs" && read.index === "by_site_content_deadline" &&
+    read.range.some(r => r.key === "contentWork.deadlineAt" && r.op === "gte" && r.value === monthStart));
+  const start = f.queryReads.length;
+  const admitted = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(admitted.mode, "buffer_fill", JSON.stringify(admitted));
+  assert.deepEqual(monthWide(start), [], "admission does not re-read every job of the month");
+  const userId = f.get(site.id)!.userId;
+  const stored = () => f.tables.account_content_usage.find(row => row.userId === userId && row.monthStart === monthStart)?.used;
+  assert.equal(stored(), 2, "the admitted article is added to the stored count at once");
+  // The scheduled recount pages through the month and stores the exact count.
+  await pumpUntil(f, () => stored() === 32, 200);
+  assert.equal(await storedUsageMatchesLive(f, site.id), 32, "the paged recount equals the live count");
+  f.assertOffline();
+});
+
 test("SLC57 public plans cap new drafts per month before any paid call", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const entitlement = f.tables.account_plan_entitlements.find(e => e.userId === f.get(f.sites[0].id)!.userId)!;
@@ -1010,6 +1053,7 @@ test("SLC57 public plans cap new drafts per month before any paid call", async (
     prior.contentWork.ownerRequest = { ...prior.contentWork.ownerRequest, requestKey: key };
     f.tables.jobs.push(prior);
   }
+  await recountUsage(f, site.id);
   const calls = f.modelCalls.length;
   await assert.rejects(f.invoke("contentWork:requestDraft", { ...base, requestKey: "free-plan-fourth-article" }), /3 free articles for this month are used/);
   assert.equal(f.modelCalls.length, calls, "a rejected request makes no paid call");
@@ -1295,11 +1339,12 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
       earlier._id = `${firstJob._id}-earlier-${n}`; earlier.contentWork.stage = "verified";
       f.tables.jobs.push(earlier);
     }
+    await recountUsage(f, site.id);
     const second = await f.invoke("contentWork:advance", { siteId: site.id });
     assert.equal(second.mode, "quota_reached", "the free plan's three articles this month are already started");
     assert.equal(f.tables.jobs.filter(j => j.contentWork).length, 3);
-    // The two earlier articles were added outside admission: the admission
-    // check counted live and stored the exact number for the dashboard.
+    // The two earlier articles were added outside admission: the paged
+    // recount counted them and stored the exact number for the dashboard.
     assert.equal(await storedUsageMatchesLive(f, site.id), 3, "a full month is shown exactly");
     const stored = structuredClone(f.tables.account_content_usage);
     f.setTime(f.now() + 60_000);
@@ -7099,7 +7144,7 @@ test("P76 an article Autopilot wrote and enrolled at publication gets the page-2
 // rewritten), so nothing remembered it: LeadPilot re-bought the same "lead scoring saas" refresh every 4 h slot
 // (9 times Oct 16-17, three paid reviews each, never published). Its retired quality_exhausted topic now blocks the
 // same page + search for the refresh cooldown, and the slot goes to a new article instead.
-test("P91 a page refresh the review rejected on every pass is not bought again for the same page and search", async () => {
+test("P91 a page whose refresh the review rejected on every pass is not refreshed again within the cooldown", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const day = 86_400_000, site = await selectGrowth(f, 7 * day);
   await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.stage === "verified")));
@@ -7115,7 +7160,8 @@ test("P91 a page refresh the review rejected on every pass is not bought again f
     ownerAccountKey: accountDeletionKey(f.get(site.id)!.userId), verifiedAt: f.now() });
   // The same refresh was tried before and retired after failing review on every pass (what reviseFailedWork records).
   f.add("topic_clusters", { ...f.tables.topic_clusters.find(t => t.siteId === site.id)!, _id: undefined,
-    primaryKeyword: query, label: ` ${String(page.editable.title).toUpperCase()} `, status: "disqualified",
+    // Retired under another phrasing of the search: the page itself waits out the cooldown.
+    primaryKeyword: `${query} for teams`, label: ` ${String(page.editable.title).toUpperCase()} `, status: "disqualified",
     contentFeasibilityStatus: "quality_exhausted", contentFeasibilityCheckedAt: f.now() - 2 * day,
     notes: "Refresh of a page-2 article: earlier attempt", createdAt: f.now() - 3 * day, updatedAt: f.now() - 2 * day });
   const before = new Set(f.tables.jobs.map(j => String(j._id)));
