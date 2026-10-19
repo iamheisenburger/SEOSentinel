@@ -1401,6 +1401,9 @@ export default defineSchema({
     .index("by_site_article", ["siteId", "articleId", "status"])
     .index("by_site_content_deadline", ["siteId", "contentWork.deadlineAt"])
     .index("by_site_content_stage", ["siteId", "contentWork.stage"])
+    // Corrections and rollbacks look up one page's work, never a site's whole
+    // history (a site past 500 jobs could not be corrected at all; Oct 19 2026).
+    .index("by_site_content_target", ["siteId", "contentWork.targetPageId"])
     .index("by_status_heartbeat", ["status", "heartbeatAt"])
     .index("by_site_type_created", ["siteId", "type", "createdAt"])
     .index("by_site_type_status_created", [
@@ -1654,6 +1657,8 @@ export default defineSchema({
   })
     .index("by_fingerprint", ["fingerprint"])
     .index("by_next_review", ["nextReviewAt"])
+    // Recovery reads only actions that can still be reviewed (B, Oct 19 2026).
+    .index("by_status_next_review", ["status", "nextReviewAt"])
     .index("by_site_status", ["siteId", "status"])
     .index("by_site_priority", ["siteId", "status", "priority"])
     .index("by_article_status", ["articleId", "status"]),

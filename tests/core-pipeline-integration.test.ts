@@ -8210,3 +8210,61 @@ test("B reserving a content-work slot never loads the month's job documents", as
   assert.equal(f.tables.usage_log.filter((row: Fields) => row.jobId === job._id).length, 1);
   f.assertOffline();
 });
+
+// B (Oct 19 2026): Convex reads. contentWork:advance runs on every scheduler
+// wake (~771 KB a run) and read five full published articles just for the last
+// publication time; the growth recovery lane re-read every resolved or
+// dismissed action with a past review time every fifteen minutes.
+test("B advance and site health find the last publication time in article summaries, not full articles", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  f.setTime(START + 5 * 60_000); // the first slot's delivery window is open: advance checks catch-up pacing
+  const fullArticleReads = (from: number) => f.queryReads.slice(from).filter(read => read.table === "articles" && read.index === "by_site_status_created");
+  let start = f.queryReads.length;
+  await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.ok(f.queryReads.slice(start).some(read => read.table === "article_summaries" && read.index === "by_site_status_created"), "pacing reads summaries");
+  assert.deepEqual(fullArticleReads(start), [], "advance never loads full published articles for pacing");
+  start = f.queryReads.length;
+  await f.invoke("contentHealth:siteHealth", { siteId: site.id });
+  assert.deepEqual(fullArticleReads(start), [], "site health reads summaries too");
+  f.assertOffline();
+});
+
+test("B the growth recovery lane reads only actions that can still be reviewed", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const siteId = f.sites[0].id;
+  for (let n = 0; n < 120; n++) f.add("seo_growth_actions", { siteId, status: n % 2 ? "resolved" : "dismissed",
+    nextReviewAt: f.now() - (n + 1) * 60_000, fingerprint: `closed-${n}` });
+  f.add("seo_growth_actions", { siteId, status: "open", nextReviewAt: f.now() - 1_000, fingerprint: "open-1" });
+  f.add("seo_growth_actions", { siteId, status: "monitoring", nextReviewAt: f.now() + 86_400_000, fingerprint: "later-1" });
+  const start = f.queryReads.length;
+  const result = await f.invoke("seoGrowth:listDueGrowthSitesInternal", { timestamp: f.now() });
+  const rows = f.queryReads.slice(start).filter(read => read.table === "seo_growth_actions").reduce((sum, read) => sum + read.rows, 0);
+  assert.equal(rows, 1, `only the one reviewable due action is read (${rows} rows)`);
+  assert.equal(result.readComplete, true);
+  f.assertOffline();
+});
+
+test("B corrections and rollbacks work on a site with more than 500 jobs, reading only the page's own work", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const selected = await selectExistingPage(f, "md", `${pipelineLeakParagraph}\n\n${correctionSurvivor}`), site = await selectGrowth(f);
+  f.get(site.id)!.gscDateEpochs = [];
+  await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const template = f.tables.jobs.find(j => j.siteId === site.id)!;
+  // leadpilot.chat passed 500 jobs: every correction was refused "inventory incomplete" (Oct 19 2026).
+  for (let n = 0; n < 520; n++) f.tables.jobs.push(Object.assign(structuredClone(template), { _id: `${template._id}-history-${n}`, status: "done" }));
+  const request = { siteId: site.id, pageId: selected.pageId, before: pipelineLeakParagraph,
+    replacement: "Keep the original observations available to an authorized reviewer.", reason: "Owner asked: remove process wording a reader should never see." };
+  const id = await f.invoke("actions/contentCorrections:repairReaderTextAsOperator", request);
+  await pumpUntil(f, () => f.get(id)!.contentWork.stage === "verified", 100, f.get(site.id)!.contentSchedule.nextDeadlineAt - 5 * 60_000);
+  const revision = f.get(id)!.contentWork.revisionId;
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  const start = f.queryReads.length;
+  const rollback = await f.invoke("contentImprovements:requestRollback", { siteId: site.id, revisionId: revision, confirm: true });
+  f.setIdentity(null);
+  assert.ok(rollback, "a mature site can still roll back");
+  const jobRows = f.queryReads.slice(start).filter(read => read.table === "jobs").reduce((sum, read) => sum + read.rows, 0);
+  assert.ok(jobRows < 20, `rollback reads the page's work, not the site's history (${jobRows} job rows)`);
+  f.assertOffline();
+});

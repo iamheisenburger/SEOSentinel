@@ -140,9 +140,14 @@ export const listDueGrowthSitesInternal = internalQuery({
     if (!Number.isSafeInteger(timestamp) || timestamp <= 0) {
       throw new Error("Growth recovery timestamp is invalid");
     }
-    const due = await ctx.db.query("seo_growth_actions")
-      .withIndex("by_next_review", (q) => q.lte("nextReviewAt", timestamp))
-      .take(GROWTH_REVIEW_RECOVERY_READ_LIMIT + 1);
+    // Only open and monitoring actions can be reviewed. Resolved and
+    // dismissed ones keep a past nextReviewAt forever, and the fifteen-minute
+    // lane re-read up to 500 of them every run (~0.7 MB, ~65 MB a day; B,
+    // Oct 19 2026). Each active status is read through its own index range.
+    const byStatus = await Promise.all(ACTIVE_ACTION_STATUSES.map((status) => ctx.db.query("seo_growth_actions")
+      .withIndex("by_status_next_review", (q) => q.eq("status", status).lte("nextReviewAt", timestamp))
+      .take(GROWTH_REVIEW_RECOVERY_READ_LIMIT + 1)));
+    const due = byStatus.flat().sort((a, b) => (a.nextReviewAt ?? 0) - (b.nextReviewAt ?? 0));
     const siteIds: Id<"sites">[] = [];
     const seen = new Set<string>();
     for (const action of due.slice(0, GROWTH_REVIEW_RECOVERY_READ_LIMIT)) {
@@ -163,7 +168,7 @@ export const listDueGrowthSitesInternal = internalQuery({
     }
     return {
       siteIds,
-      readComplete: due.length <= GROWTH_REVIEW_RECOVERY_READ_LIMIT,
+      readComplete: byStatus.every((rows) => rows.length <= GROWTH_REVIEW_RECOVERY_READ_LIMIT),
     };
   },
 });

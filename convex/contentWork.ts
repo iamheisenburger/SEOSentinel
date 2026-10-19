@@ -1708,7 +1708,10 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
  * previous one, so this only ever slows a catch-up after missed slots. */
 export const CATCH_UP_MAX_GAP_MS = 4 * 3_600_000;
 async function catchUpPaceAt(ctx: MutationCtx, siteId: Id<"sites">, intervalMs: number) {
-  const latest = await ctx.db.query("articles").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published"))
+  // Article summaries carry publishedAt (synced in the same mutation that
+  // publishes) at a few KB each; five full articles (markdown, sources, claim
+  // ledger, ~30 KB each) were read on every scheduler wake (B, Oct 19 2026).
+  const latest = await ctx.db.query("article_summaries").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published"))
     .order("desc").take(5);
   const last = latest.reduce((max, a) => typeof a.publishedAt === "number" && a.publishedAt > max ? a.publishedAt : max, 0);
   return last > 0 ? last + Math.min(Math.floor(intervalMs / 2), CATCH_UP_MAX_GAP_MS) : 0;

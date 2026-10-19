@@ -24,6 +24,20 @@ async function correctionOwner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">,
     site.contentSchedule?.paused) throw new Error("Active owner-authorized corrective work required");
   return site;
 }
+/** One page's work (improvements, corrections, rollbacks). A site's whole job
+ * history grows without bound: past 500 jobs every correction was refused
+ * ("inventory incomplete") and the read itself approached Convex's limit. */
+async function pageWork(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">, pageId: Id<"pages">) {
+  const jobs = await ctx.db.query("jobs").withIndex("by_site_content_target", q => q.eq("siteId", siteId).eq("contentWork.targetPageId", pageId)).take(501);
+  if (jobs.length > 500) throw new Error("Page work inventory is incomplete");
+  return jobs;
+}
+async function siteHasActiveWork(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
+  for (const status of ["pending", "running"]) {
+    if ((await ctx.db.query("jobs").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", status)).take(1)).length) return true;
+  }
+  return false;
+}
 async function verifiedDestination(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, id?: Id<"pages">) {
   const page = id ? await ctx.db.get(id) : null;
   if (!page || page.siteId !== site._id || !page.editable?.active) throw new Error("Correction destination is not an authorized exact-site page");
@@ -48,8 +62,7 @@ export const priorCorrection = internalQuery({ args: { siteId: v.id("sites"), pa
   replacement: v.optional(v.string()) },
   handler: async (ctx, args) => {
     await correctionOwner(ctx, args.siteId);
-    const jobs = await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", args.siteId)).take(501);
-    if (jobs.length > 500) throw new Error("Corrective work inventory incomplete");
+    const jobs = await pageWork(ctx, args.siteId, args.pageId);
     return jobs.find(j => { const cw = j.contentWork, c = cw?.correction; return cw?.targetPageId === args.pageId &&
       cw.baseRevision === args.baseRevision && c?.kind === args.kind && c.before === args.before && c.reason === args.reason &&
       c.field === args.field && c.targetPageId === args.targetPageId && (args.kind !== "reader_text_repair" || c.after === args.replacement); })?._id ?? null;
@@ -65,15 +78,14 @@ export const requestCorrection = internalMutation({ args: { siteId: v.id("sites"
     if (args.operator && args.patch.kind !== "reader_text_repair") throw new Error("The operator path only repairs pipeline wording");
     const site = await correctionOwner(ctx, args.siteId, args.operator === true);
     const key = sha256Hex(JSON.stringify([site._id, args.pageId, args.baseRevision, args.permissionVersion, args.patch, args.targetPageId]));
-    const jobs = await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", site._id)).take(501);
-    if (jobs.length > 500) throw new Error("Corrective work inventory is incomplete");
+    const jobs = await pageWork(ctx, site._id, args.pageId);
     const prior = jobs.find(j => j.contentWork?.correction?.key === key);
     if (prior) return prior._id;
     const page = await ctx.db.get(args.pageId), e = page?.editable;
     if (!page || !e?.active || page.siteId !== site._id || e.sourceRevision !== args.baseRevision || e.version !== args.permissionVersion ||
       e.profileHash !== confirmedContentProfileHash(site) || e.connectionHash !== contentConnectionHash(site) ||
       site.contentSchedule?.profileHash !== e.profileHash || site.contentSchedule?.connectionHash !== e.connectionHash ||
-      site.publicationLeaseOwner || jobs.some(j => ["pending", "running"].includes(j.status))) throw new Error("Reconcile active work or changed source before correction");
+      site.publicationLeaseOwner || await siteHasActiveWork(ctx, site._id)) throw new Error("Reconcile active work or changed source before correction");
     if (args.observedAt > Date.now() || Date.now() - args.observedAt > 60_000) throw new Error("Correction evidence must be current");
     if (args.patch.kind === "technical_repair") {
       const target = await verifiedDestination(ctx, site, args.targetPageId);
@@ -117,15 +129,14 @@ export const requestRollback = mutation({ args: { siteId: v.id("sites"), revisio
       !await siteExecutionAuthorized(ctx, site)) throw new Error("Owner-authorized rollback required");
     const r = await ctx.db.get(args.revisionId), original = r?.contentWorkJobId ? await ctx.db.get(r.contentWorkJobId) : null;
     if (!r || r.siteId !== site._id || !original?.contentWork || !r.selectedPageId || !r.deliveredSource || !r.liveVerifiedAt) throw new Error("Only a verified exact-site content revision can be rolled back");
-    const jobs = await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", site._id)).take(501);
-    if (jobs.length > 500) throw new Error("Rollback work inventory is incomplete");
+    const jobs = await pageWork(ctx, site._id, r.selectedPageId);
     const existing = jobs.find(j => j.contentWork?.rollbackOfRevisionId === r._id);
     if (existing) return existing._id;
     const page = await ctx.db.get(r.selectedPageId), e = page?.editable;
     if (!page || !e?.active || page.siteId !== site._id || e.latestRevisionId !== r._id ||
       e.sourceRevision !== r.deliveredSource.revision || e.profileHash !== confirmedContentProfileHash(site) ||
       e.connectionHash !== contentConnectionHash(site) || site.publicationLeaseOwner ||
-      jobs.some(j => ["pending","running"].includes(j.status))) throw new Error("Reconcile active work or changed page permissions before rollback");
+      await siteHasActiveWork(ctx, site._id)) throw new Error("Reconcile active work or changed page permissions before rollback");
     const jobId = await ctx.db.insert("jobs", { siteId: site._id, canonicalDomain: siteCanonicalDomain(site)!, domainRevision: siteCanonicalDomainRevision(site),
       rolloutEpoch: site.autopilotRolloutEpoch ?? 0, type: "article", status: "pending", articleId: r.articleId, workerAttempts: 0, publicationAttempts: 0,
       payload: { articleId: r.articleId, publishOnly: true, bufferDelivery: true },
