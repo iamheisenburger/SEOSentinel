@@ -2,6 +2,7 @@ import { classifyEvidenceSource } from "./sourceQuality.ts";
 import { publicationArtifactHash, sha256Hex } from "./publicationArtifact.ts";
 import { markdownCitationMarkers, removeUnverifiedMarkdownCitations } from "./markdownCitations.ts";
 import { deleteSentencesCoherently } from "./coherentDeletion.ts";
+import { SOURCES_HEADING } from "./sourcesHeading.ts";
 
 export type PublicationQualityMode = "standard" | "strict";
 
@@ -1993,7 +1994,6 @@ const READER_VISIBLE_PIPELINE_TEXT: RegExp[] = [
 ];
 const COUNT_WORD_VALUES: Record<string, number> = { two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 const LIST_ITEM = /^(\s*)(?:[-*+]|(\d+)[.)])\s+\S/;
-const SOURCES_HEADING = /^#{1,6}\s+(?:sources|references|editorial sources|bibliography|works cited)\s*:?\s*$/i;
 
 /** Top-level items of the list that starts after line `start` (blank lines and
  * deeper-indented continuation lines belong to it). */
@@ -2090,12 +2090,14 @@ function readableNumbers(sentence: string): Set<string> {
     .replace(/https?:\/\/\S+/g, " "));
 }
 
+/** A list item or line that is only a link ("Related reading") is navigation, not a claim. */
+const BARE_LINK_ITEM = /^(?:[-*+]\s+|\d+[.)]\s+)?\[[^\]]*\]\([^)]*\)\s*[.;]?$/;
 function articleClaimSentences(markdown: string): string[] {
   const { prose } = markdownOutsideCode(markdown);
   return prose.split(/\n\s*\n/).map((paragraph) => paragraph.trim())
     .filter((paragraph) => paragraph && !paragraph.startsWith("#") && !paragraph.startsWith("|") && !isSourceBibliographyEntry(paragraph))
     .flatMap((paragraph) => claimSentenceSegments(paragraph))
-    .filter((sentence) => !/^#/.test(sentence) && !/^\[\d+\]\s/.test(sentence));
+    .filter((sentence) => !/^#/.test(sentence) && !/^\[\d+\]\s/.test(sentence) && !BARE_LINK_ITEM.test(sentence.trim()));
 }
 
 /** Rule 2a, invented statistics: a sentence that cites a source must not

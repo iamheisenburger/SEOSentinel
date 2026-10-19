@@ -114,6 +114,9 @@ async function autopilotFailureBackoffUntil(ctx: MutationCtx, siteId: Id<"sites"
  * topic, a new job and its own reservation) when there is still this much time
  * before the slot. The failed job stays on record; nothing is reset. */
 const AUTOPILOT_REPLACEMENT_LEAD_MS = 60 * 60_000;
+/** The failure backoff spaces retries; it never takes a slot's first attempt.
+ * A slot due within this lead that no work has tried yet is prepared at once. */
+export const SLOT_PREP_LEAD_MS = 6 * 3_600_000;
 function autopilotReplaceable(job: Doc<"jobs">) {
   const cw = job.contentWork;
   return Boolean(cw && cw.stage === "failed" && !cw.ownerRequest && cw.retiredAt === undefined && !cw.replacesJobId &&
@@ -962,6 +965,18 @@ export const setAutopilotCadence = mutation({ args: { siteId: v.id("sites"), rev
     if (site.cadencePerWeek === args.cadencePerWeek && site.cadenceRequestedPerWeek === args.cadencePerWeek) return { changed: false };
     // The requested pace is what plan reconciliation keeps; without it an
     // owner's chosen pace silently reverted at the next plan sync.
+    await ctx.db.patch(site._id, { cadencePerWeek: args.cadencePerWeek, cadenceRequestedPerWeek: args.cadencePerWeek, updatedAt: Date.now() });
+    await wake(ctx, site._id);
+    return { changed: true };
+  } });
+/** The same pace change made by the operator on the owner's instruction
+ * (deploy key only): the owner's rules apply, without the dashboard token. */
+export const setAutopilotCadenceAsOperator = internalMutation({ args: { siteId: v.id("sites"), cadencePerWeek: v.number() },
+  handler: async (ctx, args) => {
+    const site = await ctx.db.get(args.siteId), s = site?.contentSchedule;
+    if (!site || site.serviceMode !== "growth_first" || !s?.autopilotSelectedAt || s.ownerReviewedOnly) throw new ConvexError("Autopilot is not on for this site.");
+    if (!targetCadenceOptions().some(option => option.value === args.cadencePerWeek)) throw new ConvexError("Choose one of the listed paces.");
+    if (site.cadencePerWeek === args.cadencePerWeek && site.cadenceRequestedPerWeek === args.cadencePerWeek) return { changed: false };
     await ctx.db.patch(site._id, { cadencePerWeek: args.cadencePerWeek, cadenceRequestedPerWeek: args.cadencePerWeek, updatedAt: Date.now() });
     await wake(ctx, site._id);
     return { changed: true };
@@ -1836,10 +1851,17 @@ export const advance = internalMutation({
     if (waiting.length >= 2) return { scheduled: 0, mode: "buffer_full" };
     if (schedule.autopilotSelectedAt) {
       const backoffUntil = await autopilotFailureBackoffUntil(ctx, siteId, schedule.intervalMs);
-      if (backoffUntil > Date.now()) {
-        await ctx.scheduler.runAt(backoffUntil, internal.autopilot.dispatchSiteFollowup, {
+      // Deadline first: the next open slot gets its first attempt once it is
+      // SLOT_PREP_LEAD_MS away, backoff or not. A persistent failure still costs
+      // one attempt per slot, as normal operation does (Oct 18-19 2026: both
+      // owner sites sat in this backoff while their slots came due).
+      const nextSlot = schedule.nextDeadlineAt + waiting.length * schedule.intervalMs;
+      const untried = !work.some(j => j.contentWork!.deadlineAt === nextSlot), prepAt = nextSlot - SLOT_PREP_LEAD_MS;
+      if (backoffUntil > Date.now() && !(untried && Date.now() >= prepAt)) {
+        const wakeAt = untried ? Math.min(backoffUntil, prepAt) : backoffUntil;
+        await ctx.scheduler.runAt(wakeAt, internal.autopilot.dispatchSiteFollowup, {
           siteId, trigger: "content_work", reason: "content_failure_backoff" });
-        return { scheduled: 0, mode: "content_failure_backoff", eligibleAt: backoffUntil };
+        return { scheduled: 0, mode: "content_failure_backoff", eligibleAt: wakeAt };
       }
     }
     const pricing = await pricingConfiguration(ctx, site);

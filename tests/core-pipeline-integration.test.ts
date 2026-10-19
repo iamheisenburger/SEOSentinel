@@ -4307,6 +4307,81 @@ test("P103 rule 2a: Autopilot publishes on objective checks; scores are notes, f
   });
 });
 
+// P104 (Oct 19 2026). Slots: on Oct 18-19 both owner sites sat in the failure
+// backoff while their slots came due; the backoff now spaces retries but never
+// takes a slot's first attempt. Links: Autopilot-accepted drafts were sealed
+// before the link step and went live with no internal link.
+test("P104 slot guarantee, operator pace and links on Autopilot-accepted drafts", async t => {
+  const hour = 3_600_000, day = 24 * hour;
+  const consent = (f: ReturnType<typeof setup>, siteId: string) =>
+    Object.assign(f.get(siteId)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  /** `count` automatic articles failed in a row a minute ago, at past slots: the failure backoff is active. */
+  async function failureStreak(f: ReturnType<typeof setup>, siteId: string, count: number) {
+    assert.equal((await f.invoke("contentWork:advance", { siteId })).mode, "buffer_fill");
+    const template = f.tables.jobs.find(j => j.contentWork)!;
+    const streak = [template, ...Array.from({ length: count - 1 }, (_, n) => Object.assign(structuredClone(template), { _id: `${template._id}-streak-${n}` }))];
+    streak.forEach((job, n) => {
+      if (n > 0) f.tables.jobs.push(job);
+      Object.assign(job, { status: "failed", updatedAt: f.now() - 60_000 });
+      Object.assign(job.contentWork, { stage: "failed", failure: "bounded_content_quality_exhausted",
+        deadlineAt: START - (n + 1) * day, windowStartAt: START - (n + 1) * day - 300_000 });
+    });
+  }
+
+  await t.test("a_slot_due_within_six_hours_gets_its_first_attempt_during_the_backoff", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+    const site = await selectGrowth(f, day); consent(f, site.id);
+    await failureStreak(f, site.id, 2);
+    const due = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal(due.mode, "buffer_fill", JSON.stringify(due));
+    assert.equal(f.get(due.activeJobId)!.contentWork.deadlineAt, f.get(site.id)!.contentSchedule.nextDeadlineAt, "the due slot is prepared");
+    f.assertOffline();
+  });
+
+  await t.test("a_later_slot_waits_for_the_backoff_and_is_woken_in_time", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+    const site = await selectGrowth(f, day); consent(f, site.id);
+    await failureStreak(f, site.id, 3); // backoff: 4 h
+    const slot = f.now() + 8 * hour;
+    f.get(site.id)!.contentSchedule.nextDeadlineAt = slot;
+    const waiting = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal(waiting.mode, "content_failure_backoff", JSON.stringify(waiting));
+    assert.equal(waiting.eligibleAt, slot - 6 * hour, "the wake comes when the slot is 6 h away, not when the backoff ends");
+    assert.ok(f.tables._scheduled_functions.some(row => row.state.kind === "pending" && row.at === slot - 6 * hour));
+    f.setTime(slot - 6 * hour);
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_fill");
+    f.assertOffline();
+  });
+
+  await t.test("the_operator_sets_the_owners_chosen_pace_under_the_owners_rules", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await selectGrowth(f); consent(f, site.id);
+    await assert.rejects(f.invoke("contentWork:setAutopilotCadenceAsOperator", { siteId: site.id, cadencePerWeek: 5 }), /listed paces/);
+    assert.equal((await f.invoke("contentWork:setAutopilotCadenceAsOperator", { siteId: site.id, cadencePerWeek: 7 })).changed, true);
+    assert.equal(f.get(site.id)!.cadencePerWeek, 7);
+    assert.equal(f.get(site.id)!.cadenceRequestedPerWeek, 7, "kept through the next plan sync");
+    assert.equal((await f.invoke("contentWork:setAutopilotCadenceAsOperator", { siteId: site.id, cadencePerWeek: 7 })).changed, false);
+    f.get(site.id)!.contentSchedule.ownerReviewedOnly = true;
+    await assert.rejects(f.invoke("contentWork:setAutopilotCadenceAsOperator", { siteId: site.id, cadencePerWeek: 1 }), /not on/);
+    f.assertOffline();
+  });
+
+  await t.test("autopilot_accepted_drafts_get_their_internal_links", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000,
+      auditResponse: (value: Fields) => ({ ...value, score: 62, materialDefects: ["Remove the uncited claim that the register shows trends."] }) });
+    const site = await selectGrowth(f); consent(f, site.id);
+    await pumpUntil(f, () => f.tables.jobs.some(j => ["ready", "failed"].includes(j.contentWork?.stage)));
+    const ready = f.tables.jobs.find(j => j.contentWork?.stage === "ready");
+    assert.ok(ready, diagnostic(f));
+    const article = f.get(ready.articleId)!;
+    assert.equal(article.ownerQualityWaiver?.userId, "pentra-autopilot");
+    assert.ok((article.internalLinks ?? []).length > 0, "the accepted draft carries internal links");
+    assert.match(article.markdown, /## Related reading/);
+    assert.ok(!article.ownerQualityWaiver.issues.some((issue: string) => /internal link/.test(issue)), "no link waiver was needed");
+    f.assertOffline();
+  });
+});
+
 test("SLC persisted checkpoint survives restart and duplicate workers without another initial draft", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], failedOptionalSource: true });
   const site = await selectGrowth(f);

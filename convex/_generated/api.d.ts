@@ -178,6 +178,7 @@ import type * as lib_siteSecurity from "../lib/siteSecurity.js";
 import type * as lib_smartlead from "../lib/smartlead.js";
 import type * as lib_smartleadNode from "../lib/smartleadNode.js";
 import type * as lib_sourceQuality from "../lib/sourceQuality.js";
+import type * as lib_sourcesHeading from "../lib/sourcesHeading.js";
 import type * as lib_toolChoice from "../lib/toolChoice.js";
 import type * as lib_topicLifecycle from "../lib/topicLifecycle.js";
 import type * as lib_topicLifecycleDb from "../lib/topicLifecycleDb.js";
@@ -387,6 +388,7 @@ declare const fullApi: ApiFromModules<{
   "lib/smartlead": typeof lib_smartlead;
   "lib/smartleadNode": typeof lib_smartleadNode;
   "lib/sourceQuality": typeof lib_sourceQuality;
+  "lib/sourcesHeading": typeof lib_sourcesHeading;
   "lib/toolChoice": typeof lib_toolChoice;
   "lib/topicLifecycle": typeof lib_topicLifecycle;
   "lib/topicLifecycleDb": typeof lib_topicLifecycleDb;

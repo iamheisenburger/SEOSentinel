@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm";
 import { ArrowLeft, Calendar, CheckCircle2, Clock } from "lucide-react";
 import { format } from "date-fns";
 import { api } from "../../../../convex/_generated/api";
+import { markdownHasSourcesSection } from "../../../../convex/lib/sourcesHeading";
 import { LandingNav } from "@/components/layout/landing-nav";
 import { convexHttp } from "@/lib/convexHttpClient";
 import "./article-content.css";
@@ -358,7 +359,7 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
           <MarkdownRenderer markdown={article.markdown} />
         </div>
 
-        {article.sources && article.sources.length > 0 && (
+        {article.sources && article.sources.length > 0 && !markdownHasSourcesSection(article.markdown) && (
           <div className="mt-12 pt-8 border-t border-white/[0.06]">
             <h3 className="text-[14px] font-semibold text-[#F7F8F8] mb-4">
               Sources

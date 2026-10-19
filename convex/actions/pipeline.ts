@@ -67,6 +67,7 @@ import {
   uncitedEvidenceRequiredParagraphs,
   validateClaimEvidenceLedger,
   readerVisibleIssues,
+  ownerWaivableIssue,
 } from "../lib/articleQuality";
 import { finalAuditRequest, remediationRequest, UNTRUSTED_EVIDENCE_INSTRUCTION } from "../lib/finalArticleReview";
 import { normalizeArticleHeadings } from "../lib/markdownPublishing";
@@ -7873,6 +7874,16 @@ async function reviewExistingArticleHandler(
       issues: [...preLinkIssues, ...targetAlignmentIssues],
       warnings: quality.warnings,
     });
+
+    // Autopilot will accept this draft's remaining notes when the job completes
+    // (contentWorkCompleted), sealing it as it stands. Links are normally added
+    // only after a passing review, so accepted drafts went live without any:
+    // add them now, before that seal. A link failure never holds the draft.
+    if (!readyForPublication && autopilotEditor && targetAlignmentPassed &&
+      preLinkIssues.every((issue) => ownerWaivableIssue(issue, qualityCandidate, "autopilot"))) {
+      try { await handleLinks(ctx, siteId, articleId); }
+      catch (error) { console.warn(`Internal links not added to ${articleId}: ${error instanceof Error ? error.message : "unknown"}`); }
+    }
 
     return {
       articleId,
