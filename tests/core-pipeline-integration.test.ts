@@ -8107,3 +8107,25 @@ test("A5 the health check emails the operator: daily always, a problem when new 
   assert.equal(f.opsEmails.length, 4);
   f.assertOffline();
 });
+
+// B (Oct 19 2026): one health read of an owner site loaded its whole topic,
+// page and article inventory (~4 MB) and the watch ran it four times a day.
+test("B the six-hourly health watch skips the topic inventory; the daily check counts topics", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const topicReads = (from: number) => f.queryReads.slice(from).filter(read => read.table === "topic_clusters").length;
+  let start = f.queryReads.length;
+  await f.invoke("contentHealth:runContentHealth", { notify: "problems" });
+  assert.equal(topicReads(start), 0, "the watch reads delivery state only");
+  start = f.queryReads.length;
+  await f.invoke("contentHealth:runContentHealth", { notify: "always" });
+  assert.ok(topicReads(start) > 0, "the daily check still counts topics");
+  assert.ok((await f.invoke("contentHealth:siteHealth", { siteId: site.id })).plannedTopics !== null, "an operator's single-site check counts topics");
+  const { healthFingerprint } = await import("../convex/lib/opsEmail.ts");
+  const daily = [{ siteId: "s", status: "attention", problems: ["next article is 3h overdue", "only 2 topic(s) left, less than a day of slots"] }];
+  const watch = [{ siteId: "s", status: "attention", problems: ["next article is 4h overdue"] }];
+  assert.equal(healthFingerprint(daily), healthFingerprint(watch), "topic supply never makes a watch look like a change");
+  assert.equal(healthFingerprint([{ siteId: "t", status: "attention", problems: ["no topics left to write"] }]), healthFingerprint([]));
+  f.assertOffline();
+});

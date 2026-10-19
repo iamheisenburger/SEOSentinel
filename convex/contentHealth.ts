@@ -100,7 +100,10 @@ export function describeSiteHealth(input: {
   return { status: problems.length ? "attention" : "ok", problems, nudge };
 }
 
-async function siteHealthFor(ctx: QueryCtx, site: Doc<"sites">, now: number): Promise<SiteHealth | null> {
+/** `topics: false` skips the topic inventory (each site's whole topic, page and
+ * article list, about 4 MB for an owner site): the six-hourly watch only needs
+ * delivery state; the daily check and an operator's single-site check count topics. */
+async function siteHealthFor(ctx: QueryCtx, site: Doc<"sites">, now: number, topics = true): Promise<SiteHealth | null> {
   if (site.deletionStatus || site.accountDeletionRequestedAt || site.serviceMode !== "growth_first" || !site.contentSchedule) return null;
   const schedule = site.contentSchedule;
   if (!site.autopilotEnabled && !schedule.active) return null;
@@ -128,7 +131,7 @@ async function siteHealthFor(ctx: QueryCtx, site: Doc<"sites">, now: number): Pr
   const lastPublishedAt = published.reduce<number | null>((max, a) => typeof a.publishedAt === "number" && (max === null || a.publishedAt > max) ? a.publishedAt : max, null);
   const destinationVerified = publisherDestinationReceiptVerified({ site, timestamp: now });
   let topicsLeft: number | null = null, plannedTopics: number | null = null;
-  try {
+  if (topics) try {
     const inventory = await eligiblePlannedTopics(ctx, site);
     // The owner's confirmed questions and features are written when no keyword is left.
     plannedTopics = inventory.planned.length + fallbackTopicProposals(site, inventory).length;
@@ -148,13 +151,13 @@ async function siteHealthFor(ctx: QueryCtx, site: Doc<"sites">, now: number): Pr
 }
 
 export const healthPage = internalQuery({
-  args: { cursor: v.union(v.string(), v.null()), now: v.number() },
-  handler: async (ctx, { cursor, now }) => {
+  args: { cursor: v.union(v.string(), v.null()), now: v.number(), topics: v.optional(v.boolean()) },
+  handler: async (ctx, { cursor, now, topics }) => {
     // Few sites per page: each one reads its topic, page and article inventory.
     const page = await ctx.db.query("sites").paginate({ cursor, numItems: 5 });
     const sites: SiteHealth[] = [];
     for (const site of page.page) {
-      const health = await siteHealthFor(ctx, site, now);
+      const health = await siteHealthFor(ctx, site, now, topics ?? true);
       if (health) sites.push(health);
     }
     return { isDone: page.isDone, continueCursor: page.continueCursor, sites };
@@ -240,7 +243,7 @@ export const runContentHealth = internalAction({
     let cursor: string | null = null;
     for (let pages = 0; pages < 200; pages++) {
       const page: { isDone: boolean; continueCursor: string; sites: SiteHealth[] } =
-        await ctx.runQuery(internal.contentHealth.healthPage, { cursor, now });
+        await ctx.runQuery(internal.contentHealth.healthPage, { cursor, now, topics: (notify ?? "problems") === "always" });
       all.push(...page.sites);
       if (page.isDone) break;
       cursor = page.continueCursor;

@@ -37,6 +37,10 @@ export async function sendOpsEmail(subject: string, text: string, env: Env = pro
  * "53h overdue" and "54h overdue" are the same problem. */
 export function healthFingerprint(sites: ReadonlyArray<{ siteId: string; status: string; problems: string[] }>): string {
   return JSON.stringify(sites.filter((site) => site.status === "attention")
-    .map((site) => [site.siteId, site.problems.map((problem) => problem.replace(/\d+(?:\.\d+)?\s*(?:h|d|days?|hours?)\b/g, "#"))])
+    // Topic supply is counted only in the daily check, so it is left out here:
+    // otherwise every six-hourly watch would look like a change.
+    .map((site) => [site.siteId, site.problems.filter((problem) => !/^(?:no topics left|only \d+ topic)/.test(problem))
+      .map((problem) => problem.replace(/\d+(?:\.\d+)?\s*(?:h|d|days?|hours?)\b/g, "#"))] as const)
+    .filter(([, problems]) => problems.length > 0)
     .sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
 }
