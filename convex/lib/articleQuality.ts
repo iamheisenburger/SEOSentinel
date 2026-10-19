@@ -1463,6 +1463,45 @@ export function pruneUnsupportedEvidenceSentences(args: {
  * the reviewers still audit the exact result. Headings, tables, code and
  * source rows are never edited.
  */
+/** P101: passages the exact article really contains twice: two sentences,
+ * lines (list items, headings, table rows) or paragraphs with the same wording
+ * (30+ characters) or at least 80% of their content words in common (six or
+ * more). A unit is never compared with the paragraph or line that contains it.
+ * Code and quotations count. It only checks an auditor's claim that something
+ * repeats; it never edits text. */
+export function repeatedArticlePassages(markdown: string): string[] {
+  type Unit = { text: string; block: number; line: number; level: 0 | 1 | 2; norm: string; tokens: Set<string> };
+  const units: Unit[] = [];
+  const add = (text: string, block: number, line: number, level: 0 | 1 | 2) =>
+    units.push({ text, block, line, level, norm: text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(), tokens: evidenceTokens(text) });
+  markdown.split(/\n[ \t]*\n/).forEach((raw, block) => {
+    const paragraph = raw.trim();
+    if (!paragraph) return;
+    add(paragraph, block, -1, 0);
+    paragraph.split("\n").forEach((rawLine, line) => {
+      const text = rawLine.trim();
+      if (!text) return;
+      if (text !== paragraph) add(text, block, line, 1);
+      for (const sentence of claimSentenceSegments(text)) if (sentence !== text && sentence !== paragraph) add(sentence, block, line, 2);
+    });
+  });
+  const contains = (outer: Unit, inner: Unit) => outer.block === inner.block && outer.level < inner.level &&
+    (outer.level === 0 || outer.line === inner.line);
+  const repeated = new Set<string>();
+  for (let i = 0; i < units.length; i++) {
+    for (let j = i + 1; j < units.length; j++) {
+      const a = units[i], b = units[j];
+      if (contains(a, b) || contains(b, a)) continue;
+      if (a.norm.length >= 30 && a.norm === b.norm) { repeated.add(a.text); continue; }
+      if (a.tokens.size < 6 || b.tokens.size < 6) continue;
+      let shared = 0;
+      for (const token of a.tokens) if (b.tokens.has(token)) shared += 1;
+      if (shared / (a.tokens.size + b.tokens.size - shared) >= 0.8) repeated.add(a.text);
+    }
+  }
+  return [...repeated];
+}
+
 export function pruneMismatchedCitedSentences(args: {
   markdown: string;
   sources: PublicationSource[];

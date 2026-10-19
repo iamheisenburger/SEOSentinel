@@ -7,7 +7,7 @@ import type { Doc } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import { sha256Hex } from "../lib/publicationArtifact";
 import { isProviderCreditRefusal, isProviderRequestRefusal, validProviderRequestId } from "../lib/contentProviderRefusal";
-import { auditResultHash, contradictoryContentAudit, semanticAuditPrompt, SEMANTIC_AUDIT_SUFFIX } from "../lib/contentAudit";
+import { auditResultHash, clarifiableContentAudit, contradictoryContentAudit, semanticAuditPrompt, SEMANTIC_AUDIT_SUFFIX } from "../lib/contentAudit";
 import { classifyEvidenceSource } from "../lib/sourceQuality";
 import { safeFetchPublicText } from "../lib/safeOutbound";
 
@@ -33,7 +33,7 @@ const WRITER_TOOLS = new Set(["submit_article", "remediate_final_article"]);
  * same durable job owns every bounded call and its ambiguous-response receipt.
  * Deployment pricing must be reviewed before activation; there is no default. */
 export async function contentStructuredCall(args: { system: string; userMessage: string; toolName: string;
-  toolDescription: string; inputSchema: Anthropic.Tool.InputSchema; maxTokens?: number }, clarifyAudit?: { originalResult: unknown }) {
+  toolDescription: string; inputSchema: Anthropic.Tool.InputSchema; maxTokens?: number }, clarifyAudit?: { originalResult: unknown; phantomRepetition?: string[] }) {
   const s = scope.getStore();
   if (!s?.job.contentWork) throw new Error("Missing content provider scope");
   if (!["submit_article", "review_article", "remediate_final_article", "audit_final_article", "submit_final_metadata"].includes(args.toolName)) throw new Error(`Unpriced content tool: ${args.toolName}`);
@@ -42,7 +42,8 @@ export async function contentStructuredCall(args: { system: string; userMessage:
   const logicalKey = baseKey + (clarifyAudit ? SEMANTIC_AUDIT_SUFFIX : "");
   let current = cw, semanticClarificationOf;
   if (clarifyAudit) {
-    if (args.toolName !== "audit_final_article" || !contradictoryContentAudit(clarifyAudit.originalResult)) throw new Error("content_audit_clarification_not_applicable");
+    if (args.toolName !== "audit_final_article" || !(contradictoryContentAudit(clarifyAudit.originalResult) ||
+      ((clarifyAudit.phantomRepetition?.length ?? 0) > 0 && clarifiableContentAudit(clarifyAudit.originalResult)))) throw new Error("content_audit_clarification_not_applicable");
     const latest = await s.ctx.runQuery(internal.jobs.getInternal, { jobId: s.job._id });
     if (!latest?.contentWork) throw new Error("content_audit_original_checkpoint_missing");
     current = latest.contentWork;
@@ -55,7 +56,7 @@ export async function contentStructuredCall(args: { system: string; userMessage:
   // main one. A job keeps the pricing it was created with.
   const price = WRITER_TOOLS.has(args.toolName) && p.writer ? p.writer : p;
   const request = contentToolRequest({ ...args, model: price.model,
-    ...(clarifyAudit ? { userMessage: semanticAuditPrompt(args.userMessage, clarifyAudit.originalResult) } : {}) }, previous?.requestHash);
+    ...(clarifyAudit ? { userMessage: semanticAuditPrompt(args.userMessage, clarifyAudit.originalResult, clarifyAudit.phantomRepetition) } : {}) }, previous?.requestHash);
   // UTF-8 bytes upper-bound text tokens; explicit overhead covers tool/chat
   // framing. No images, cached/premium tool use, web search or thinking enabled.
   const inputBound = Buffer.byteLength(JSON.stringify(request), "utf8") + 8192;

@@ -103,3 +103,49 @@ test("P99 'is not a defect', 'not a factual claim' and 'needs no external eviden
   assert.deepEqual(selfNegatingMaterialDefects([...noChange, ...real]), noChange);
   assert.equal(contradictoryContentAudit({ ...clean, score: 62, materialDefects: [real[1], noChange[0]] }), true);
 });
+
+test("P101 a repetition defect is checked against the exact article: phantom copies are clarified, real repeats stay", async () => {
+  const { repetitionDefects, phantomRepetitionDefects, clarifiableContentAudit, repetitionClaimingAudit, semanticAuditPrompt } = await import("../convex/lib/contentAudit.ts");
+  const { repeatedArticlePassages } = await import("../convex/lib/articleQuality.ts");
+  const claims = [
+    "The 'Where LeadPilot fits' paragraph appears twice in the article; keep one copy.",
+    "Remove the duplicated product paragraph in the closing section.",
+    "The checklist bullets repeat verbatim from the earlier section.",
+    "The same paragraph appears again under the FAQ.",
+  ];
+  const others = ["Add a worked example to the scoring step.", "The meta description duplicates the title; rewrite it.", "Cite [2] for the reporting delay."];
+  assert.deepEqual(repetitionDefects([...claims, ...others]), claims);
+  const article = [
+    "# Lead scoring", "",
+    "Score fit and intent separately so one strong signal does not hide a weak one in the weekly review.", "",
+    "## Where LeadPilot fits", "",
+    "LeadPilot qualifies visitors in conversation and hands the contact details and buying context to your team.", "",
+    "- Review the weights every month against the deals your team actually closed.",
+    "- Keep a short written definition of a qualified lead next to the scoring sheet.", "",
+  ].join("\n");
+  assert.deepEqual(repeatedArticlePassages(article), [], "a paragraph is never compared with its own sentences or lines");
+  const audit = { score: 62, notes: [], materialDefects: [claims[0], others[0]], claimEvidence: [] };
+  assert.deepEqual(phantomRepetitionDefects(audit, article), [claims[0]]);
+  // The same passage really written twice: the defect is right and stays.
+  const repeated = `${article}\nLeadPilot qualifies visitors in conversation and hands the contact details and buying context to your team.\n`;
+  assert.equal(repeatedArticlePassages(repeated).length, 1);
+  assert.deepEqual(phantomRepetitionDefects(audit, repeated), []);
+  // A near copy (80% of the wording) counts as a repeat; short shared phrases do not.
+  const near = `${article}\nLeadPilot qualifies visitors in conversation and passes the contact details and buying context to your team.\n`;
+  assert.deepEqual(phantomRepetitionDefects(audit, near), []);
+  assert.deepEqual(repeatedArticlePassages(`${article}\n## Where LeadPilot fits\n`), [], "a short repeated heading is not a passage");
+  // Lineage: only a contradictory audit or one that asserts a repetition is clarifiable.
+  assert.equal(repetitionClaimingAudit(audit), true);
+  assert.equal(clarifiableContentAudit(audit), true);
+  assert.equal(clarifiableContentAudit({ ...audit, materialDefects: [others[0]] }), false);
+  // The repetition clarification states the checked fact; it never applies without a repetition claim.
+  const prompt = semanticAuditPrompt("ORIGINAL", audit, [claims[0]]);
+  assert.match(prompt, /found no sentence, list item, heading or paragraph that appears twice/);
+  assert.match(prompt, /REQUIRED CLAIM UNITS ledger worksheet, which is not article text/);
+  assert.match(prompt, /do not raise the score for any other reason/);
+  assert.throws(() => semanticAuditPrompt("ORIGINAL", { ...audit, materialDefects: [others[0]] }, [others[0]]), /not_applicable/);
+  // A contradictory audit keeps its exact pre-P101 clarification bytes even when a repetition is also claimed.
+  const contradictory = { score: 64, notes: [], materialDefects: [], claimEvidence: [] };
+  assert.equal(semanticAuditPrompt("ORIGINAL", contradictory, [claims[0]]), semanticAuditPrompt("ORIGINAL", contradictory));
+  assert.doesNotMatch(semanticAuditPrompt("ORIGINAL", contradictory), /deterministic check/);
+});

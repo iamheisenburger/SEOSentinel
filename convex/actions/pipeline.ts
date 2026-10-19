@@ -19,7 +19,7 @@ import {
 } from "../lib/articleExecutionBudget";
 import { z } from "zod";
 import { ArticleSchema, recoverLeakedArticleEnvelope } from "../lib/articleToolResult";
-import { auditScoreContractHolds, contradictoryContentAudit, inconsistentAuditFeedback, selfNegatingMaterialDefects } from "../lib/contentAudit";
+import { auditScoreContractHolds, contradictoryContentAudit, inconsistentAuditFeedback, phantomRepetitionDefects, selfNegatingMaterialDefects } from "../lib/contentAudit";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
   appendRelatedInternalLinks,
@@ -1216,6 +1216,8 @@ async function callClaudeStructured<T>(args: {
   inputSchema: ObjectJsonSchema;
   outputSchema: z.ZodType<T>;
   maxTokens?: number;
+  /** Final audit only: repetition defects the exact article was checked not to have. */
+  phantomRepetition?: (result: unknown) => string[];
 }): Promise<T> {
   if (contentProviderActive()) {
     const originalResult = await contentStructuredCall(args);
@@ -1228,7 +1230,16 @@ async function callClaudeStructured<T>(args: {
     // A leaked XML-style field envelope is never article prose.
     const normalizedResult = args.toolName === "remediate_final_article" ? recoverLeakedArticleEnvelope(notesNormalized) : notesNormalized;
     const parsed = args.outputSchema.safeParse(normalizedResult);
-    if (parsed.success) return parsed.data;
+    if (parsed.success) {
+      // P101: a consistent verdict that says a passage repeats, when the exact
+      // article repeats nothing, gets the same single bounded clarification.
+      // The auditor re-scores; nothing is raised or dropped here, and if its
+      // answer is not a consistent verdict the original one stands.
+      const phantom = args.toolName === "audit_final_article" ? args.phantomRepetition?.(originalResult) ?? [] : [];
+      if (phantom.length === 0) return parsed.data;
+      const clarified = args.outputSchema.safeParse(await contentStructuredCall(args, { originalResult, phantomRepetition: phantom }));
+      return clarified.success ? clarified.data : parsed.data;
+    }
     if (args.toolName !== "audit_final_article") throw new Error("content_model_response_invalid");
     if (!contradictoryContentAudit(originalResult)) throw new Error("content_audit_response_invalid");
     const clarified = await contentStructuredCall(args, { originalResult });
@@ -1904,6 +1915,7 @@ async function auditFinalArticle(args: {
   const request = finalAuditRequest(args);
   return callClaudeStructured({
     ...request,
+    phantomRepetition: (result) => phantomRepetitionDefects(result, args.markdown),
     outputSchema: z.object({
       score: z.number().min(0).max(100),
       notes: z.array(z.string()).default([]),

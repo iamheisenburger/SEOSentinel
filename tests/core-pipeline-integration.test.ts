@@ -37,7 +37,7 @@ const slugify = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-")
 const titleFor = (keyword: string) => keyword[0].toUpperCase() + keyword.slice(1);
 const description = "Build a documented workflow with clear decisions, practical review questions, evidence checks, and a careful handoff for your team.";
 const evidenceText = "The synthetic field register contains an observation label and a review note. The synthetic studio register contains a material label and a review note. These fixture records describe the sample dataset only. Use the source as evidence of its stated fields, not as evidence of customer outcomes or commercial product capabilities.";
-function articlePayload(keyword: string) {
+function articlePayload(keyword: string, uniqueDraft = false) {
   const sections = [
     ["Define the decision", "Write down the decision you intend to make before choosing a tool or assigning an owner. Describe the boundary between an observation and an interpretation. If someone disputes a conclusion, ask which recorded detail they disagree with and what evidence would resolve the difference. Keep a place for uncertainty instead of treating a blank field as a confirmed negative."],
     ["Inspect the working context", "Walk through the current workflow with the person who uses it. Ask them to identify the point where they need information and the point where they can record it. Consider whether access, equipment, language, or location could interrupt that sequence. Draft a local checklist from those observations and let the operator correct it before proposing a change."],
@@ -55,7 +55,7 @@ function articlePayload(keyword: string) {
   const continuation = "For this proposed workflow, choose an example from your own authorized records and compare it with the question in this section. Write down the decision you would take, the observations behind it, and the uncertainty that remains. Invite a colleague to challenge the interpretation before adopting the template. Add a note explaining which local conditions would change your decision. Save unanswered questions for the next review.";
   const markdown = [
     `Use this author-proposed review framework to evaluate ${keyword}. Adapt each decision to the responsibilities and evidence available in your own operation.`,
-    ...sections.map(([heading, body], index) => `## ${heading}\n\n${body}\n\n${continuation.replace("this section", `the ${heading.toLowerCase()} section`)}${index === 1 ? "\n\nThe synthetic field register contains an observation label and a review note [1]." : ""}`),
+    ...sections.map(([heading, body], index) => `## ${heading}\n\n${body}${uniqueDraft ? "" : `\n\n${continuation.replace("this section", `the ${heading.toLowerCase()} section`)}`}${index === 1 ? "\n\nThe synthetic field register contains an observation label and a review note [1]." : ""}`),
     "## Sources\n\n[1] Synthetic register specification — https://records.example.gov/specification\n\n[2] Synthetic review methods — https://methods.example.edu/review",
   ].join("\n\n");
   return { title: titleFor(keyword), slug: slugify(keyword), markdown, metaTitle: titleFor(keyword).slice(0, 60), metaDescription: description,
@@ -64,6 +64,8 @@ function articlePayload(keyword: string) {
 export function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean;
   growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
   longManagedPage?: boolean; gscFixture?: boolean; omitDraftTitle?: boolean; convexSerialization?: boolean;
+  /** A synthetic draft without its repeated template paragraph (P101 repetition checks). */
+  uniqueDraft?: boolean;
   gscSitemap?: { robots?: string; submitStatus?: number; submitted: string[] };
   auditResponse?: (audit: Fields, request: Fields) => unknown;
   metadataResponse?: (metadata: Fields, request: Fields) => unknown;
@@ -155,7 +157,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       const keyword = text.match(/Primary Keyword: ([^\n]+)/i)?.[1] ?? text.match(/PRIMARY KEYWORD: ([^\n]+)/)?.[1];
       let value: unknown;
       if (tool === "submit_article") {
-        assert.ok(keyword); const article = articlePayload(keyword);
+        assert.ok(keyword); const article = articlePayload(keyword, options.uniqueDraft);
         if (options.growthFirst && !options.quality && !(options.webResearch && !options.webResearch.error)) {
           article.markdown = article.markdown.replace("The synthetic field register contains an observation label and a review note [1].", "").split("## Sources")[0].trim();
           article.sources = [];
@@ -7697,5 +7699,59 @@ test("P99 a polish-only verdict (70-84, no material defect) is consistent: Autop
     assert.equal(f.get(after.articleId)!.editorialQualityScore, 78);
     assert.ok((f.get(after.articleId)!.publicationGateIssues ?? []).some((i: string) => /Editorial quality score is 78/.test(i)));
     assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0); f.assertOffline();
+  });
+});
+
+test("P101 a phantom repetition defect gets the single bounded clarification; the auditor re-scores, nothing is raised locally", async t => {
+  const phantom = "The 'Where the product fits' paragraph appears twice in the article; remove the second copy.";
+  await t.test("clarified_and_rescored", async () => {
+    const f = await scopedPricingFixture({}, {}, { uniqueDraft: true, longManagedPage: true, auditResponse: (audit, request) => isAuditClarification(request) ? audit
+      : { ...audit, score: 72, materialDefects: [phantom] } });
+    await f.admit(0); const id = f.tables.jobs[0]._id;
+    await pumpUntil(f, () => ["ready", "failed", "review_failed", "verified"].includes(f.get(id)!.contentWork.stage), 120);
+    const clarifications = f.modelCalls.filter(isAuditClarification);
+    assert.equal(clarifications.length, 1);
+    assert.match(clarifications[0].messages[0].content, /found no sentence, list item, heading or paragraph that appears twice/);
+    assert.ok(clarifications[0].messages[0].content.includes(JSON.stringify([phantom])));
+    const work = f.get(id)!.contentWork;
+    const call = work.providerCalls.find((c: Fields) => c.semanticClarificationOf);
+    assert.ok(call, "the clarification is a checkpointed call bound to its original audit");
+    assert.equal(work.providerCalls.filter((c: Fields) => (c.logicalKey ?? c.key).endsWith(":semantic_clarification_v1")).length, 1);
+    assert.equal(work.stage, "ready", "the auditor's consistent re-score (no defect) is the verdict");
+    f.assertOffline();
+  });
+  await t.test("inconsistent_clarification_keeps_the_original_verdict", async () => {
+    const f = await scopedPricingFixture({}, {}, { uniqueDraft: true, longManagedPage: true, auditResponse: (audit, request) => isAuditClarification(request)
+      ? { ...audit, score: 62, materialDefects: [] } : { ...audit, score: 72, materialDefects: [phantom] } });
+    await f.admit(0); const id = f.tables.jobs[0]._id;
+    await pumpUntil(f, () => ["ready", "failed", "review_failed", "verified"].includes(f.get(id)!.contentWork.stage), 120);
+    // The original verdict stands, so the draft takes its ordinary bounded revisions;
+    // each audit gets at most its one clarification, never more.
+    const audits = f.modelCalls.filter((c: Fields) => c.tools[0].name === "audit_final_article" && !isAuditClarification(c)).length;
+    assert.ok(audits >= 1);
+    assert.equal(f.modelCalls.filter(isAuditClarification).length, audits);
+    const keys = f.get(id)!.contentWork.providerCalls.map((c: Fields) => c.logicalKey ?? c.key);
+    assert.equal(new Set(keys).size, keys.length);
+    const job = f.get(id)!, article = f.get(job.articleId)!;
+    assert.ok(job.contentWork.failure === undefined || job.contentWork.failure === "bounded_content_quality_exhausted", job.contentWork.failure);
+    assert.ok((article.editorialQualityNotes ?? []).some((n: string) => n.includes(phantom)), "the original defect stands");
+    assert.ok(!(article.editorialQualityNotes ?? []).some((n: string) => /review was inconsistent/i.test(n)));
+    f.assertOffline();
+  });
+  await t.test("a_real_repeat_keeps_the_defect_without_clarification", async () => {
+    // The default synthetic draft really repeats a template paragraph in every section.
+    const f = await scopedPricingFixture({}, {}, { auditResponse: audit => ({ ...audit, score: 72, materialDefects: [phantom] }) });
+    await f.admit(0); const id = f.tables.jobs[0]._id;
+    await pumpUntil(f, () => ["ready", "failed", "review_failed", "verified"].includes(f.get(id)!.contentWork.stage), 120);
+    assert.equal(f.modelCalls.filter(isAuditClarification).length, 0);
+    assert.ok((f.get(f.get(id)!.articleId)!.editorialQualityNotes ?? []).some((n: string) => n.includes(phantom)));
+    f.assertOffline();
+  });
+  await t.test("no_repetition_claim_no_clarification", async () => {
+    const f = await scopedPricingFixture({}, {}, { auditResponse: audit => ({ ...audit, score: 72, materialDefects: ["Add a worked example to the scoring step."] }) });
+    await f.admit(0); const id = f.tables.jobs[0]._id;
+    await pumpUntil(f, () => ["ready", "failed", "review_failed", "verified"].includes(f.get(id)!.contentWork.stage), 120);
+    assert.equal(f.modelCalls.filter(isAuditClarification).length, 0);
+    f.assertOffline();
   });
 });

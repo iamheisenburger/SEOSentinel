@@ -31,7 +31,7 @@ import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning
 import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes } from "./articles";
 import { AUTOPILOT_ACCEPTANCE, ownerWaivableIssue } from "./lib/articleQuality";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
-import { auditResultHash, contradictoryContentAudit, inconsistentAuditFeedback, internalContentProcessingError, retainedContradictoryContentAudit, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
+import { auditResultHash, clarifiableContentAudit, inconsistentAuditFeedback, internalContentProcessingError, retainedContradictoryContentAudit, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 import { contentJobUsesAllowance } from "./lib/contentUsage";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
 
@@ -2169,7 +2169,8 @@ export const beginProviderCall = internalMutation({
       if (!lineage || !original || (original.logicalKey ?? original.key) !== expectedBase || args.key !== expectedBase + SEMANTIC_AUDIT_SUFFIX ||
         original.state !== "completed" || !Number.isSafeInteger(original.actualMicroUsd) || !original.requestHash ||
         original.requestHash !== lineage.requestHash || auditResultHash(original.result) !== lineage.resultHash ||
-        !contradictoryContentAudit(original.result)) throw new Error("content_audit_original_checkpoint_changed");
+        // P101: or it asserts a repetition; the worker checked the exact article repeats nothing.
+        !clarifiableContentAudit(original.result)) throw new Error("content_audit_original_checkpoint_changed");
       if (previousCalls.some(c => JSON.stringify(c.semanticClarificationOf) !== JSON.stringify(lineage))) throw new Error("content_audit_clarification_lineage_changed");
       if (previousCalls.some(c => c.state !== "completed")) throw new Error("content_audit_clarification_already_attempted");
     }
