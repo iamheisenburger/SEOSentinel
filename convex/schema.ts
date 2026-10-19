@@ -641,6 +641,13 @@ export default defineSchema({
     used: v.number(),
     updatedAt: v.number(),
   }).index("by_user_month", ["userId", "monthStart"]),
+  // A5: the last operator alert per kind, so an unchanged problem is not
+  // emailed again within a day (convex/lib/opsEmail.ts).
+  ops_alert_state: defineTable({
+    key: v.string(),
+    fingerprint: v.string(),
+    sentAt: v.number(),
+  }).index("by_key", ["key"]),
   account_plan_entitlements: defineTable({
     userId: v.string(),
     planFeatures: v.array(v.string()),

@@ -123,6 +123,7 @@ import type * as lib_oneSetupInitialPlan from "../lib/oneSetupInitialPlan.js";
 import type * as lib_oneSetupInitialPlanDb from "../lib/oneSetupInitialPlanDb.js";
 import type * as lib_oneSetupRuntime from "../lib/oneSetupRuntime.js";
 import type * as lib_operatorSnapshot from "../lib/operatorSnapshot.js";
+import type * as lib_opsEmail from "../lib/opsEmail.js";
 import type * as lib_outcomeReceipts from "../lib/outcomeReceipts.js";
 import type * as lib_outreachAutonomy from "../lib/outreachAutonomy.js";
 import type * as lib_outreachContacts from "../lib/outreachContacts.js";
@@ -334,6 +335,7 @@ declare const fullApi: ApiFromModules<{
   "lib/oneSetupInitialPlanDb": typeof lib_oneSetupInitialPlanDb;
   "lib/oneSetupRuntime": typeof lib_oneSetupRuntime;
   "lib/operatorSnapshot": typeof lib_operatorSnapshot;
+  "lib/opsEmail": typeof lib_opsEmail;
   "lib/outcomeReceipts": typeof lib_outcomeReceipts;
   "lib/outreachAutonomy": typeof lib_outreachAutonomy;
   "lib/outreachContacts": typeof lib_outreachContacts;

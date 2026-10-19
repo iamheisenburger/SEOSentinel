@@ -5,6 +5,7 @@ import { v } from "convex/values";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { contentIssue } from "./lib/contentCustomer";
 import { eligiblePlannedTopics, fallbackTopicProposals, topicResearchDueAt } from "./contentWork";
+import { healthFingerprint, opsEmailConfigured, sendOpsEmail } from "./lib/opsEmail";
 
 /**
  * Daily Autopilot health check.
@@ -212,7 +213,24 @@ export function formatHealthReport(sites: SiteHealth[], now: number, detailDomai
   return lines.join("\n").slice(0, 3900);
 }
 
-type HealthRunResult = { checked: number; attention: number; nudged: number; notified: boolean };
+type HealthRunResult = { checked: number; attention: number; nudged: number; notified: boolean; emailed?: boolean };
+
+export const alertState = internalQuery({
+  args: { key: v.string() },
+  handler: async (ctx, { key }) => await ctx.db.query("ops_alert_state").withIndex("by_key", q => q.eq("key", key)).first(),
+});
+export const recordAlertSent = internalMutation({
+  args: { key: v.string(), fingerprint: v.string(), sentAt: v.number() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.query("ops_alert_state").withIndex("by_key", q => q.eq("key", args.key)).first();
+    if (row) await ctx.db.patch(row._id, { fingerprint: args.fingerprint, sentAt: args.sentAt });
+    else await ctx.db.insert("ops_alert_state", args);
+  },
+});
+/** A5: the operator's email (Telegram belongs to the X reply system). The
+ * daily run always reports; the six-hourly watch emails a problem when it is
+ * new or changed, and again only after a day. */
+const HEALTH_EMAIL_REPEAT_MS = 86_400_000;
 
 export const runContentHealth = internalAction({
   args: { notify: v.optional(v.union(v.literal("always"), v.literal("problems"), v.literal("never"))) },
@@ -243,6 +261,20 @@ export const runContentHealth = internalAction({
         notified = response.ok;
       } catch { notified = false; }
     }
-    return { checked: all.length, attention, nudged, notified };
+    let emailed = false;
+    if (opsEmailConfigured() && mode !== "never") {
+      const fingerprint = healthFingerprint(all);
+      const last = await ctx.runQuery(internal.contentHealth.alertState, { key: "content_health" });
+      const due = mode === "always" || (attention > 0 &&
+        (!last || last.fingerprint !== fingerprint || now - last.sentAt >= HEALTH_EMAIL_REPEAT_MS));
+      if (due) {
+        const result = await sendOpsEmail(attention > 0 ? `Pentra: ${attention} Autopilot site(s) need attention` : "Pentra: every Autopilot site OK",
+          formatHealthReport(all, now, (process.env.PENTRA_OPS_REPORT_DOMAINS ?? "").split(",")));
+        emailed = result.sent;
+        if (result.sent) await ctx.runMutation(internal.contentHealth.recordAlertSent, { key: "content_health", fingerprint, sentAt: now });
+        else console.warn(`Pentra health email not sent: ${result.error}`);
+      }
+    }
+    return { checked: all.length, attention, nudged, notified, emailed };
   },
 });

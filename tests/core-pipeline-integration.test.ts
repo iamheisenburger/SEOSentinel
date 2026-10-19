@@ -92,6 +92,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   topicFit?: (keyword: string) => boolean } = {}) {
   const modelCalls: Fields[] = [];
   const telegramMessages: Fields[] = [];
+  const opsEmails: Fields[] = [];
   const discoveryCalls: Array<{ endpoint: string; seeds: string[] }> = [];
   const businesses = options.businesses ?? defaultBusinesses;
   let publisherFailuresRemaining = options.publisherFailures ?? 0;
@@ -130,6 +131,10 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
     }
     if (options.hosted && businesses.some(b => b.domain === url.hostname) && (url.pathname.startsWith("/ghost/") || /^\/[a-z0-9-]+\/$/.test(url.pathname))) {
       return options.hosted.transport(url, init);
+    }
+    if (url.origin === "https://api.resend.com") {
+      assert.equal(url.pathname, "/emails"); assert.equal(init.method, "POST");
+      opsEmails.push(JSON.parse(String(init.body))); return json({ id: `synthetic-email-${opsEmails.length}` });
     }
     if (url.origin === "https://api.telegram.org") {
       assert.match(url.pathname, /^\/botsynthetic-ops-token\/sendMessage$/); assert.equal(init.method, "POST");
@@ -389,7 +394,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
     f.add("pages", { siteId: id, slug: "/", url: `https://${b.domain}/`, title: b.niche, summary: `${b.name} provides ${b.niche}.`, keywords: b.keywords, createdAt: START - 1000 });
     return { ...b, id };
   });
-  return { ...f, sites, modelCalls, repositories, failedPublications, telegramMessages, discoveryCalls };
+  return { ...f, sites, modelCalls, repositories, failedPublications, telegramMessages, opsEmails, discoveryCalls };
 }
 
 test("owner can verify an existing GitHub destination without publishing or spending", async () => {
@@ -8072,4 +8077,33 @@ test("K2 operator readouts read only the newest articles of a site", async () =>
   assert.equal(recent[0]._id, [...articles].sort((a, b) => b._creationTime - a._creationTime || b._id.localeCompare(a._id, undefined, { numeric: true }))[0]._id, "newest first");
   assert.deepEqual(f.queryReads.slice(start).map(r => [r.table, r.index, r.rows]), [["articles", "by_site", 1]]);
   assert.equal((await f.invoke("articles:listRecentBySiteInternal", { siteId: site.id, limit: 500 })).length, articles.length, "the limit is capped, never unbounded");
+});
+
+// A5 (Oct 19 2026): Anthropic credit was out for 9 days and X credit for 3
+// with no alert; Telegram now belongs to the X reply system, so operator
+// alerts go by email once RESEND_API_KEY and PENTRA_ALERT_EMAIL_TO are set.
+test("A5 the health check emails the operator: daily always, a problem when new or changed, the same one again only after a day", async () => {
+  const hour = 3_600_000;
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() - 3 * hour;
+  assert.equal((await f.invoke("contentHealth:runContentHealth", { notify: "always" })).emailed, false, "off until configured");
+  assert.equal(f.opsEmails.length, 0);
+  f.restartRuntime({ RESEND_API_KEY: "re_synthetic", PENTRA_ALERT_EMAIL_TO: "owner@example.com", PENTRA_OPS_REPORT_DOMAINS: f.get(site.id)!.domain });
+  const watch = () => f.invoke("contentHealth:runContentHealth", { notify: "problems" });
+  assert.equal((await watch()).emailed, true, "a new problem is emailed at once");
+  assert.deepEqual(f.opsEmails[0].to, ["owner@example.com"]);
+  assert.match(f.opsEmails[0].subject, /^Pentra: 1 Autopilot site\(s\) need attention$/);
+  assert.match(f.opsEmails[0].text, /overdue/);
+  assert.ok(String(f.opsEmails[0].text).includes(f.get(site.id)!.domain), "owner domains are listed in detail");
+  f.setTime(f.now() + hour);
+  assert.equal((await watch()).emailed, false, "the same problem an hour later (4h instead of 3h overdue) is not repeated");
+  assert.equal((await f.invoke("contentHealth:runContentHealth", { notify: "always" })).emailed, true, "the daily report always goes");
+  f.setTime(f.now() + 25 * hour);
+  assert.equal((await watch()).emailed, true, "an unchanged problem is repeated after a day");
+  f.get(site.id)!.contentSchedule.paused = true;
+  assert.equal((await watch()).emailed, true, "a changed problem is emailed at once");
+  assert.equal(f.opsEmails.length, 4);
+  f.assertOffline();
 });
