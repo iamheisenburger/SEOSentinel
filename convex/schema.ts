@@ -1313,6 +1313,9 @@ export default defineSchema({
         previousStatus: v.string(), previousStage: v.string(), previousFailure: v.optional(v.string()),
         previousError: v.optional(v.string()), previousNextAttemptAt: v.optional(v.number()),
         workerAttempts: v.number(), recoveryAttempts: v.number() })),
+      // A delivered improvement verified by a later bounded re-check after its
+      // live checks ran out; the original failure stays on record here.
+      liveRecheck: v.optional(v.object({ version: v.literal(1), verifiedAt: v.number(), previousFailure: v.string(), rechecks: v.number() })),
       priorReservationIds: v.optional(v.array(v.id("provider_spend_reservations"))),
       publishedAt: v.optional(v.number()), verifiedAt: v.optional(v.number()),
       verificationNextAt: v.optional(v.number()),
@@ -1784,6 +1787,8 @@ export default defineSchema({
     liveVerificationLeaseOwner: v.optional(v.string()),
     liveVerificationLeaseExpiresAt: v.optional(v.number()),
     liveVerifiedAt: v.optional(v.number()),
+    // Bounded re-checks after the live checks ran out (contentImprovements.claimLiveRecheck).
+    liveRechecks: v.optional(v.number()),
     failureCode: v.optional(v.string()),
     failureDetail: v.optional(v.string()),
     ambiguityDispositionAt: v.optional(v.number()),

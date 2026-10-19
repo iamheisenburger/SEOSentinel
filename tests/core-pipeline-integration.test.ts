@@ -8178,6 +8178,59 @@ test("C1b the operator repairs pipeline wording on a live page: provider-free, e
   f.assertOffline();
 });
 
+// C1b (Oct 19 2026): live checks run five times in about five minutes. The
+// first wording repair on leadpilot.chat was live, yet every check failed and
+// nothing looked again: the owner saw a failure and the page kept its old source.
+test("C1b a delivered repair whose live checks ran out is re-checked: verified once live, failure kept on record, at most three times", async () => {
+  for (const host of ["deploys_late", "never_deploys"] as const) {
+    const options: Parameters<typeof setup>[0] = { growthFirst: true, businesses: [slcBusinesses[0]] };
+    const f = setup(options);
+    const selected = await selectExistingPage(f, "md", `${pipelineLeakParagraph}\n\n${correctionSurvivor}`), site = await selectGrowth(f);
+    f.get(site.id)!.gscDateEpochs = [];
+    await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+    const original = f.get(selected.pageId)!.editable.sourceContent;
+    const repaired = "Keep the original observations available to an authorized reviewer.";
+    options.liveCorrupt = "body"; // the host has not deployed the repair yet
+    const id = await f.invoke("actions/contentCorrections:repairReaderTextAsOperator", { siteId: site.id, pageId: selected.pageId,
+      before: pipelineLeakParagraph, replacement: repaired, reason: "Owner asked: remove process wording a reader should never see." });
+    await pumpUntil(f, () => f.get(id)!.contentWork.stage === "failed", 300, f.now() + 30 * 60_000);
+    const revisionId = f.get(id)!.contentWork.revisionId, repo = f.repositories.get(site.name.toLowerCase())!;
+    const writes = repo.writes, calls = f.modelCalls.length, deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+    const scheduled = () => f.tables._scheduled_functions.filter(s => s.name === "publisher:recheckContentImprovement" && s.args.jobId === id);
+    assert.equal(f.get(revisionId)!.liveVerificationAttempts, 5);
+    assert.equal(f.get(selected.pageId)!.editable.sourceContent, original, "nothing is recorded before a live check passes");
+    assert.equal(scheduled().length, 1, "one re-check is scheduled");
+    assert.ok(scheduled()[0].at >= f.now() + 59 * 60_000, "an hour later");
+    const recheck = () => f.invoke("publisher:recheckContentImprovement", { siteId: site.id, jobId: id });
+    assert.equal((await recheck())!.verified, false);
+    if (host === "deploys_late") {
+      options.liveCorrupt = undefined;
+      assert.equal((await recheck())!.verified, true);
+      const revision = f.get(revisionId)!, job = f.get(id)!;
+      assert.equal(revision.status, "verified"); assert.ok(revision.liveVerifiedAt);
+      assert.equal(revision.liveVerificationAttempts, 5, "exhausted attempts are never reset");
+      assert.ok(revision.failureDetail, "the original failure stays on record");
+      assert.equal(job.contentWork.stage, "verified"); assert.equal(job.contentWork.failure, undefined);
+      assert.equal(job.contentWork.liveRecheck.previousFailure, "improvement_live_artifact_not_verified");
+      assert.equal(job.contentWork.liveRecheck.rechecks, 2);
+      const page = f.get(selected.pageId)!;
+      assert.ok(page.editable.markdown.includes(repaired) && !page.editable.markdown.includes("The excerpt is truncated"), page.editable.markdown);
+      assert.equal(await recheck(), null, "a verified repair is never re-checked");
+    } else {
+      assert.equal((await recheck())!.verified, false); assert.equal((await recheck())!.verified, false);
+      assert.equal(f.get(revisionId)!.liveRechecks, 3);
+      assert.equal(await recheck(), null, "at most three re-checks");
+      assert.equal(scheduled().length, 3, "no fourth is scheduled");
+      assert.equal(f.get(revisionId)!.status, "failed"); assert.equal(f.get(id)!.contentWork.stage, "failed");
+      assert.equal(f.get(selected.pageId)!.editable.sourceContent, original);
+    }
+    assert.equal(repo.writes, writes, "a re-check never writes to the destination");
+    assert.equal(f.modelCalls.length, calls, "no model runs");
+    assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline, "the cadence is untouched");
+    f.assertOffline();
+  }
+});
+
 // B (Oct 19 2026): reserving a content-work article slot loaded the job behind
 // every usage row of the month: 11.3 MB in one call for the owner account,
 // growing toward Convex's 16 MB per-execution limit (every new article would

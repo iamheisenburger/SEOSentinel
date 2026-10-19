@@ -17,6 +17,7 @@ import {
   verifyLegacyGitHubReceiptAdoptionProof,
   verifyLivePublishedRevision,
   verifyLiveCreatedArticle,
+  verifyLiveSelectedRestoration,
   webhookRevisionReceiptFromResponse,
   type PublishedRevisionArtifact,
 } from "../convex/lib/publishedRevision.ts";
@@ -541,6 +542,32 @@ test("live metadata revision requires exact URL, canonical, title, and descripti
     }),
     /exact revised meta title/,
   );
+});
+
+// C1b (Oct 19 2026): a title template ("%s | LeadPilot") appends the brand to
+// every page. Creation accepted it, but corrections, rollbacks and snippet
+// changes demanded the bare title, so a delivered wording repair on
+// leadpilot.chat could never verify.
+test("C1b corrections, rollbacks and snippet changes verify on a site whose layout appends its brand", () => {
+  const expectedUrl = "https://leadpilot.chat/how-to-qualify-leads";
+  const kept = "Ask what the visitor wants to solve, how soon they need it, and who else signs off before you route the conversation to sales.";
+  const base = artifact({ internalLinks: [], markdown: `${kept}\n\nThe pass removed unsupported claims from this section, so it now states the routing rule plainly for every reader.` });
+  const next = { ...base, markdown: `${kept}\n\nIt states the routing rule plainly: a visitor with a named need and a date goes to sales the same day.` };
+  const page = (a: PublishedRevisionArtifact, title = `${a.metaTitle} | LeadPilot`, social = a.metaTitle) =>
+    `<html><head><title>${title}</title><meta property="og:title" content="${social}"><meta name="twitter:title" content="${social}"><meta name="description" content="${a.metaDescription}"><link rel="canonical" href="${expectedUrl}"></head><body><main><h1>${a.title}</h1>${renderSafePublicationHtml(a.markdown)}</main></body></html>`;
+  const correction = (html: string) => verifyLiveSelectedRestoration({ expectedUrl, fetchedUrl: expectedUrl, html, base, next, siteBrand: "LeadPilot" });
+  assert.doesNotThrow(() => correction(page(next)));
+  assert.doesNotThrow(() => verifyLivePublishedRevision({ expectedUrl, fetchedUrl: expectedUrl, html: page(next), base, next, kind: "editorial_correction" }));
+  const snippet = { ...base, metaTitle: "Website lead qualification workflow" };
+  assert.doesNotThrow(() => verifyLivePublishedRevision({ expectedUrl, fetchedUrl: expectedUrl, html: page(snippet), base, next: snippet, kind: "improve_snippet" }));
+  assert.doesNotThrow(() => verifyLivePublishedRevision({ expectedUrl, fetchedUrl: expectedUrl, html: page(base), base: snippet, next: base, kind: "rollback" }));
+  // Still exact: an unknown suffix, a stale title, stale social titles and
+  // superseded prose all fail.
+  for (const bad of [page(next, `${next.metaTitle} | Guaranteed growth`), page(next, `${base.metaTitle}x | LeadPilot`),
+    page(next, undefined, "Stale title")]) assert.throws(() => correction(bad), /exact revised meta title/);
+  assert.throws(() => verifyLivePublishedRevision({ expectedUrl, fetchedUrl: expectedUrl, html: page(base, `${base.metaTitle} | LeadPilot`),
+    base, next: snippet, kind: "improve_snippet" }), /exact revised meta title/);
+  assert.throws(() => correction(page(base)), /complete exact audited prose/);
 });
 
 test("live internal-link revision requires the exact verified destination href", () => {

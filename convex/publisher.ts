@@ -2341,6 +2341,7 @@ export const verifyPublishedRevisionInternal = internalAction({
         next: revision.nextArtifact as PublishedRevisionArtifact,
         kind: revision.kind,
         targetUrl: revision.targetUrl,
+        siteBrand: context.site.siteName,
       });
       await ctx.runMutation(internal.publishedRevisions.recordLiveVerification, {
         revisionId: args.revisionId,
@@ -2537,16 +2538,35 @@ export const verifyContentImprovement = internalAction({ args: { siteId: v.id("s
       await ctx.runMutation(internal.contentImprovements.verified, { ...target, leaseOwner, nextArtifactHash: r.nextArtifactHash, error });
       return;
     }
-    try {
-      const fetched = await safeFetchPublicText(r.expectedPublicUrl, { expectedHost: new URL(r.expectedPublicUrl).hostname,
-        allowedContentTypes: [/^text\/html(?:;|$)/i] });
-      if (context.job.contentWork?.operation) verifyLiveSelectedRestoration({ expectedUrl: r.expectedPublicUrl,
-        fetchedUrl: fetched.url, html: fetched.text, base: r.baseArtifact as PublishedRevisionArtifact, next: r.nextArtifact as PublishedRevisionArtifact });
-      else verifyLiveCreatedArticle({ expectedUrl: r.expectedPublicUrl, fetchedUrl: fetched.url, html: fetched.text,
-        article: r.nextArtifact as PublishedRevisionArtifact, siteBrand: context.site.siteName });
-      if (context.job.contentWork.correction) verifyCorrectedLink(fetched.text, context.job.contentWork.correction);
-    } catch (e) { error = e instanceof Error ? e.message : "Live improvement verification failed"; }
+    try { await verifyLiveImprovement(context.site, context.job, r); }
+    catch (e) { error = e instanceof Error ? e.message : "Live improvement verification failed"; }
     await ctx.runMutation(internal.contentImprovements.verified, { ...target, leaseOwner, nextArtifactHash: r.nextArtifactHash, ...(error ? { error } : {}) });
+  } });
+
+/** The exact live proof of a delivered improvement: one public GET of its page. */
+async function verifyLiveImprovement(site: Doc<"sites">, job: Doc<"jobs">, r: Doc<"published_article_revisions">) {
+  const fetched = await safeFetchPublicText(r.expectedPublicUrl, { expectedHost: new URL(r.expectedPublicUrl).hostname,
+    allowedContentTypes: [/^text\/html(?:;|$)/i] });
+  if (job.contentWork?.operation) verifyLiveSelectedRestoration({ expectedUrl: r.expectedPublicUrl,
+    fetchedUrl: fetched.url, html: fetched.text, base: r.baseArtifact as PublishedRevisionArtifact, next: r.nextArtifact as PublishedRevisionArtifact,
+    siteBrand: site.siteName });
+  else verifyLiveCreatedArticle({ expectedUrl: r.expectedPublicUrl, fetchedUrl: fetched.url, html: fetched.text,
+    article: r.nextArtifact as PublishedRevisionArtifact, siteBrand: site.siteName });
+  if (job.contentWork?.correction) verifyCorrectedLink(fetched.text, job.contentWork.correction);
+}
+
+/** Bounded re-check of a delivered improvement whose live checks ran out
+ * (contentImprovements.claimLiveRecheck). Read-only toward the destination. */
+export const recheckContentImprovement = internalAction({ args: { siteId: v.id("sites"), jobId: v.id("jobs") },
+  handler: async (ctx, args): Promise<{ verified: boolean; error?: string } | null> => {
+    const leaseOwner = randomUUID();
+    const context = await ctx.runMutation(internal.contentImprovements.claimLiveRecheck, { ...args, leaseOwner });
+    if (!context) return null;
+    let error: string | undefined;
+    try { await verifyLiveImprovement(context.site, context.job, context.revision); }
+    catch (e) { error = e instanceof Error ? e.message : "Live improvement verification failed"; }
+    await ctx.runMutation(internal.contentImprovements.liveRechecked, { ...args, leaseOwner, nextArtifactHash: context.revision.nextArtifactHash, ...(error ? { error } : {}) });
+    return { verified: !error, ...(error ? { error } : {}) };
   } });
 
 async function publishArticleHandler(
