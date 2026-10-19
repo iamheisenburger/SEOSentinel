@@ -18,6 +18,13 @@ const ORDERED_ITEM = /^\s*\d+[.)]\s+/;
 /** A sentence opening like this depends on the sentence or block before it. */
 const LEANS_ON_PREVIOUS = /^(?:\*\*[^*]{1,80}\*\*[:.]?\s*)?["“'‘(]?(?:this|that|these|those|it|its|it's|they|they're|their|them|such|both|another|also|however|but|and|or|so|then|thus|therefore|instead|otherwise|still|yet|meanwhile|likewise|similarly|in that case|as a result|for example|for instance|in other words|that's|here's why|even so|at that point|from there)\b/i;
 const BOLD_LEAD_IN_ONLY = /^(?:\*\*[^*]+\*\*|__[^_]+__)[:.]?$/;
+/** A block's bold lead-in label ("**Step 2:** ...", "**Pricing.** ..."). The
+ * sentence splitter keeps it with the first sentence, so deleting that
+ * sentence would delete the label (Oct 18 2026: a test design jumped from
+ * Step 1 to Step 3). */
+const BOLD_LEAD_IN = /^\s*(?:\*\*[^*\n]{1,80}\*\*|__[^_\n]{1,80}__)/;
+/** A bold label that numbers a step of a sequence: its block is never dropped. */
+const NUMBERED_BOLD_LABEL = /^\s*(?:\*\*|__)\s*(?:(?:step|phase|stage|part|day|week|module|lesson|tip|mistake|reason|way|method|option)\s*#?\d+|\d+[.):])/i;
 /** Inside a paragraph, "The engine replies..." right after a deleted sentence
  * usually names something that sentence introduced. */
 const DEFINITE_REFERENCE = /^(?:\*\*[^*]{1,80}\*\*[:.]?\s*)?["“'‘(]?the\b/i;
@@ -117,7 +124,8 @@ export function deleteSentencesCoherently(
       // step, never the last content under a heading, never a block the next
       // one refers back to.
       const next = nextProseBody(lines, i, fence);
-      if (ORDERED_ITEM.test(line) || (next !== undefined && LEANS_ON_PREVIOUS.test(next)) || lastItemOfIntroducedList(lines, i) ||
+      if (ORDERED_ITEM.test(line) || NUMBERED_BOLD_LABEL.test(line.slice(prefix.length)) ||
+        (next !== undefined && LEANS_ON_PREVIOUS.test(next)) || lastItemOfIntroducedList(lines, i) ||
         answersPreviousQuestion(lines, i)) { hold(); continue; }
       if (onlyContentInSection(lines, i)) {
         // The section's only content: the section goes with it (heading
@@ -136,9 +144,10 @@ export function deleteSentencesCoherently(
       removedAt[i] = flaggedText;
       continue;
     }
-    // Part of a block: never cut a quotation, never strand a sentence that
-    // refers back to (or names something introduced by) a deleted one.
-    if (flaggedText.some((s) => !quotesBalanced(s)) ||
+    // Part of a block: never cut a quotation or the block's bold label, never
+    // strand a sentence that refers back to (or names something introduced by)
+    // a deleted one.
+    if (flaggedText.some((s) => !quotesBalanced(s)) || segments.some((s, k) => flagged[k] && BOLD_LEAD_IN.test(s)) ||
       segments.some((s, k) => k > 0 && !flagged[k] && flagged[k - 1] && (LEANS_ON_PREVIOUS.test(s.trim()) || DEFINITE_REFERENCE.test(s.trim())))) { hold(); continue; }
     const kept = segments.filter((_, k) => !flagged[k]).join(" ").trim();
     if (!kept || BOLD_LEAD_IN_ONLY.test(kept)) { hold(); continue; }

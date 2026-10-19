@@ -348,15 +348,23 @@ const FACTUAL_CLAIM_PATTERN =
  * supported Markdown contract, and accepting them would let a multiline MDX
  * expression survive a line-oriented regular expression.
  */
+/** The article split into prose and code. Code (closed fenced blocks and
+ * single-line inline spans) renders literally in MDX, plain Markdown and the
+ * safe HTML renderer; anything the patterns do not close stays prose. */
+export function markdownOutsideCode(markdown: string): { prose: string; code: string[] } {
+  const code: string[] = [];
+  const prose = markdown
+    .replace(/^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$/gm, (block) => { code.push(block); return " "; })
+    .replace(/(`+)(?!`)([^\n]*?[^`\n])\1(?!`)/g, (span) => { code.push(span); return " "; });
+  return { prose, code };
+}
+
 export function containsExecutableMdx(markdown: string): boolean {
   // Code (fenced blocks and inline spans) renders literally in MDX and in
   // plain Markdown, so a tag or an import line inside it is text: an SEO
   // article must be able to write `<title>`. Template engines (Liquid, Hugo)
   // still expand {{ }} and {% %} inside code, so those stay blocked there.
-  const code: string[] = [];
-  const prose = markdown
-    .replace(/^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$/gm, (block) => { code.push(block); return " "; })
-    .replace(/(`+)(?!`)([^\n]*?[^`\n])\1(?!`)/g, (span) => { code.push(span); return " "; });
+  const { prose, code } = markdownOutsideCode(markdown);
   return (
     /[{}]/.test(prose) ||
     /^\s*(?:import|export)\b/m.test(prose) ||
@@ -1144,7 +1152,17 @@ const EVIDENCE_REQUIRED_NUMBER_PATTERN =
   /(?:\$\s?\d[\d,]*(?:\.\d+)?(?:\s*(?:[-–]|to)\s*\$?\d[\d,]*(?:\.\d+)?)?|\b\d[\d,]*(?:\.\d+)?(?:\s*(?:[-–]|to)\s*\d[\d,]*(?:\.\d+)?)?\s*\+?\s*(?:%|x|[-‑–— ]?(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?|questions?|conversations?|orders?|customers?|users?|visitors?|leads?|calls?|employees?|responses?|messages?|sessions?|articles?|posts?|points?|scores?))|\b\d+(?:\s*\/\s*\d+)+\s*(?:points?|scores?)\b|\b(?:above|below|under|over|at\s+least|at\s+most|more\s+than|fewer\s+than)\s+\d+(?:\.\d+)?\b)(?![\w])/i;
 const EXTERNAL_LINK_PATTERN = /\[[^\]]+\]\(https:\/\/[^)]+\)|https:\/\/\S+/;
 const DANGLING_META_END_PATTERN =
-  /\b(?:a|about|across|after|an|and|as|at|before|by|for|from|in|into|of|on|or|over|the|through|to|toward|towards|under|via|while|with|without|which|that)$/i;
+  /\b(?:a|about|across|after|an|and|as|at|before|by|for|from|in|into|of|on|or|over|the|through|to|toward|towards|under|via|while|with|without|which|that|your|our|their|its|my|whether|than|because|although|unless|if)$/i;
+/** Where an over-long meta description is cut: its last sentence end, else
+ * its last clause break, at or after `minLength` (the strict gate's snippet
+ * floor) and inside `window`. -1 when there is none. */
+function lastMetaBoundary(window: string, minLength: number): number {
+  let best = -1;
+  for (const m of window.matchAll(/[.!?](?=\s)/g)) if (m.index! >= minLength) best = m.index!;
+  if (best > 0) return best;
+  for (const m of window.matchAll(/[,;:](?=\s)|\s[–—-](?=\s)/g)) if (m.index! >= minLength) best = m.index!;
+  return best;
+}
 const INCOMPLETE_META_PHRASE_END_PATTERN =
   /\b(?:with|for|to|of)\s+(?:full|complete|detailed|relevant|useful|better|clear|strong)$/i;
 const INCOMPLETE_TRANSITIVE_META_END_PATTERN =
@@ -1268,11 +1286,18 @@ export function clampMetaDescription(
     ? normalized
     : normalized.slice(0, maxLength + 1);
   const lastSpace = candidate.lastIndexOf(" ");
+  // An over-long description is cut where a sentence or clause ends, never
+  // mid-thought ("...for finding whether your."); a word cut is the fallback.
+  const boundary = normalized.length <= maxLength
+    ? -1
+    : lastMetaBoundary(normalized.slice(0, maxLength), Math.min(100, Math.floor(maxLength * 0.6)));
   const cutAt = normalized.length <= maxLength
     ? normalized.length
-    : lastSpace >= Math.floor(maxLength * 0.7)
-      ? lastSpace
-      : maxLength;
+    : boundary > 0
+      ? boundary
+      : lastSpace >= Math.floor(maxLength * 0.7)
+        ? lastSpace
+        : maxLength;
   let complete = normalized
     .slice(0, cutAt)
     .replace(/[\s,;:.!?–—-]+$/g, "");
@@ -1645,6 +1670,28 @@ export function applyFactCheckFindings(args: {
     confidenceScore: remaining > 0 ? Math.round((verifiedCount! / remaining) * 100) : 100 };
 }
 
+/** A cited page's title can name a tag ("<script> HTML script element - MDN"),
+ * and the writer copies it into the Sources list as link text, where MDX would
+ * parse it as markup and the gate blocks the whole article. Only Sources /
+ * References rows of the form `[label](url)` are touched: each tag-like token
+ * in the label becomes inline code. Body prose is never changed here. */
+export function codeTagsInSourceLabels(markdown: string): string {
+  const lines = markdown.split("\n");
+  let inSources = false, inFence = false, changed = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) { inFence = !inFence; continue; }
+    if (inFence) continue;
+    const heading = /^\s*#{1,6}\s+(.*?)\s*$/.exec(line);
+    if (heading) { inSources = /^(?:sources|references)$/i.test(heading[1].replace(/[*_]/g, "").trim()); continue; }
+    if (!inSources || !/^\s*(?:[-*+]|\d+[.)])\s+/.test(line)) continue;
+    const next = line.replace(/\[([^\]\n`]*<\/?[A-Za-z][^\]\n`]*)\](?=\(\s*https?:\/\/)/g, (_link, label: string) =>
+      `[${label.replace(/<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?>/g, (tag) => `\`${tag}\``)}]`);
+    if (next !== line) { lines[i] = next; changed = true; }
+  }
+  return changed ? lines.join("\n") : markdown;
+}
+
 /** Structured data belongs to the renderer: a <script> block the writer put in
  * the article body (usually JSON-LD) fails the gate and costs the draft. It is
  * removed outside code fences; code examples are left alone. */
@@ -1902,7 +1949,8 @@ export function evaluatePublicationQuality(
     }
   }
 
-  if (/<script\b/i.test(markdown)) {
+  // A how-to may show an embed snippet in a code block: code renders as text.
+  if (/<script\b/i.test(markdownOutsideCode(markdown).prose)) {
     issues.push("Article contains a script tag; structured data belongs in the renderer.");
   }
   if (containsExecutableMdx(markdown)) {

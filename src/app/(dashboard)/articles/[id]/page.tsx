@@ -40,6 +40,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSlug from "rehype-slug";
 import rehypeRaw from "rehype-raw";
+import { pasteHtmlFromMarkdown } from "@/lib/paste-html";
 import type { Components } from "react-markdown";
 import type { Id } from "../../../../../convex/_generated/dataModel";
 import { useEffect, useMemo, useState } from "react";
@@ -70,30 +71,6 @@ function customerReviewNotes(notes: string | undefined): string {
 // Slugs may be stored with or without a leading slash; show exactly one.
 function displayPath(slug: string): string {
   return `/${slug.replace(/^\/+/, "")}`;
-}
-
-function simpleMarkdownToHtml(md: string): string {
-  let html = md;
-  html = html.replace(/^######\s+(.+)$/gm, "<h6>$1</h6>");
-  html = html.replace(/^#####\s+(.+)$/gm, "<h5>$1</h5>");
-  html = html.replace(/^####\s+(.+)$/gm, "<h4>$1</h4>");
-  html = html.replace(/^###\s+(.+)$/gm, "<h3>$1</h3>");
-  html = html.replace(/^##\s+(.+)$/gm, "<h2>$1</h2>");
-  html = html.replace(/^#\s+(.+)$/gm, "<h1>$1</h1>");
-  html = html.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
-  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-  html = html.replace(/^>\s+(.+)$/gm, "<blockquote>$1</blockquote>");
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-  html = html.replace(/^---$/gm, "<hr>");
-  html = html.split("\n\n").map((block) => {
-    const t = block.trim();
-    if (!t) return "";
-    if (/^<[a-z]/.test(t)) return t;
-    return `<p>${t.replace(/\n/g, "<br>")}</p>`;
-  }).join("\n\n");
-  return html;
 }
 
 const markdownComponents: Components = {
@@ -573,7 +550,7 @@ export default function ArticleDetailPage() {
   };
 
   const handleCopyHtml = async () => {
-    const html = simpleMarkdownToHtml(article.markdown);
+    const html = pasteHtmlFromMarkdown(article.markdown);
     await navigator.clipboard.writeText(html);
     setLinkStatus("HTML copied to clipboard.");
     setTimeout(() => setLinkStatus(null), 2000);
