@@ -29,6 +29,9 @@ crons.daily("content-health-daily", { hourUTC: 3, minuteUTC: 30 }, internal.cont
 // adoption, up to three a site a day; refreshes take at most one slot in four).
 crons.daily("published-article-refresh-adoption", { hourUTC: 4, minuteUTC: 10 }, internal.actions.selectedPages.adoptPublishedForRefreshFleet, {});
 crons.interval("content-health-watch", { hours: 6 }, internal.contentHealth.runContentHealth, { notify: "problems" });
+// Every Autopilot site's planned topics without a buyer-fit verdict get one
+// (one cheap call per site, its spend reserved first; P105).
+crons.daily("buyer-fit-sweep", { hourUTC: 2, minuteUTC: 40 }, internal.actions.growthTopics.sweepBuyerFitFleet, {});
 crons.interval(
   "growth-loop-ga-rollout-start",
   { minutes: 15 },

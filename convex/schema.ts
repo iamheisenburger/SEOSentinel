@@ -29,6 +29,7 @@ export default defineSchema({
         discovered: v.optional(v.number()), excludedKnown: v.optional(v.number()), excludedFit: v.optional(v.number()),
         excludedIntent: v.optional(v.number()), offered: v.number(), added: v.number(),
         skippedShape: v.number(), skippedDifficulty: v.number(), skippedCompetitor: v.number(), skippedFit: v.number(), skippedIntent: v.number(),
+        skippedBuyerFit: v.optional(v.number()),
       })),
     })),
     userId: v.optional(v.string()), // Clerk user ID
@@ -825,6 +826,11 @@ export default defineSchema({
     businessFitReasons: v.optional(v.array(v.string())),
     businessFitCheckedAt: v.optional(v.number()),
     disqualifiedReason: v.optional(v.string()),
+    // P105: the model's buyer-fit verdict for this keyword and business
+    // (convex/lib/topicFit.ts). Autopilot never writes a topic judged unfit,
+    // and the lexical audit above cannot overturn that verdict.
+    buyerFit: v.optional(v.object({ eligible: v.boolean(), reason: v.string(), version: v.number(),
+      checkedAt: v.number(), profileHash: v.optional(v.string()) })),
 
     // A topic that exhausts the bounded article-quality recovery contract is
     // terminal for this exact evidence generation. Without this receipt the

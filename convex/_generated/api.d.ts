@@ -180,6 +180,7 @@ import type * as lib_smartleadNode from "../lib/smartleadNode.js";
 import type * as lib_sourceQuality from "../lib/sourceQuality.js";
 import type * as lib_sourcesHeading from "../lib/sourcesHeading.js";
 import type * as lib_toolChoice from "../lib/toolChoice.js";
+import type * as lib_topicFit from "../lib/topicFit.js";
 import type * as lib_topicLifecycle from "../lib/topicLifecycle.js";
 import type * as lib_topicLifecycleDb from "../lib/topicLifecycleDb.js";
 import type * as lib_userError from "../lib/userError.js";
@@ -390,6 +391,7 @@ declare const fullApi: ApiFromModules<{
   "lib/sourceQuality": typeof lib_sourceQuality;
   "lib/sourcesHeading": typeof lib_sourcesHeading;
   "lib/toolChoice": typeof lib_toolChoice;
+  "lib/topicFit": typeof lib_topicFit;
   "lib/topicLifecycle": typeof lib_topicLifecycle;
   "lib/topicLifecycleDb": typeof lib_topicLifecycleDb;
   "lib/userError": typeof lib_userError;

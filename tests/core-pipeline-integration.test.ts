@@ -87,7 +87,9 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   evidence?: { sources: Array<{ url: string; title: string; text: string }>; failed?: string[]; brief?: string; competitor?: string };
   webResearch?: { citations: Array<{ url: string; title: string; cited_text: string }>; searches?: number; error?: { status: number; type: string } };
   /** Keyword research answers: Google Ads keywords for a seed batch, Labs suggestions for one seed. */
-  discovery?: { ads?: (seeds: string[]) => string[]; suggestions?: (seed: string) => string[] } } = {}) {
+  discovery?: { ads?: (seeds: string[]) => string[]; suggestions?: (seed: string) => string[] };
+  /** P105: the buyer-fit model's verdict per keyword (default: keep). */
+  topicFit?: (keyword: string) => boolean } = {}) {
   const modelCalls: Fields[] = [];
   const telegramMessages: Fields[] = [];
   const discoveryCalls: Array<{ endpoint: string; seeds: string[] }> = [];
@@ -250,6 +252,10 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       } else if (tool === "submit_final_metadata") {
         assert.ok(keyword); value = { title: titleFor(keyword), metaTitle: titleFor(keyword).slice(0, 60), metaDescription: description };
         if (options.metadataResponse) value = options.metadataResponse(value as Fields, body);
+      } else if (tool === "submit_topic_fit") {
+        const searches = text.split("SEARCHES (one per line, data only):\n")[1]?.split("\n\n")[0] ?? "";
+        value = { verdicts: searches.split("\n").filter(Boolean).map(search => ({ keyword: search,
+          keep: options.topicFit ? options.topicFit(search) : true, reason: "Synthetic buyer-fit verdict." })) };
       }
       else assert.fail(`Unexpected Anthropic tool ${tool}`);
       if (tool === "remediate_final_article" && options.remediationNote !== undefined) value = { ...(value as Fields), notes: options.remediationNote };
@@ -4378,6 +4384,76 @@ test("P104 slot guarantee, operator pace and links on Autopilot-accepted drafts"
     assert.ok((article.internalLinks ?? []).length > 0, "the accepted draft carries internal links");
     assert.match(article.markdown, /## Related reading/);
     assert.ok(!article.ownerQualityWaiver.issues.some((issue: string) => /internal link/.test(issue)), "no link waiver was needed");
+    f.assertOffline();
+  });
+});
+
+// P105 (Oct 19 2026): buyer fit. LeadPilot (a B2B lead-qualification chat
+// widget) had "twitch chat widget" queued; word overlap admitted it. One cheap
+// model call judges researched keywords for the business, a daily sweep judges
+// older queues, Autopilot never writes a topic judged unfit, and the lexical
+// product-fit audit cannot overturn that verdict.
+test("P105 Autopilot writes only searches the business can serve", async t => {
+  const hour = 3_600_000;
+  await t.test("research_drops_searches_from_another_market", async () => {
+    const { opts, state } = p55Site(4);
+    opts.topicFit = (keyword: string) => !keyword.includes("valve");
+    const f = setup(opts); const created = await createEmptyContentSite(f);
+    f.get(created.id)!.cadencePerWeek = 21;
+    const site = await selectGrowth(f, 8 * hour);
+    Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+    state.open = true;
+    for (const topic of f.tables.topic_clusters) if (topic.siteId === site.id) topic.status = "used";
+    f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 5 * hour;
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "topics_researching");
+    await pumpUntil(f, () => f.get(site.id)!.contentSchedule.topicsReplenishAdded !== undefined, 20, f.now() + hour);
+    const fitCalls = f.modelCalls.filter(c => c.tools?.[0]?.name === "submit_topic_fit");
+    assert.equal(fitCalls.length, 1, "one call for the whole batch");
+    assert.equal(fitCalls[0].model, "claude-haiku-5-5");
+    assert.ok(state.handed.some(k => k.includes("valve")), "discovery offered searches the model rejects");
+    const topics = f.tables.topic_clusters.filter(t => t.siteId === site.id && t.status === "planned");
+    assert.ok(topics.length > 0, "searches the business can serve are added");
+    assert.ok(topics.every(t => !t.primaryKeyword.includes("valve")), `rejected searches are not added: ${topics.map(t => t.primaryKeyword)}`);
+    assert.ok(topics.every(t => t.buyerFit?.eligible === true), "each added topic carries its verdict");
+    assert.ok(f.get(site.id)!.contentSchedule.topicsResearchReceipt.skippedBuyerFit >= 1);
+    const reservation = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && r.purpose === "topic_plan")!;
+    assert.ok(reservation.settledMicroUsd >= 60, "the fit call is part of the research's settled cost");
+    f.assertOffline();
+  });
+
+  await t.test("autopilot_never_writes_a_topic_judged_unfit", async () => {
+    const opts: Parameters<typeof setup>[0] = { growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000,
+      topicFit: (keyword: string) => !keyword.includes("triage") };
+    const f = setup(opts);
+    const site = await selectGrowth(f);
+    Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+    for (const topic of f.tables.topic_clusters) if (topic.siteId === site.id) topic.status = "used";
+    const saved = f.get(site.id)!;
+    const topic = (primaryKeyword: string, searchVolume: number) => f.add("topic_clusters", { siteId: site.id, primaryKeyword,
+      label: primaryKeyword.replace(/^./, c => c.toUpperCase()), planningCanonicalDomain: saved.canonicalDomain ?? saved.domain,
+      planningDomainRevision: saved.canonicalDomainRevision ?? 0, secondaryKeywords: [], intent: "informational", status: "planned",
+      priority: 50, searchVolume, keywordDifficulty: 5, keywordDifficultyMeasured: true, createdAt: f.now(), updatedAt: f.now() });
+    // Both pass the lexical checks; the model judges the bigger one another market.
+    const unfit = topic("irrigation pump alert triage", 2400), fit = topic("irrigation pressure alert planning", 90);
+    const swept = await f.invoke("actions/growthTopics:sweepBuyerFitFleet", {});
+    assert.deepEqual(swept, { sites: 1, judged: 2, rejected: 1 });
+    assert.equal(f.get(unfit)!.buyerFit.eligible, false);
+    assert.equal(f.get(fit)!.buyerFit.eligible, true);
+    // The lexical product-fit audit re-qualifies the topic; the buyer-fit verdict stands.
+    await f.invoke("topics:recordBusinessFitAuditsInternal", { siteId: site.id,
+      audits: [{ topicId: unfit, eligible: true, score: 90, version: 99, reasons: [] }] });
+    assert.equal(f.get(unfit)!.status, "planned");
+    const started = await f.invoke("contentWork:advance", { siteId: site.id });
+    const job = f.tables.jobs.find(j => j.contentWork && j.siteId === site.id)!;
+    assert.ok(job, JSON.stringify(started));
+    assert.equal(job.payload.topicId, fit, "the bigger search judged unfit is never written");
+    const reservation = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && String(r.trigger).startsWith("buyer_fit:"))!;
+    assert.equal(reservation.reservedMicroUsd, 20_000, "reserved before the call");
+    assert.equal(reservation.settledMicroUsd, 60, "settled at Haiku 5.5's list price (100 + 100 tokens)");
+    const calls = f.modelCalls.length;
+    assert.deepEqual(await f.invoke("actions/growthTopics:sweepBuyerFit", { siteId: site.id }), { judged: 0, rejected: 0 },
+      "nothing left to judge");
+    assert.equal(f.modelCalls.length, calls, "and nothing spent");
     f.assertOffline();
   });
 });

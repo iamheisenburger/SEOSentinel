@@ -33,6 +33,7 @@ import { AUTOPILOT_ACCEPTANCE, ownerWaivableIssue } from "./lib/articleQuality";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
 import { auditResultHash, clarifiableContentAudit, inconsistentAuditFeedback, internalContentProcessingError, retainedContradictoryContentAudit, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 import { contentJobUsesAllowance } from "./lib/contentUsage";
+import { BUYER_FIT_MAX_KEYWORDS, BUYER_FIT_RESERVATION_MICRO_USD, BUYER_FIT_VERSION, type BuyerFitBusiness } from "./lib/topicFit";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
 
 export const CONTENT_DELIVERY_WINDOW_MS = 5 * 60_000;
@@ -1247,7 +1248,9 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
   const fit = (t: { primaryKeyword: string; label: string }) => evaluateTopicBusinessFit({ keyword: t.primaryKeyword, label: t.label, ...signals }).eligible;
   const covered = topics.filter(t => !["planned", "pending"].includes(t.status ?? "planned"));
   const competitors = competitorNamesFor(site);
-  const planned = topics.filter(t => ["planned", "pending"].includes(t.status ?? "planned") && fit(t) &&
+  // A buyer-fit verdict of "unfit" (P105) is final for Autopilot: the lexical
+  // fit above admitted searches from other markets that share the business's words.
+  const planned = topics.filter(t => ["planned", "pending"].includes(t.status ?? "planned") && fit(t) && t.buyerFit?.eligible !== false &&
     !namesCompetitor(`${t.primaryKeyword} ${t.label}`, competitors) &&
     !planCheckpointTopicExecutionLocked(t) && !terminalContentFeasibility(t.contentFeasibilityStatus) &&
     ![...covered, ...pageCoverage, ...excludedIntents].some(c => contentIntentConflicts(t, c)));
@@ -1514,7 +1517,66 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
   return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds, known, coverage,
     signals, searchConsole: searchConsoleTopicCandidatesFrom(site, searches),
     tenantAuthority: storedTenantAuthority(site) ?? null,
-    canonicalDomain: siteCanonicalDomain(site) ?? site.domain, domainRevision: siteCanonicalDomainRevision(site) };
+    canonicalDomain: siteCanonicalDomain(site) ?? site.domain, domainRevision: siteCanonicalDomainRevision(site),
+    business: buyerFitBusiness(site) };
+} });
+
+/** P105: the business as the buyer-fit check sees it (the owner's confirmed profile). */
+function buyerFitBusiness(site: Doc<"sites">): BuyerFitBusiness {
+  return { name: site.siteName ?? siteCanonicalDomain(site) ?? site.domain, domain: siteCanonicalDomain(site) ?? site.domain,
+    summary: site.siteSummary ?? site.niche, audience: site.targetAudienceSummary, features: site.keyFeatures,
+    problems: site.painPoints, usage: site.productUsage };
+}
+/** The planned topics Autopilot could write that have no buyer-fit verdict
+ * for the current profile, in the order it would write them. */
+export const buyerFitSweepContext = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return null;
+  let planned: Doc<"topic_clusters">[];
+  try { planned = (await eligiblePlannedTopics(ctx, site)).planned; } catch { return null; }
+  const profileHash = confirmedContentProfileHash(site);
+  const topics = planned.filter(t => !t.buyerFit || t.buyerFit.version < BUYER_FIT_VERSION || t.buyerFit.profileHash !== profileHash)
+    .slice(0, BUYER_FIT_MAX_KEYWORDS).map(t => ({ topicId: t._id, keyword: t.primaryKeyword }));
+  return { business: buyerFitBusiness(site), topics };
+} });
+/** The sweep's spend is held before its one call, like keyword research. */
+export const reserveBuyerFitSweep = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site?.userId || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return null;
+  const reserved = await reserveSharedProviderBudget(ctx, { siteId, userId: site.userId, purpose: "topic_plan",
+    trigger: `buyer_fit:${Math.floor(Date.now() / 86_400_000)}`, reservedMicroUsd: BUYER_FIT_RESERVATION_MICRO_USD, timestamp: Date.now() });
+  return reserved.ok ? reserved.reservationId : null;
+} });
+/** Settle the sweep's call at its cost and store each verdict on its topic. */
+export const recordBuyerFit = internalMutation({ args: { siteId: v.id("sites"), reservationId: v.id("provider_spend_reservations"),
+  actualMicroUsd: v.number(), verdicts: v.array(v.object({ topicId: v.id("topic_clusters"), eligible: v.boolean(), reason: v.string() })) },
+  handler: async (ctx, { siteId, reservationId, actualMicroUsd, verdicts }) => {
+    const reservation = await ctx.db.get(reservationId);
+    const actual = Math.max(0, Math.ceil(actualMicroUsd));
+    if (reservation && reservation.siteId === siteId && reservation.purpose === "topic_plan" && reservation.settledAt === undefined &&
+      reservation.releasedAt === undefined && Number.isSafeInteger(actual) && actual <= reservation.reservedMicroUsd) {
+      await settleSharedProviderReservation(ctx, { reservationId, siteId, purpose: "topic_plan",
+        actualMicroUsd: actual, reason: "verified_provider_receipt_actual_cost", timestamp: Date.now() });
+    }
+    const site = await ctx.db.get(siteId);
+    if (!site) return { recorded: 0 };
+    const profileHash = confirmedContentProfileHash(site), checkedAt = Date.now();
+    let recorded = 0;
+    for (const verdict of verdicts) {
+      const topic = await ctx.db.get(verdict.topicId);
+      if (!topic || topic.siteId !== siteId || !["planned", "pending"].includes(topic.status ?? "planned")) continue;
+      await ctx.db.patch(topic._id, { buyerFit: { eligible: verdict.eligible, reason: verdict.reason.slice(0, 160),
+        version: BUYER_FIT_VERSION, checkedAt, profileHash }, updatedAt: checkedAt });
+      recorded++;
+    }
+    return { recorded };
+  } });
+/** Autopilot sites for the daily buyer-fit sweep, a page at a time. */
+export const buyerFitSweepSites = internalQuery({ args: { cursor: v.union(v.string(), v.null()) }, handler: async (ctx, { cursor }) => {
+  const page = await ctx.db.query("sites").paginate({ cursor, numItems: 20 });
+  return { siteIds: page.page.filter(s => s.serviceMode === "growth_first" && s.autopilotEnabled && s.contentSchedule?.autopilotSelectedAt &&
+    !s.contentSchedule.paused && !s.deletionStatus && !s.accountDeletionRequestedAt).map(s => s._id),
+    isDone: page.isDone, continueCursor: page.continueCursor };
 } });
 
 const urlKey = (url: string) => url.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[#?].*$/, "").replace(/\/+$/, "");
@@ -1581,7 +1643,9 @@ export const closeTopicResearchReservation = internalMutation({ args: { siteId: 
 export const addResearchedTopics = internalMutation({ args: { siteId: v.id("sites"),
   keywords: v.array(v.object({ keyword: v.string(), searchVolume: v.number(), difficulty: v.number(), difficultyMeasured: v.boolean(),
     // Search Console: the site already appears for this search (volume = impressions in 28 days).
-    source: v.optional(v.literal("search_console")), position: v.optional(v.number()) })),
+    source: v.optional(v.literal("search_console")), position: v.optional(v.number()),
+    // P105: the buyer-fit verdict for this business, when the batch call gave one.
+    fit: v.optional(v.object({ keep: v.boolean(), reason: v.string() })) })),
     // What the research run saw (seeds and discovery counts), kept with its outcome.
     research: v.optional(v.object({ seeds: v.array(v.string()), searchConsole: v.number(), discovered: v.optional(v.number()),
       excludedKnown: v.optional(v.number()), excludedFit: v.optional(v.number()), excludedIntent: v.optional(v.number()) })) },
@@ -1595,7 +1659,8 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
     // written, so it is not added (it would only take a research slot).
     const taken: { primaryKeyword: string }[] = [...inventory.topics, ...inventory.pageCoverage];
     let added = 0;
-    const skipped = { shape: 0, difficulty: 0, competitor: 0, fit: 0, intent: 0 };
+    const skipped = { shape: 0, difficulty: 0, competitor: 0, fit: 0, buyerFit: 0, intent: 0 };
+    const profileHash = confirmedContentProfileHash(site);
     // Searches the site already appears for come first: they are the nearest wins.
     const fromSearchConsole = (k: { source?: string }) => Number(k.source === "search_console");
     for (const k of [...keywords].sort((a, b) => fromSearchConsole(b) - fromSearchConsole(a) || b.searchVolume - a.searchVolume)) {
@@ -1606,8 +1671,10 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
       if (namesCompetitor(keyword, competitorNamesFor(site))) { skipped.competitor++; continue; }
       const proposal = { primaryKeyword: keyword, label: keyword.replace(/^./, c => c.toUpperCase()) };
       if (!evaluateTopicBusinessFit({ keyword, label: proposal.label, ...signals }).eligible) { skipped.fit++; continue; }
+      if (k.fit && !k.fit.keep) { skipped.buyerFit++; continue; }
       if (taken.some(t => contentIntentConflicts(proposal, t))) { skipped.intent++; continue; }
       await ctx.db.insert("topic_clusters", { siteId, ...proposal, planningCanonicalDomain: siteCanonicalDomain(site)!,
+        ...(k.fit ? { buyerFit: { eligible: true, reason: k.fit.reason.slice(0, 160), version: BUYER_FIT_VERSION, checkedAt: Date.now(), profileHash } } : {}),
         planningDomainRevision: siteCanonicalDomainRevision(site), secondaryKeywords: [], intent: "informational",
         priority: Math.max(1, Math.min(90, Math.round(Math.log10(1 + k.searchVolume) * 20 - k.difficulty / 5))), status: "planned",
         searchVolume: k.searchVolume, keywordDifficulty: k.difficulty, keywordDifficultyMeasured: k.difficultyMeasured,
@@ -1622,7 +1689,7 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
       ...(research?.discovered !== undefined ? { discovered: research.discovered, excludedKnown: research.excludedKnown ?? 0,
         excludedFit: research.excludedFit ?? 0, excludedIntent: research.excludedIntent ?? 0 } : {}),
       offered: keywords.length, added, skippedShape: skipped.shape, skippedDifficulty: skipped.difficulty,
-      skippedCompetitor: skipped.competitor, skippedFit: skipped.fit, skippedIntent: skipped.intent };
+      skippedCompetitor: skipped.competitor, skippedFit: skipped.fit, skippedIntent: skipped.intent, skippedBuyerFit: skipped.buyerFit };
     if (site.contentSchedule) await ctx.db.patch(siteId, { contentSchedule: { ...site.contentSchedule, topicsReplenishAdded: added,
       topicsResearchReceipt: receipt }, updatedAt: Date.now() });
     await wake(ctx, siteId);
