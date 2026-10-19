@@ -8129,3 +8129,14 @@ test("B the six-hourly health watch skips the topic inventory; the daily check c
   assert.equal(healthFingerprint([{ siteId: "t", status: "attention", problems: ["no topics left to write"] }]), healthFingerprint([]));
   f.assertOffline();
 });
+
+test("P109 the writer is told the article sits on the business's own site", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  await selectGrowth(f);
+  await pumpUntil(f, () => f.modelCalls.some(c => c.tools?.[0]?.name === "submit_article"));
+  const writer = f.modelCalls.find(c => c.tools?.[0]?.name === "submit_article")!;
+  const system = JSON.stringify(writer.system);
+  assert.match(system, /This article is published on [^'"]+'s own website\. State its facts directly/);
+  assert.match(system, /never as an outside observer of its site/);
+  f.assertOffline();
+});

@@ -4680,6 +4680,7 @@ async function handleArticle(
     ``,
     `When mentioning ${productName}'s features, pricing, or capabilities, use ONLY the information above.`,
     `NEVER fabricate features, integrations, or pricing tiers that are not listed here.`,
+    `This article is published on ${productName}'s own website. State its facts directly ("${productName} has a free plan"), never as an outside observer of its site ("${productName}'s site lists", "not on the homepage", "the product information does not specify"). Leave out any detail the information above does not give.`,
     `If live crawled data is provided in the user message, prefer that for pricing/features as it may be more current.`,
     `</product_identity>`,
     ``,
