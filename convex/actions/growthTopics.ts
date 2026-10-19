@@ -15,7 +15,7 @@ import { BUYER_FIT_CEILING_MICRO_USD, BUYER_FIT_MAX_TOKENS, BUYER_FIT_MODEL, BUY
 type ResearchContext = { domain: string; language: string; targetCountry: string | null; seeds: string[]; known: string[];
   coverage: string[]; signals: { coreBusinessSignals: string[]; productAnchorSignals: string[]; businessModelSignals: string[] };
   searchConsole: Array<{ keyword: string; impressions: number; position: number }>; tenantAuthority: number | null;
-  canonicalDomain: string; domainRevision: number; business: BuyerFitBusiness };
+  canonicalDomain: string; domainRevision: number; business: BuyerFitBusiness; maximumDifficulty?: number };
 
 /** One buyer-fit call for a batch of keywords (convex/lib/topicFit.ts). It
  * throws when no verdict came back; the caller then counts the call's ceiling. */
@@ -75,7 +75,9 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
           if (measured) tenantAuthority = measured.domainRank;
         }
         return await discoverKeywords(context.seeds, dataForSeoLocationCode(context.targetCountry ?? undefined), context.language, 80,
-          { targetDomain: context.domain, minimumResults: 10, maxLabsSeeds: 5, maxRelatedSeeds: 3, maximumDifficulty: 45,
+          { targetDomain: context.domain, minimumResults: 10, maxLabsSeeds: 5, maxRelatedSeeds: 3,
+            // The site's own reach ceiling (siteDifficultyCeiling), at most 45.
+            maximumDifficulty: Math.min(45, context.maximumDifficulty ?? 45),
             // Keep what this site can win when discovery truncates (its measured authority, if any).
             ...(tenantAuthority !== null ? { tenantAuthority } : {}),
             excludeKeyword: exclusion, onDiagnostics: d => { discovery = d; } });

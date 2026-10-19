@@ -7316,6 +7316,37 @@ test("P60 with measured authority, Autopilot writes the search a young site can 
   });
 });
 
+// P113 (Oct 19 2026): the reach ceiling. The winnability model scores a keyword
+// past preSerpReachCeiling(authority) at zero, yet Autopilot still wrote such
+// searches once easier ones ran out, and keyword research still asked for up to
+// KD 45. leadpilot.chat (authority 4) and pentra.dev (0) reach KD 32.
+test("P113 a measured weak site never writes or researches a search past its reach; an unmeasured site keeps the general bound", async t => {
+  for (const measured of [false, true]) await t.test(measured ? "authority 4 measured" : "no authority evidence", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    f.setIdentity(saved.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+    f.setIdentity(null);
+    const current = f.get(site.id)!;
+    if (measured) Object.assign(current, { seoAuthorityDomain: current.domain, seoAuthorityDomainRank: 4, seoAuthorityReferringDomains: 3,
+      seoAuthoritySource: "dataforseo_backlinks_bulk_pages_summary", seoAuthorityMeasuredAt: f.now() - 86_400_000 });
+    for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+    const head = f.add("topic_clusters", { siteId: site.id, planningCanonicalDomain: current.canonicalDomain ?? current.domain,
+      planningDomainRevision: current.canonicalDomainRevision ?? 0, secondaryKeywords: [], intent: "informational", status: "planned", priority: 50,
+      keywordDifficultyMeasured: true, createdAt: f.now(), updatedAt: f.now(),
+      primaryKeyword: "irrigation valve pressure test", label: "Irrigation valve pressure test", searchVolume: 20_000, keywordDifficulty: 40 });
+    assert.equal((await f.invoke("contentWork:growthTopicContext", { siteId: site.id })).maximumDifficulty, measured ? 32 : 45,
+      "keyword research asks only for what the site can reach");
+    f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 5 * 3_600_000;
+    await f.invoke("contentWork:advance", { siteId: site.id });
+    const job = f.tables.jobs.find(j => j.contentWork && j.siteId === site.id);
+    if (measured) assert.ok(!job || job.payload.topicId !== head, "a KD 40 search past a rank-4 site's reach is never written");
+    else assert.equal(job?.payload.topicId, head, "without authority evidence the general bound (KD 45) applies");
+    f.assertOffline();
+  });
+});
+
 // ── P61: hosted platforms (Ghost Admin API) end to end ─────────────
 
 type GhostJson = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any

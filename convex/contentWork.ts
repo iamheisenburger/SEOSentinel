@@ -9,7 +9,7 @@ import { publicationArtifactHash, publicationDeliveryConfig, sha256Hex } from ".
 import { isProviderRequestRefusal, legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain, gscConnectionMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
-import { preSerpWinnability } from "./lib/winnableDiscovery";
+import { preSerpReachCeiling, preSerpWinnability } from "./lib/winnableDiscovery";
 import { measuredAuthorityIsFresh, tenantAuthorityFromStoredEvidence } from "./lib/expectedClickPortfolio";
 import { addSearchConsoleDays, isBrandedSearchQuery, publishedArticlePageUrl } from "./lib/searchPerformance";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
@@ -161,6 +161,15 @@ function namesCompetitor(text: string, names: string[]) {
 }
 /** Keywords above this difficulty are out of reach for most small sites; research asks for this bound too. */
 const WINNABLE_KEYWORD_DIFFICULTY = 45;
+/** The hardest keyword Autopilot writes for this site. A measured weak domain
+ * gets its reach ceiling (the winnability model's own bound: past it a keyword
+ * scores zero): leadpilot.chat (authority 4) and pentra.dev (0) reach KD 32,
+ * yet KD 33-45 searches were still written once easier ones ran out. An
+ * unmeasured or established site keeps the general bound. */
+export function siteDifficultyCeiling(site: Doc<"sites">): number {
+  const authority = storedTenantAuthority(site);
+  return authority === undefined ? WINNABLE_KEYWORD_DIFFICULTY : Math.min(WINNABLE_KEYWORD_DIFFICULTY, preSerpReachCeiling(authority));
+}
 /** Research that found no new keyword is not repeated for a week. */
 const TOPIC_REPLENISH_EMPTY_BACKOFF_MS = 7 * 86_400_000;
 /** Research never runs more than once a day for a site. */
@@ -1257,13 +1266,18 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
   const competitors = competitorNamesFor(site);
   // A buyer-fit verdict of "unfit" (P105) is final for Autopilot: the lexical
   // fit above admitted searches from other markets that share the business's words.
-  const planned = topics.filter(t => ["planned", "pending"].includes(t.status ?? "planned") && fit(t) && t.buyerFit?.eligible !== false &&
+  // A search past the site's reach is never written either: the winnability
+  // model scores it zero, so its page cannot rank (P113). Search Console
+  // searches carry no difficulty: the site is already shown for them.
+  const difficultyCeiling = siteDifficultyCeiling(site);
+  const reachable = (t: Doc<"topic_clusters">) => !((t.searchVolume ?? 0) > 0 && (t.keywordDifficulty ?? 0) > difficultyCeiling);
+  const planned = topics.filter(t => ["planned", "pending"].includes(t.status ?? "planned") && fit(t) && t.buyerFit?.eligible !== false && reachable(t) &&
     !namesCompetitor(`${t.primaryKeyword} ${t.label}`, competitors) &&
     !planCheckpointTopicExecutionLocked(t) && !terminalContentFeasibility(t.contentFeasibilityStatus) &&
     ![...covered, ...pageCoverage, ...excludedIntents].some(c => contentIntentConflicts(t, c)));
   // Keywords people measurably search for come first; within each group the
   // stored priority orders the work. Absence remains absent in storage.
-  const searched = (t: Doc<"topic_clusters">) => (t.searchVolume ?? 0) > 0 && (t.keywordDifficulty ?? 0) <= WINNABLE_KEYWORD_DIFFICULTY;
+  const searched = (t: Doc<"topic_clusters">) => (t.searchVolume ?? 0) > 0 && (t.keywordDifficulty ?? 0) <= difficultyCeiling;
   // Among searched keywords, a young site wins easy ones first: difficulty
   // weighs more than raw volume (e.g. 100 searches at difficulty 10 beats
   // 1,000 searches at difficulty 40).
@@ -1271,7 +1285,7 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
   // With measured authority, searched keywords are ordered by the chance this
   // site can actually win them (Pentra's winnability model): a young domain
   // writes the easy searches first instead of ones only an incumbent ranks
-  // for. Ordering only: nothing is dropped, so topic supply is unchanged.
+  // for. The ordering drops nothing; only the reach ceiling above does.
   const authority = storedTenantAuthority(site);
   const winnability = (t: Doc<"topic_clusters">) => authority === undefined ? 0 : preSerpWinnability({ tenantAuthority: authority,
     keywordDifficulty: t.keywordDifficulty, keywordDifficultyMeasured: t.keywordDifficultyMeasured, monthlySearches: t.searchVolume });
@@ -1525,7 +1539,7 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
     signals, searchConsole: searchConsoleTopicCandidatesFrom(site, searches),
     tenantAuthority: storedTenantAuthority(site) ?? null,
     canonicalDomain: siteCanonicalDomain(site) ?? site.domain, domainRevision: siteCanonicalDomainRevision(site),
-    business: buyerFitBusiness(site) };
+    business: buyerFitBusiness(site), maximumDifficulty: siteDifficultyCeiling(site) };
 } });
 
 /** P105: the business as the buyer-fit check sees it (the owner's confirmed profile). */
@@ -1674,7 +1688,7 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
       if (added >= 15) break;
       const keyword = k.keyword.trim().toLowerCase().replace(/\s+/g, " ");
       if (keyword.split(" ").length < 2 || keyword.length > 80) { skipped.shape++; continue; }
-      if (k.difficulty > WINNABLE_KEYWORD_DIFFICULTY) { skipped.difficulty++; continue; }
+      if (k.difficulty > siteDifficultyCeiling(site)) { skipped.difficulty++; continue; }
       if (namesCompetitor(keyword, competitorNamesFor(site))) { skipped.competitor++; continue; }
       const proposal = { primaryKeyword: keyword, label: keyword.replace(/^./, c => c.toUpperCase()) };
       if (!evaluateTopicBusinessFit({ keyword, label: proposal.label, ...signals }).eligible) { skipped.fit++; continue; }
