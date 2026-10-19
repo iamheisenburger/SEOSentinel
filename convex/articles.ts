@@ -664,6 +664,15 @@ export const listBySiteInternal = internalQuery({
   handler: async (ctx, { siteId }) => listBySiteHandler(ctx, siteId),
 });
 
+/** K2: the newest articles of one site, for operator readouts that show the
+ * latest few. listBySiteInternal returns every article with its Markdown
+ * (about 7 MB read and returned per site). */
+export const listRecentBySiteInternal = internalQuery({
+  args: { siteId: v.id("sites"), limit: v.optional(v.number()) },
+  handler: async (ctx, { siteId, limit }) => ctx.db.query("articles").withIndex("by_site", (q) => q.eq("siteId", siteId))
+    .order("desc").take(Math.max(1, Math.min(50, Math.floor(limit ?? 10)))),
+});
+
 /**
  * Minimal, receipt-verified replacement inventory for authority discovery.
  * This deliberately reloads the full article rows because compact summaries

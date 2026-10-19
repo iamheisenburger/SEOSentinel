@@ -7755,3 +7755,51 @@ test("P101 a phantom repetition defect gets the single bounded clarification; th
     f.assertOffline();
   });
 });
+
+// --- K2: scheduler and health readouts stay off past job checkpoints ------------------------------
+// Oct 19 2026: each `advance` read the site's 200 latest past jobs with their provider checkpoints
+// (~7 MB a run, two thirds of all database reads); site health read the 50 latest past jobs.
+test("K2 advance and site health find stranded or failed past work through the stage index, never by reading past job checkpoints", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 }), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const schedule = f.get(site.id)!.contentSchedule, interval = schedule.intervalMs;
+  const ready = f.tables.jobs.filter(j => j.contentWork?.stage === "ready").sort((a, b) => a.contentWork.deadlineAt - b.contentWork.deadlineAt);
+  // Thirty finished past jobs, each carrying 40 KB of provider checkpoints.
+  const template = f.tables.jobs.find(j => j.contentWork)!;
+  for (let i = 0; i < 30; i++) f.add("jobs", { ...structuredClone(template), status: "failed", articleId: undefined,
+    contentWork: { ...structuredClone(template.contentWork), stage: i % 2 ? "verified" : "failed", failure: i % 2 ? undefined : "bounded_content_quality_exhausted",
+      deadlineAt: ready[0].contentWork.deadlineAt - (i + 1) * interval, windowStartAt: ready[0].contentWork.deadlineAt - (i + 1) * interval - 300_000,
+      providerCalls: [{ key: `0:0:review:audit_final_article`, state: "completed", requestHash: "0".repeat(64), ceilingMicroUsd: 1, actualMicroUsd: 1,
+        result: { score: 62, notes: ["x".repeat(40_000)], materialDefects: ["Synthetic."], claimEvidence: [] } }] } });
+  schedule.nextDeadlineAt = ready[1].contentWork.deadlineAt + 2 * interval; schedule.active = true;
+  const pastReads = (from: number) => f.queryReads.slice(from).filter(read => read.table === "jobs" &&
+    read.range.some(r => r.key === "contentWork.deadlineAt" && r.op === "lt"));
+  const jobBytes = (from: number) => f.queryReads.slice(from).filter(read => read.table === "jobs").reduce((n, read) => n + read.bytes, 0);
+  let start = f.queryReads.length;
+  const rebound = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(rebound.mode, "content_slot_rebound", JSON.stringify(rebound));
+  assert.equal(rebound.activeJobId, ready[0]._id, "the oldest stranded ready article still takes the due slot");
+  assert.deepEqual(pastReads(start), [], "advance never scans past jobs by deadline");
+  // The ready articles themselves are read; none of the 1.2 MB of finished past work is.
+  assert.ok(jobBytes(start) < 200_000, `advance read ${jobBytes(start)} bytes of jobs`);
+  start = f.queryReads.length;
+  const health = await f.invoke("contentHealth:siteHealth", { siteId: site.id });
+  assert.equal(health.strandedReady, 1, "the remaining stranded ready article is still reported");
+  assert.deepEqual(pastReads(start), [], "site health never scans past jobs by deadline");
+  // The recent failed jobs it reads are bounded; the checkpoints of older finished work are not read.
+  assert.ok(jobBytes(start) < 21 * 41_000, `site health read ${jobBytes(start)} bytes of jobs`);
+  f.assertOffline();
+});
+
+test("K2 operator readouts read only the newest articles of a site", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 }), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const articles = f.tables.articles.filter(a => a.siteId === site.id);
+  assert.ok(articles.length >= 2);
+  const start = f.queryReads.length;
+  const recent = await f.invoke("articles:listRecentBySiteInternal", { siteId: site.id, limit: 1 });
+  assert.equal(recent.length, 1);
+  assert.equal(recent[0]._id, [...articles].sort((a, b) => b._creationTime - a._creationTime || b._id.localeCompare(a._id, undefined, { numeric: true }))[0]._id, "newest first");
+  assert.deepEqual(f.queryReads.slice(start).map(r => [r.table, r.index, r.rows]), [["articles", "by_site", 1]]);
+  assert.equal((await f.invoke("articles:listRecentBySiteInternal", { siteId: site.id, limit: 500 })).length, articles.length, "the limit is capped, never unbounded");
+});

@@ -1652,8 +1652,13 @@ export async function rebindStrandedReadyWork(ctx: MutationCtx, site: Doc<"sites
   const occupied = new Set(waiting.map(j => j.contentWork!.deadlineAt));
   // Stranded below the schedule: never visible to `waiting` (jobsForSite reads
   // deadlines >= nextDeadlineAt), so they are looked up explicitly, newest first.
-  const below = (await ctx.db.query("jobs").withIndex("by_site_content_deadline", q => q.eq("siteId", site._id)
-    .lt("contentWork.deadlineAt", next)).order("desc").take(200));
+  // Only a ready job can be rebound, so they are found through the stage index:
+  // reading the site's 200 latest past jobs, each carrying its provider
+  // checkpoints, cost ~7 MB per scheduler run (K2, Oct 19 2026: half of all
+  // database reads). Every eligibility check below is unchanged.
+  const below = (await ctx.db.query("jobs").withIndex("by_site_content_stage", q => q.eq("siteId", site._id)
+    .eq("contentWork.stage", "ready")).take(200))
+    .filter(j => j.contentWork!.deadlineAt < next).sort((a, b) => b.contentWork!.deadlineAt - a.contentWork!.deadlineAt);
   const stranded: Doc<"jobs">[] = [];
   for (const j of below) if (await eligible(j)) stranded.push(j);
   const offGrid: Doc<"jobs">[] = [];

@@ -106,8 +106,13 @@ async function siteHealthFor(ctx: QueryCtx, site: Doc<"sites">, now: number): Pr
   const nextDeadlineAt = schedule.nextDeadlineAt;
   const upcoming = await ctx.db.query("jobs").withIndex("by_site_content_deadline", q => q.eq("siteId", site._id)
     .gte("contentWork.deadlineAt", nextDeadlineAt)).take(50);
-  const behind = await ctx.db.query("jobs").withIndex("by_site_content_deadline", q => q.eq("siteId", site._id)
-    .lt("contentWork.deadlineAt", nextDeadlineAt)).order("desc").take(50);
+  // Past work matters only when it is ready (stranded) or a recent failure, so
+  // each is read through its stage index instead of the 50 latest past jobs with
+  // their provider checkpoints (K2, Oct 19 2026: ~5 MB per site per health run).
+  const behind = [
+    ...(await ctx.db.query("jobs").withIndex("by_site_content_stage", q => q.eq("siteId", site._id).eq("contentWork.stage", "ready")).take(50)),
+    ...(await ctx.db.query("jobs").withIndex("by_site_content_stage", q => q.eq("siteId", site._id).eq("contentWork.stage", "failed")).order("desc").take(20)),
+  ].filter(j => j.contentWork!.deadlineAt < nextDeadlineAt);
   const automatic = (j: Doc<"jobs">) => Boolean(j.contentWork && !j.contentWork.ownerRequest && j.contentWork.retiredAt === undefined && !j.contentWork.operation);
   const readyForNextSlots = upcoming.filter(j => automatic(j) && j.status === "done" && j.contentWork!.stage === "ready").length;
   const strandedReady = behind.filter(j => automatic(j) && j.status === "done" && j.contentWork!.stage === "ready").length;
