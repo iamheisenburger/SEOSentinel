@@ -148,6 +148,7 @@ import { oneSetupQueueDenialDisposition } from
   "./lib/oneSetupExecution.ts";
 import { accountDeletionKey } from "./lib/accountDeletion.ts";
 import { ONE_SETUP_CONTRACT_VERSION } from "./lib/oneSetup.ts";
+import { contentJobUsesAllowance } from "./lib/contentUsage";
 import {
   CADENCE_MICRO_SEED_MAX_CADENCE_HORIZON_MS,
   CADENCE_MICRO_SEED_SCHEDULE_HANDOFF_VERSION,
@@ -3536,7 +3537,14 @@ export const reserveGenerationSlot = internalMutation({
           .gte("createdAt", monthStart),
       )
       .collect();
-    const count = logs.filter(
+    // Rows stay forever (deleting a site never frees usage); a row whose
+    // content job ended without delivering anything no longer counts.
+    const countable = [];
+    for (const log of logs) {
+      const owner = log.jobId ? await ctx.db.get(log.jobId) : null;
+      if (!owner || contentJobUsesAllowance(owner)) countable.push(log);
+    }
+    const count = countable.filter(
       (log) => log.state !== "reserved" || (log.expiresAt ?? Infinity) > currentTime,
     ).length;
     // A content-work slot is one article of the plan: the monthly allowance
@@ -3549,7 +3557,7 @@ export const reserveGenerationSlot = internalMutation({
     const slotJobIds = job.contentWork?.intent === "create" && !job.contentWork.ownerRequest?.sourceArticleId
       ? new Set([String(job._id), ...(job.contentWork.replacesJobId ? [String(job.contentWork.replacesJobId)] : [])])
       : null;
-    if (slotJobIds && !ownsExistingReservation && logs.some((log) =>
+    if (slotJobIds && !ownsExistingReservation && countable.some((log) =>
       (log.state ?? "settled") === "settled" && log.jobId !== undefined && slotJobIds.has(String(log.jobId)))) {
       return { ok: true, reason: "This slot's article is already counted" };
     }

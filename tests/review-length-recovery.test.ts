@@ -34,11 +34,11 @@ test("existing-draft review performs bounded evidence-safe fixed-point recovery 
 });
 
 test("length recovery uses a dedicated non-contradictory editor contract", () => {
-  const source = readFileSync("convex/actions/pipeline.ts", "utf8");
-  const start = source.indexOf("async function remediateFinalArticle");
-  const end = source.indexOf("async function generateFinalMetadata", start);
-  assert.ok(start >= 0 && end > start);
-  const remediation = source.slice(start, end);
+  // P98: the remediation prompt lives in convex/lib/finalArticleReview.ts (shared with the offline replay).
+  const source = readFileSync("convex/lib/finalArticleReview.ts", "utf8");
+  const start = source.indexOf("export function remediationRequest");
+  assert.ok(start >= 0);
+  const remediation = source.slice(start);
 
   assert.match(remediation, /const lengthRecovery = args\.purpose ===/);
   assert.match(remediation, /The stated minimum is a binding output contract/);
@@ -80,16 +80,17 @@ test("existing-draft recovery closes fresh editorial feedback with one guarded r
   assert.match(handler, /postAuditPass <= 2/);
   assert.match(handler, /Post-audit remediation pass.*improved the exact artifact/);
   assert.match(handler, /Post-audit remediation pass.*was rejected because it did not improve/);
+  const prompts = readFileSync("convex/lib/finalArticleReview.ts", "utf8");
   assert.match(
-    source,
+    prompts,
     /uncited category, taxonomy, or best practice is presented as settled industry fact/,
   );
   assert.match(
-    source,
+    prompts,
     /Lack of sources alone is not a defect; presenting an uncited taxonomy or best practice as settled external fact is/,
   );
   assert.match(
-    source,
+    prompts,
     /topic-specific tool with explicit reader inputs, a procedure, an observable output, and a decision rule/,
   );
 });

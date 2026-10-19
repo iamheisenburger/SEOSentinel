@@ -88,7 +88,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
           {plain && w.title ? <p className="text-[#F7F8F8]">{topicTitle(w.title)}</p> : <span className="text-[#F7F8F8]">{workLabel(w)}</span>}
           <span className="flex items-center gap-1.5 text-[12px] text-[#8A8F98]">{plain && <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${w.stage === "ready" ? "bg-[#4CB782]" : "bg-[#0EA5E9]"}`} />}{stageLabel(w.stage)}{simple ? (w.stage === "ready" ? ` · goes live ${friendlyTime(w.deadlineAt, zone)}` : "") : ` · due ${shownTime(w.deadlineAt, zone)}`}</span></li>)}</ul>}
         {heldBack.length > 0 && <div className="mt-3 space-y-1.5" aria-label="Held back drafts">
-          <p className="text-[12px] text-[#8A8F98]">Held back, not published: these drafts didn&apos;t pass Pentra&apos;s quality review (facts, sources and editing), so Pentra moved on to another topic.</p>
+          <p className="text-[12px] text-[#8A8F98]">Held back, not published: these drafts didn&apos;t pass Pentra&apos;s quality review (facts, sources and editing), so Pentra moved on to another topic. Held-back drafts don&apos;t count toward your monthly articles.</p>
           <ul className="space-y-1 text-[13px]">{heldBack.map(w => <li key={w.jobId}><Link className="text-[#0EA5E9] hover:underline" href={`/articles/${w.articleId}`}>{w.title ? topicTitle(w.title) : "Held-back draft"}</Link><span className="text-[#62666D]"> · see the reviewer&apos;s notes</span></li>)}</ul>
         </div>}
       </section>
@@ -253,7 +253,7 @@ function ResultsStrip({ siteId, live, liveThisMonth, planPerMonth, planUsed }: {
   </div>;
   return <div className="grid grid-cols-2 gap-3 md:grid-cols-3" aria-label="Results at a glance">
     {tile("Articles live", String(live), "published and confirmed on your site")}
-    {tile("This month", String(liveThisMonth), planPerMonth ? `published on this site · Autopilot has used ${planUsed} of your ${planPerMonth} monthly articles (all sites)` : "articles published on this site")}
+    {tile("This month", String(liveThisMonth), planPerMonth ? `published on this site · ${planUsed} of your ${planPerMonth} monthly articles used (all sites; held-back drafts don't count)` : "articles published on this site")}
     {tile("Site health", check ? `${check.score}/100` : "—", check ? "latest weekly check" : "first check pending")}
   </div>;
 }

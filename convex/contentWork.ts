@@ -32,6 +32,7 @@ import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwne
 import { AUTOPILOT_ACCEPTANCE, ownerWaivableIssue } from "./lib/articleQuality";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
 import { auditResultHash, contradictoryContentAudit, inconsistentAuditFeedback, internalContentProcessingError, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
+import { contentJobUsesAllowance } from "./lib/contentUsage";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
 
 export const CONTENT_DELIVERY_WINDOW_MS = 5 * 60_000;
@@ -210,10 +211,12 @@ function usageMonthBounds(now = new Date()) {
 }
 /** One article job's share of the monthly allowance (a replaced slot is
  * excluded by the caller): automatic creations plus new owner drafts; edits of
- * an existing draft and retired automatic work do not count. */
+ * an existing draft, retired automatic work and work that ended without
+ * delivering anything (contentJobUsesAllowance) do not count. */
 function countsTowardMonthlyUsage(j: Doc<"jobs">, monthStart: number) {
   return Boolean(j.contentWork && j.contentWork.intent === "create" && j.createdAt >= monthStart &&
-    (j.contentWork.ownerRequest ? !j.contentWork.ownerRequest.sourceArticleId : j.contentWork.retiredAt === undefined));
+    (j.contentWork.ownerRequest ? !j.contentWork.ownerRequest.sourceArticleId : j.contentWork.retiredAt === undefined) &&
+    contentJobUsesAllowance(j));
 }
 /** New articles started this UTC month, counted live from every article job of
  * the month on every site of the account. Each job document carries its
@@ -1949,6 +1952,9 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">, r
   if (!job.articleId) {
     await ctx.db.patch(job._id, { status: "failed", contentWork: { ...job.contentWork, stage: "failed", failure: "candidate_rejected_before_draft" } });
     await closeContentWorkHold(ctx, (await ctx.db.get(job._id))!);
+    // Nothing was delivered: the article goes back to the month's allowance.
+    const owner = await ctx.db.get(job.siteId!);
+    if (owner) await refreshAccountUsage(ctx, owner);
     await wake(ctx, job.siteId!);
     return;
   }
@@ -2089,6 +2095,9 @@ export async function settleFailedContentWork(ctx: MutationCtx, jobId: Id<"jobs"
   await closeContentWorkHold(ctx, job);
   await ctx.db.patch(job._id, { contentWork: { ...cw, stage: "failed", failure: cw.failure ??
     (cw.stage === "publish" ? "content_publication_failed_reconciliation_required" : "worker_failed_review_required") } });
+  // Work that delivered nothing gives its article back (contentJobUsesAllowance).
+  const owner = await ctx.db.get(job.siteId);
+  if (owner) await refreshAccountUsage(ctx, owner);
 }
 
 /** Called only by the existing exact-worker failure/lease transitions. Recovery

@@ -7528,9 +7528,11 @@ test("NEW-USER free plan: failed drafts never strand a slot as an internal error
   assert.ok(!failures.includes("worker_failed_review_required"), JSON.stringify(failures));
   assert.ok(!f.tables.jobs.some(j => j.siteId === site.id && /Limit reached/.test(String(j.error ?? ""))),
     JSON.stringify(f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork).map(j => ({ status: j.status, stage: j.contentWork.stage, failure: j.contentWork.failure, error: String(j.error ?? "").slice(0, 120), revisions: j.contentWork.revisions, replacements: j.contentWork.replacements }))));
-  const slots = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.intent === "create" && !j.contentWork.replacesJobId).length;
+  // One row per article job at most: a slot's own replacement draft reuses its row. (Since P98 a slot that
+  // delivered nothing gives its article back, so a later replacement job is a new attempt with its own row.)
+  const slots = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.intent === "create").length;
   const generated = f.tables.usage_log.filter((l: Fields) => l.userId === owner && l.type === "article_generated").length;
-  assert.ok(generated <= slots, `usage_log ${generated} rows for ${slots} slots`);
+  assert.ok(generated <= slots, `usage_log ${generated} rows for ${slots} article jobs`);
   f.assertOffline();
 });
 
@@ -7569,4 +7571,44 @@ test("NEW-USER upgrading Free to Starter moves a default pace to Starter's; a pa
     assert.equal(r.plan.autopilotIntervalMs, Math.floor(7 * 86_400_000 / (chosen ?? 2)));
     f.setIdentity(null);
   }
+});
+
+
+test("P98 a held-back draft gives its article back: only delivered articles use the monthly allowance", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], quality: "low" });
+  const owner = newFreeAccount(f);
+  const site = await createEmptyContentSite(f);
+  await startAutopilot(f, site.id, owner);
+  // Every draft fails review: the first slot is held back and nothing is delivered.
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.siteId === site.id && j.contentWork?.stage === "failed"), 400, START + 30 * 86_400_000);
+  await recountUsage(f, site.id);
+  const failed = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "failed");
+  assert.ok(failed.length >= 1 && failed.every(j => !j.contentWork.publishedAt && !j.publicationAttempts));
+  const open = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.intent === "create" && j.contentWork.stage !== "failed" && !j.contentWork.retiredAt).length;
+  f.setIdentity(owner);
+  const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  assert.equal(r.results.planUsedThisMonth, open, "held-back work does not use the free allowance");
+  // The draft counter agrees: rows of undelivered jobs stay in usage_log but no longer count.
+  const counted = await f.invoke("articles:countThisMonth", { userId: owner });
+  const rowsForOpenJobs = f.tables.usage_log.filter((l: Fields) => l.userId === owner && l.type === "article_generated" &&
+    !failed.some(j => j._id === l.jobId)).length;
+  assert.equal(counted, rowsForOpenJobs);
+  assert.ok(f.tables.usage_log.some((l: Fields) => failed.some(j => j._id === l.jobId)), "the held-back draft's row is kept, not deleted");
+  f.setIdentity(null);
+  // Spending caps are unchanged: each attempt still reserves its own bounded budget.
+  for (const j of failed) assert.ok(j.providerSpendReservationId, "a held-back attempt was still funded by its reservation");
+});
+
+test("P98 allowance rule: delivered, in-progress and uncertain work count; held-back, rejected and declined work does not", async () => {
+  const { contentJobUsesAllowance } = await import("../convex/lib/contentUsage.ts");
+  const cw = (stage: string, extra: Fields = {}) => ({ contentWork: { stage, ...extra } });
+  assert.equal(contentJobUsesAllowance({ status: "running", ...cw("review") }), true);
+  assert.equal(contentJobUsesAllowance({ status: "done", ...cw("ready") }), true, "a ready-to-paste or reviewable draft is delivered");
+  assert.equal(contentJobUsesAllowance({ status: "done", ...cw("verified", { publishedAt: 1, verifiedAt: 2 }) }), true);
+  assert.equal(contentJobUsesAllowance({ status: "failed", ...cw("failed", { failure: "bounded_content_quality_exhausted" }) }), false);
+  assert.equal(contentJobUsesAllowance({ status: "failed", ...cw("failed", { failure: "candidate_rejected_before_draft" }) }), false);
+  assert.equal(contentJobUsesAllowance({ status: "failed", ...cw("failed", { failure: "owner_rejected_draft" }) }), false);
+  assert.equal(contentJobUsesAllowance({ status: "failed", publicationAttempts: 1, ...cw("failed", { failure: "content_publication_failed_reconciliation_required" }) }), true,
+    "an attempted external write may have published; it keeps counting");
+  assert.equal(contentJobUsesAllowance({ status: "failed", ...cw("failed", { failure: "owner_edited_draft" }) }), true, "the article lives on in the owner's edit");
 });

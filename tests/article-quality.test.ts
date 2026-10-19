@@ -178,8 +178,9 @@ test("the auditor receives the same deterministic claim units the gate validates
   ]);
 
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
-  assert.match(pipeline, /REQUIRED CLAIM UNITS/);
-  assert.match(pipeline, /requiredClaimUnits\.length \* 512/);
+  const review = readFileSync("convex/lib/finalArticleReview.ts", "utf8");
+  assert.match(review, /REQUIRED CLAIM UNITS/);
+  assert.match(review, /requiredClaimUnits\.length \* 512/);
   assert.doesNotMatch(
     pipeline,
     /if \(!claimAudit\.passed\) \{\s*pruned = removeUnledgeredEvidenceParagraphs/,
@@ -2487,7 +2488,8 @@ test("P93 the auditor is told the claim units are copies, not repeated article t
   // material defect, yet every named passage appeared once in the article;
   // the second copy the auditor saw was its own claim-unit worksheet.
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
-  const audit = pipeline.slice(pipeline.indexOf("async function auditFinalArticle("), pipeline.indexOf("toolName: \"audit_final_article\""));
+  const review = readFileSync("convex/lib/finalArticleReview.ts", "utf8");
+  const audit = review.slice(review.indexOf("export function finalAuditRequest("), review.indexOf("toolName: \"audit_final_article\""));
   assert.match(audit, /LEDGER WORKSHEET \(not article text\)/);
   assert.match(audit, /Never count a unit and its paragraph as repetition/);
   assert.match(audit, /report duplication only when the article itself contains the same passage twice/);

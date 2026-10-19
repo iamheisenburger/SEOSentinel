@@ -98,6 +98,7 @@ import {
   topicMatchesCurrentDomain,
 } from "./lib/siteDomainBinding";
 import { PUBLISHED_REVISION_LEASE_MS } from "./lib/publishedRevision";
+import { contentJobUsesAllowance } from "./lib/contentUsage";
 import {
   appendRelatedInternalLinks,
   publishedArticleInternalHref,
@@ -3368,10 +3369,14 @@ async function countThisMonthHandler(ctx: QueryCtx, userId: string) {
       )
       .collect();
     const currentTime = Date.now();
-    return logs.filter(
-      (log) =>
-        log.state !== "reserved" || (log.expiresAt ?? Infinity) > currentTime,
-    ).length;
+    let count = 0;
+    for (const log of logs) {
+      if (log.state === "reserved" && (log.expiresAt ?? Infinity) <= currentTime) continue;
+      // A draft that was held back and never delivered gives its article back.
+      const owner = log.jobId ? await ctx.db.get(log.jobId) : null;
+      if (!owner || contentJobUsesAllowance(owner)) count += 1;
+    }
+    return count;
 }
 
 export const countThisMonthInternal = internalQuery({
