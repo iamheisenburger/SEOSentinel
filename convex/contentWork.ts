@@ -956,8 +956,10 @@ export const setAutopilotCadence = mutation({ args: { siteId: v.id("sites"), rev
     if (site.serviceMode !== "growth_first" || !s?.autopilotSelectedAt || s.ownerReviewedOnly) throw new ConvexError("Turn on Autopilot first.");
     if (args.reviewToken !== contentConsentToken(site)) throw new ConvexError("Your saved setup changed. Refresh and try again.");
     if (!targetCadenceOptions().some(option => option.value === args.cadencePerWeek)) throw new ConvexError("Choose one of the listed paces.");
-    if (site.cadencePerWeek === args.cadencePerWeek) return { changed: false };
-    await ctx.db.patch(site._id, { cadencePerWeek: args.cadencePerWeek, updatedAt: Date.now() });
+    if (site.cadencePerWeek === args.cadencePerWeek && site.cadenceRequestedPerWeek === args.cadencePerWeek) return { changed: false };
+    // The requested pace is what plan reconciliation keeps; without it an
+    // owner's chosen pace silently reverted at the next plan sync.
+    await ctx.db.patch(site._id, { cadencePerWeek: args.cadencePerWeek, cadenceRequestedPerWeek: args.cadencePerWeek, updatedAt: Date.now() });
     await wake(ctx, site._id);
     return { changed: true };
   } });
@@ -1109,7 +1111,7 @@ export const readiness = query({
           : parkedByAutopilot(j) ? j.contentWork!.failure === "content_model_response_invalid"
             ? "Pentra's writing service returned an incomplete response for this article, so nothing was published. Your schedule continued with the next article."
             : ["bounded_content_quality_exhausted", "candidate_rejected_before_draft"].includes(j.contentWork!.failure ?? "")
-              ? "Pentra held this draft back because its fact check wasn't confident enough. It won't be published; your schedule continued with the next article."
+              ? "Pentra held this draft back because it didn't pass Pentra's quality review (facts, sources and editing). It won't be published; your schedule continued with the next article."
               : "Pentra's writing service could not complete this article, so nothing was published. Your schedule continued with the next article."
           : rejectedReview ? "Review handling has been repaired. Resume to recheck this retained work within its existing revision and spending limits. The article has not been approved."
           : creditRetry ? "Pentra has restored generation for this interrupted work. You can retry it once; the original deadline and earlier attempt remain recorded."

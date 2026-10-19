@@ -49,6 +49,7 @@ import {
 } from "../../../../../convex/planLimits";
 import { SetupReadiness } from "@/components/onboarding/setup-readiness";
 import { useVisibleQuery } from "@/hooks/useVisibleQuery";
+import { userErrorMessage } from "@/lib/user-error";
 
 type Tab = "overview" | "articles" | "settings";
 type SiteView = NonNullable<FunctionReturnType<typeof api.sites.get>>;
@@ -1148,8 +1149,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
       }
       setEditing(false);
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Connection verification failed";
-      setConnectionError(message);
+      setConnectionError(userErrorMessage(e, "Pentra couldn't save or verify this connection. Check the details and try again."));
       console.error("Failed to save or verify:", e);
     }
     finally { setSaving(false); }
@@ -1163,7 +1163,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
       await verifyPublicationDestination({ siteId: site._id });
       setConnectionVerified(true);
     } catch (error) {
-      setConnectionError(error instanceof Error ? error.message : "Connection verification failed");
+      setConnectionError(userErrorMessage(error, "Pentra couldn't verify this connection. Check the details and try again."));
     } finally {
       setSaving(false);
     }

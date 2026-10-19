@@ -19,6 +19,7 @@ import { useActiveSite } from "@/contexts/site-context";
 import { Zap } from "lucide-react";
 import { manualPublicationBlocker } from "../../../../convex/lib/manualPublication";
 import { useVisibleQuery } from "@/hooks/useVisibleQuery";
+import { userErrorMessage } from "@/lib/user-error";
 
 export default function ArticlesPage() {
   const { activeSite: site, sites } = useActiveSite();
@@ -125,15 +126,13 @@ export default function ArticlesPage() {
         const result = await requestDraft({ siteId: site._id, requestKey: request.key,
           reviewToken: readiness.reviewToken, maximumMicroUsd: readiness.ownerDraft.maximumMicroUsd, topicId: selectedTopic });
         draftRequestKey.current = null;
-        setStatus(result.created ? "Draft requested. Review and approve it before publishing. Your automatic schedule is unchanged." : "Your existing draft request is retained. Open it below to check progress.");
+        setStatus(result.created ? "Draft requested. Pentra researches, writes and checks it, usually within a few minutes; then you review it and publish." : "Your existing draft request is retained. Open it below to check progress.");
       } else {
         await queueArticle({ siteId: site._id, topicId: selectedTopic });
         setStatus("Article queued.");
       }
     } catch (err: unknown) {
-      setStatus(
-        err instanceof Error ? err.message : "Failed to queue article",
-      );
+      setStatus(userErrorMessage(err, "Pentra couldn't start this draft. Refresh and try again."));
     } finally { setGenerating(false); }
   };
 
@@ -296,11 +295,7 @@ export default function ArticlesPage() {
                         try {
                           await publishAction({ siteId: site._id, articleId: article._id });
                         } catch (err) {
-                          setStatus(
-                            err instanceof Error
-                              ? err.message
-                              : "Could not publish this article. Open it to see what needs attention.",
-                          );
+                          setStatus(userErrorMessage(err, "Could not publish this article. Open it to see what needs attention."));
                         }
                       }}
                       className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-[#22C55E] hover:bg-[#22C55E]/[0.08] transition"

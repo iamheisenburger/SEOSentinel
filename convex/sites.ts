@@ -9,6 +9,7 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { withUserFacingErrors } from "./lib/userError";
 import {
   ALL_FEATURE_KEYS,
   cadenceFitsOperationalLimit,
@@ -1304,9 +1305,21 @@ async function reconcileCanonicalPlanSitePage(
   const nextRemainingArticleAllowance = entitlement.maxArticles;
   for (const site of page.page) {
     await schedulePublicationReceiptRecovery(ctx, site);
-    const requestedCadenceCandidate = site.cadenceRequestedPerWeek ??
-      site.cadencePerWeek ??
-      defaultTargetCadenceForMonthlyLimit(entitlement.maxArticles);
+    // A pace still at the previous plan's default was never the owner's
+    // choice, so it follows the new plan. Oct 2026: a Free site upgraded to
+    // Starter kept 1 article a week (about 4 of the 10 it paid for). A pace
+    // the owner set stays.
+    const previousPlanDefault = entitlement.previousMaxArticles !== undefined &&
+        entitlement.previousMaxArticles !== entitlement.maxArticles
+      ? defaultTargetCadenceForMonthlyLimit(entitlement.previousMaxArticles)
+      : undefined;
+    const keptPreviousPlanDefault = previousPlanDefault !== undefined &&
+      (site.cadenceRequestedPerWeek ?? site.cadencePerWeek) === previousPlanDefault;
+    const requestedCadenceCandidate = keptPreviousPlanDefault
+      ? defaultTargetCadenceForMonthlyLimit(entitlement.maxArticles)
+      : site.cadenceRequestedPerWeek ??
+        site.cadencePerWeek ??
+        defaultTargetCadenceForMonthlyLimit(entitlement.maxArticles);
     const requestedCadence = cadenceFitsOperationalLimit(
         requestedCadenceCandidate,
       )
@@ -1508,6 +1521,7 @@ async function applyCanonicalPlanToUserSites(
     planFeatures: verifiedFeatures,
     maxSites: limits.maxSites,
     maxArticles: limits.maxArticles,
+    previousMaxArticles: existing?.maxArticles,
     syncVersion,
     syncStartedAt: timestamp,
     authoritativeVerifiedAt: timestamp,
@@ -3390,7 +3404,10 @@ export const upsert = mutation({
     linkedinAccessToken: v.optional(v.string()),
     syndicationEnabled: v.optional(v.boolean()),
   },
-  handler: async (ctx, args) => {
+  // Customer-driven: production shows a plain Error only as "Server Error",
+  // so every reason (limit, domain already set up, invalid field) is sent as
+  // a ConvexError the setup screen can show.
+  handler: async (ctx, args) => withUserFacingErrors("Pentra couldn't save this website. Check the details and try again.", async () => {
     const identity = await ctx.auth.getUserIdentity();
     const userId = identity?.subject;
     if (!userId) throw new Error("Authentication required");
@@ -3825,7 +3842,7 @@ export const upsert = mutation({
     });
     await syncOrganicClickGoal(ctx, siteId, args.organicClickGoalMonthly);
     return siteId;
-  },
+  }),
 });
 
 // Partial update — edit individual site settings post-onboarding

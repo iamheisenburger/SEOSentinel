@@ -3539,6 +3539,20 @@ export const reserveGenerationSlot = internalMutation({
     const count = logs.filter(
       (log) => log.state !== "reserved" || (log.expiresAt ?? Infinity) > currentTime,
     ).length;
+    // A content-work slot is one article of the plan: the monthly allowance
+    // counts it once at admission (contentWork countsTowardMonthlyUsage; a
+    // replaced slot once). Its replacement draft, in the same job or in the
+    // job that replaces the slot, reuses the slot's settled row instead of
+    // counting as another article. Oct 2026: on Free, two failed slots wrote
+    // four rows and the second slot's replacement was refused "Limit reached
+    // (3/3)" while the account had used 2 of its 3 articles.
+    const slotJobIds = job.contentWork?.intent === "create" && !job.contentWork.ownerRequest?.sourceArticleId
+      ? new Set([String(job._id), ...(job.contentWork.replacesJobId ? [String(job.contentWork.replacesJobId)] : [])])
+      : null;
+    if (slotJobIds && !ownsExistingReservation && logs.some((log) =>
+      (log.state ?? "settled") === "settled" && log.jobId !== undefined && slotJobIds.has(String(log.jobId)))) {
+      return { ok: true, reason: "This slot's article is already counted" };
+    }
     if (
       ownsExistingReservation
         ? count > limits.maxArticles

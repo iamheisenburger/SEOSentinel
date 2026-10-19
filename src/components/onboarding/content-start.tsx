@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { ContentWorkService } from "@/components/content-work-service";
 import { CMS_PLATFORM_LABELS, isApiCmsMethod } from "../../../convex/lib/cmsDestinations";
+import { userErrorMessage } from "@/lib/user-error";
 
 /** Content-only onboarding reuses the owner-authenticated site writer, trusted
  * billing sync and existing connection UI. It launches no paid legacy bootstrap
@@ -51,7 +52,11 @@ export function ContentStart() {
         ...(ctaUrl.trim() ? { ctaUrl: ctaUrl.trim(), ctaText: ctaText.trim().slice(0, 60) || "Get started" } : {}),
         autopilotEnabled: false, approvalRequired: true, inferToneNiche: false, language: "en" });
       setSiteId(id);
-    } catch { setError("We couldn't save your setup. Check that your plan allows another website (Plans & billing) and that this domain is yours. Nothing was charged."); }
+    } catch (err) {
+      setError(err instanceof Error && err.message === "billing"
+        ? "We couldn't confirm your plan just now. Wait a moment and try again. Nothing was charged."
+        : userErrorMessage(err, "We couldn't save your setup. Check the details and try again. Nothing was charged."));
+    }
     finally { setBusy(false); }
   }
   const steps = (active: number) => <ol className="flex flex-wrap gap-2 text-[12px]" aria-label="Setup steps">

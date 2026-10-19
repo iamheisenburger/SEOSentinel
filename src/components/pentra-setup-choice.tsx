@@ -70,7 +70,7 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
       <label className={`rounded-xl border p-4 transition ${reviewAvailable ? "cursor-pointer hover:border-white/20" : "opacity-50"} ${choice === "review" ? "border-[#0EA5E9] bg-[#0EA5E9]/[0.06]" : "border-white/10"}`}>
         <input type="radio" name="pentra-mode" className="mr-2" disabled={!reviewAvailable} checked={choice === "review"} onChange={() => setChoice("review")} />
         <span className="font-medium text-[#F7F8F8]">Review first</span>
-        <p className="mt-1 text-sm text-[#8A8F98]">{paste ? "Pentra researches and writes each article; you read it, then paste it into your site's blog." : reviewAvailable ? "Pentra drafts; you read, edit and approve every article before it goes live." : "Connect GitHub or WordPress to choose this."}</p>
+        <p className="mt-1 text-sm text-[#8A8F98]">{paste ? "Pentra researches and writes each article; you read it, then paste it into your site's blog." : reviewAvailable ? "You ask for each article when you want one; Pentra researches, writes and checks it, then you read, edit and approve it before it goes live." : "Connect your website to choose this."}</p>
       </label>
     </fieldset>
     {(choice === "autopilot" || !reviewAvailable) && <p className="text-xs text-[#8A8F98]">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>}

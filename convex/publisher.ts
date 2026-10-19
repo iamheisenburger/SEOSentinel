@@ -87,6 +87,7 @@ import {
 } from "./lib/siteDomainBinding";
 import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
 import { accountDeletionKey } from "./lib/accountDeletion.ts";
+import { withUserFacingErrors } from "./lib/userError";
 import {
   expectedPublisherDestinationReceipt,
   publisherAutopublishConsentCurrent,
@@ -1246,20 +1247,23 @@ export const verifyLegacyPublicationDestinationInternal = internalAction({
 
 export const verifyPublicationDestination = action({
   args: { siteId: v.id("sites") },
-  handler: async (ctx, { siteId }) => {
-    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
-    const identity = await ctx.auth.getUserIdentity();
-    if (!site?.userId || !identity || identity.subject !== site.userId) {
-      throw new Error("Not authorized to verify this site");
-    }
-    if ((site.publishMethod ?? "github") === "github") {
-      const verified = await reverifyGithubConnectionHandler(ctx, siteId, {
-        siteSnapshot: site,
-      });
-      return { ...verified, method: "github" as const };
-    }
-    return verifyPublicationDestinationHandler(ctx, siteId);
-  },
+  handler: async (ctx, { siteId }) => withUserFacingErrors(
+    "Pentra couldn't confirm this website connection. Check the details and try again.",
+    async () => {
+      const site = await ctx.runQuery(internal.sites.getFull, { siteId });
+      const identity = await ctx.auth.getUserIdentity();
+      if (!site?.userId || !identity || identity.subject !== site.userId) {
+        throw new Error("Not authorized to verify this site");
+      }
+      if ((site.publishMethod ?? "github") === "github") {
+        const verified = await reverifyGithubConnectionHandler(ctx, siteId, {
+          siteSnapshot: site,
+        });
+        return { ...verified, method: "github" as const };
+      }
+      return verifyPublicationDestinationHandler(ctx, siteId);
+    },
+  ),
 });
 
 type ManagedPublisherPreflightContext = {

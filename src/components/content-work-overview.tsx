@@ -44,6 +44,11 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
   // Plain-mode owners only see what needs them: a revision Pentra is still working through is not their problem.
   const attention = state.work.filter(w => w.failure && !w.retiredAt && !w.superseded && !w.parked && !(plain && w.pastSlot) &&
     !published.some(a => a.articleId === w.articleId) && (!plain || w.systemFailure || w.stage === "failed"));
+  // A new owner hears the two things that otherwise look like Pentra stalling:
+  // the month's articles are used, or a draft was held back by the review.
+  const planPerMonth = state.plan?.articlesPerMonth ?? 0;
+  const quotaUsed = Boolean(plain && planPerMonth && (state.results?.planUsedThisMonth ?? 0) >= planPerMonth);
+  const heldBack = plain ? state.work.filter(w => w.parked && w.articleId && !w.retiredAt && !w.superseded).slice(0, 3) : [];
   const tone = delivery.status === "failed" || delivery.status === "changed" ? "bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/20"
     : delivery.status === "paused" ? "bg-white/[0.04] text-[#8A8F98] border-white/10" : "bg-[#22C55E]/10 text-[#22C55E] border-[#22C55E]/20";
   return <div className="space-y-5" aria-label="Content service overview">
@@ -73,13 +78,19 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
       <div className="space-y-4">
       <section className={CARD}><h2 className={H2}>Upcoming work</h2>
         {s?.ownerReviewedOnly ? <p className={BODY}>Request, review and publish from <Link className="text-[#0EA5E9] hover:underline" href="/articles">Articles</Link>. Nothing publishes automatically.</p>
-          : simple ? <p className={BODY}>{upcoming.length ? "Pentra is preparing your next articles." : "Pentra will start preparing your next article shortly."}</p>
+          : simple ? <p className={BODY}>{upcoming.length ? "Pentra is preparing your next articles."
+            : quotaUsed ? <>You&apos;ve used all {planPerMonth} articles in your plan this month{s ? <>, so the next one starts {when(s.nextDeadlineAt)}</> : null}. <Link className="text-[#0EA5E9] hover:underline" href="/upgrade">Upgrade for more articles</Link>.</>
+            : "Pentra will start preparing your next article shortly."}</p>
           : <p className={BODY}>{delivery.label}. Articles ready to publish: {state.complete ? `${state.ready} of 2` : "unknown (history incomplete)"}.</p>}
         {s && !s.ownerReviewedOnly && !simple && <p className={BODY}>Next delivery due: {shownTime(s.nextDeadlineAt, zone)} ({zone}). {s.nextDeadlineAt < state.funding.checkedAt && <span role="alert" className="text-[#F59E0B]">Overdue. The missed deadline stays on record.</span>}</p>}
         {!upcoming.length && !s?.ownerReviewedOnly && !simple && <p className={BODY}>No upcoming item is prepared yet.</p>}
         {upcoming.length > 0 && <ul className="divide-y divide-white/[0.06] text-[14px]">{upcoming.map(w => <li key={w.jobId} className={plain && w.title ? "space-y-1 py-2.5" : "flex items-center justify-between gap-3 py-2"}>
           {plain && w.title ? <p className="text-[#F7F8F8]">{topicTitle(w.title)}</p> : <span className="text-[#F7F8F8]">{workLabel(w)}</span>}
           <span className="flex items-center gap-1.5 text-[12px] text-[#8A8F98]">{plain && <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${w.stage === "ready" ? "bg-[#4CB782]" : "bg-[#0EA5E9]"}`} />}{stageLabel(w.stage)}{simple ? (w.stage === "ready" ? ` · goes live ${friendlyTime(w.deadlineAt, zone)}` : "") : ` · due ${shownTime(w.deadlineAt, zone)}`}</span></li>)}</ul>}
+        {heldBack.length > 0 && <div className="mt-3 space-y-1.5" aria-label="Held back drafts">
+          <p className="text-[12px] text-[#8A8F98]">Held back, not published: these drafts didn&apos;t pass Pentra&apos;s quality review (facts, sources and editing), so Pentra moved on to another topic.</p>
+          <ul className="space-y-1 text-[13px]">{heldBack.map(w => <li key={w.jobId}><Link className="text-[#0EA5E9] hover:underline" href={`/articles/${w.articleId}`}>{w.title ? topicTitle(w.title) : "Held-back draft"}</Link><span className="text-[#62666D]"> · see the reviewer&apos;s notes</span></li>)}</ul>
+        </div>}
       </section>
       {plain && <UpcomingTopics siteId={siteId} />}
       </div>

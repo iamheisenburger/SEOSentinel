@@ -645,6 +645,9 @@ export default defineSchema({
     planFeatures: v.array(v.string()),
     maxSites: v.number(),
     maxArticles: v.number(),
+    // The plan's monthly articles before the latest change, so a site still
+    // on that plan's default pace can follow the new plan's default.
+    previousMaxArticles: v.optional(v.number()),
     syncVersion: v.number(),
     syncStartedAt: v.number(),
     authoritativeVerifiedAt: v.optional(v.number()),

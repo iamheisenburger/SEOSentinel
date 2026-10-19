@@ -7432,3 +7432,141 @@ test("P88 a lost provider answer is never replayed but no longer freezes the sch
   f.setIdentity(null);
   f.assertOffline();
 });
+
+// --- New-user journeys (Oct 19 2026, before distribution) -------------------
+// A brand-new FREE account (no paid plan features) on each supported setup:
+// create the site, confirm the business profile, start, and measure the
+// simulated time until the first article is live (or ready to paste) and
+// what the dashboard says on the way.
+function newFreeAccount(f: ReturnType<typeof setup>) {
+  const owner = f.get(f.sites[0].id)!.userId;
+  const entitlement = f.tables.account_plan_entitlements.find(e => e.userId === owner)!;
+  Object.assign(entitlement, { planFeatures: [], maxSites: 1, maxArticles: 3 });
+  return owner;
+}
+async function startAutopilot(f: ReturnType<typeof setup>, siteId: string, owner: string) {
+  f.get(siteId)!.planFeatures = [];
+  f.setIdentity(owner);
+  const r = await f.invoke("contentWork:readiness", { siteId });
+  assert.equal(r.plan.tier, "free", JSON.stringify(r.plan));
+  await f.invoke("contentWork:selectServiceMode", { siteId, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  const started = await f.invoke("contentWork:readiness", { siteId });
+  f.setIdentity(null);
+  return { t0: f.now(), started };
+}
+const journeyLog: Record<string, unknown>[] = [];
+test("NEW-USER journeys: a free account reaches a first article on every supported setup", async t => {
+  await t.test("store_ghost_api_autopilot", async () => {
+    const { f, site } = ghostHostedSetup();
+    const owner = newFreeAccount(f), business = slcBusinesses[0];
+    f.tables.sites.splice(0); f.tables.pages.splice(0);
+    f.setIdentity(owner);
+    // The new-user path: the setup screen creates the site, then saves the platform connection.
+    site.id = await f.invoke("sites:upsert", { createOnly: true, contentSetup: true, domain: site.domain, clerkUserId: owner,
+      siteName: "ClayShelf", siteSummary: business.niche, niche: business.niche, blogTheme: business.niche,
+      targetAudienceSummary: "Shoppers choosing handmade tableware", productUsage: business.niche, anchorKeywords: business.keywords,
+      painPoints: business.keywords, language: "en", publishMethod: "ghost", autopilotEnabled: false, approvalRequired: true, inferToneNiche: false });
+    await f.invoke("sites:upsert", { id: site.id, domain: site.domain, publishMethod: "ghost", cmsEndpoint: `https://${site.domain}`,
+      cmsSecret: `${ghostKeyId}:${ghostKeySecret}` });
+    await f.invoke("publisher:verifyPublicationDestination", { siteId: site.id });
+    f.setIdentity(null);
+    const { t0 } = await startAutopilot(f, site.id, owner);
+    await pumpUntil(f, () => f.tables.articles.some(a => a.siteId === site.id && a.publicUrlStatus === "verified"), 300, START + 48 * 3_600_000);
+    assert.ok(f.tables.articles.find(a => a.siteId === site.id && a.publicUrlStatus === "verified"), diagnostic(f));
+    journeyLog.push({ fixture: "Store on a hosted CMS API (Ghost; Shopify/Webflow use the same adapter path), Autopilot",
+      minutesToLive: Math.round((f.now() - t0) / 60_000), modelCalls: f.modelCalls.length });
+    f.assertOffline();
+  });
+  await t.test("saas_github_autopilot", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const owner = newFreeAccount(f);
+    const site = await createEmptyContentSite(f);
+    const { t0, started } = await startAutopilot(f, site.id, owner);
+    await pumpUntil(f, () => f.tables.articles.some(a => a.siteId === site.id && a.publicUrlStatus === "verified"), 300, START + 48 * 3_600_000);
+    const article = f.tables.articles.find(a => a.siteId === site.id && a.publicUrlStatus === "verified")!;
+    assert.ok(article, diagnostic(f));
+    journeyLog.push({ fixture: "SaaS on GitHub, Autopilot", minutesToLive: Math.round((f.now() - t0) / 60_000), modelCalls: f.modelCalls.length,
+      planLimit: started.plan, firstDeadlineMinutes: Math.round((f.get(site.id)!.contentSchedule.nextDeadlineAt - t0) / 60_000) });
+    f.assertOffline();
+  });
+  await t.test("clinic_paste_review_first", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = f.sites[0], owner = newFreeAccount(f);
+    f.tables.sites.splice(0); f.tables.pages.splice(0);
+    f.setIdentity(owner);
+    site.id = await f.invoke("sites:upsert", { createOnly: true, contentSetup: true, domain: site.domain, clerkUserId: owner,
+      siteName: "Harbor Family Clinic", siteSummary: "Local family medicine clinic", niche: "Local family medicine clinic", blogTheme: "Local family medicine clinic",
+      targetAudienceSummary: "Local patients choosing a clinic", productUsage: "Book appointments", anchorKeywords: slcBusinesses[0].keywords,
+      painPoints: slcBusinesses[0].keywords, language: "en", publishMethod: "manual", autopilotEnabled: false, approvalRequired: true, inferToneNiche: false });
+    f.get(site.id)!.planFeatures = [];
+    let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    assert.equal(r.plan.tier, "free");
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", ownerReviewedOnly: true, confirmBusinessProfile: true, reviewToken: r.reviewToken });
+    r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    const t0 = f.now();
+    const requested = await f.invoke("contentWork:requestDraft", { siteId: site.id, reviewToken: r.reviewToken, requestKey: "journey-clinic-first", maximumMicroUsd: r.ownerDraft.maximumMicroUsd });
+    await pumpUntil(f, () => ["ready", "failed"].includes(f.get(requested.jobId)!.contentWork.stage));
+    assert.equal(f.get(requested.jobId)!.contentWork.stage, "ready", diagnostic(f));
+    f.setIdentity(owner);
+    const after = await f.invoke("contentWork:readiness", { siteId: site.id });
+    journeyLog.push({ fixture: "Local clinic, paste-it-yourself, Review first", minutesToReady: Math.round((f.now() - t0) / 60_000),
+      modelCalls: f.modelCalls.length, allowance: after.ownerDraft.allowance, latest: after.ownerDraft.latest });
+    f.setIdentity(null);
+    f.assertOffline();
+  });
+  t.diagnostic(JSON.stringify(journeyLog));
+});
+
+test("NEW-USER free plan: failed drafts never strand a slot as an internal error, and both usage counters agree", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], quality: "low" });
+  const owner = newFreeAccount(f);
+  const site = await createEmptyContentSite(f);
+  await startAutopilot(f, site.id, owner);
+  // Every draft fails review: each slot writes a draft, revises it twice, then one replacement draft.
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "failed").length >= 2, 400, START + 30 * 86_400_000);
+  const failures = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork).map(j => j.contentWork.failure ?? j.contentWork.stage);
+  assert.ok(!failures.includes("worker_failed_review_required"), JSON.stringify(failures));
+  assert.ok(!f.tables.jobs.some(j => j.siteId === site.id && /Limit reached/.test(String(j.error ?? ""))),
+    JSON.stringify(f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork).map(j => ({ status: j.status, stage: j.contentWork.stage, failure: j.contentWork.failure, error: String(j.error ?? "").slice(0, 120), revisions: j.contentWork.revisions, replacements: j.contentWork.replacements }))));
+  const slots = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.intent === "create" && !j.contentWork.replacesJobId).length;
+  const generated = f.tables.usage_log.filter((l: Fields) => l.userId === owner && l.type === "article_generated").length;
+  assert.ok(generated <= slots, `usage_log ${generated} rows for ${slots} slots`);
+  f.assertOffline();
+});
+
+test("NEW-USER a rejected website connection tells the owner why (production hides plain errors as 'Server Error')", async () => {
+  const { f, site } = ghostHostedSetup();
+  f.get(site.id)!.cmsSecret = `${ghostKeyId}:${"d4".repeat(32)}`;
+  f.setIdentity(f.get(site.id)!.userId);
+  const failure = await f.invoke("publisher:verifyPublicationDestination", { siteId: site.id }).then(() => null, (error: unknown) => error) as { name?: string; data?: unknown } | null;
+  // ConvexError is the one error type whose text production sends to the browser.
+  assert.equal(failure?.name, "ConvexError", String(failure));
+  assert.match(String(failure?.data), /Admin API key was rejected/);
+  assert.equal(f.get(site.id)!.publisherDestinationReceipt, undefined);
+  f.setIdentity(null);
+  f.assertOffline();
+});
+
+test("NEW-USER upgrading Free to Starter moves a default pace to Starter's; a pace the owner chose stays", async () => {
+  for (const chosen of [undefined, 4]) {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const owner = newFreeAccount(f);
+    const site = await createEmptyContentSite(f);
+    await startAutopilot(f, site.id, owner);
+    assert.equal(f.get(site.id)!.cadencePerWeek, 1, "a new Free site publishes about once a week");
+    if (chosen) {
+      f.setIdentity(owner);
+      const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+      await f.invoke("contentWork:setAutopilotCadence", { siteId: site.id, reviewToken: r.reviewToken, cadencePerWeek: chosen });
+      f.setIdentity(null);
+    }
+    await f.invoke("sites:syncPlanFeaturesInternal", { userId: owner, planFeatures: ["max_sites_1", "max_articles_10"] });
+    const upgraded = f.get(site.id)!;
+    assert.equal(upgraded.cadencePerWeek, chosen ?? 2, `chosen=${chosen}`);
+    f.setIdentity(owner);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    assert.equal(r.plan.tier, "starter");
+    assert.equal(r.plan.autopilotIntervalMs, Math.floor(7 * 86_400_000 / (chosen ?? 2)));
+    f.setIdentity(null);
+  }
+});
