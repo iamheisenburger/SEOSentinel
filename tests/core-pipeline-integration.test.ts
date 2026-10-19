@@ -2093,7 +2093,7 @@ test("SLC47 irregular audits on both sites clarify once, retain raw contradictio
   let ordinal = 0;
   const f = await scopedPricingFixture({}, {}, { auditResponse: (audit, request) => isAuditClarification(request) ? audit
     : ++ordinal % 3 === 0 ? { ...audit, materialDefects: ["Resolve this concrete unsupported statement."] }
-      : { ...audit, score: ordinal % 2 === 0 ? 80 : 83 } });
+      : { ...audit, score: ordinal % 2 === 0 ? 64 : 62 } });
   await exerciseValidationCycles(f, t, 4);
   for (const job of f.tables.jobs) {
     const calls = job.contentWork.providerCalls, clarification = calls.find((c: Fields) => c.semanticClarificationOf);
@@ -2109,12 +2109,12 @@ test("SLC47 irregular audits on both sites clarify once, retain raw contradictio
 
 test("SLC48 real Convex value serialization preserves fresh audit clarification and three publish/refill cycles on both sites", async t => {
   const f = await scopedPricingFixture({}, {}, { convexSerialization: true,
-    auditResponse: (audit, request) => isAuditClarification(request) ? audit : { ...audit, score: 83 } });
+    auditResponse: (audit, request) => isAuditClarification(request) ? audit : { ...audit, score: 62 } });
   await exerciseValidationCycles(f, t, 4);
   for (const job of f.tables.jobs) {
     const original = job.contentWork.providerCalls.find((c: Fields) => c.logicalKey?.endsWith(":audit_final_article"));
     const clarification = job.contentWork.providerCalls.find((c: Fields) => c.semanticClarificationOf);
-    assert.equal(original.result.score, 83); assert.equal(clarification.result.score, 93);
+    assert.equal(original.result.score, 62); assert.equal(clarification.result.score, 93);
     assert.equal(clarification.semanticClarificationOf.resultHash, auditResultHash(original.result));
     assert.deepEqual(Object.keys(original.result), Object.keys(original.result).sort());
     assert.equal(job.contentWork.recoveryAttempts ?? 0, 0);
@@ -2124,7 +2124,7 @@ test("SLC48 real Convex value serialization preserves fresh audit clarification 
 
 test("SLC48 restart after persisted clarification but before article application reuses exact request bytes and settles once", async () => {
   const create = () => scopedPricingFixture({}, {}, { convexSerialization: true,
-    auditResponse: (audit, request) => isAuditClarification(request) ? audit : { ...audit, score: 83 } });
+    auditResponse: (audit, request) => isAuditClarification(request) ? audit : { ...audit, score: 62 } });
   const template = await create(), f = await create();
   for (const fixture of [template, f]) {
     await fixture.admit(0); const job = fixture.tables.jobs[0];
@@ -2193,7 +2193,7 @@ test("P95 a material defect that asks for no change is clarified once; a real de
 test("SLC47 valid failing audit or failing clarification enters bounded revision without score promotion", async () => {
   for (const clarify of [false, true]) {
     const f = await scopedPricingFixture({}, {}, { auditResponse: (audit, request) => clarify && !isAuditClarification(request)
-      ? { ...audit, score: 83 } : { ...audit, score: 80, notes: ["Retain the actual failing judgment."], materialDefects: ["Replace unsupported factual claims with grounded guidance."] } });
+      ? { ...audit, score: 62 } : { ...audit, score: 80, notes: ["Retain the actual failing judgment."], materialDefects: ["Replace unsupported factual claims with grounded guidance."] } });
     await f.admit(0); const job = f.tables.jobs[0];
     for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
     assert.equal(f.get(job._id)!.contentWork.stage, "review_failed");
@@ -2207,7 +2207,7 @@ test("SLC47 valid failing audit or failing clarification enters bounded revision
 test("SLC47 a malformed audit still stops deterministically without infrastructure retry or paid replay", async () => {
   for (const kind of ["malformed_correction", "malformed_original"]) {
     const f = await scopedPricingFixture({}, {}, { auditResponse: (audit, request) => kind === "malformed_original" ||
-      (kind === "malformed_correction" && isAuditClarification(request)) ? { ...audit, score: undefined } : { ...audit, score: 83 } });
+      (kind === "malformed_correction" && isAuditClarification(request)) ? { ...audit, score: undefined } : { ...audit, score: 62 } });
     await f.admit(0); const job = f.tables.jobs[0];
     for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
     const failed = f.get(job._id)!, saved = JSON.stringify(failed), calls = f.modelCalls.length;
@@ -2226,7 +2226,7 @@ test("SLC47 a malformed audit still stops deterministically without infrastructu
   }
 });
 
-async function legacySemanticAuditFixture(index = 0, keyOnly = false) {
+async function legacySemanticAuditFixture(index = 0, keyOnly = false, legacyScore?: number) {
   const beforeFinalAudit = async () => {
     let audits = 0;
     const f = await scopedPricingFixture({}, {}, { providerError: creditFailure(), omitDraftTitle: true,
@@ -2253,7 +2253,7 @@ async function legacySemanticAuditFixture(index = 0, keyOnly = false) {
   for (const c of template.get(job._id)!.contentWork.providerCalls.slice(existingCount)) {
     const admission = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken,
       key: c.logicalKey, requestHash: c.requestHash, ceilingMicroUsd: c.ceilingMicroUsd });
-    const result = c.logicalKey.endsWith(":audit_final_article") ? { ...c.result, score: index === 0 ? 83 : 80, materialDefects: [] } : c.result;
+    const result = c.logicalKey.endsWith(":audit_final_article") ? { ...c.result, score: legacyScore ?? (index === 0 ? 62 : 64), materialDefects: [] } : c.result;
     await f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken, key: admission.key, result, actualMicroUsd: c.actualMicroUsd });
     if (keyOnly) { const saved = f.get(job._id)!.contentWork.providerCalls.at(-1); saved.key = c.logicalKey; delete saved.logicalKey; }
   }
@@ -2343,7 +2343,7 @@ test("SLC50 an inconsistent clarification rejects content without pausing the se
   for (const index of [0, 1]) {
     const f = await legacySemanticAuditFixture(index), original = structuredClone(f.get(f.jobId)!);
     await f.invoke("contentWork:reconcileSemanticAuditFailure", f.repair);
-    f.providerOptions.auditResponse = audit => ({ ...audit, score: 80 });
+    f.providerOptions.auditResponse = audit => ({ ...audit, score: 64 });
     await f.invoke("contentWork:control", { siteId: original.siteId, action: "resume", reviewToken: (await f.invoke("contentWork:readiness", { siteId: original.siteId })).reviewToken });
     const calls = f.modelCalls.length, holds = JSON.stringify(f.tables.provider_spend_reservations);
     await f.invoke("actions/pipeline:processNextJob", { siteId: original.siteId, jobId: original._id });
@@ -2372,7 +2372,7 @@ test("SLC50 an inconsistent clarification rejects content without pausing the se
 });
 
 test("SLC50 repeated inconsistent reviews exhaust the existing bounded candidate, never publish or mint unlimited replacements", async () => {
-  const f = await scopedPricingFixture({}, {}, { auditResponse: audit => ({ ...audit, score: 80 }) });
+  const f = await scopedPricingFixture({}, {}, { auditResponse: audit => ({ ...audit, score: 64 }) });
   await f.admit(0); const id = f.tables.jobs[0]._id;
   await pumpUntil(f, () => f.get(id)!.contentWork.stage === "failed", 180);
   const failed = f.get(id)!;
@@ -2404,12 +2404,61 @@ test("SLC50 a single remediation note is preserved without replay or quality-sco
   }
 });
 
+test("P99 a retained pre-P99 parse failure scored 70-84 with no defect stays repairable; resume uses it as a polish-only review without a paid clarification", async () => {
+  const f = await legacySemanticAuditFixture(0, false, 83), siteId = f.get(f.jobId)!.siteId, calls = f.modelCalls.length;
+  await f.invoke("contentWork:reconcileSemanticAuditFailure", f.repair);
+  f.restartRuntime(); f.setIdentity(f.get(siteId)!.userId);
+  await f.invoke("contentWork:control", { siteId, action: "resume", reviewToken: (await f.invoke("contentWork:readiness", { siteId })).reviewToken });
+  await f.invoke("actions/pipeline:processNextJob", { siteId, jobId: f.jobId });
+  const job = f.get(f.jobId)!, article = f.get(job.articleId)!;
+  // This legacy site never consented to automatic publication, so the ordinary
+  // strict gate decides: the review is used as given, not quarantined or promoted.
+  assert.equal(job.contentWork.stage, "review_failed", job.error);
+  assert.equal(job.contentWork.failure, "content_review_rejected");
+  assert.deepEqual(article.publicationGateIssues, ["Editorial quality score is 83; strict minimum is 85."]);
+  assert.equal(article.editorialQualityScore, 83);
+  assert.equal(f.modelCalls.length, calls, "The retained polish-only review is reused; no clarification is bought");
+  assert.equal(job.contentWork.providerCalls.some((c: Fields) => c.semanticClarificationOf), false);
+  f.assertOffline();
+});
+
+test("P99 owner resume still reclassifies a retained pre-P99 inconsistent review scored 70-84 with no defect", async () => {
+  const f = await legacySemanticAuditFixture(0);
+  await f.invoke("contentWork:reconcileSemanticAuditFailure", f.repair);
+  const job = f.get(f.jobId)!;
+  f.providerOptions.auditResponse = audit => ({ ...audit, score: 64 });
+  await f.invoke("contentWork:control", { siteId: job.siteId, action: "resume", reviewToken: (await f.invoke("contentWork:readiness", { siteId: job.siteId })).reviewToken });
+  await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+  const retained = f.get(job._id)!;
+  Object.assign(retained, { status: "failed", error: "content_audit_clarification_inconsistent", updatedAt: f.now() });
+  Object.assign(retained.contentWork, { stage: "failed", failure: "content_audit_clarification_inconsistent" });
+  // Evidence written before P99: both reviews scored 78 with no material defect.
+  const clarification = retained.contentWork.providerCalls.at(-1);
+  const original = retained.contentWork.providerCalls.find((c: Fields) => c.key === clarification.semanticClarificationOf.key);
+  original.result = { ...original.result, score: 78, materialDefects: [] };
+  clarification.result = { ...clarification.result, score: 78, materialDefects: [] };
+  clarification.semanticClarificationOf.resultHash = auditResultHash(original.result);
+  f.get(job.siteId)!.contentSchedule.paused = true;
+  const readiness = await f.invoke("contentWork:readiness", { siteId: job.siteId });
+  assert.equal(readiness.work[0].systemFailure, false);
+  assert.equal(contentServiceStatus(readiness).canResume, true);
+  const before = structuredClone(retained), calls = f.modelCalls.length;
+  await f.invoke("contentWork:control", { siteId: job.siteId, action: "resume", reviewToken: readiness.reviewToken });
+  const after = f.get(job._id)!;
+  assert.equal(after.contentWork.stage, "review_failed");
+  assert.deepEqual(after.contentWork.providerCalls, before.contentWork.providerCalls);
+  assert.equal(after.result.previousFailure, "content_audit_clarification_inconsistent");
+  assert.equal(after.contentWork.revisions, before.contentWork.revisions);
+  assert.equal(f.modelCalls.length, calls);
+  assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0); f.assertOffline();
+});
+
 test("SLC50 owner resume reclassifies only completed retained contradictory reviews, preserving history and limits", async () => {
   for (const defect of ["none", "lineage", "ambiguous", "article_changed", "published", "lease", "other_failure", "wrong_owner"]) {
     const f = await legacySemanticAuditFixture(0);
     await f.invoke("contentWork:reconcileSemanticAuditFailure", f.repair);
     const job = f.get(f.jobId)!;
-    f.providerOptions.auditResponse = audit => ({ ...audit, score: 80 });
+    f.providerOptions.auditResponse = audit => ({ ...audit, score: 64 });
     await f.invoke("contentWork:control", { siteId: job.siteId, action: "resume", reviewToken: (await f.invoke("contentWork:readiness", { siteId: job.siteId })).reviewToken });
     await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
     // Simulate the previous deployed worker's classification, not another model call.
@@ -2486,7 +2535,7 @@ test("SLC47 pause, revoked authority, expiry and budget fences stop a clarificat
       if (defect === "expiry") f.get(f.args.authorizationId)!.cumulativeValidation.expiresAt = f.now();
       if (defect === "stop") f.get(f.args.authorizationId)!.cumulativeValidation.stoppedAt = f.now();
       if (defect === "budget") f.get(job._id)!.contentWork.budgetMicroUsd = 600;
-      return { ...audit, score: 83 };
+      return { ...audit, score: 62 };
     };
     for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
     assert.equal(f.modelCalls.length, 3, defect);
@@ -7611,4 +7660,42 @@ test("P98 allowance rule: delivered, in-progress and uncertain work count; held-
   assert.equal(contentJobUsesAllowance({ status: "failed", publicationAttempts: 1, ...cw("failed", { failure: "content_publication_failed_reconciliation_required" }) }), true,
     "an attempted external write may have published; it keeps counting");
   assert.equal(contentJobUsesAllowance({ status: "failed", ...cw("failed", { failure: "owner_edited_draft" }) }), true, "the article lives on in the owner's edit");
+});
+
+test("P99 a polish-only verdict (70-84, no material defect) is consistent: Autopilot publishes it under the owner's rule, the score is kept", async t => {
+  await t.test("autopilot_publishes_without_clarification", async () => {
+    // Oct 19 2026, LeadPilot: 72/[] and 78/[] were clarified, repeated, and quarantined as "inconsistent".
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000,
+      auditResponse: (value: Fields) => ({ ...value, score: 72, materialDefects: [], notes: ["The remaining weaknesses are polish-level; none is material."] }) });
+    const site = await selectGrowth(f);
+    Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+    await pumpUntil(f, () => f.tables.jobs.some(j => ["ready", "failed"].includes(j.contentWork?.stage)));
+    const ready = f.tables.jobs.find(j => j.contentWork?.stage === "ready");
+    assert.ok(ready, diagnostic(f));
+    assert.equal(ready.contentWork.providerCalls.filter((c: Fields) => c.semanticClarificationOf).length, 0, "no clarification for a consistent verdict");
+    assert.equal(ready.contentWork.revisions, 0);
+    const article = f.get(ready.articleId)!;
+    assert.equal(article.editorialQualityScore, 72, "stored exactly as given, never promoted");
+    assert.equal(article.ownerQualityWaiver?.userId, "pentra-autopilot");
+    assert.ok(!(article.publicationGateIssues ?? []).some((i: string) => /inconsistent/.test(i)));
+    f.assertOffline();
+  });
+  await t.test("below_70_without_a_defect_is_still_clarified", async () => {
+    const f = await scopedPricingFixture({}, {}, { auditResponse: (audit, request) => isAuditClarification(request) ? audit : { ...audit, score: 62, materialDefects: [] } });
+    await f.admit(0); const job = f.tables.jobs[0];
+    for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    assert.equal(f.get(job._id)!.contentWork.providerCalls.filter((c: Fields) => c.semanticClarificationOf).length, 1);
+    f.assertOffline();
+  });
+  await t.test("owner_reviewed_site_still_needs_85", async () => {
+    const f = await scopedPricingFixture({}, {}, { auditResponse: (audit) => ({ ...audit, score: 78, materialDefects: [] }) });
+    await f.admit(0); const job = f.tables.jobs[0];
+    for (let i = 0; i < 2; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
+    const after = f.get(job._id)!;
+    assert.equal(after.contentWork.providerCalls.filter((c: Fields) => c.semanticClarificationOf).length, 0);
+    assert.notEqual(after.contentWork.stage, "ready", "the strict gate still requires 85 without the Autopilot rule");
+    assert.equal(f.get(after.articleId)!.editorialQualityScore, 78);
+    assert.ok((f.get(after.articleId)!.publicationGateIssues ?? []).some((i: string) => /Editorial quality score is 78/.test(i)));
+    assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0); f.assertOffline();
+  });
 });

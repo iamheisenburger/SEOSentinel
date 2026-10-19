@@ -19,7 +19,7 @@ import {
 } from "../lib/articleExecutionBudget";
 import { z } from "zod";
 import { ArticleSchema, recoverLeakedArticleEnvelope } from "../lib/articleToolResult";
-import { contradictoryContentAudit, inconsistentAuditFeedback, selfNegatingMaterialDefects } from "../lib/contentAudit";
+import { auditScoreContractHolds, contradictoryContentAudit, inconsistentAuditFeedback, selfNegatingMaterialDefects } from "../lib/contentAudit";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
   appendRelatedInternalLinks,
@@ -1916,8 +1916,8 @@ async function auditFinalArticle(args: {
         }),
       ),
     }).refine(
-      (audit) => (audit.score >= 85) === (audit.materialDefects.length === 0),
-      { path: ["materialDefects"], message: "A score below 85 requires a concrete material defect; a score of 85 or more requires no material defects. Reassess the exact article and make the score and required corrections agree." },
+      (audit) => auditScoreContractHolds(audit.score, audit.materialDefects),
+      { path: ["materialDefects"], message: "A score of 85 or more requires no material defects, and a score below 70 requires a concrete material defect (70-84 with none means only polish remains). Reassess the exact article and make the score and required corrections agree." },
     ).refine(
       (audit) => selfNegatingMaterialDefects(audit.materialDefects).length === 0,
       { path: ["materialDefects"], message: "Each material defect must name a concrete required change. An entry saying the text is supported as-is, acceptable or needs no change is not a material defect; move it to notes and rescore the exact article." },

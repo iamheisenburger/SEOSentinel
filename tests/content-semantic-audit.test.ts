@@ -7,7 +7,8 @@ import { contentServiceStatus } from "../src/lib/content-service-status.ts";
 
 const clean = { score: 92, notes: ["Original reasoning."], materialDefects: [], claimEvidence: [] };
 test("semantic clarification accepts only complete contradictory audits, never promotes a score or edits raw evidence", () => {
-  for (const audit of [{ ...clean, score: 83 }, { ...clean, score: 80 }, { ...clean, materialDefects: ["Unsupported factual claim."] }]) {
+  // P99: below 70 with no defect, or 85+ with a defect, contradicts the contract (70-84 with none is polish-only).
+  for (const audit of [{ ...clean, score: 62 }, { ...clean, score: 69 }, { ...clean, materialDefects: ["Unsupported factual claim."] }]) {
     const saved = JSON.stringify(audit), hash = auditResultHash(audit);
     assert.equal(contradictoryContentAudit(audit), true);
     const prompt = semanticAuditPrompt("SAME ARTICLE AND EVIDENCE", audit);
@@ -41,11 +42,11 @@ test("P95 a material defect must name a change: entries that ask for none make t
   }
   for (const defect of real) assert.equal(contradictoryContentAudit({ ...clean, score: 62, materialDefects: [defect] }), false);
   // A score/defect mismatch keeps its exact earlier clarification text.
-  assert.doesNotMatch(semanticAuditPrompt("SAME ARTICLE", { ...clean, score: 83 }), /ask for no change/);
+  assert.doesNotMatch(semanticAuditPrompt("SAME ARTICLE", { ...clean, score: 62 }), /ask for no change/);
 });
 
 test("SLC48 real Convex serialization keeps nested audit hashes and clarification request text stable without changing values or array order", () => {
-  const raw = { score: 83, notes: ["First note", "Second note"], materialDefects: [], claimEvidence: [
+  const raw = { score: 62, notes: ["First note", "Second note"], materialDefects: [], claimEvidence: [
     { supported: true, reason: "First evidence", claim: "First claim", citationNumbers: [2, 1] },
     { citationNumbers: [3], claim: "Second claim", reason: "Second evidence", supported: true },
   ] };
@@ -55,7 +56,7 @@ test("SLC48 real Convex serialization keeps nested audit hashes and clarificatio
   assert.equal(auditResultHash(raw), sha256Hex(JSON.stringify(persisted)), "Existing db-derived repair hashes remain unchanged");
   assert.equal(semanticAuditPrompt("Exact retained article", raw), semanticAuditPrompt("Exact retained article", persisted));
   assert.equal(JSON.stringify(raw), original);
-  for (const changed of [{ ...raw, score: 84 }, { ...raw, notes: [...raw.notes].reverse() },
+  for (const changed of [{ ...raw, score: 63 }, { ...raw, notes: [...raw.notes].reverse() },
     { ...raw, claimEvidence: [...raw.claimEvidence].reverse() },
     { ...raw, claimEvidence: [{ ...raw.claimEvidence[0], citationNumbers: [1, 2] }, raw.claimEvidence[1]] },
     { ...raw, claimEvidence: [{ ...raw.claimEvidence[0], supported: false }, raw.claimEvidence[1]] }])
@@ -78,4 +79,27 @@ test("one authoritative presentation distinguishes paused, preparing, failed, re
   assert.equal(contentServiceStatus({ serviceMode: "legacy_articles", enabled: true }).label, "Autopilot on");
   assert.equal(contentServiceStatus({ serviceMode: "legacy_articles", enabled: false }).label, "Manual");
   assert.equal(contentServiceStatus({ ...base, work: [{ stage: "failed", systemFailure: true, retiredAt: 1 }] }).status, "preparing");
+});
+
+
+test("P99 a 70-84 verdict with no material defect is consistent polish-only; below 70 must name a defect", () => {
+  for (const score of [70, 72, 78, 84]) assert.equal(contradictoryContentAudit({ ...clean, score }), false, `score ${score}`);
+  for (const score of [0, 62, 69.9]) assert.equal(contradictoryContentAudit({ ...clean, score }), true, `score ${score}`);
+  assert.equal(contradictoryContentAudit({ ...clean, score: 85 }), false);
+  assert.equal(contradictoryContentAudit({ ...clean, score: 85, materialDefects: ["Fix the broken step."] }), true);
+  assert.equal(contradictoryContentAudit({ ...clean, score: 62, materialDefects: ["Fix the broken step."] }), false);
+  // The clarification prompt is unchanged for cases that stay contradictory.
+  assert.match(semanticAuditPrompt("SAME ARTICLE", { ...clean, score: 62 }), /Do not raise the score/);
+  assert.throws(() => semanticAuditPrompt("SAME ARTICLE", { ...clean, score: 72 }));
+});
+
+test("P99 'is not a defect', 'not a factual claim' and 'needs no external evidence' entries ask for no change", () => {
+  const noChange = [
+    "Claim unit 2 ('Keep the success measure simple...') is advice and a scope disclaimer; it needs no external evidence and is not a defect.",
+    "Claim unit 3 is a call to action linking to the owner's configured sign-up page; it is not a factual claim.",
+  ];
+  const real = ["Claim unit 4 is not a factual claim but reads as one; label it as the author's view.",
+    "The FAQ states Search Console behaviour as fact; cite it or turn it into a reader check."];
+  assert.deepEqual(selfNegatingMaterialDefects([...noChange, ...real]), noChange);
+  assert.equal(contradictoryContentAudit({ ...clean, score: 62, materialDefects: [real[1], noChange[0]] }), true);
 });

@@ -92,7 +92,7 @@ test("the runtime harness audits real Markdown links and checklists without chan
 
 test("contradictory audit scores receive one provider clarification rather than local promotion", async () => {
   for (const contradiction of [
-    { ...clean, score: 83 },
+    { ...clean, score: 62 },
     { ...clean, materialDefects: ["Unsupported platform-wide assertion."] },
   ]) {
     const corrected = { ...clean, score: 82, materialDefects: ["Unsupported platform-wide assertion."] };
@@ -100,14 +100,24 @@ test("contradictory audit scores receive one provider clarification rather than 
     const result = await f.run(args("Compare the workflow against your own requirements and record the limitations before choosing the next action."));
     assert.equal(f.requests.length, 2);
     assert.match(f.requests[1].messages[0].content, /CORRECTION/);
-    assert.match(f.requests[1].messages[0].content, /score below 85 requires a concrete material defect/);
+    assert.match(f.requests[1].messages[0].content, /score below 70 requires a concrete material defect/);
     assert.equal(result.audit.score, 82);
     assert.equal(result.audit.materialDefects.length, 1);
   }
 });
 
+test("P99 a polish-only audit (70-84, no material defect) is accepted once and stored exactly", async () => {
+  for (const score of [70, 78, 84]) {
+    const f = fixture([{ ...clean, score }]);
+    const result = await f.run(args("Compare the workflow against your own requirements and record the limitations before choosing the next action."));
+    assert.equal(f.requests.length, 1);
+    assert.equal(result.audit.score, score);
+    assert.equal(result.audit.materialDefects.length, 0);
+  }
+});
+
 test("a second contradictory audit fails closed without more provider calls", async () => {
-  const contradiction = { ...clean, score: 83 };
+  const contradiction = { ...clean, score: 62 };
   const f = fixture([contradiction, contradiction]);
   await assert.rejects(f.run(args("Compare the workflow against your own requirements and record the limitations before choosing the next action.")));
   assert.equal(f.requests.length, 2);

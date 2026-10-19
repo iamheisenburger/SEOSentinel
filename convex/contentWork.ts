@@ -31,7 +31,7 @@ import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning
 import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes } from "./articles";
 import { AUTOPILOT_ACCEPTANCE, ownerWaivableIssue } from "./lib/articleQuality";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
-import { auditResultHash, contradictoryContentAudit, inconsistentAuditFeedback, internalContentProcessingError, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
+import { auditResultHash, contradictoryContentAudit, inconsistentAuditFeedback, internalContentProcessingError, retainedContradictoryContentAudit, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 import { contentJobUsesAllowance } from "./lib/contentUsage";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
 
@@ -550,7 +550,7 @@ export const reconcileSemanticAuditFailure = internalMutation({
     const call = cw.providerCalls.at(-1), baseKey = `${cw.replacements}:${cw.revisions}:review:audit_final_article`;
     if (!call || call.key !== args.callKey || (call.logicalKey ?? call.key) !== baseKey ||
       call.requestHash !== args.requestHash || !/^[a-f0-9]{64}$/.test(args.requestHash) ||
-      call.state !== "completed" || !contradictoryContentAudit(call.result) || auditResultHash(call.result) !== args.resultHash ||
+      call.state !== "completed" || !retainedContradictoryContentAudit(call.result) || auditResultHash(call.result) !== args.resultHash ||
       cw.providerCalls.some(c => c.semanticClarificationOf || c.key.includes(SEMANTIC_AUDIT_SUFFIX) || c.state === "started" ||
         (c.state === "completed" && (!Number.isSafeInteger(c.actualMicroUsd) || c.actualMicroUsd! < 0 || c.result === undefined)) ||
         (c.state === "rejected" && !(c.rejectionStatus === 400 && c.rejectionCode === "provider_credit_unavailable" &&
@@ -1092,7 +1092,7 @@ export const readiness = query({
         // The mutation still verifies lineage, unchanged source and no writes;
         // exposing the control grants no execution or spending authority.
         const rejectedReview = j.status === "failed" && j.contentWork!.failure === "content_audit_clarification_inconsistent" &&
-          lastReview?.state === "completed" && contradictoryContentAudit(lastReview.result);
+          lastReview?.state === "completed" && retainedContradictoryContentAudit(lastReview.result);
         const call = j.contentWork!.providerCalls.find(c => interruptedCreditCall(c) && c.creditRecovery);
         const creditRetry = j.status === "failed" && j.contentWork!.stage === "failed" && call && j.contentWork!.retiredAt === undefined
           ? { jobId: j._id, callKey: call.key, token: creditRetryToken(j, call) } : null;
@@ -1139,7 +1139,7 @@ async function reconcileCompletedReviewRejection(ctx: MutationCtx, site: Doc<"si
     (original.logicalKey ?? original.key) !== `${cw.replacements}:${cw.revisions}:review:audit_final_article` ||
     (call.logicalKey ?? call.key) !== `${original.logicalKey ?? original.key}${SEMANTIC_AUDIT_SUFFIX}` ||
     original.requestHash !== lineage.requestHash || auditResultHash(original.result) !== lineage.resultHash ||
-    !contradictoryContentAudit(original.result) || !contradictoryContentAudit(call.result) ||
+    !retainedContradictoryContentAudit(original.result) || !retainedContradictoryContentAudit(call.result) ||
     cw.providerCalls.some(c => c.state === "started" || (c.state === "completed" && (!Number.isSafeInteger(c.actualMicroUsd) || c.actualMicroUsd! < 0))) ||
     !article || article.siteId !== site._id || article.updatedAt > job.updatedAt || article.status === "published" ||
     article.publicationAttemptedAt || article.publicationReceipt || article.publicationLeaseOwner || article.publicationOutcomeUnverifiedAt || article.publishedContentHash) {
