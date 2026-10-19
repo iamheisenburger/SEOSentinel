@@ -1753,12 +1753,13 @@ async function factCheckArticle(
       claimCount: reviewed.claimCount, verifiedCount: reviewed.verifiedCount,
       confidenceScore: normalizedFactCheckConfidence(reviewed), productEvidence });
     return { ...reviewed, confidenceScore: applied.confidenceScore,
-      unverifiedClaims: applied.unverifiedClaims, markdown: applied.markdown };
+      unverifiedClaims: applied.unverifiedClaims, firstPartyVerified: applied.firstPartyVerified, markdown: applied.markdown };
   }
   return {
     ...reviewed,
     confidenceScore: normalizedFactCheckConfidence(reviewed),
     unverifiedClaims: [],
+    firstPartyVerified: [] as string[],
     markdown: (sources?.length ?? 0) === 0
       ? removeUncitedQuantifiedSentences(citationSafeMarkdown)
       : citationSafeMarkdown,
@@ -7752,6 +7753,8 @@ async function reviewExistingArticleHandler(
       factCheckNotes: [
         reviewed.notes,
         ...(reviewed.unverifiedClaims ?? []).map((claim) => `Unverified claim: «${claim.replace(/[«»]/g, "")}»`),
+        // Listed by the checker but stated by the first-party snapshot: kept and counted verified.
+        ...(reviewed.firstPartyVerified ?? []).map((claim) => `First-party verified: «${claim.replace(/[«»]/g, "")}»`),
         evidenceDefects.length > 0
           ? `${evidenceDefects.length} deterministic evidence defect(s) remain.`
           : "Deterministic numeric evidence scan passed.",

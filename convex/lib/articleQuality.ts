@@ -1646,15 +1646,23 @@ export function applyFactCheckFindings(args: {
   verifiedCount?: number;
   confidenceScore?: number;
   productEvidence?: string;
-}): { markdown: string; removedClaims: number; confidenceScore?: number; unverifiedClaims: string[] } {
+}): { markdown: string; removedClaims: number; confidenceScore?: number; unverifiedClaims: string[]; firstPartyVerified: string[] } {
   let markdown = args.markdown, removedClaims = 0;
-  const unverifiedClaims: string[] = [];
+  const unverifiedClaims: string[] = [], firstPartyVerified: string[] = [];
   for (const claim of args.unverifiedClaims) {
     // The checker is told never to list advice; a plain call-to-action link it
     // listed anyway asserts nothing. It is kept in the article and is not
     // counted as an unverified fact (the deletion would only cut the CTA).
     if (isCallToActionSentence(claim.trim(), args.productEvidence ?? "") &&
       args.markdown.includes(claim.trim())) { removedClaims += 1; continue; }
+    // P100: with no external source the checker listed sentences about the
+    // publisher's own product that, by its own notes, the first-party
+    // evidence supports; one it could not delete scored the draft 0. Under
+    // its rule (product claims stand when the product evidence supports
+    // them) a sentence the snapshot itself states is verified: keep it and
+    // count it so. Anything beyond the snapshot is still removed.
+    if (args.productEvidence && args.markdown.includes(claim.trim()) &&
+      firstPartySnapshotStatesClaim(claim, args.productEvidence, paragraphContaining(args.markdown, claim.trim()))) { firstPartyVerified.push(claim); continue; }
     unverifiedClaims.push(claim);
     const next = removeUnsupportedClaimSentences(markdown, [claim]);
     if (next !== markdown) { removedClaims += 1; markdown = next; }
@@ -1662,13 +1670,53 @@ export function applyFactCheckFindings(args: {
   const { claimCount, verifiedCount } = args;
   const countsValid = Number.isInteger(claimCount) && Number.isInteger(verifiedCount) && (claimCount ?? 0) > 0 &&
     (verifiedCount ?? -1) >= 0 && (verifiedCount ?? 0) <= (claimCount ?? 0);
-  if (!countsValid) return { markdown, removedClaims, confidenceScore: args.confidenceScore, unverifiedClaims };
-  const unverified = claimCount! - verifiedCount!;
+  if (!countsValid) return { markdown, removedClaims, confidenceScore: args.confidenceScore, unverifiedClaims, firstPartyVerified };
+  const listedUnverified = claimCount! - verifiedCount!;
+  // A reclassified sentence moves from unverified to verified; the claim count is unchanged.
+  const reclassified = Math.min(firstPartyVerified.length, listedUnverified);
+  const verified = verifiedCount! + reclassified, unverified = listedUnverified - reclassified;
   const remainingUnverified = Math.max(0, unverified - Math.min(removedClaims, unverified));
-  const remaining = verifiedCount! + remainingUnverified;
-  return { markdown, removedClaims, unverifiedClaims,
-    confidenceScore: remaining > 0 ? Math.round((verifiedCount! / remaining) * 100) : 100 };
+  const remaining = verified + remainingUnverified;
+  return { markdown, removedClaims, unverifiedClaims, firstPartyVerified,
+    confidenceScore: remaining > 0 ? Math.round((verified / remaining) * 100) : 100 };
 }
+
+/** P100: one sentence about the publisher's own product that the first-party
+ * snapshot itself states. Stricter than the claim ledger's binding check
+ * (30% shared vocabulary): the sentence names the product, cites nothing,
+ * makes no platform-mechanics or absence assertion, every number and named
+ * phrase in it is in the snapshot, and its wording comes from one place there
+ * (most of its content words within two adjacent snapshot segments, nearly all
+ * of them somewhere in it). An inferred benefit, fit, limit or outcome adds
+ * words the snapshot lacks and fails. */
+export function firstPartySnapshotStatesClaim(sentence: string, productEvidence: string, paragraph = ""): boolean {
+  const claim = sentence.trim();
+  if (!productEvidence.trim() || claimSentenceSegments(claim).length !== 1) return false;
+  // "It learns from your website content" inside a paragraph that names the
+  // product is a sentence about the product.
+  const aboutProduct = referencesNamedProduct(claim, productEvidence) ||
+    (PRODUCT_PRONOUN_SUBJECT.test(claim.replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)?(?:\*\*[^*]+\*\*\s*)?/, "")) &&
+      referencesNamedProduct(paragraph, productEvidence));
+  if (!aboutProduct || !exactClaimDetailsPresent(claim, productEvidence) ||
+    inlineCitationNumbers(claim).length > 0 || hasExternalSystemAssertion(claim)) return false;
+  const identity = new Set([...productEvidence.matchAll(/^(?:Name|Domain):\s*([^\n]+)/gim)]
+    .flatMap((match) => [...evidenceTokens(match[1])]));
+  const words = [...evidenceTokens(claim)].filter((token) => !identity.has(token));
+  if (words.length < 3) return false;
+  const everywhere = evidenceTokens(productEvidence);
+  if (words.filter((token) => everywhere.has(token)).length / words.length < SNAPSHOT_STATEMENT_COVERAGE) return false;
+  const segments = productEvidence.split(/\n+|(?<=[.!?])\s+/).map((segment) => evidenceTokens(segment));
+  return segments.some((segment, index) => {
+    const nearby = new Set([...segment, ...(segments[index + 1] ?? [])]);
+    return words.filter((token) => nearby.has(token)).length / words.length >= SNAPSHOT_STATEMENT_LOCAL_COVERAGE;
+  });
+}
+const PRODUCT_PRONOUN_SUBJECT = /^(?:(?:according to|based on|per|on) (?:its|the product's|the vendor's) [^,]{1,40},\s*)?(?:it|its|the (?:agent|tool|product|platform|software|assistant))\b/i;
+function paragraphContaining(markdown: string, sentence: string): string {
+  return markdown.split(/\n\s*\n/).find((block) => block.includes(sentence)) ?? "";
+}
+const SNAPSHOT_STATEMENT_COVERAGE = 0.9;
+const SNAPSHOT_STATEMENT_LOCAL_COVERAGE = 0.7;
 
 /** A cited page's title can name a tag ("<script> HTML script element - MDN"),
  * and the writer copies it into the Sources list as link text, where MDX would

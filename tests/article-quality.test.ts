@@ -2483,6 +2483,47 @@ test("P93 a plain call-to-action sentence is an invitation, not a claim, in the 
   assert.deepEqual(kept.unverifiedClaims, [claimCta]);
 });
 
+test("P100 the fact check counts a product sentence the first-party snapshot states as verified, never one it does not state", async () => {
+  // Oct 19 2026: with no external source the checker listed product sentences
+  // it called supported by the first-party evidence and set verifiedCount 0;
+  // one it could not delete scored the draft 0 (/conversational-ai-lead-scoring).
+  const { applyFactCheckFindings, firstPartySnapshotStatesClaim } = await import("../convex/lib/articleQuality.ts");
+  const snapshot = [
+    "Name: LeadPilot", "Domain: leadpilot.chat",
+    "Summary: LeadPilot is an AI-powered sales agent that embeds into websites to answer questions and capture contact information.",
+    "Configured features:", "- Answers from approved content. If the answer is missing, LeadPilot says so instead of inventing it.",
+  ].join("\n");
+  const stated = "LeadPilot is an AI-powered sales agent that embeds into websites.";
+  const pronoun = "It says so instead of inventing an answer when one is missing.";
+  const beyond = "LeadPilot doubles qualified pipeline for most B2B teams.";
+  const general = "Most visitors leave a slow page before reading anything.";
+  const markdown = ["# Chat widgets", "", "Ask each vendor how answers are grounded before you install anything.", "",
+    `${stated} ${pronoun}`, "", beyond, "", general, ""].join("\n");
+  const applied = applyFactCheckFindings({ markdown, unverifiedClaims: [stated, pronoun, beyond, general],
+    claimCount: 4, verifiedCount: 0, confidenceScore: 40, productEvidence: snapshot });
+  assert.deepEqual(applied.firstPartyVerified, [stated, pronoun]);
+  assert.deepEqual(applied.unverifiedClaims, [beyond, general]);
+  assert.ok(applied.markdown.includes(stated) && applied.markdown.includes(pronoun), "stated product facts stay word for word");
+  assert.ok(!applied.markdown.includes(beyond) && !applied.markdown.includes(general), "everything else listed is still removed");
+  assert.equal(applied.confidenceScore, 100, "the two kept sentences are verified; the two removed ones are gone");
+  // A listed unsupported sentence that cannot be removed still counts against the score.
+  const held = applyFactCheckFindings({ markdown, unverifiedClaims: [stated, "Gartner says chat triples conversion."],
+    claimCount: 2, verifiedCount: 0, productEvidence: snapshot });
+  assert.equal(held.confidenceScore, 50);
+  // Naming the product is not enough: the snapshot must state the sentence itself.
+  for (const sentence of [
+    `${stated.slice(0, -1)} [1].`,
+    "LeadPilot captures contact information for 3x more leads.",
+    "LeadPilot suits teams that want fewer manual handoffs and faster replies.",
+    "LeadPilot integrates with every CRM and calendar your team already uses.",
+    "LeadPilot does not publish any limits on conversations.",
+  ]) assert.equal(firstPartySnapshotStatesClaim(sentence, snapshot), false, sentence);
+  // A pronoun only stands for the product inside a paragraph that names it.
+  assert.equal(firstPartySnapshotStatesClaim(pronoun, snapshot, `${stated} ${pronoun}`), true);
+  assert.equal(firstPartySnapshotStatesClaim(pronoun, snapshot, `Chat tools vary. ${pronoun}`), false);
+  assert.equal(firstPartySnapshotStatesClaim(stated, ""), false, "no snapshot, no first-party verification");
+});
+
 test("P93 the auditor is told the claim units are copies, not repeated article text, and metadata stays at the body's scope", () => {
   // Oct 18 2026: 13 of 29 rejected drafts carried a "duplicated paragraph"
   // material defect, yet every named passage appeared once in the article;
