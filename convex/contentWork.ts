@@ -318,12 +318,19 @@ async function displayedAccountUsage(ctx: QueryCtx, site: Doc<"sites">) {
  * writes and rewrites articles ("writer": {model, inputMicroUsdPerToken,
  * outputMicroUsdPerToken}); every check keeps the main model. Invalid or
  * absent means the main model does everything. */
+/** A per-token price in micro-dollars. Fractions are allowed (A3, Oct 19 2026):
+ * Claude Haiku 5.5 lists at $0.10/$0.50 per million tokens (0.1/0.5 µUSD a
+ * token), which whole micro-dollars priced 10x and 6x too high, so caps bound
+ * early. Every call's cost and ceiling is rounded up to whole micro-dollars. */
+export function validTokenPrice(n: unknown): n is number {
+  return typeof n === "number" && Number.isFinite(n) && n >= 0.001 && n <= 1_000;
+}
 export function writerPricing(raw: unknown): { model: string; inputMicroUsdPerToken: number; outputMicroUsdPerToken: number } | undefined {
   const w = raw && typeof raw === "object" ? (raw as { writer?: unknown }).writer : undefined;
   if (!w || typeof w !== "object") return undefined;
   const { model, inputMicroUsdPerToken, outputMicroUsdPerToken } = w as Record<string, unknown>;
   if (typeof model !== "string" || !model.startsWith("claude-") ||
-    ![inputMicroUsdPerToken, outputMicroUsdPerToken].every(n => Number.isSafeInteger(n) && (n as number) > 0)) return undefined;
+    ![inputMicroUsdPerToken, outputMicroUsdPerToken].every(validTokenPrice)) return undefined;
   return { model, inputMicroUsdPerToken: inputMicroUsdPerToken as number, outputMicroUsdPerToken: outputMicroUsdPerToken as number };
 }
 async function pricingConfiguration(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, job?: Doc<"jobs">) {
@@ -336,7 +343,7 @@ async function pricingConfiguration(ctx: QueryCtx | MutationCtx, site: Doc<"site
   // It never applies to a site bound to that grant, and never rebinds a job.
   try { pub = JSON.parse(process.env.PENTRA_PUBLIC_CONTENT_PRICING ?? "null"); } catch { pub = null; }
   const publicPricing = pub && typeof pub === "object" && typeof pub.model === "string" && pub.model && !("validationAuthorizationId" in pub) &&
-    [pub.inputMicroUsdPerToken, pub.outputMicroUsdPerToken, pub.budgetMicroUsd].every(n => Number.isSafeInteger(n) && n > 0)
+    [pub.inputMicroUsdPerToken, pub.outputMicroUsdPerToken].every(validTokenPrice) && Number.isSafeInteger(pub.budgetMicroUsd) && pub.budgetMicroUsd > 0
     ? { model: pub.model as string, inputMicroUsdPerToken: pub.inputMicroUsdPerToken as number,
         outputMicroUsdPerToken: pub.outputMicroUsdPerToken as number, budgetMicroUsd: pub.budgetMicroUsd as number,
         ...(writerPricing(pub) ? { writer: writerPricing(pub)! } : {}),
@@ -351,7 +358,7 @@ async function pricingConfiguration(ctx: QueryCtx | MutationCtx, site: Doc<"site
   }
   if (!cw && scoped && publicPricing && !site.contentSchedule?.validationAuthorizationId) return publicPricing;
   if (!p || typeof p.model !== "string" || !p.model ||
-    ![p.inputMicroUsdPerToken, p.outputMicroUsdPerToken, p.budgetMicroUsd].every(n => Number.isSafeInteger(n) && n > 0)) return null;
+    ![p.inputMicroUsdPerToken, p.outputMicroUsdPerToken].every(validTokenPrice) || !Number.isSafeInteger(p.budgetMicroUsd) || p.budgetMicroUsd <= 0) return null;
   let validationAuthorizationId: Id<"provider_budget_authorizations"> | undefined;
   try {
     if (scoped) {

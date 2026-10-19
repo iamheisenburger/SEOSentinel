@@ -7655,6 +7655,25 @@ test("P87 one model writes, another checks: writer pricing applies only to draft
   f.assertOffline();
 });
 
+test("A3 list prices: checks at Haiku 5.5's fractional rates, every cost and ceiling in whole micro-dollars rounded up", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const writer = { model: "claude-mocked-writer", inputMicroUsdPerToken: 2, outputMicroUsdPerToken: 10 };
+  f.restartRuntime({ PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ model: "mocked-content-model", inputMicroUsdPerToken: 0.1, outputMicroUsdPerToken: 0.5,
+    budgetMicroUsd: 2_000_000, writer }) });
+  await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork && ["ready", "verified"].includes(j.contentWork.stage)));
+  const job = f.tables.jobs.find(j => j.contentWork && ["ready", "verified"].includes(j.contentWork.stage))!;
+  assert.equal(job.contentWork.pricing.inputMicroUsdPerToken, 0.1, "the job keeps the fractional list price it was created with");
+  const calls = job.contentWork.providerCalls as Array<{ key: string; logicalKey?: string; actualMicroUsd?: number; ceilingMicroUsd: number }>;
+  assert.ok(calls.every(c => Number.isSafeInteger(c.ceilingMicroUsd) && (c.actualMicroUsd === undefined || Number.isSafeInteger(c.actualMicroUsd))), JSON.stringify(calls));
+  // The fixture reports 100 input and 100 output tokens per call.
+  const check = calls.find(c => !String(c.logicalKey ?? c.key).endsWith(":submit_article") && !String(c.logicalKey ?? c.key).endsWith(":remediate_final_article"))!;
+  assert.equal(check.actualMicroUsd, 60, "100 x 0.1 + 100 x 0.5 micro-dollars");
+  const draft = calls.find(c => String(c.logicalKey ?? c.key).endsWith(":submit_article"))!;
+  assert.equal(draft.actualMicroUsd, 1_200, "the writer keeps its own rates");
+  f.assertOffline();
+});
+
 test("P87 a malformed or missing writer block leaves one model doing everything", async () => {
   const { writerPricing } = await import("../convex/contentWork.ts").catch(() => ({ writerPricing: undefined }));
   if (!writerPricing) return; // contentWork imports Convex server modules; covered by the integration test above.

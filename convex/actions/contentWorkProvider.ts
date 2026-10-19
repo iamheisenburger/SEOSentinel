@@ -69,7 +69,7 @@ export async function contentStructuredCall(args: { system: string; userMessage:
   // framing. No images, cached/premium tool use, web search or thinking enabled.
   const inputBound = Buffer.byteLength(JSON.stringify(request), "utf8") + 8192;
   if (inputBound > 200_000) throw new Error("Content request exceeds priced input bound");
-  const ceilingMicroUsd = inputBound * price.inputMicroUsdPerToken + request.max_tokens * price.outputMicroUsdPerToken;
+  const ceilingMicroUsd = Math.ceil(inputBound * price.inputMicroUsdPerToken + request.max_tokens * price.outputMicroUsdPerToken);
   const admission = await s.ctx.runMutation(internal.contentWork.beginProviderCall, { jobId: s.job._id, workerToken: s.workerToken,
     key: logicalKey, requestHash: sha256Hex(JSON.stringify(request)), ceilingMicroUsd,
     ...(semanticClarificationOf ? { semanticClarificationOf } : {}) });
@@ -109,7 +109,7 @@ export async function contentStructuredCall(args: { system: string; userMessage:
   if (!Number.isSafeInteger(input) || !Number.isSafeInteger(output) || input < 0 || output < 0 || input > inputBound || output > request.max_tokens) throw new Error("Provider usage receipt missing or over bound");
   const result = response.content.find(block => block.type === "tool_use" && block.name === args.toolName);
   await s.ctx.runMutation(internal.contentWork.completeProviderCall, { jobId: s.job._id, workerToken: s.workerToken, key,
-    actualMicroUsd: input * price.inputMicroUsdPerToken + output * price.outputMicroUsdPerToken,
+    actualMicroUsd: Math.ceil(input * price.inputMicroUsdPerToken + output * price.outputMicroUsdPerToken),
     ...(result?.type === "tool_use" ? { result: result.input } : {}) });
   if (!result || result.type !== "tool_use") throw new Error(args.toolName === "audit_final_article"
     ? clarifyAudit ? "content_audit_clarification_invalid" : "content_audit_response_invalid"
@@ -150,7 +150,7 @@ export async function contentResearchCall(args: { system: string; userMessage: s
     tools: [{ type: "web_search_20250305" as const, name: "web_search" as const, max_uses: maxUses }] };
   const inputBound = Buffer.byteLength(JSON.stringify(request), "utf8") + 8192 + maxUses * WEB_SEARCH_INPUT_TOKENS_BOUND;
   if (inputBound > 250_000) throw new Error("Content request exceeds priced input bound");
-  const ceilingMicroUsd = inputBound * p.inputMicroUsdPerToken + request.max_tokens * p.outputMicroUsdPerToken + maxUses * WEB_SEARCH_MICRO_USD_PER_REQUEST;
+  const ceilingMicroUsd = Math.ceil(inputBound * p.inputMicroUsdPerToken + request.max_tokens * p.outputMicroUsdPerToken) + maxUses * WEB_SEARCH_MICRO_USD_PER_REQUEST;
   const admission = await s.ctx.runMutation(internal.contentWork.beginProviderCall, { jobId: s.job._id, workerToken: s.workerToken,
     key: logicalKey, requestHash: sha256Hex(JSON.stringify(request)), ceilingMicroUsd });
   if (admission.kind === "cached") return admission.result as ContentResearchResult;
@@ -181,7 +181,7 @@ export async function contentResearchCall(args: { system: string; userMessage: s
   }
   const result = await withPreservedExcerpts(researchFromResponse(response.content as unknown[], searches));
   await s.ctx.runMutation(internal.contentWork.completeProviderCall, { jobId: s.job._id, workerToken: s.workerToken, key,
-    actualMicroUsd: input * p.inputMicroUsdPerToken + output * p.outputMicroUsdPerToken + searches * WEB_SEARCH_MICRO_USD_PER_REQUEST, result });
+    actualMicroUsd: Math.ceil(input * p.inputMicroUsdPerToken + output * p.outputMicroUsdPerToken) + searches * WEB_SEARCH_MICRO_USD_PER_REQUEST, result });
   return result;
 }
 

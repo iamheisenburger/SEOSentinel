@@ -1985,6 +1985,10 @@ const READER_VISIBLE_PIPELINE_TEXT: RegExp[] = [
   /\bthe supplied (?:source )?(?:excerpts?|snapshot|evidence)\b/i,
   /\bthe provided (?:source )?excerpts?\b/i,
   /\bexcerpts? (?:is|was|are|were) truncated\b/i,
+  // P106: the rewriter's evidence vocabulary (leadpilot.chat, Oct 19 2026:
+  // "the documentation excerpt we can verify is truncated").
+  /\bexcerpts?\b[^.\n]{0,80}\btruncated\b/i,
+  /\b(?:documentation|information|evidence|excerpts?|sources?|material|snapshot)\s+(?:that\s+)?(?:we|I)\s+(?:can|could)\s+(?:verify|confirm|check)\b/i,
   /\bthis (?:article|draft|guide) relies (?:only|solely|entirely) on\b/i,
   /\bno (?:external |retained |verified )?(?:sources?|research) (?:were|was) (?:verified|supplied|retained|preserved|available)\b/i,
   /\bfirst-party snapshot\b/i,
