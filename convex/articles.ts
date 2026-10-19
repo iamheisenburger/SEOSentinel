@@ -53,6 +53,7 @@ import {
   evaluatePublicationQuality,
   AUTOPILOT_ACCEPTANCE,
   ownerWaivableIssue,
+  readerVisibleIssues,
   repairDanglingStructuredIntroductions,
 } from "./lib/articleQuality";
 import {
@@ -3233,7 +3234,8 @@ export async function sealAcceptedReviewNotes(ctx: MutationCtx, site: Doc<"sites
   const review = evaluatePublicationQuality(candidate, "strict");
   const actor = acceptedBy === AUTOPILOT_ACCEPTANCE ? "autopilot" as const : "owner" as const;
   const waivable = review.issues.filter(issue => ownerWaivableIssue(issue, candidate, actor));
-  const blocking = review.issues.filter(issue => !waivable.includes(issue));
+  // Rule 2a: what a reader would see or be misled by is never accepted.
+  const blocking = [...review.issues.filter(issue => !waivable.includes(issue)), ...readerVisibleIssues(candidate)];
   if (blocking.length > 0) return { sealed: false as const, blocking, waivable };
   if (waivable.length === 0) return { sealed: false as const, blocking: [] as string[], waivable };
   const checkedAt = now(), hash = publicationArtifactHash(candidate);

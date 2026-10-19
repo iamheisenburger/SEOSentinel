@@ -1,5 +1,6 @@
 "use node";
-import { contentProviderActive, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
+import { contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
+import { autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote, checkableFactCheckFindings } from "../lib/autopilotEditor";
 class ContentQualityRejection extends Error {}
 
 import { internal } from "../_generated/api";
@@ -65,6 +66,7 @@ import {
   stripDraftProcessNotes,
   uncitedEvidenceRequiredParagraphs,
   validateClaimEvidenceLedger,
+  readerVisibleIssues,
 } from "../lib/articleQuality";
 import { finalAuditRequest, remediationRequest, UNTRUSTED_EVIDENCE_INSTRUCTION } from "../lib/finalArticleReview";
 import { normalizeArticleHeadings } from "../lib/markdownPublishing";
@@ -1651,6 +1653,8 @@ async function factCheckArticle(
   productName = "",
   productEvidence = "",
   researchEvidence = "",
+  /** Rule 2a Autopilot editor policy: report findings, never delete text. */
+  keepFindings = false,
 ) {
   const normalizedProductName = productName.trim().toLowerCase();
   const effectiveBannedNames = bannedNames.filter(
@@ -1762,7 +1766,7 @@ async function factCheckArticle(
     // paying for a revision round to delete them (owner decision, Oct 14).
     const applied = applyFactCheckFindings({ markdown, unverifiedClaims: reviewed.unverifiedClaims ?? [],
       claimCount: reviewed.claimCount, verifiedCount: reviewed.verifiedCount,
-      confidenceScore: normalizedFactCheckConfidence(reviewed), productEvidence });
+      confidenceScore: normalizedFactCheckConfidence(reviewed), productEvidence, keepText: keepFindings });
     return { ...reviewed, confidenceScore: applied.confidenceScore,
       unverifiedClaims: applied.unverifiedClaims, firstPartyVerified: applied.firstPartyVerified, markdown: applied.markdown };
   }
@@ -2012,6 +2016,8 @@ export const auditPublishedCorrectionInternal = internalAction({
 
 async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
   metadata?: { title: string; metaTitle: string; metaDescription: string };
+  /** Rule 2a Autopilot editor policy: audit only, never delete text. */
+  keepText?: boolean;
   markdown: string;
   articleType: string;
   primaryKeyword: string;
@@ -2032,7 +2038,7 @@ async function auditFinalArticleWithUnsupportedClaimRemoval(args: {
     // Pentra deletes only text it wrote itself. An owner's edit, an
     // improvement of an existing page, a correction or a rollback carries the
     // customer's words: it is reviewed exactly as written, never pruned.
-    if (!contentProviderMayRepairDraft()) return { markdown, audit, deterministicPruningApplied: false };
+    if (!contentProviderMayRepairDraft() || args.keepText) return { markdown, audit, deterministicPruningApplied: false };
     // Autopilot cannot pay for a second audit inside one review (the provider
     // ledger replays the first), so it used to keep every sentence the audit
     // marked unsupported and fail the draft for a paid revision to delete
@@ -6994,6 +7000,12 @@ async function reviewExistingArticleHandler(
       ? await ctx.runQuery(internal.topics.getInternal, { topicId: article.topicId })
       : null;
     const productName = site.siteName ?? site.domain;
+    // Rule 2a Autopilot editor policy (convex/lib/autopilotEditor.ts): a
+    // Pentra-written automatic article on a site that consented to automatic
+    // publication is never cut sentence by sentence. Objective checks block,
+    // the reviewers' scores are notes, and checkable fact-check findings get
+    // the one bounded rewrite.
+    const autopilotEditor = contentProviderAutopilotDraft() && autopilotPublicationConsented(site);
     const sources = article.sources ?? [];
     const maxWords = articleWordCeiling(article.articleType);
     const minimumWords = STRICT_PUBLICATION_MIN_WORDS;
@@ -7055,8 +7067,8 @@ async function reviewExistingArticleHandler(
     // previous review named (unsupported ledger claims, unverified fact-check
     // claims). Deleting text cannot add a claim, costs nothing, and converges;
     // a model rewrite is only needed for editorial defects.
-    let evidenceRepairOnly = contentProviderMayRepairDraft() && incrementRevision && onlyEvidenceDefects(storedDefects);
-    if (contentProviderMayRepairDraft() && incrementRevision) {
+    let evidenceRepairOnly = !autopilotEditor && contentProviderMayRepairDraft() && incrementRevision && onlyEvidenceDefects(storedDefects);
+    if (!autopilotEditor && contentProviderMayRepairDraft() && incrementRevision) {
       const deletion = deleteUnsupportedClaimSentences(reviewMarkdown, [
         ...(article.claimEvidence ?? []).filter((entry) => !entry.supported).map((entry) => entry.claim),
         ...unverifiedClaimsFromFactCheckNotes(article.factCheckNotes),
@@ -7107,9 +7119,18 @@ async function reviewExistingArticleHandler(
         // Prioritize explicit corrections before the existing prompt bound.
         // General observations and gate summaries may outnumber the actual
         // repair instructions; their order must not silence the latter.
-        auditNotes: [...new Set(storedDefects)].sort((left, right) => {
+        // Rule 2a: under the Autopilot editor policy nothing was deleted, so the
+        // fact check's checkable findings are passed on as exact rewrite
+        // instructions. Reader-visible defects and those findings come first.
+        auditNotes: [...new Set([
+          ...(autopilotEditor
+            ? checkableFactCheckFindings(unverifiedClaimsFromFactCheckNotes(article.factCheckNotes), productName).map(autopilotVerificationNote)
+            : []),
+          ...storedDefects,
+        ])].sort((left, right) => {
           const priority = (note: string) =>
-            /^(?:Remaining )?Material editorial defect\b/i.test(note) ? 0
+            /^(?:Reader-visible defect|Verify against the preserved sources)\b/i.test(note) ? -1
+              : /^(?:Remaining )?Material editorial defect\b/i.test(note) ? 0
               : /^(?:Remaining )?(?:Deterministic )?(?:Uncited evidence defect|Claim-ledger defect|Unsupported claim|Evidence defect)\b/i.test(note) ? 1
               : 2;
           return priority(left) - priority(right);
@@ -7119,11 +7140,17 @@ async function reviewExistingArticleHandler(
     }
 
     if (contentProviderMayRepairDraft()) {
-      reviewMarkdown = pruneUnsupportedEvidenceSentences({
-        markdown: normalizeArticleHeadings(codeTagsInSourceLabels(stripArticleScriptBlocks(stripLeakedToolFieldTrailer(reviewMarkdown))), article.title), productEvidence, productEvidenceHash,
-      }).markdown;
-      // Cited sentences the preserved source does not support go the same way.
-      reviewMarkdown = pruneMismatchedCitedSentences({ markdown: reviewMarkdown, sources }).markdown;
+      reviewMarkdown = normalizeArticleHeadings(codeTagsInSourceLabels(stripArticleScriptBlocks(stripLeakedToolFieldTrailer(reviewMarkdown))), article.title);
+      // Rule 2a: the Autopilot editor policy never cuts sentences; the
+      // reader-visible checks and the bounded rewrite handle what these
+      // deletions used to remove (and the scars they left).
+      if (!autopilotEditor) {
+        reviewMarkdown = pruneUnsupportedEvidenceSentences({
+          markdown: reviewMarkdown, productEvidence, productEvidenceHash,
+        }).markdown;
+        // Cited sentences the preserved source does not support go the same way.
+        reviewMarkdown = pruneMismatchedCitedSentences({ markdown: reviewMarkdown, sources }).markdown;
+      }
     }
     let reviewed = await factCheckArticle(
       reviewMarkdown,
@@ -7132,6 +7159,7 @@ async function reviewExistingArticleHandler(
       productName,
       productEvidence,
       researchEvidence,
+      autopilotEditor,
     );
     if (reviewed.confidenceScore === undefined) {
       throw new Error("Draft fact check returned no confidence score");
@@ -7163,6 +7191,7 @@ async function reviewExistingArticleHandler(
     }
     const exactAudit = await auditFinalArticleWithUnsupportedClaimRemoval({
       ...(contentProviderActive() ? { metadata: reviewMetadata } : {}),
+      ...(autopilotEditor ? { keepText: true } : {}),
       markdown: reviewed.markdown,
       articleType: article.articleType ?? "standard",
       primaryKeyword: topic?.primaryKeyword ?? article.title,
@@ -7738,7 +7767,18 @@ async function reviewExistingArticleHandler(
       : [
           `The primary keyword "${topic?.primaryKeyword ?? "unknown"}" does not align with both the configured business and the final article title.`,
         ];
-    const preLinkIssues = issuesBlockingPreLinkReview(quality.issues);
+    // Rule 2a: reader-visible defects block every draft. Under the Autopilot
+    // editor policy a first review whose fact check listed findings a source
+    // or the profile can settle takes its one bounded rewrite before it can
+    // be accepted; after that rewrite the findings are notes.
+    const checkableFindings = autopilotEditor && !incrementRevision
+      ? checkableFactCheckFindings(reviewed.unverifiedClaims ?? [], productName)
+      : [];
+    const preLinkIssues = issuesBlockingPreLinkReview([
+      ...quality.issues,
+      ...readerVisibleIssues(qualityCandidate),
+      ...(checkableFindings.length > 0 ? [autopilotEditPassIssue(checkableFindings.length)] : []),
+    ]);
     const readyForPublication =
       preLinkIssues.length === 0 && targetAlignmentPassed;
     const contentHash: string | undefined = readyForPublication

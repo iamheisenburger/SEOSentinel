@@ -79,25 +79,32 @@ export function preservedResearchEvidenceSnapshot(
 /** Reviewer notes that may be accepted on an exact unpublished draft.
  * The site owner, reading the draft, may accept judgement-based editorial
  * notes and a borderline fact-check confidence (70–84) — the reviewer's score,
- * not a listed factual defect. Pentra's autopilot may accept style notes
- * (editorial 70–84) when the fact check itself passed. Safety, metadata,
- * rendering, word-count and evidence-for-numbers checks are never waivable. */
+ * not a listed factual defect.
+ *
+ * Rule 2a (owner decision, Oct 19 2026): for Autopilot the LLM scores
+ * (editorial and fact-check confidence) and the claim ledger are notes, never
+ * blockers. Re-reviewing an identical draft moved its fact score from 100 to
+ * 0, and 65 of 113 held October drafts scored exactly 62, so a threshold on
+ * those scores held useful drafts at random. What protects readers is
+ * objective and stays blocking for every actor: the reader-visible checks
+ * (readerVisibleIssues: pipeline text, deletion scars, numbers absent from
+ * the cited source or the confirmed profile), uncited quantified claims,
+ * product evidence, safety, metadata, rendering and length. A completed fact
+ * check and editorial review are still required; their findings drive the
+ * bounded rewrite instead of a veto. */
 export const AUTOPILOT_ACCEPTANCE = "pentra-autopilot";
 export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number; claimEvidenceStatus?: string }, actor: "owner" | "autopilot" = "owner"): boolean {
   const editorial = /^Editorial quality score is (\d+); strict minimum is 85\.$/.exec(issue);
   // The editorial score is the reviewer's judgement of style, not a fact
   // check. Owner decision (Sep 25, Oct 14 2026): it must not throw away
-  // drafts and their spend. Autopilot accepts the same 70+ the owner may;
-  // a draft under 70 still gets its bounded rewrite.
-  if (editorial) return Number(editorial[1]) >= 70;
+  // drafts and their spend; the owner may accept 70+.
+  if (editorial) return actor === "autopilot" || Number(editorial[1]) >= 70;
   if (issue === PENDING_INTERNAL_LINK_ISSUE) return true;
   const factual = /^Fact-check score is (\d+); strict minimum is 85\.$/.exec(issue);
-  if (factual) return actor === "owner" && Number(factual[1]) >= 70;
+  if (factual) return actor === "autopilot" || Number(factual[1]) >= 70;
   if (issue === "Strict publication requires a completed claim-to-evidence audit.") {
-    // A failed audit means some claim could not be matched to its source:
-    // only the owner, reading the draft, may accept that; autopilot never does.
-    if (actor === "autopilot" && article.claimEvidenceStatus === "failed") return false;
-    return (article.factCheckScore ?? 0) >= (actor === "owner" ? 70 : 85);
+    if (actor === "autopilot") return true;
+    return (article.factCheckScore ?? 0) >= 70;
   }
   return false;
 }
@@ -1411,7 +1418,7 @@ export function unverifiedClaimsFromFactCheckNotes(notes: string | undefined): s
   return [...(notes ?? "").matchAll(/Unverified claim: «([^»]{12,2000})»/g)].map((match) => match[1].trim());
 }
 
-const REWRITE_NEEDED_DEFECT = /Material editorial defect|does not deterministically match preserved excerpt|cites \[\d+\]|cites missing source|inline citation|require at least two|^Article (?:is too thin|is overlong|body is missing|title is missing|contains)|^Meta (?:description|title)|^Title or meta description|Raw HTML|executable MDX|inline image|Featured image|YouTube|javascript URL|script tag|iframe|malformed|^Invalid/i;
+const REWRITE_NEEDED_DEFECT = /^Reader-visible defect|^Autopilot edit pass|Material editorial defect|does not deterministically match preserved excerpt|cites \[\d+\]|cites missing source|inline citation|require at least two|^Article (?:is too thin|is overlong|body is missing|title is missing|contains)|^Meta (?:description|title)|^Title or meta description|Raw HTML|executable MDX|inline image|Featured image|YouTube|javascript URL|script tag|iframe|malformed|^Invalid/i;
 const EVIDENCE_DEFECT = /claim-to-evidence|claim ledger|claim-ledger|Evidence-required paragraph|Fact-check score is \d+|Editorial quality score is \d+(?:\.\d+)?; strict minimum|quantified outcome|operational claim|Uncited evidence defect|Unsupported claim \d+|deterministic evidence defect|Unverified claim/i;
 
 /** True when a failed review's remaining defects are all evidence defects
@@ -1685,6 +1692,9 @@ export function applyFactCheckFindings(args: {
   verifiedCount?: number;
   confidenceScore?: number;
   productEvidence?: string;
+  /** Rule 2a Autopilot editor policy: keep every sentence (the bounded rewrite
+   * corrects checkable findings) and score over all listed claims. */
+  keepText?: boolean;
 }): { markdown: string; removedClaims: number; confidenceScore?: number; unverifiedClaims: string[]; firstPartyVerified: string[] } {
   let markdown = args.markdown, removedClaims = 0;
   const unverifiedClaims: string[] = [], firstPartyVerified: string[] = [];
@@ -1703,6 +1713,7 @@ export function applyFactCheckFindings(args: {
     if (args.productEvidence && args.markdown.includes(claim.trim()) &&
       firstPartySnapshotStatesClaim(claim, args.productEvidence, paragraphContaining(args.markdown, claim.trim()))) { firstPartyVerified.push(claim); continue; }
     unverifiedClaims.push(claim);
+    if (args.keepText) continue;
     const next = removeUnsupportedClaimSentences(markdown, [claim]);
     if (next !== markdown) { removedClaims += 1; markdown = next; }
   }
@@ -1958,6 +1969,179 @@ export function repairDanglingStructuredIntroductions(markdown: string): string 
     lines[index] = lines[index].replace(/:\s*(\**)\s*$/, ".$1");
   }
   return lines.join("\n");
+}
+
+/**
+ * Rule 2a (owner decision, Oct 19 2026): objective defects a reader can see or
+ * be misled by. They block a draft at review and at acceptance for every site
+ * and actor and are never waivable; the bounded rewrite fixes them. They are
+ * deliberately not part of evaluatePublicationQuality, so artifacts already
+ * sealed under the previous contract, publication retries, corrections and
+ * rollbacks keep their exact gate.
+ */
+const READER_VISIBLE_PIPELINE_TEXT: RegExp[] = [
+  /\bthe preserved (?:source )?(?:excerpts?|snapshot)\b/i,
+  /\bthe supplied (?:source )?(?:excerpts?|snapshot|evidence)\b/i,
+  /\bthe provided (?:source )?excerpts?\b/i,
+  /\bexcerpts? (?:is|was|are|were) truncated\b/i,
+  /\bthis (?:article|draft|guide) relies (?:only|solely|entirely) on\b/i,
+  /\bno (?:external |retained |verified )?(?:sources?|research) (?:were|was) (?:verified|supplied|retained|preserved|available)\b/i,
+  /\bfirst-party snapshot\b/i,
+  /\bclaim[- ]ledger\b|\bledger worksheet\b/i,
+  /\bstrict evidence mode\b/i,
+  /\bas an AI language model\b/i,
+];
+const COUNT_WORD_VALUES: Record<string, number> = { two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+const LIST_ITEM = /^(\s*)(?:[-*+]|(\d+)[.)])\s+\S/;
+const SOURCES_HEADING = /^#{1,6}\s+(?:sources|references|editorial sources|bibliography|works cited)\s*:?\s*$/i;
+
+/** Top-level items of the list that starts after line `start` (blank lines and
+ * deeper-indented continuation lines belong to it). */
+function listAfter(lines: string[], start: number): { count: number; numbers: number[] } {
+  let indent: number | undefined, count = 0;
+  const numbers: number[] = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    const item = LIST_ITEM.exec(line);
+    const lineIndent = line.length - line.trimStart().length;
+    if (indent === undefined) {
+      if (!item) break;
+      indent = item[1].length;
+    }
+    if (item && item[1].length === indent) {
+      count += 1;
+      if (item[2] !== undefined) numbers.push(Number(item[2]));
+      continue;
+    }
+    if (lineIndent > indent) continue;
+    break;
+  }
+  return { count, numbers };
+}
+
+export function readerVisibleDefects(markdown: string): string[] {
+  const defects: string[] = [];
+  const { prose } = markdownOutsideCode(markdown);
+  for (const pattern of READER_VISIBLE_PIPELINE_TEXT) {
+    const match = pattern.exec(prose);
+    if (match) defects.push(`Reader-visible defect: pipeline text "${match[0]}" must not appear in an article.`);
+  }
+  // Structure is read with each fenced code block kept as one line of content,
+  // so a section whose only content is a code example is not "empty".
+  const lines = markdown.replace(/^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$/gm, "[code example]").split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line || line.startsWith("|")) continue;
+    if (/^(?:[-*+]|\d+[.)])$/.test(line)) defects.push("Reader-visible defect: an empty list item.");
+    if (line.endsWith(":") && !line.startsWith("#")) {
+      // The counted phrase must lead into the list: "For ten topics, ask:" counts topics, not the questions listed.
+      const counted = /\b(two|three|four|five|six|seven|eight|nine|ten)\s+(?:[A-Za-z-]+\s+){0,3}?[A-Za-z-]+s\b(?=[^,;]*:$)/i.exec(line);
+      if (counted) {
+        const expected = COUNT_WORD_VALUES[counted[1].toLowerCase()];
+        const { count } = listAfter(lines, i);
+        if (count > 0 && count < expected) {
+          defects.push(`Reader-visible defect: "${counted[0]}" introduces only ${count} item${count === 1 ? "" : "s"}.`);
+        }
+      }
+    }
+    const heading = /^(#{1,6})\s+\S/.exec(line);
+    if (heading) {
+      let next = i + 1;
+      while (next < lines.length && !lines[next].trim()) next++;
+      const following = next < lines.length ? /^(#{1,6})\s+\S/.exec(lines[next].trim()) : null;
+      if (next >= lines.length || (following && following[1].length <= heading[1].length)) {
+        defects.push(`Reader-visible defect: the section "${line.replace(/^#+\s*/, "").slice(0, 80)}" has no content.`);
+      }
+    }
+  }
+  // Numbered lists: "1. 1. 1." renders as 1, 2, 3; anything else must count up by one.
+  for (let i = 0; i < lines.length; i++) {
+    const item = LIST_ITEM.exec(lines[i]);
+    if (!item || item[2] === undefined) continue;
+    const previous = i > 0 ? lines.slice(0, i).reverse().find((value) => value.trim()) : undefined;
+    if (previous && LIST_ITEM.exec(previous)) continue;
+    const { numbers } = listAfter(lines, i - 1);
+    const allSame = numbers.every((value) => value === numbers[0]);
+    const gap = numbers.findIndex((value, index) => index > 0 && value !== numbers[index - 1] + 1);
+    if (numbers.length > 1 && !allSame && gap > 0) {
+      defects.push(`Reader-visible defect: a numbered list jumps from ${numbers[gap - 1]} to ${numbers[gap]}.`);
+    }
+  }
+  // Step labels in headings or bold lead-ins must not skip a number.
+  const steps = [...lines.join("\n").matchAll(/^(?:#{1,6}\s*|\s*\*\*)Step\s+(\d+)\b/gim)].map((match) => Number(match[1]));
+  for (let index = 1; index < steps.length; index++) {
+    if (steps[index] > steps[index - 1] + 1) {
+      defects.push(`Reader-visible defect: the steps jump from Step ${steps[index - 1]} to Step ${steps[index]}.`);
+      break;
+    }
+  }
+  const sourceHeadings = lines.filter((value) => SOURCES_HEADING.test(value.trim())).length;
+  if (sourceHeadings > 1) defects.push(`Reader-visible defect: the article has ${sourceHeadings} Sources sections.`);
+  return [...new Set(defects)];
+}
+
+/** Numbers a reader reads in a sentence: images, link targets and bare URLs
+ * are not claims (an image path or a URL slug can contain digits). */
+function readableNumbers(sentence: string): Set<string> {
+  return normalizedEvidenceNumbers(sentence
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, " "));
+}
+
+function articleClaimSentences(markdown: string): string[] {
+  const { prose } = markdownOutsideCode(markdown);
+  return prose.split(/\n\s*\n/).map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph && !paragraph.startsWith("#") && !paragraph.startsWith("|") && !isSourceBibliographyEntry(paragraph))
+    .flatMap((paragraph) => claimSentenceSegments(paragraph))
+    .filter((sentence) => !/^#/.test(sentence) && !/^\[\d+\]\s/.test(sentence));
+}
+
+/** Rule 2a, invented statistics: a sentence that cites a source must not
+ * state a number the cited sources' hash-valid excerpts do not contain. */
+export function citedNumberMismatches(markdown: string, sources: PublicationSource[]): string[] {
+  return articleClaimSentences(markdown).filter((sentence) => {
+    const citations = inlineCitationNumbers(sentence);
+    if (citations.length === 0) return false;
+    const numbers = readableNumbers(sentence);
+    if (numbers.size === 0) return false;
+    const evidence = new Set<string>();
+    for (const citation of citations) {
+      const source = sources[citation - 1];
+      if (!source?.excerpt || !source.contentHash || sha256Hex(source.excerpt) !== source.contentHash) continue;
+      for (const number of normalizedEvidenceNumbers(source.excerpt)) evidence.add(number);
+    }
+    return [...numbers].some((number) => !evidence.has(number));
+  });
+}
+
+/** Rule 2a, false claims about the customer's product or prices: an uncited
+ * sentence naming the product must not state a number (price, limit, count)
+ * that the customer-confirmed, hash-valid profile snapshot does not contain. */
+export function productNumberMismatches(markdown: string, productEvidence?: string, productEvidenceHash?: string): string[] {
+  if (!productEvidence || !productEvidenceHash || sha256Hex(productEvidence) !== productEvidenceHash) return [];
+  const name = /^Name:\s*(.+)$/m.exec(productEvidence)?.[1]?.trim();
+  if (!name || name.length < 2) return [];
+  const named = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+  const profileNumbers = normalizedEvidenceNumbers(productEvidence);
+  return articleClaimSentences(markdown).filter((sentence) =>
+    named.test(sentence.replace(/!\[[^\]]*\]\([^)]*\)/g, " ")) && inlineCitationNumbers(sentence).length === 0 &&
+    [...readableNumbers(sentence)].some((number) => !profileNumbers.has(number)));
+}
+
+/** Every rule-2a objective issue of an exact draft, as gate messages. */
+export function readerVisibleIssues(article: Pick<PublicationArticle, "markdown" | "sources" | "productEvidenceSnapshot" | "productEvidenceHash">): string[] {
+  const issues = readerVisibleDefects(article.markdown);
+  const cited = citedNumberMismatches(article.markdown, article.sources ?? []);
+  if (cited.length > 0) {
+    issues.push(`Reader-visible defect: ${cited.length} cited sentence(s) state a number their source does not contain, e.g. «${cited[0].slice(0, 200)}».`);
+  }
+  const product = productNumberMismatches(article.markdown, article.productEvidenceSnapshot, article.productEvidenceHash);
+  if (product.length > 0) {
+    issues.push(`Reader-visible defect: ${product.length} sentence(s) about the product state a number the confirmed business profile does not contain, e.g. «${product[0].slice(0, 200)}».`);
+  }
+  return issues;
 }
 
 export function evaluatePublicationQuality(

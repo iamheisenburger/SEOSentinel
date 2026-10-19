@@ -2553,14 +2553,35 @@ test("P93 first-party help documentation under learn., knowledge., kb. and faq. 
   }
 });
 
-test("autopilot accepts the reviewer's style score from 70, never a factual or safety issue", async () => {
+test("rule 2a: autopilot treats LLM scores and the claim ledger as notes, never an objective issue", async () => {
+  // Owner decision Oct 19 2026: re-reviewing an identical draft moved its
+  // fact score from 100 to 0, so scores cannot gate Autopilot; objective
+  // reader-facing checks do.
   const { ownerWaivableIssue } = await import("../convex/lib/articleQuality.ts");
   const facts = { factCheckScore: 100, claimEvidenceStatus: "passed" };
-  for (const score of [70, 79, 84]) assert.equal(ownerWaivableIssue(`Editorial quality score is ${score}; strict minimum is 85.`, facts, "autopilot"), true, String(score));
-  assert.equal(ownerWaivableIssue("Editorial quality score is 69; strict minimum is 85.", facts, "autopilot"), false);
-  assert.equal(ownerWaivableIssue("Fact-check score is 80; strict minimum is 85.", facts, "autopilot"), false);
-  assert.equal(ownerWaivableIssue("Raw HTML and executable MDX are disabled in publication content.", facts, "autopilot"), false);
-  assert.equal(ownerWaivableIssue("Strict publication requires a completed claim-to-evidence audit.", { factCheckScore: 100, claimEvidenceStatus: "failed" }, "autopilot"), false);
+  for (const score of [0, 42, 62, 69, 70, 84]) {
+    assert.equal(ownerWaivableIssue(`Editorial quality score is ${score}; strict minimum is 85.`, facts, "autopilot"), true, String(score));
+    assert.equal(ownerWaivableIssue(`Fact-check score is ${score}; strict minimum is 85.`, facts, "autopilot"), true, String(score));
+  }
+  assert.equal(ownerWaivableIssue("Strict publication requires a completed claim-to-evidence audit.", { factCheckScore: 0, claimEvidenceStatus: "failed" }, "autopilot"), true);
+  for (const objective of [
+    "Raw HTML and executable MDX are disabled in publication content.",
+    "Article contains a script tag; structured data belongs in the renderer.",
+    "Article is too thin (812 words; minimum 1000).",
+    "Meta description is too short for a useful search snippet (minimum 100 characters).",
+    "2 quantified outcome or operational claim(s) lack an inline citation.",
+    "A product-specific section requires validated first-party product evidence.",
+    "Strict publication requires a completed fact check.",
+    "Strict publication requires a completed people-first editorial review.",
+    "Reader-visible defect: \"three consequences\" introduces only 2 items.",
+    "Autopilot edit pass: 2 fact-check finding(s) to verify against the sources and the business profile.",
+  ]) assert.equal(ownerWaivableIssue(objective, facts, "autopilot"), false, objective);
+  // The site owner's own acceptance is unchanged.
+  assert.equal(ownerWaivableIssue("Editorial quality score is 70; strict minimum is 85.", facts), true);
+  assert.equal(ownerWaivableIssue("Editorial quality score is 69; strict minimum is 85.", facts), false);
+  assert.equal(ownerWaivableIssue("Fact-check score is 70; strict minimum is 85.", facts), true);
+  assert.equal(ownerWaivableIssue("Fact-check score is 69; strict minimum is 85.", facts), false);
+  assert.equal(ownerWaivableIssue("Strict publication requires a completed claim-to-evidence audit.", { factCheckScore: 69 }), false);
 });
 
 test("a script block the writer put in the article body is removed; code examples are kept", async () => {

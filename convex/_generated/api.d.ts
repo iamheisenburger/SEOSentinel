@@ -62,6 +62,7 @@ import type * as lib_authorityDiscoveryBudget from "../lib/authorityDiscoveryBud
 import type * as lib_autopilotAlerts from "../lib/autopilotAlerts.js";
 import type * as lib_autopilotBuffer from "../lib/autopilotBuffer.js";
 import type * as lib_autopilotCadence from "../lib/autopilotCadence.js";
+import type * as lib_autopilotEditor from "../lib/autopilotEditor.js";
 import type * as lib_autopilotHealthDetail from "../lib/autopilotHealthDetail.js";
 import type * as lib_autopilotReadiness from "../lib/autopilotReadiness.js";
 import type * as lib_autopilotRunLease from "../lib/autopilotRunLease.js";
@@ -270,6 +271,7 @@ declare const fullApi: ApiFromModules<{
   "lib/autopilotAlerts": typeof lib_autopilotAlerts;
   "lib/autopilotBuffer": typeof lib_autopilotBuffer;
   "lib/autopilotCadence": typeof lib_autopilotCadence;
+  "lib/autopilotEditor": typeof lib_autopilotEditor;
   "lib/autopilotHealthDetail": typeof lib_autopilotHealthDetail;
   "lib/autopilotReadiness": typeof lib_autopilotReadiness;
   "lib/autopilotRunLease": typeof lib_autopilotRunLease;

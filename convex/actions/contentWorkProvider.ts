@@ -26,6 +26,14 @@ export const contentProviderMayRepairDraft = () => {
   return !!cw && cw.intent === "create" && !cw.ownerRequest?.sourceArticleId && !cw.operation && !cw.editTarget;
 };
 
+/** Pentra-written automatic work (not an owner request, edit, improvement,
+ * correction or rollback): the only work the rule-2a Autopilot editor policy
+ * (convex/lib/autopilotEditor.ts) covers. */
+export const contentProviderAutopilotDraft = () => {
+  const cw = scope.getStore()?.job.contentWork;
+  return !!cw && cw.intent === "create" && !cw.ownerRequest && !cw.operation && !cw.editTarget;
+};
+
 /** Tools that write article prose (first draft and rewrites). */
 const WRITER_TOOLS = new Set(["submit_article", "remediate_final_article"]);
 
