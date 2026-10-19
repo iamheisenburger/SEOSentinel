@@ -12,7 +12,7 @@ import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 export const money = (value: number | null) => value === null ? "Unknown" : `$${(value / 1_000_000).toFixed(4)}`;
 export const shownTime = (value: number, zone = "UTC") => new Intl.DateTimeFormat("en", { timeZone: zone, dateStyle: "medium", timeStyle: "long" }).format(value);
 export const fundingCopy = { available: "Internal capacity currently available; every paid admission rechecks it.", blocked: "Admission blocked by the existing spending or entitlement guards.", unknown: "Funding readiness unknown. No extra spending is authorized.", unconfigured: "Provider pricing is not configured. Preparation is not funded." };
-export const workLabel = (w: { intent: string; operation?: string }) => w.operation === "rollback" ? "Rollback" : w.operation === "factual_correction" ? "Factual correction" : w.operation === "technical_repair" ? "Broken-link repair" : w.intent === "improve" ? "Page improvement" : "New article";
+export const workLabel = (w: { intent: string; operation?: string }) => w.operation === "rollback" ? "Rollback" : w.operation === "factual_correction" ? "Factual correction" : w.operation === "technical_repair" ? "Broken-link repair" : w.operation === "reader_text_repair" ? "Wording repair" : w.intent === "improve" ? "Page improvement" : "New article";
 export const stageLabel = (stage: string) => ({ prepare: "Preparing", review: "Quality review", review_failed: "Revision needed", ready: "Reviewed and ready", publish: "Publishing", verify: "Checking the live page", verified: "Live and verified", failed: "Needs your review" }[stage] ?? "State needs review");
 
 /** Friendly date for customers: "Thu, Sep 25, 6:19 PM". */

@@ -8140,3 +8140,73 @@ test("P109 the writer is told the article sits on the business's own site", asyn
   assert.match(system, /never as an outside observer of its site/);
   f.assertOffline();
 });
+
+// C1b (Oct 19 2026): pages published before rule 2a can carry pipeline text.
+// A wording repair goes through the exact correction path: provider-free,
+// deterministic, receipts and rollback kept, the cadence untouched.
+export const pipelineLeakParagraph = "Keep the original observations available to an authorized reviewer. The excerpt is truncated, so this article relies only on that one statement.";
+test("C1b the operator repairs pipeline wording on a live page: provider-free, exact, reversible; nothing else goes through this path", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const selected = await selectExistingPage(f, "md", `${pipelineLeakParagraph}\n\n${correctionSurvivor}`), site = await selectGrowth(f);
+  f.get(site.id)!.gscDateEpochs = [];
+  await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt, calls = f.modelCalls.length, reservations = f.tables.provider_spend_reservations.length;
+  const original = f.get(selected.pageId)!.editable.sourceContent;
+  const repaired = "Keep the original observations available to an authorized reviewer.";
+  const request = { siteId: site.id, pageId: selected.pageId, before: pipelineLeakParagraph, replacement: repaired,
+    reason: "Owner asked: remove process wording a reader should never see." };
+  const id = await f.invoke("actions/contentCorrections:repairReaderTextAsOperator", request);
+  assert.equal(await f.invoke("actions/contentCorrections:repairReaderTextAsOperator", request), id, "a retried request reuses its job");
+  await pumpUntil(f, () => f.get(id)!.contentWork.stage === "verified", 100, deadline - 5 * 60_000);
+  const page = f.get(selected.pageId)!;
+  assert.ok(page.editable.markdown.includes(repaired) && !page.editable.markdown.includes("The excerpt is truncated"), page.editable.markdown);
+  assert.ok(page.editable.markdown.includes(correctionSurvivor), "the rest of the page is unchanged");
+  assert.equal(f.modelCalls.length, calls, "no model runs"); assert.equal(f.tables.provider_spend_reservations.length, reservations);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline, "the cadence is untouched");
+  const revision = f.get(f.get(id)!.contentWork.revisionId)!;
+  assert.equal(revision.kind, "editorial_correction"); assert.equal(revision.status, "verified");
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  const rollback = await f.invoke("contentImprovements:requestRollback", { siteId: site.id, revisionId: revision._id, confirm: true });
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.get(rollback)!.contentWork.stage === "verified", 100, deadline - 5 * 60_000);
+  assert.equal(f.get(selected.pageId)!.editable.sourceContent, original, "the repair is reversible");
+  // The operator path is for wording repairs only.
+  const e = f.get(selected.pageId)!.editable;
+  await assert.rejects(f.invoke("contentImprovements:requestCorrection", { siteId: site.id, pageId: selected.pageId, baseRevision: e.sourceRevision,
+    permissionVersion: e.version, observedAt: f.now(), operator: true, patch: { kind: "factual_correction", before: pipelineLeakParagraph, after: "x",
+      sourceBefore: pipelineLeakParagraph, sourceAfter: "x", reason: "An operator may not make factual corrections." } }), /only repairs pipeline wording/);
+  f.assertOffline();
+});
+
+// B (Oct 19 2026): reserving a content-work article slot loaded the job behind
+// every usage row of the month: 11.3 MB in one call for the owner account,
+// growing toward Convex's 16 MB per-execution limit (every new article would
+// then fail, as admission did on Oct 18). Content work is admitted against the
+// plan's allowance already; its slot needs only its own row.
+test("B reserving a content-work slot never loads the month's job documents", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_fill");
+  const job = f.tables.jobs.find(j => j.contentWork)!;
+  const userId = f.get(site.id)!.userId;
+  // A busy month: 40 earlier article jobs, each with a usage row.
+  for (let n = 0; n < 40; n++) {
+    const earlier = Object.assign(structuredClone(job), { _id: `${job._id}-month-${n}`, status: "done" });
+    earlier.contentWork.stage = "verified"; f.tables.jobs.push(earlier);
+    f.add("usage_log", { userId, siteId: site.id, jobId: earlier._id, type: "article_generated", state: "settled", createdAt: f.now() - n * 60_000 });
+  }
+  Object.assign(job, { status: "running", workerToken: "synthetic-worker", leaseExpiresAt: f.now() + 10 * 60_000 });
+  const start = f.queryReads.length, pointStart = f.pointReads.length;
+  const reserved = await f.invoke("jobs:reserveGenerationSlot", { jobId: job._id, workerToken: "synthetic-worker", siteId: site.id });
+  assert.equal(reserved.ok, true, JSON.stringify(reserved));
+  const jobReads = f.queryReads.slice(start).filter(read => read.table === "jobs").length +
+    f.pointReads.slice(pointStart).filter(read => read.table === "jobs").length;
+  assert.ok(jobReads <= 2, `the slot reads its own job only, not the month's (${jobReads} job reads)`);
+  assert.ok(f.tables.usage_log.some((row: Fields) => row.jobId === job._id && row.state === "reserved"), "its usage row is still written");
+  // A retried call reuses the row instead of writing another.
+  const again = await f.invoke("jobs:reserveGenerationSlot", { jobId: job._id, workerToken: "synthetic-worker", siteId: site.id });
+  assert.equal(again.reason, "Existing reservation");
+  assert.equal(f.tables.usage_log.filter((row: Fields) => row.jobId === job._id).length, 1);
+  f.assertOffline();
+});

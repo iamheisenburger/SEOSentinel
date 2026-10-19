@@ -58,6 +58,8 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
   const modules = new Map<string, Exported>();
   const trace: Trace[] = [], logs: string[] = [], unexpected: string[] = [];
   const queryReads: Array<{ table: string; index?: string; range: Fields[]; limit?: number; rows: number; bytes: number }> = [];
+  // Point reads (db.get) by table, so a test can see one-by-one document loads too.
+  const pointReads: Array<{ table: string; id: string }> = [];
   const indexes: Record<string, Record<string, string[]>> = {};
   const stored = new Map<string, Blob>();
   const readFailures = new Map<string, Error>();
@@ -161,7 +163,7 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
     auth: { getUserIdentity: async () => identitySubject === null ? null : { subject: identitySubject } },
     db: {
       system: { get: async (id: string) => copy(get(id)) },
-      get: async (id: string) => copy(get(id)),
+      get: async (id: string) => { pointReads.push({ table: String(id).split(":")[0], id: String(id) }); return copy(get(id)); },
       normalizeId: (table: string, id: string) => id.startsWith(`${table}:`) ? id : null,
       insert: async (table: string, values: Fields) => add(table, values),
       patch: async (id: string, values: Fields) => {
@@ -247,7 +249,7 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
     const pending = mutationTail.then(execute); mutationTail = pending.catch(() => {}); return pending;
   };
   for (const kind of ["runQuery", "runMutation", "runAction"]) context[kind] = (ref: Parameters<typeof getFunctionName>[0], args: Fields) => invoke(getFunctionName(ref), args);
-  const api = { tables, trace, queryReads, logs, unexpected, stored, add, get, invoke,
+  const api = { tables, trace, queryReads, pointReads, logs, unexpected, stored, add, get, invoke,
     // Drop handler/module memory while retaining the database, clock and
     // scheduled work. Call only between awaited actions, like a worker restart.
     restartRuntime(environmentUpdates: Record<string, string> = {}) {

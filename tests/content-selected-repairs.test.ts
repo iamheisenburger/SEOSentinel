@@ -78,3 +78,29 @@ test("broken-link correction preserves anchor and prose and verifies a visible h
   assert.throws(() => planCorrectiveChange(site, page, { ...input, targetUrl: "https://foreign.example/blog/target" }));
   assert.equal(classicHtmlMarkdown(html), patch.after);
 });
+
+test("C1b wording repair removes pipeline text only: no new claim, no new defect, exact source mapping", () => {
+  const leak = "The documentation describes a lead score as a set of rules [1]. The documentation excerpt we can verify is truncated, so confirm the full list of rule inputs in the current documentation before you build around them.";
+  const fixed = "The documentation describes a lead score as a set of rules [1]. Confirm the full list of rule inputs in the current documentation before you build around them.";
+  for (const kind of ["github", "wordpress"]) {
+    const markdown = `## Rules\n\n${leak}\n\n${before}`;
+    const sourceContent = kind === "github" ? markdown : preserveWordPressReviewedText(renderSafePublicationHtml(markdown));
+    const page = { url: "https://repair.example/blog/example", editable: { active: true, kind, markdown, sourceContent } } as never;
+    const input = { kind: "reader_text_repair" as const, before: leak, reason: "Owner: remove process wording from the live page.", replacement: fixed };
+    const patch = planCorrectiveChange(site, page, input);
+    assert.equal(patch.after, fixed, kind);
+    assert.equal((patch as Record<string, unknown>).replacement, undefined, "the replacement is stored once, as the patch's after");
+    assert.equal(verifyCorrectivePatch(site, page, patch), markdown.replace(leak, fixed));
+    assert.throws(() => verifyCorrectivePatch(site, page, { ...patch, after: fixed.replace("Confirm", "Check") }), /evidence/);
+    for (const unsafe of [fixed + " It saves 30%.", fixed.replace("[1]", "[2]"), fixed + " See [the docs](https://outside.example).",
+      leak, `${fixed}\n\n${fixed}`, "## Rules"]) {
+      assert.throws(() => planCorrectiveChange(site, page, { ...input, replacement: unsafe }), Error, `${kind}: ${unsafe.slice(0, 40)}`);
+    }
+    assert.throws(() => planCorrectiveChange(site, page, { ...input, before, replacement: before.slice(0, 40) }), /no pipeline text/);
+    assert.equal(planCorrectiveChange(site, page, { ...input, replacement: "" }).after, "", "the paragraph may be removed when its section keeps content");
+  }
+  const alone = `## Rules\n\n${leak}\n\n## Next\n\n${before}`;
+  const lonely = { url: "https://repair.example/blog/example", editable: { active: true, kind: "github", markdown: alone, sourceContent: alone } } as never;
+  assert.throws(() => planCorrectiveChange(site, lonely, { kind: "reader_text_repair", before: leak, reason: "Owner: remove process wording from the live page.",
+    replacement: "" }), /another reader-visible defect/, "removing a section's only paragraph would leave it empty");
+});

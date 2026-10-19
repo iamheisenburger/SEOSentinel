@@ -15,9 +15,11 @@ import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDoma
 import { verifyCorrectivePatch } from "./lib/contentCorrection";
 import { closeVerifiedContentWake } from "./jobs";
 
-async function correctionOwner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
-  const site = await ctx.db.get(siteId), identity = await ctx.auth.getUserIdentity();
-  if (!site?.userId || identity?.subject !== site.userId || site.serviceMode !== "growth_first" ||
+/** `operator`: the deploy key acting on the owner's instruction (internal
+ * callers only; limited to wording repairs by requestCorrection). */
+async function correctionOwner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">, operator = false) {
+  const site = await ctx.db.get(siteId), identity = operator ? null : await ctx.auth.getUserIdentity();
+  if (!site?.userId || (!operator && identity?.subject !== site.userId) || site.serviceMode !== "growth_first" ||
     !await siteExecutionAuthorized(ctx, site) || !site.autopilotEnabled || site.autopilotRolloutMode !== "live" || site.approvalRequired ||
     site.contentSchedule?.paused) throw new Error("Active owner-authorized corrective work required");
   return site;
@@ -32,32 +34,36 @@ async function verifiedDestination(ctx: QueryCtx | MutationCtx, site: Doc<"sites
       article.contentWorkCreationSource?.sourceRevision === page.editable.sourceRevision)) throw new Error("Correction destination has no matching verified live artifact");
   return page;
 }
-export const correctionContext = internalQuery({ args: { siteId: v.id("sites"), pageId: v.id("pages"), targetPageId: v.optional(v.id("pages")) },
+export const correctionContext = internalQuery({ args: { siteId: v.id("sites"), pageId: v.id("pages"), targetPageId: v.optional(v.id("pages")),
+  operator: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
-    const site = await correctionOwner(ctx, args.siteId), page = await ctx.db.get(args.pageId);
+    const site = await correctionOwner(ctx, args.siteId, args.operator === true), page = await ctx.db.get(args.pageId);
     if (!page?.editable?.active || page.siteId !== site._id || page.editable.profileHash !== confirmedContentProfileHash(site) ||
       page.editable.connectionHash !== contentConnectionHash(site)) throw new Error("Corrective source permission or business profile changed");
     return { site, page, target: args.targetPageId ? await verifiedDestination(ctx, site, args.targetPageId) : null };
   } });
 export const priorCorrection = internalQuery({ args: { siteId: v.id("sites"), pageId: v.id("pages"), baseRevision: v.string(),
-  kind: v.union(v.literal("factual_correction"), v.literal("technical_repair")), before: v.string(), reason: v.string(),
-  field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))), targetPageId: v.optional(v.id("pages")) },
+  kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair")), before: v.string(), reason: v.string(),
+  field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))), targetPageId: v.optional(v.id("pages")),
+  replacement: v.optional(v.string()) },
   handler: async (ctx, args) => {
     await correctionOwner(ctx, args.siteId);
     const jobs = await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", args.siteId)).take(501);
     if (jobs.length > 500) throw new Error("Corrective work inventory incomplete");
     return jobs.find(j => { const cw = j.contentWork, c = cw?.correction; return cw?.targetPageId === args.pageId &&
       cw.baseRevision === args.baseRevision && c?.kind === args.kind && c.before === args.before && c.reason === args.reason &&
-      c.field === args.field && c.targetPageId === args.targetPageId; })?._id ?? null;
+      c.field === args.field && c.targetPageId === args.targetPageId && (args.kind !== "reader_text_repair" || c.after === args.replacement); })?._id ?? null;
   } });
-const correctivePatch = v.object({ kind: v.union(v.literal("factual_correction"), v.literal("technical_repair")),
+const correctivePatch = v.object({ kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair")),
   before: v.string(), after: v.string(), sourceBefore: v.string(), sourceAfter: v.string(), reason: v.string(),
   field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))),
   targetUrl: v.optional(v.string()), brokenUrl: v.optional(v.string()) });
 export const requestCorrection = internalMutation({ args: { siteId: v.id("sites"), pageId: v.id("pages"), baseRevision: v.string(),
-  permissionVersion: v.number(), patch: correctivePatch, targetPageId: v.optional(v.id("pages")), observedAt: v.number() },
+  permissionVersion: v.number(), patch: correctivePatch, targetPageId: v.optional(v.id("pages")), observedAt: v.number(),
+  operator: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<Id<"jobs">> => {
-    const site = await correctionOwner(ctx, args.siteId);
+    if (args.operator && args.patch.kind !== "reader_text_repair") throw new Error("The operator path only repairs pipeline wording");
+    const site = await correctionOwner(ctx, args.siteId, args.operator === true);
     const key = sha256Hex(JSON.stringify([site._id, args.pageId, args.baseRevision, args.permissionVersion, args.patch, args.targetPageId]));
     const jobs = await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", site._id)).take(501);
     if (jobs.length > 500) throw new Error("Corrective work inventory is incomplete");
@@ -174,7 +180,7 @@ export const claim = internalMutation({ args: claimArgs, handler: async (ctx, ar
     const baseHash = publicationArtifactHash(base), revisionKey = sha256Hex(JSON.stringify([job._id, cw.baseRevision, cw.approvedArtifactHash]));
     const id = await ctx.db.insert("published_article_revisions", {
       siteId: site._id, articleId: article._id, contentWorkJobId: job._id, selectedPageId: page._id,
-      selectedSource: page.editable, actionFingerprint: cw.opportunity ?? "selected_page_improvement", kind: rollback ? "rollback" : correction?.kind === "factual_correction" ? "editorial_correction" : correction ? "renderer_repair" : "content_improvement",
+      selectedSource: page.editable, actionFingerprint: cw.opportunity ?? "selected_page_improvement", kind: rollback ? "rollback" : correction?.kind === "factual_correction" || correction?.kind === "reader_text_repair" ? "editorial_correction" : correction ? "renderer_repair" : "content_improvement",
       ...(rollback ? { rollbackOfRevisionId: rollback._id } : {}),
       revisionKey, status: "prepared", rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
       publicationConfigHash: article.publicationConfigHash!, publicationDate: 0, expectedPublicUrl: page.url,

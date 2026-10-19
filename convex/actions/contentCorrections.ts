@@ -1,5 +1,5 @@
 "use node";
-import { action } from "../_generated/server";
+import { action, internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { v } from "convex/values";
 import type { Id } from "../_generated/dataModel";
@@ -9,15 +9,18 @@ import { validateCorrectionDestinations } from "../lib/publishedCorrection";
 import { exactReplacement, contentConsentToken } from "../lib/contentSelection";
 import { sha256Hex } from "../lib/publicationArtifact";
 
+const correctionKind = v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"));
 const previewArgs = { siteId: v.id("sites"), pageId: v.id("pages"), baseRevision: v.string(),
-  kind: v.union(v.literal("factual_correction"), v.literal("technical_repair")), before: v.string(), reason: v.string(),
-  field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))), targetPageId: v.optional(v.id("pages")) };
+  kind: correctionKind, before: v.string(), reason: v.string(),
+  field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))), targetPageId: v.optional(v.id("pages")),
+  replacement: v.optional(v.string()) };
 export const preview = action({ args: previewArgs, handler: async (ctx, args): Promise<{ before: string; after: string; url: string; reviewToken: string }> => {
   const { site, page, target } = await ctx.runQuery(internal.contentImprovements.correctionContext, {
     siteId: args.siteId, pageId: args.pageId, ...(args.targetPageId ? { targetPageId: args.targetPageId } : {}) });
   if (page.editable!.sourceRevision !== args.baseRevision) throw new Error("Source changed. Reload the selected page.");
   const patch = planCorrectiveChange(site, page, { kind: args.kind, before: args.before, reason: args.reason,
-    ...(args.field ? { field: args.field } : {}), ...(target ? { targetUrl: target.url } : {}) });
+    ...(args.field ? { field: args.field } : {}), ...(target ? { targetUrl: target.url } : {}),
+    ...(args.replacement !== undefined ? { replacement: args.replacement } : {}) });
   await verifyBrokenLinkEvidence(patch);
   return { before: patch.before, after: patch.after, url: page.url,
     reviewToken: sha256Hex(JSON.stringify([contentConsentToken(site), args.baseRevision, patch])) };
@@ -25,8 +28,9 @@ export const preview = action({ args: previewArgs, handler: async (ctx, args): P
 
 export const correct = action({ args: { siteId: v.id("sites"), pageId: v.id("pages"), baseRevision: v.string(), confirm: v.boolean(),
   reviewToken: v.optional(v.string()),
-  kind: v.union(v.literal("factual_correction"), v.literal("technical_repair")), before: v.string(), reason: v.string(),
-  field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))), targetPageId: v.optional(v.id("pages")) },
+  kind: correctionKind, before: v.string(), reason: v.string(),
+  field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))), targetPageId: v.optional(v.id("pages")),
+  replacement: v.optional(v.string()) },
   handler: async (ctx, args): Promise<Id<"jobs">> => {
     if (!args.confirm) throw new Error("Explicit owner confirmation required for an exact correction");
     const { confirm: _confirm, reviewToken: _reviewToken, ...request } = args;
@@ -38,7 +42,8 @@ export const correct = action({ args: { siteId: v.id("sites"), pageId: v.id("pag
       siteId: args.siteId, pageId: args.pageId, ...(args.targetPageId ? { targetPageId: args.targetPageId } : {}) });
     if (page.editable!.sourceRevision !== args.baseRevision) throw new Error("Correction source changed since owner confirmation");
     const patch = planCorrectiveChange(site, page, { kind: args.kind, before: args.before, reason: args.reason,
-      ...(args.field ? { field: args.field } : {}), ...(target ? { targetUrl: target.url } : {}) });
+      ...(args.field ? { field: args.field } : {}), ...(target ? { targetUrl: target.url } : {}),
+      ...(args.replacement !== undefined ? { replacement: args.replacement } : {}) });
     if (args.reviewToken && args.reviewToken !== sha256Hex(JSON.stringify([contentConsentToken(site), args.baseRevision, patch]))) throw new Error("Correction preview changed. Review the exact replacement again.");
     if (patch.kind === "factual_correction") validateCorrectionDestinations(page.editable!.markdown,
       exactReplacement(page.editable!.markdown, patch.before, patch.after));
@@ -46,4 +51,17 @@ export const correct = action({ args: { siteId: v.id("sites"), pageId: v.id("pag
     return ctx.runMutation(internal.contentImprovements.requestCorrection, { siteId: site._id, pageId: page._id,
       baseRevision: page.editable!.sourceRevision, permissionVersion: page.editable!.version, patch, observedAt: Date.now(),
       ...(target ? { targetPageId: target._id } : {}) });
+  } });
+
+/** The operator fixes pipeline wording on a live page at the owner's
+ * instruction (deploy key only; owner sites, or a customer who asked). The
+ * same deterministic checks as the owner's own repair apply; no model runs and
+ * the page keeps its receipts, hashes and rollback. */
+export const repairReaderTextAsOperator = internalAction({ args: { siteId: v.id("sites"), pageId: v.id("pages"), before: v.string(),
+  replacement: v.string(), reason: v.string() },
+  handler: async (ctx, args): Promise<Id<"jobs">> => {
+    const { site, page } = await ctx.runQuery(internal.contentImprovements.correctionContext, { siteId: args.siteId, pageId: args.pageId, operator: true });
+    const patch = planCorrectiveChange(site, page, { kind: "reader_text_repair", before: args.before, reason: args.reason, replacement: args.replacement });
+    return ctx.runMutation(internal.contentImprovements.requestCorrection, { siteId: site._id, pageId: page._id,
+      baseRevision: page.editable!.sourceRevision, permissionVersion: page.editable!.version, patch, observedAt: Date.now(), operator: true });
   } });

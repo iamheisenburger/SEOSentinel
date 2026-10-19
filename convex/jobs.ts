@@ -3524,6 +3524,34 @@ export const reserveGenerationSlot = internalMutation({
       existingReservation.userId === site.userId,
     );
     const currentTime = now();
+    // Content work is admitted against the plan's monthly allowance before it
+    // exists (the stored account count, P92; owner drafts when requested), so
+    // its slot needs only its own usage row here. Counting the month by loading
+    // the job behind every usage row read 11.3 MB in one call for the owner
+    // account on Oct 19 2026 (job documents carry model outputs) and grows
+    // toward Convex's 16 MB per-execution limit, which would stop every new
+    // article. A replacement draft still reuses its slot's settled row.
+    if (job.contentWork) {
+      const cw = job.contentWork;
+      const slotIds = cw.intent === "create" && !cw.ownerRequest?.sourceArticleId
+        ? [job._id, ...(cw.replacesJobId ? [cw.replacesJobId] : [])] : [];
+      if (!ownsExistingReservation) for (const slotId of slotIds) {
+        const rows = await ctx.db.query("usage_log").withIndex("by_job", (q) => q.eq("jobId", slotId)).take(20);
+        if (!rows.some((row) => row.type === "article_generated" && (row.state ?? "settled") === "settled")) continue;
+        // As before: a settled row counts only when its job delivered (a failed
+        // slot's row does not, so its replacement gets a row of its own).
+        const owner = slotId === job._id ? job : await ctx.db.get(slotId);
+        if (!owner || contentJobUsesAllowance(owner)) return { ok: true, reason: "This slot's article is already counted" };
+      }
+      if (ownsExistingReservation && existingReservation) {
+        await ctx.db.patch(existingReservation._id, { expiresAt: currentTime + JOB_LEASE_MS + 5 * 60 * 1000 });
+        return { ok: true, reason: "Existing reservation", reservationId: existingReservation._id };
+      }
+      const reservationId = await ctx.db.insert("usage_log", { userId: site.userId, siteId: args.siteId, jobId: args.jobId,
+        type: "article_generated", state: "reserved", expiresAt: currentTime + JOB_LEASE_MS + 5 * 60 * 1000, createdAt: currentTime });
+      await ctx.db.patch(args.jobId, { reservationId, updatedAt: currentTime });
+      return { ok: true, reason: "", reservationId };
+    }
     const date = new Date(currentTime);
     const monthStart = new Date(
       Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1),
@@ -3547,20 +3575,10 @@ export const reserveGenerationSlot = internalMutation({
     const count = countable.filter(
       (log) => log.state !== "reserved" || (log.expiresAt ?? Infinity) > currentTime,
     ).length;
-    // A content-work slot is one article of the plan: the monthly allowance
-    // counts it once at admission (contentWork countsTowardMonthlyUsage; a
-    // replaced slot once). Its replacement draft, in the same job or in the
-    // job that replaces the slot, reuses the slot's settled row instead of
-    // counting as another article. Oct 2026: on Free, two failed slots wrote
-    // four rows and the second slot's replacement was refused "Limit reached
-    // (3/3)" while the account had used 2 of its 3 articles.
-    const slotJobIds = job.contentWork?.intent === "create" && !job.contentWork.ownerRequest?.sourceArticleId
-      ? new Set([String(job._id), ...(job.contentWork.replacesJobId ? [String(job.contentWork.replacesJobId)] : [])])
-      : null;
-    if (slotJobIds && !ownsExistingReservation && countable.some((log) =>
-      (log.state ?? "settled") === "settled" && log.jobId !== undefined && slotJobIds.has(String(log.jobId)))) {
-      return { ok: true, reason: "This slot's article is already counted" };
-    }
+    // Content-work slots (one article per slot; a replacement draft reuses its
+    // slot's settled row; Oct 2026: on Free, two failed slots wrote four rows
+    // and a replacement was refused "Limit reached (3/3)" at 2 of 3 used) are
+    // handled above; this month-wide count is for legacy article jobs only.
     if (
       ownsExistingReservation
         ? count > limits.maxArticles
