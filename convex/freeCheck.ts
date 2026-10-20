@@ -81,6 +81,18 @@ export const request = internalMutation({ args: { domain: v.string(), visitor: v
   return { status: "running" as const, domain };
 } });
 
+/** How many new checks this network has left today (shown before anyone
+ * types a domain); 0 also when today's free checks are paused. */
+export const quotaFor = internalQuery({ args: { visitor: v.string() }, handler: async (ctx, { visitor }) => {
+  const day = freeCheckDay(Date.now());
+  const [used, spend] = await Promise.all([
+    ctx.db.query("free_check_quota").withIndex("by_key", q => q.eq("key", `visitor:${visitor}`)).first(),
+    ctx.db.query("free_check_quota").withIndex("by_key", q => q.eq("key", `spend:${day}`)).first(),
+  ]);
+  const paused = (spend?.microUsd ?? 0) + FREE_CHECK_RESERVATION_MICRO_USD > FREE_CHECK_DAILY_CAP_MICRO_USD;
+  return { remaining: paused ? 0 : Math.max(0, FREE_CHECK_IP_DAILY_LIMIT - (used?.count ?? 0)), paused };
+} });
+
 /** What the running check is doing, for the result page. */
 export const progress = internalMutation({ args: { checkId: v.id("free_checks"), requestedAt: v.number(), step: v.string() },
   handler: async (ctx, { checkId, requestedAt, step }) => {

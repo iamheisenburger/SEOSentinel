@@ -23,6 +23,8 @@ import { missedSlotCause } from "./lib/customerNotices";
 export const HEALTH_OVERDUE_GRACE_MS = 60 * 60_000;
 /** P126: an Autopilot article this late gets its owner an email saying why. */
 export const CUSTOMER_LATE_EMAIL_MS = 6 * 3_600_000;
+/** A topic runway shorter than this is flagged when research will not refill it. */
+export const TOPIC_RUNWAY_ALERT_MS = 3 * 86_400_000;
 
 export type SiteHealth = {
   siteId: Id<"sites">;
@@ -91,15 +93,23 @@ export function describeSiteHealth(input: {
   }
   if (input.failedAtSlot) problems.push(`the due slot failed: ${input.failedAtSlot}`);
   // Topic supply: a site that runs out of keywords silently misses slots.
+  // Its runway is the articles already ready plus the topics left (one per
+  // slot). It needs attention only when research will not refill it in time:
+  // the next research comes after the runway ends, research is a slot and more
+  // overdue with under 3 days left, or no research is scheduled with under 3
+  // days left (Oct 20 2026: "1 topic left" read as an emergency while two ready
+  // articles and research due the next day covered every slot).
   if (!s.paused && typeof input.plannedTopics === "number") {
     const due = input.researchDueAt ?? null;
     const research = due === null ? "" : due <= input.now ? "; keyword research is due now" : `; keyword research next runs ${utc(due)}`;
-    const dayOfSlots = Math.max(1, Math.round(86_400_000 / s.intervalMs));
-    if (input.plannedTopics === 0) {
-      problems.push(`no topics left to write${research}`);
-      if (due !== null && due <= input.now) nudge = true;
-    } else if (input.plannedTopics < dayOfSlots && (due === null || due > input.now + 12 * 3_600_000)) {
-      problems.push(`only ${input.plannedTopics} topic(s) left, less than a day of slots${research}`);
+    const slots = input.readyForNextSlots + input.plannedTopics;
+    const runwayEnd = s.nextDeadlineAt + Math.max(0, slots - 1) * s.intervalMs;
+    const short = runwayEnd - input.now < TOPIC_RUNWAY_ALERT_MS;
+    if (input.plannedTopics === 0 && due !== null && due <= input.now) nudge = true;
+    if (slots === 0) problems.push(`no topics left to write${research}`);
+    else if (due === null ? short : due > runwayEnd || (short && input.now - due > s.intervalMs + 6 * 3_600_000)) {
+      problems.push(`topics run out after ${utc(runwayEnd)}${due === null ? " and no keyword research is scheduled"
+        : due > runwayEnd ? ", before the next keyword research" : ""}${research}`);
     }
   }
   if (!input.destinationVerified) problems.push("publishing connection needs re-verification");
@@ -196,10 +206,12 @@ function utc(ms: number | null) {
   if (ms === null) return "never";
   return new Date(ms).toISOString().slice(5, 16).replace("T", " ") + " UTC";
 }
+/** Slots covered: articles already ready plus topics left, one per slot. */
 function runwayDays(s: SiteHealth) {
-  if (!s.plannedTopics || s.nextDeadlineAt === null) return "0 days";
+  const slots = s.readyForNextSlots + (s.plannedTopics ?? 0);
+  if (!slots || s.nextDeadlineAt === null) return "0 days";
   const interval = s.intervalMs ?? 86_400_000;
-  const days = s.plannedTopics * interval / 86_400_000;
+  const days = slots * interval / 86_400_000;
   return days < 1 ? `${Math.round(days * 24)}h` : `${Math.round(days * 10) / 10} days`;
 }
 
@@ -218,8 +230,8 @@ export function formatHealthReport(sites: SiteHealth[], now: number, detailDomai
     lines.push("");
     lines.push(`${s.status === "ok" ? "OK" : "ATTENTION"} ${s.domain}`);
     lines.push(`last published ${utc(s.lastPublishedAt)}; next due ${utc(s.nextDeadlineAt)}; ${s.readyForNextSlots} ready`);
-    if (s.plannedTopics !== null) lines.push(`topics left ${s.plannedTopics} (${s.topicsLeft ?? 0} with search demand; about ${
-      runwayDays(s)} of slots); last keyword research ${utc(s.lastResearchAt)}${s.lastResearchAdded !== null ? ` (+${s.lastResearchAdded})` : ""}`);
+    if (s.plannedTopics !== null) lines.push(`topics left ${s.plannedTopics} (${s.topicsLeft ?? 0} with search demand); with ${s.readyForNextSlots} ready, about ${
+      runwayDays(s)} of slots covered; last keyword research ${utc(s.lastResearchAt)}${s.lastResearchAdded !== null ? ` (+${s.lastResearchAdded})` : ""}; next ${utc(s.researchDueAt)}`);
     for (const p of s.problems) lines.push(`- ${p}`);
   }
   if (detailed.length > 20) lines.push("", `(${detailed.length - 20} more not shown)`);

@@ -1186,6 +1186,7 @@ http.route({
     const visitor = typeof body?.visitor === "string" && /^[a-f0-9]{64}$/.test(body.visitor) ? body.visitor : null;
     const domain = typeof body?.domain === "string" && body.domain.length <= 300 ? body.domain : undefined;
     if (!visitor) return json({ error: "Invalid free check payload" }, 400);
+    if (body?.op === "quota") return json(await ctx.runQuery(internal.freeCheck.quotaFor, { visitor }));
     if (body?.op === "check" && domain) return json(await ctx.runMutation(internal.freeCheck.request, { domain, visitor }));
     if (body?.op === "signup_click") {
       return json(await ctx.runMutation(internal.freeCheck.track, { kind: "signup_click", visitor, ...(domain ? { domain } : {}) }));

@@ -23,8 +23,10 @@ export const FREE_CHECK_CACHE_MS = 7 * 86_400_000;
 export const FREE_CHECK_RUNNING_MS = 10 * 60_000;
 /** A failed check is retried at most hourly. */
 export const FREE_CHECK_FAILED_RETRY_MS = 60 * 60_000;
-/** New checks per visitor (hashed IP) per day; cached results don't count. */
-export const FREE_CHECK_IP_DAILY_LIMIT = 3;
+/** New checks per network (hashed IP) per day; cached results don't count.
+ * Offices and mobile carriers put many people behind one address, so it is
+ * per network, not per person; the daily spend cap bounds the total. */
+export const FREE_CHECK_IP_DAILY_LIMIT = 10;
 /** Tracking events per visitor per day. */
 export const FREE_CHECK_EVENT_DAILY_LIMIT = 30;
 /** Hard daily cap on provider spend for all free checks together. */

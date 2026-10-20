@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight } from "lucide-react";
 
 /** What /api/check answers when no check can start, in the visitor's words. */
 export function freeCheckMessage(status: string): string | null {
-  if (status === "limited") return "You've run 3 free checks today. Come back tomorrow, or create a free account and Pentra researches your site for you.";
+  if (status === "limited") return "This network has used today's free checks. Come back tomorrow, or create a free account and Pentra researches your site for you.";
   if (status === "paused") return "Today's free checks are used up. Come back tomorrow, or create a free account and Pentra researches your site for you.";
   if (status === "invalid") return "Enter your website address, like yourbusiness.com.";
   return null;
@@ -29,6 +29,18 @@ export async function startFreeCheck(url: string): Promise<{ domain: string; sta
 export function FreeCheckForm({ autoFocus = false }: { autoFocus?: boolean }) {
   const router = useRouter();
   const [url, setUrl] = useState(""), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [remaining, setRemaining] = useState<number | null>(null), [paused, setPaused] = useState(false);
+  // Say up front when this network is low on or out of checks, instead of after a
+  // click. The button stays on: a website checked before is shown free.
+  useEffect(() => {
+    let live = true;
+    fetch("/api/check", { cache: "no-store" }).then(r => r.json()).then((body: { remaining?: number | null; paused?: boolean }) => {
+      if (!live || typeof body.remaining !== "number") return;
+      setRemaining(body.remaining); setPaused(Boolean(body.paused));
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, []);
+  const exhausted = remaining === 0;
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!url.trim() || busy) return;
@@ -50,7 +62,8 @@ export function FreeCheckForm({ autoFocus = false }: { autoFocus?: boolean }) {
       </button>
     </div>
     <p id="free-check-status" role="status" className={`mt-3 min-h-[1.25rem] text-[13px] ${error ? "text-[#F59E0B]" : "text-[#62666D]"}`}>
-      {error || "Free, no signup. Pentra reads only your public pages."}
+      {error || (exhausted ? freeCheckMessage(paused ? "paused" : "limited")
+        : `Free, no signup. Pentra reads only your public pages.${remaining !== null && remaining <= 3 ? ` ${remaining} free check${remaining === 1 ? "" : "s"} left today on this network.` : ""}`)}
     </p>
   </form>;
 }

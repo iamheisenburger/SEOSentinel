@@ -82,7 +82,7 @@ function Proof() {
 /* ─── Statement + pillars ──────────────────────── */
 
 const PILLARS = [
-  { title: "Fact-checked, never invented", desc: "Every article is written from the business facts you confirmed, and a separate review blocks any claim it can't support before it goes live." },
+  { title: "Fact-checked, never invented", desc: "Every article is written from the business facts you confirmed. Statistics must appear in the source they cite, and prices and plans must match your confirmed facts, or the article isn't published." },
   { title: "Published, then confirmed live", desc: "Pentra publishes to WordPress, Shopify, Webflow, Ghost or your GitHub site, then opens the real page to confirm the exact article is live." },
   { title: "Measured in your own data", desc: "Clicks and positions come from your Google Search Console, before and after every article and every improvement." },
 ];
@@ -164,8 +164,8 @@ function HowItWorks() {
 /* ─── Feature rows ─────────────────────────────── */
 
 const ROWS = [
-  { label: "01 · Accuracy", title: "No invented facts.", body: "Most AI writers make up statistics. Pentra writes from the business facts you confirm and the searches your customers make, and a separate fact check blocks any claim it can't support. A draft that doesn't pass is never published.",
-    points: ["Written only from business facts you confirmed", "No invented statistics, quotes or case studies", "Independent fact check before anything goes live"], panel: <SourcesPanel /> },
+  { label: "01 · Accuracy", title: "No invented facts.", body: "Most AI writers make up statistics. Pentra writes from the business facts you confirm and the searches your customers make, A draft with a statistic its source doesn't contain, or a price or plan you didn't confirm, is never published, and a sentence a source contradicts is rewritten first.",
+    points: ["Written only from business facts you confirmed", "Every statistic checked against its source", "Independent fact check before anything goes live"], panel: <SourcesPanel /> },
   { label: "02 · Improve", title: "Pages close to page one come first.", body: "The fastest traffic is on pages Google already shows at positions 4 to 20. Pentra finds them in your Search Console, answers the searches they appear for, and measures what changed.",
     points: ["Uses your own Search Console data", "Answers the exact searches a page appears for", "Before and after clicks for every change"], panel: <RankingsPanel /> },
   { label: "03 · Answers", title: "Written for Google and for AI answers.", body: "Each section answers its question in the first line and stands on its own, the way Google and AI assistants quote pages. Every article ends with a short FAQ built from the questions your customers really ask, and one clear next step to your booking or signup page.",
@@ -241,7 +241,7 @@ const faqs = [
   },
   {
     q: "Is Autopilot safe for my brand?",
-    a: "Autopilot only publishes articles that pass the fact check. A draft that doesn't pass is held back, never published, and the schedule moves on. You can pause Pentra at any time, or choose Review first so nothing publishes without your approval.",
+    a: "Autopilot only publishes articles that pass its checks: every statistic must appear in the source it cites, and prices, plans and product numbers must match the facts you confirmed. A draft that fails is held back, never published, and the schedule moves on. You can pause Pentra at any time, or choose Review first so nothing publishes without your approval.",
   },
   {
     q: "How many articles will Pentra publish?",
@@ -249,7 +249,7 @@ const faqs = [
   },
   {
     q: "Will Pentra make things up about my business?",
-    a: "No. Pentra writes from the business facts you confirm. It is instructed never to invent product features, statistics, testimonials or case studies, and a separate review blocks unsupported claims before anything is published.",
+    a: "No. Pentra writes from the business facts you confirm. It is instructed never to invent product features, statistics, testimonials or case studies. A draft with a statistic its source doesn't contain, or a product number you didn't confirm, is never published, and a separate fact check reviews every article before it goes live.",
   },
   {
     q: "Does Pentra guarantee rankings?",

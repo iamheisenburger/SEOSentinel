@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { brandTerms, checkSeeds, excludedFromMissed, freeCheckDomain, freeCheckLocale, freeCheckReportEmail, freeCheckView, healthSummary,
   isBrandedKeyword, parseSearchSeeds, searchSeedRequest, selectAlmostThere, selectMissedSearches, siteCoverage, FREE_CHECK_DAILY_CAP_MICRO_USD,
-  FREE_CHECK_EMAIL_ADDRESS_DAILY_LIMIT, FREE_CHECK_HEALTH_CHECKS, FREE_CHECK_RESERVATION_MICRO_USD, FREE_CHECK_VERSION,
+  FREE_CHECK_EMAIL_ADDRESS_DAILY_LIMIT, FREE_CHECK_HEALTH_CHECKS, FREE_CHECK_IP_DAILY_LIMIT, FREE_CHECK_RESERVATION_MICRO_USD, FREE_CHECK_VERSION,
   FREE_CHECK_VISIBLE } from "../convex/lib/missedSearches.ts";
 import { homepageDigest } from "../convex/lib/sitePrefill.ts";
 import { plausibleEmail } from "../convex/lib/customerEmail.ts";
@@ -323,15 +323,24 @@ test("a result from an older version of the check runs again; a failed seed call
   f.assertOffline();
 });
 
-test("free checks stop at the visitor's daily limit and the day's spend cap", async () => {
+test("free checks stop at the network's daily limit and the day's spend cap; the page can show what's left", async () => {
   const { f } = world();
-  for (const name of ["one", "two", "three"]) {
-    assert.equal((await f.invoke("freeCheck:request", { domain: `${name}-studio.co`, visitor: visitor(7) })).status, "running");
+  // Offices and carriers share one address: the limit is per network, and ten fit under the day's cap.
+  assert.equal(FREE_CHECK_IP_DAILY_LIMIT, 10);
+  assert.ok(FREE_CHECK_IP_DAILY_LIMIT * FREE_CHECK_RESERVATION_MICRO_USD <= FREE_CHECK_DAILY_CAP_MICRO_USD);
+  assert.deepEqual(await f.invoke("freeCheck:quotaFor", { visitor: visitor(7) }), { remaining: FREE_CHECK_IP_DAILY_LIMIT, paused: false });
+  for (let i = 0; i < FREE_CHECK_IP_DAILY_LIMIT; i++) {
+    assert.equal((await f.invoke("freeCheck:request", { domain: `studio-${i}.co`, visitor: visitor(7) })).status, "running");
   }
+  assert.deepEqual(await f.invoke("freeCheck:quotaFor", { visitor: visitor(7) }), { remaining: 0, paused: false });
   assert.deepEqual(await f.invoke("freeCheck:request", { domain: "four-studio.co", visitor: visitor(7) }), { status: "limited", domain: "four-studio.co" });
+  assert.deepEqual(await f.invoke("freeCheck:request", { domain: "studio-0.co", visitor: visitor(7) }), { status: "running", domain: "studio-0.co" },
+    "a check already running or cached is shown without counting");
+  assert.deepEqual(await f.invoke("freeCheck:quotaFor", { visitor: visitor(8) }), { remaining: FREE_CHECK_IP_DAILY_LIMIT, paused: false });
   spendRow(f).microUsd = FREE_CHECK_DAILY_CAP_MICRO_USD - FREE_CHECK_RESERVATION_MICRO_USD + 1;
+  assert.deepEqual(await f.invoke("freeCheck:quotaFor", { visitor: visitor(8) }), { remaining: 0, paused: true });
   assert.deepEqual(await f.invoke("freeCheck:request", { domain: "five-studio.co", visitor: visitor(8) }), { status: "paused", domain: "five-studio.co" });
-  assert.equal(f.tables._scheduled_functions.length, 3, "nothing paid starts past a limit");
+  assert.equal(f.tables._scheduled_functions.length, FREE_CHECK_IP_DAILY_LIMIT, "nothing paid starts past a limit");
   assert.deepEqual(await f.invoke("freeCheck:request", { domain: "localhost", visitor: visitor(8) }), { status: "invalid", domain: null });
   // A new day: yesterday's visitor counters are removed, the spend row stays as cost history.
   f.setTime(START + 86_400_000);

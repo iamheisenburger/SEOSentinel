@@ -6705,8 +6705,11 @@ test("P54 a failing destination is not renewed and the renewal run never throws"
 });
 
 test("P54 the daily health check reports stops the same day and nudges repairable ones", async () => {
-  // A real cadence (the fastest plan: every 8 hours), so four topics left is days of work, not an alert.
-  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 }), site = await selectGrowth(f, 8 * 3_600_000);
+  // A real cadence (the fastest plan: every 8 hours) with over three days of topics and ready articles.
+  // No keyword research is scheduled here, so a shorter runway would be an alert (P134).
+  const keywords = [...slcBusinesses[0].keywords, ...["sprinkler zone audit", "drip line flushing routine", "backflow test records",
+    "controller schedule review", "nozzle replacement log", "winterization job sheet"].map(t => `irrigation ${t}`)];
+  const f = setup({ growthFirst: true, businesses: [{ ...slcBusinesses[0], keywords }], budgetMicroUsd: 2_000_000 }), site = await selectGrowth(f, 8 * 3_600_000);
   await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
   // Without the operator chat configured the check still runs and never sends.
   const silent = await f.invoke("contentHealth:runContentHealth", { notify: "always" });
@@ -8436,7 +8439,7 @@ test("B the six-hourly health watch skips the topic inventory; the daily check c
   assert.ok(topicReads(start) > 0, "the daily check still counts topics");
   assert.ok((await f.invoke("contentHealth:siteHealth", { siteId: site.id })).plannedTopics !== null, "an operator's single-site check counts topics");
   const { healthFingerprint } = await import("../convex/lib/opsEmail.ts");
-  const daily = [{ siteId: "s", status: "attention", problems: ["next article is 3h overdue", "only 2 topic(s) left, less than a day of slots"] }];
+  const daily = [{ siteId: "s", status: "attention", problems: ["next article is 3h overdue", "topics run out after 10-21 18:00 UTC, before the next keyword research"] }];
   const watch = [{ siteId: "s", status: "attention", problems: ["next article is 4h overdue"] }];
   assert.equal(healthFingerprint(daily), healthFingerprint(watch), "topic supply never makes a watch look like a change");
   assert.equal(healthFingerprint([{ siteId: "t", status: "attention", problems: ["no topics left to write"] }]), healthFingerprint([]));

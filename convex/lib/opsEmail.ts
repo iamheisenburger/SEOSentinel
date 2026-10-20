@@ -39,7 +39,7 @@ export function healthFingerprint(sites: ReadonlyArray<{ siteId: string; status:
   return JSON.stringify(sites.filter((site) => site.status === "attention")
     // Topic supply is counted only in the daily check, so it is left out here:
     // otherwise every six-hourly watch would look like a change.
-    .map((site) => [site.siteId, site.problems.filter((problem) => !/^(?:no topics left|only \d+ topic)/.test(problem))
+    .map((site) => [site.siteId, site.problems.filter((problem) => !/^(?:no topics left|topics run out)/.test(problem))
       .map((problem) => problem.replace(/\d+(?:\.\d+)?\s*(?:h|d|days?|hours?)\b/g, "#"))] as const)
     .filter(([, problems]) => problems.length > 0)
     .sort((a, b) => String(a[0]).localeCompare(String(b[0]))));

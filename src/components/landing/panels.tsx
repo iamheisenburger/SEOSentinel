@@ -144,7 +144,7 @@ export function ControlPanel() {
         <div className="grid grid-cols-2 gap-2">
           <div className="rounded-lg border border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.06] p-3">
             <p className="flex items-center gap-2 text-[13px] font-semibold text-[#F7F8F8]"><span className="h-1.5 w-1.5 rounded-full bg-[#4CB782]" />Autopilot</p>
-            <p className="mt-1 text-[12px] leading-relaxed text-[#8A8F98]">Publishes on your schedule. Drafts that fail the fact check are held back.</p>
+            <p className="mt-1 text-[12px] leading-relaxed text-[#8A8F98]">Publishes on your schedule. Drafts that fail the checks are held back.</p>
           </div>
           <div className="rounded-lg border border-white/[0.08] p-3">
             <p className="text-[13px] font-semibold text-[#D0D6E0]">Review first</p>

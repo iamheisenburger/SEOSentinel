@@ -13,7 +13,12 @@ test("public Pentra copy sells only what the product delivers", () => {
   assert.doesNotMatch(combined, /automatically refresh/i);
   assert.doesNotMatch(combined, /builds backlinks/i);
   assert.doesNotMatch(homepage, /hero images|infographic|approval-first outreach|autonomous/i);
-  assert.match(homepage, /Autopilot only publishes articles that pass the fact check/);
+  // Rule 2a (Oct 19 2026): Autopilot is blocked by objective checks (a statistic
+  // its cited source lacks, a product number the owner didn't confirm); the LLM
+  // fact check is a reviewed note, so copy never says it blocks any claim.
+  assert.match(homepage, /Autopilot only publishes articles that pass its checks: every statistic must appear in the source it cites/);
+  const landing = ["src/components/landing/run-log.tsx", "src/components/landing/panels.tsx"].map(f => readFileSync(f, "utf8")).join("\n");
+  assert.doesNotMatch(`${homepage}\n${landing}`, /blocks any claim|blocks unsupported|no unsupported claims|fail the fact check|invented statistics, quotes/i);
   // Limits are stated where buyers ask about them (FAQ), not as a "does not do" list.
   assert.match(homepage, /automatic publishing there is coming soon/);
   assert.match(homepage, /No one can honestly guarantee rankings/);

@@ -4,6 +4,19 @@ import { clientIp, freeCheckEmailKey, freeCheckVisitor } from "@/lib/free-check"
 import { freeCheckDomain } from "../../../../convex/lib/missedSearches";
 import { plausibleEmail } from "../../../../convex/lib/customerEmail";
 
+/** How many new free checks this network has left today. */
+export async function GET(request: Request) {
+  const secret = process.env.PENTRA_INTERNAL_SECRET?.trim();
+  if (!secret) return NextResponse.json({ remaining: null });
+  try {
+    const result = await callPentraInternal<{ remaining: number; paused: boolean }>("/internal/free-check",
+      { op: "quota", visitor: freeCheckVisitor(clientIp(request.headers), Date.now(), secret) });
+    return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
+  } catch {
+    return NextResponse.json({ remaining: null });
+  }
+}
+
 /** The free Missed Searches Checker: start a check for a website, count a
  * signup click from a result page, or email a check's full report to the
  * address the visitor typed. No sign-in; limits and the daily spend cap live

@@ -11,7 +11,7 @@ const LINES: Line[] = [
   { mark: "✓", tone: "ok", text: "Found 32 searches your patients make that you don't answer yet" },
   { mark: "●", tone: "run", text: "Writing “How long does teeth whitening last?”" },
   { mark: "├─", tone: "dim", text: "Written from Northside Dental's confirmed facts", indent: true },
-  { mark: "├─", tone: "dim", text: "Fact check passed · no unsupported claims", indent: true },
+  { mark: "├─", tone: "dim", text: "Fact check passed · every statistic matches its source", indent: true },
   { mark: "├─", tone: "dim", text: "FAQ from real patient questions · links to Book a visit", indent: true },
   { mark: "└─", tone: "dim", text: "Published to WordPress at 9:00 AM", indent: true },
   { mark: "✓", tone: "ok", text: "Live page confirmed · title, text and schema match" },
