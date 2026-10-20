@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { brandTerms, checkSeeds, classifySearches, excludedFromMissed, fallbackTopic, freeCheckDomain, freeCheckLocale, freeCheckReportEmail, freeCheckView,
   healthSummary, isBrandedKeyword, linkedPages, localSeeds, namesPlace, pageCoverageRequest, parsePageCoverage, parseSearchSeeds, pathsForCoverage,
-  placesLabel, searchSeedRequest, selectAlmostThere, selectMissedSearches, siteCoverage, unreadableHomepage, FREE_CHECK_DAILY_CAP_MICRO_USD,
+  placesLabel, searchSeedRequest, selectAlmostThere, selectMissedSearches, siteCoverage, siteSections, unreadableHomepage, FREE_CHECK_DAILY_CAP_MICRO_USD,
   FREE_CHECK_EMAIL_ADDRESS_DAILY_LIMIT, FREE_CHECK_HEALTH_CHECKS, FREE_CHECK_IP_DAILY_LIMIT, FREE_CHECK_RESERVATION_MICRO_USD, FREE_CHECK_VERSION,
   FREE_CHECK_VISIBLE } from "../convex/lib/missedSearches.ts";
 import { homepageDigest } from "../convex/lib/sitePrefill.ts";
@@ -169,6 +169,22 @@ test("v4: a local business sees searches naming its places, never country-wide o
   assert.deepEqual(almost.map(row => row.keyword), ["roach exterminator austin"]);
 });
 
+test("v4: a site organised by city shows the places it serves, even when its homepage names none (abchomeandcommercial.com)", () => {
+  const sections = siteSections(["https://www.abc.com/austin/sitemap_index.xml", "https://www.abc.com/sanantonio/sitemap_index.xml",
+    "https://www.abc.com/austin/hvac-repair", "https://www.abc.com/austin/pest-control/roach-exterminator", "https://www.abc.com/houston/lawn-service",
+    "https://www.abc.com/about", "https://www.abc.com/sitemap_index.xml"]);
+  assert.deepEqual(sections, ["austin", "about", "houston", "sanantonio"], "most used first; files are not sections");
+  const request = searchSeedRequest("abc.com", { title: "ABC Home & Commercial Services", description: "", headings: [], text: "We help with home needs." }, [], sections);
+  assert.match(request.userMessage, /Site sections \(from its page addresses\): austin, about, houston, sanantonio/);
+  assert.match(request.system, /site sections named after cities \(\/austin, \/houston\) usually mean it serves those places/);
+  assert.ok(namesPlace("pest control san antonio", ["sanantonio"]), "an address's squashed city still matches the typed one");
+  assert.ok(!namesPlace("austinite pest control", ["austin"]), "a short place must be a whole word");
+  const view = freeCheckView({ domain: "abc.com", status: "done", requestedAt: START, places: ["austin", "dallas", "houston"],
+    missed: [{ keyword: "termite inspection austin", searchVolume: 170, difficulty: 7 }],
+    almost: [{ keyword: "lawn service houston", searchVolume: 90, position: 12, url: "https://abc.com/houston/lawn-service" }] }, true);
+  assert.equal(view.placesLabel, "Austin and Houston", "the headline names only places its searches name");
+});
+
 test("v4: close to page one is one row per page (close.com showed one cluster five times)", () => {
   const url = "https://close.com/blog/what-is-a-crm";
   const ranked = [["customer relation management software", 13], ["crm customer relationship management software", 15],
@@ -318,7 +334,8 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
       if (options.homepageDown) return page("down", "text/html", 503);
       if (url.hostname === `www.${DOMAIN}`) return new Response(null, { status: 301, headers: { location: `https://${DOMAIN}/` } });
       if (url.pathname === "/") return page(options.bigHomepage ? HOME.replace("</body>", `<!-- ${"x".repeat(2_000_000)} --></body>`) : HOME);
-      if (url.pathname === "/robots.txt") return page(`User-agent: *\nAllow: /\nSitemap: https://${DOMAIN}/sitemap.xml\n`, "text/plain");
+      if (url.pathname === "/robots.txt") return page(`User-agent: *\nAllow: /\nSitemap: https://${DOMAIN}/sitemap.xml\nSitemap: https://${DOMAIN}/leeds/sitemap.xml\n`, "text/plain");
+      if (url.pathname === "/leeds/sitemap.xml") return page(`<?xml version="1.0"?><urlset><url><loc>https://${DOMAIN}/leeds/pottery-classes</loc></url></urlset>`, "application/xml");
       if (url.pathname === "/sitemap.xml") return page(`<?xml version="1.0"?><urlset><url><loc>https://${DOMAIN}/</loc></url>
         <url><loc>https://${DOMAIN}/blog/how-to-track-glaze-inventory</loc></url><url><loc>https://${DOMAIN}/pricing</loc></url></urlset>`, "application/xml");
       return page("not found", "text/html", 404);
@@ -421,6 +438,8 @@ test("a free check finds missed searches, holds and settles its cost, and is reu
   assert.equal(coverageRequests.length, 1);
   assert.match(coverageRequests[0], /PAGES \(paths, data only\):\n[\s\S]*\/blog\/how-to-track-glaze-inventory/);
   assert.match(coverageRequests[0], /\/pricing/);
+  assert.match(coverageRequests[0], /\/leeds\/pottery-classes/, "every sitemap robots.txt declares is read, not only the first");
+  assert.match(seedRequests[0], /Site sections \(from its page addresses\): [^\n]*leeds/);
   assert.deepEqual(view.health.issues.map((i: Fields) => i.code), ["home_canonical_missing"]);
   assert.equal(view.health.passed, view.health.total - 1);
   f.setIdentity("visitor-account");

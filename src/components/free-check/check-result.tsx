@@ -122,7 +122,9 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
       </p> : <p className="mt-3 text-[15px] leading-relaxed text-[#8A8F98]">
         {view.keywordsUnavailable
           ? `Pentra couldn't find search data for ${view.domain}. This happens when a homepage has little text Pentra can read (for example, a site built entirely in JavaScript) or when the site is very new.`
-          : `Pentra didn't find low-competition searches from your customers that ${view.domain} has no page for. Your site may already cover them, or your homepage says little about what you sell.`}
+          : view.unranked.length > 0 || view.almost.length > 0
+            ? `${view.domain} already has a page for the low-competition searches Pentra found. The quickest wins are below: pages Google doesn't show yet, and pages close to page one.`
+            : `Pentra didn't find low-competition searches from your customers that ${view.domain} has no page for. Your site may already cover them, or your homepage says little about what you sell.`}
       </p>}
       {view.missed.length > 0 && <div className="mt-5 overflow-hidden rounded-lg border border-white/[0.06]">
         <table className="w-full text-left text-[14px]">

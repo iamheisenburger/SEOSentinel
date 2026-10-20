@@ -15,14 +15,15 @@ import { structuredToolChoice } from "../lib/toolChoice";
 import { asksForFree, brandTerms, checkBusiness, checkSeeds, classifySearches, FREE_CHECK_COVERAGE_SEARCHES, FREE_CHECK_HOME_MAX_BYTES,
   FREE_CHECK_MAX_DIFFICULTY, FREE_CHECK_SITEMAP_MAX_BYTES, freeCheckLocale, healthSummary, htmlLang, isBrandedKeyword, linkedPages, localSeeds,
   namesPlace, notACandidate, PAGE_COVERAGE_MAX_TOKENS, PAGE_COVERAGE_TOOL, pageCoverageRequest, parsePageCoverage, parseSearchSeeds,
-  pathsForCoverage, SEARCH_SEEDS_MAX_TOKENS, SEARCH_SEEDS_TOOL, searchSeedRequest, selectAlmostThere, siteCoverage, unreadableHomepage,
+  pathsForCoverage, SEARCH_SEEDS_MAX_TOKENS, SEARCH_SEEDS_TOOL, searchSeedRequest, selectAlmostThere, siteCoverage, siteSections, unreadableHomepage,
   type PageAnswer, type RankedKeyword, type SeedRead } from "../lib/missedSearches";
 import { discoverKeywords, getRankedKeywords, meterDataForSeoCost } from "./seoData";
 import { judgeBuyerFit } from "./growthTopics";
 
 /** Page addresses read from the sitemap, and sitemap files read from an index. */
 const SITEMAP_PAGES = 5_000;
-const SITEMAP_CHILDREN = 12;
+const SITEMAP_ROOTS = 16;
+const SITEMAP_CHILDREN = 32;
 /** The site's own Google rankings read up front: its top-20 positions, most searched first. */
 const RANKED_TOP = 300;
 type Classified = ReturnType<typeof classifySearches>;
@@ -37,13 +38,14 @@ type Diagnostics = { seedSource: "model" | "homepage"; seeds: string[]; topics?:
   coverage?: "model" | "words"; pagesRead?: number; rankCheck?: "verified" | "partial" };
 
 /** One small model call: the searches a buyer would type, read from the
- * homepage (convex/lib/missedSearches.ts searchSeedRequest). Throws when no
- * usable answer came back; the caller then counts the call's ceiling. */
-async function proposeSeeds(domain: string, html: string, questions: string[], brands: string[]) {
+ * homepage and the site's sections (convex/lib/missedSearches.ts
+ * searchSeedRequest). Throws when no usable answer came back; the caller then
+ * counts the call's ceiling. */
+async function proposeSeeds(domain: string, html: string, questions: string[], brands: string[], sections: string[]) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
   const model = process.env.TOPIC_FIT_MODEL ?? BUYER_FIT_MODEL;
-  const request = searchSeedRequest(domain, homepageDigest(html), questions);
+  const request = searchSeedRequest(domain, homepageDigest(html), questions, sections);
   const response = await new Anthropic({ apiKey, maxRetries: 1, timeout: 45_000, fetch }).messages.create({
     model, max_tokens: SEARCH_SEEDS_MAX_TOKENS, system: request.system,
     messages: [{ role: "user", content: request.userMessage }],
@@ -72,19 +74,27 @@ async function coverPages(input: Parameters<typeof pageCoverageRequest>[0]) {
     costMicroUsd: buyerFitCostMicroUsd(response.usage) };
 }
 
-/** The page addresses the site's sitemap lists (bounded), and whether it has one. */
+/** The page addresses the site's sitemaps list (bounded), and whether it has
+ * one. Every sitemap robots.txt declares is read, not only the first: a site
+ * organised by city declares one per city (abchomeandcommercial.com has 15,
+ * and its /austin/hvac-repair page is only in the Austin one). */
 async function sitemapPages(home: string, host: string, declared: string[]): Promise<{ found: boolean; urls: string[] }> {
-  for (const candidate of [`${home}sitemap.xml`, ...declared]) {
-    const root = await fetchPage(candidate, { maxBytes: FREE_CHECK_SITEMAP_MAX_BYTES });
-    if (root.status !== 200) continue;
-    const children = sitemapIndexChildren(root.html, host, SITEMAP_CHILDREN);
-    const documents = children.length
-      ? (await Promise.all(children.map(child => fetchPage(child, { maxBytes: FREE_CHECK_SITEMAP_MAX_BYTES })))).filter(page => page.status === 200).map(page => page.html)
-      : [root.html];
-    const urls = [...new Set(documents.flatMap(xml => sitemapUrls(xml, host, SITEMAP_PAGES)))].slice(0, SITEMAP_PAGES);
-    if (urls.length || children.length) return { found: true, urls };
-  }
-  return { found: false, urls: [] };
+  const urls = new Set<string>(), children: string[] = [];
+  let found = false;
+  // A batch at a time, keeping only the addresses, so large files never pile up.
+  const take = async (files: string[], index: boolean) => {
+    for (let i = 0; i < files.length && urls.size < SITEMAP_PAGES; i += 8) {
+      for (const page of await Promise.all(files.slice(i, i + 8).map(url => fetchPage(url, { maxBytes: FREE_CHECK_SITEMAP_MAX_BYTES })))) {
+        if (page.status !== 200) continue;
+        found = true;
+        if (index) for (const child of sitemapIndexChildren(page.html, host, SITEMAP_CHILDREN)) if (!children.includes(child)) children.push(child);
+        for (const url of sitemapUrls(page.html, host, SITEMAP_PAGES)) urls.add(url);
+      }
+    }
+  };
+  await take([...new Set([`${home}sitemap.xml`, ...declared])].slice(0, SITEMAP_ROOTS), true);
+  await take(children.slice(0, SITEMAP_CHILDREN), false);
+  return { found, urls: [...urls].slice(0, SITEMAP_PAGES) };
 }
 
 /** One free check (convex/freeCheck.ts started it and holds its worst-case
@@ -139,7 +149,7 @@ export const run = internalAction({
       const coverage = siteCoverage(sitePages, homeHealth.title);
       let read: SeedRead | null = null;
       try {
-        const proposed = await proposeSeeds(domain, page.html, prefill.questions, brands);
+        const proposed = await proposeSeeds(domain, page.html, prefill.questions, brands, siteSections([...sitePages, ...robots.sitemaps]));
         read = proposed.read; spent.fitMicroUsd += proposed.costMicroUsd;
       } catch { spent.fitMicroUsd += BUYER_FIT_CEILING_MICRO_USD; }
       const places = read?.places ?? [];
