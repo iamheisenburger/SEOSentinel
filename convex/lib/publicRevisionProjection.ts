@@ -10,10 +10,15 @@ import { artifactSnapshot, revisionArtifactRendererVersion } from "./revisionArt
 /** Acknowledged bytes must be served BEFORE the independent live verifier can
  * confirm them. Prepared/attempted rows never qualify. Reads stay article-bound. */
 async function latestAcknowledgedRevision(ctx: QueryCtx, articleId: Id<"articles">) {
-  const groups = await Promise.all((["verified", "rolled_back", "verification_pending", "unverified"] as const).map(status =>
+  // A delivered revision whose live checks failed is still what the
+  // destination holds (its receipt is exact), so it is served too: on Oct 20
+  // 2026 a wording repair's checks failed against a 404 caused elsewhere, and
+  // without being served its bounded re-check could never pass. One set aside
+  // by an owner or operator decision (ambiguity disposition) is not.
+  const groups = await Promise.all((["verified", "rolled_back", "verification_pending", "unverified", "failed"] as const).map(status =>
     ctx.db.query("published_article_revisions").withIndex("by_article_status_created", q =>
-      q.eq("articleId", articleId).eq("status", status)).order("desc").take(status === "unverified" ? 8 : 1)));
-  return groups.flat().filter(row => row.receipt).sort((a, b) =>
+      q.eq("articleId", articleId).eq("status", status)).order("desc").take(status === "unverified" || status === "failed" ? 8 : 1)));
+  return groups.flat().filter(row => row.receipt && !(row.status === "failed" && row.ambiguityDispositionAt)).sort((a, b) =>
     b.createdAt - a.createdAt || b._creationTime - a._creationTime)[0];
 }
 

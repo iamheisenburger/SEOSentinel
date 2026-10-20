@@ -147,3 +147,16 @@ test("a correction's draft with the same slug never hides the published article"
   f.tables.articles[0].status = "rejected";
   assert.equal(await f.run("getPublishedBySlug"), null, "a draft alone is never public");
 });
+
+// Oct 20 2026: a delivered repair whose live checks failed (against a 404
+// caused elsewhere) was never served again, so its re-check could not pass.
+test("a delivered revision whose live checks failed is still served; one set aside is not", async () => {
+  const f = fixture();
+  Object.assign(f.revision, { status: "failed", liveVerificationAttempts: 5, failureDetail: "improvement_live_artifact_not_verified" });
+  assert.equal((await f.run("getPublishedBySlug")).markdown, f.next.markdown, "the destination holds the delivered bytes");
+  f.revision.ambiguityDispositionAt = 3000;
+  assert.equal((await f.run("getPublishedBySlug")).markdown, f.base.markdown, "an owner or operator disposition sets it aside");
+  delete f.revision.ambiguityDispositionAt;
+  delete f.revision.receipt;
+  assert.equal((await f.run("getPublishedBySlug")).markdown, f.base.markdown, "a failed write without a receipt is never served");
+});
