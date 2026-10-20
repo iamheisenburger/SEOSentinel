@@ -1569,7 +1569,7 @@ test("SLC68 Autopilot researches on the live web inside the content receipt and 
   assert.equal(research.state, "completed");
   assert.equal(research.actualMicroUsd, 1200 + 150 + 2 * 10_000, "tokens plus the per-search fee are on the receipt");
   assert.ok(research.ceilingMicroUsd >= research.actualMicroUsd);
-  assert.deepEqual(research.result.sources.map((s: { url: string }) => s.url), ["https://records.example.gov/specification", "https://methods.example.edu/review", "https://someblog.example.com/opinion"]);
+  assert.deepEqual(callResult(f, research)!.sources.map((s: { url: string }) => s.url), ["https://records.example.gov/specification", "https://methods.example.edu/review", "https://someblog.example.com/opinion"]);
   const writer = f.modelCalls.find(c => c.tools[0].name === "submit_article")!;
   const prompt = String(writer.messages[0].content);
   assert.match(prompt, /records\.example\.gov\/specification/); assert.doesNotMatch(prompt, /someblog\.example\.com/, "secondary sources never become evidence");
@@ -2027,7 +2027,7 @@ test("SLC46 a draft missing only title retains its generated metadata and reache
   assert.ok(current.articleId, current.error ?? "Paid draft must not be stranded before substantive review");
   const article = f.get(current.articleId)!;
   assert.equal(article.title, article.metaTitle);
-  assert.equal(current.contentWork.providerCalls[0].result.title, undefined, "The retained raw receipt is never rewritten");
+  assert.equal(callResult(f, current.contentWork.providerCalls[0])!.title, undefined, "The retained raw receipt is never rewritten");
   assert.equal(f.modelCalls.filter(c => c.tools[0].name === "submit_article").length, 1);
   f.assertOffline();
 });
@@ -2039,7 +2039,7 @@ test("SLC46 both sites strictly generate, review, verify three deliveries and fr
   assert.ok(f.modelCalls.every(c => c.tools[0].strict === true));
   assert.ok(f.modelCalls.every(c => !JSON.stringify(c.tools[0].input_schema).includes('"maxLength"')));
   for (const j of f.tables.jobs) for (const c of j.contentWork.providerCalls) {
-    if (c.logicalKey.endsWith(":submit_article")) assert.equal(c.result.title, undefined);
+    if (c.logicalKey.endsWith(":submit_article")) assert.equal(callResult(f, c)!.title, undefined);
   }
   f.assertOffline();
 });
@@ -2070,10 +2070,9 @@ test("SLC46 paused legacy paid checkpoints resume at recovery three without redr
     const admitted = await f.invoke("contentWork:beginProviderCall", { jobId: id, workerToken, key: call.logicalKey,
       requestHash: sha256Hex(JSON.stringify(request)), ceilingMicroUsd: call.ceilingMicroUsd });
     await f.invoke("contentWork:completeProviderCall", { jobId: id, workerToken, key: admitted.key,
-      actualMicroUsd: call.actualMicroUsd, result: call.result });
+      actualMicroUsd: call.actualMicroUsd, result: callResult(template, call) });
     if (i === 1) {
-      const historical = f.get(id)!.contentWork.providerCalls[0];
-      historical.key = call.logicalKey; delete historical.logicalKey;
+      legacyReceipt(f, f.get(id)!.contentWork.providerCalls[0]);
     }
     // Seed the durable state of the old parser after three local failures.
     Object.assign(f.get(id)!, { status: "pending", workerAttempts: 3, workerToken: undefined, heartbeatAt: undefined, leaseExpiresAt: undefined });
@@ -2114,6 +2113,17 @@ test("SLC46 recovered title metadata does not approve substantively weak content
 });
 
 const isAuditClarification = (request: Fields) => request.messages[0].content.includes("SEMANTIC AUDIT CLARIFICATION V1:");
+/** A provider call's stored result: inline on legacy receipts, in content_call_results since P118. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function callResult(fixture: { get: (id: any) => any }, call: Fields | undefined): Fields | undefined {
+  return call?.result ?? (call?.resultRef ? fixture.get(call.resultRef)?.result : undefined);
+}
+/** Receipts written before P118 (and before logical keys) keep their result inline. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function legacyReceipt(fixture: { get: (id: any) => any }, call: Fields) {
+  call.result = callResult(fixture, call); delete call.resultRef; delete call.resultHash;
+  call.key = call.logicalKey; delete call.logicalKey;
+}
 test("SLC47 irregular audits on both sites clarify once, retain raw contradictions, publish and freshly refill three synthetic cycles", async t => {
   let ordinal = 0;
   const f = await scopedPricingFixture({}, {}, { auditResponse: (audit, request) => isAuditClarification(request) ? audit
@@ -2124,7 +2134,7 @@ test("SLC47 irregular audits on both sites clarify once, retain raw contradictio
     const calls = job.contentWork.providerCalls, clarification = calls.find((c: Fields) => c.semanticClarificationOf);
     assert.ok(clarification); assert.equal(calls.filter((c: Fields) => c.semanticClarificationOf).length, 1);
     const original = calls.find((c: Fields) => c.key === clarification.semanticClarificationOf.key);
-    assert.equal(auditResultHash(original.result), clarification.semanticClarificationOf.resultHash);
+    assert.equal(auditResultHash(callResult(f, original)), clarification.semanticClarificationOf.resultHash);
     assert.equal(original.requestHash, clarification.semanticClarificationOf.requestHash);
     assert.equal(job.contentWork.recoveryAttempts ?? 0, 0);
     assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, 800);
@@ -2139,9 +2149,9 @@ test("SLC48 real Convex value serialization preserves fresh audit clarification 
   for (const job of f.tables.jobs) {
     const original = job.contentWork.providerCalls.find((c: Fields) => c.logicalKey?.endsWith(":audit_final_article"));
     const clarification = job.contentWork.providerCalls.find((c: Fields) => c.semanticClarificationOf);
-    assert.equal(original.result.score, 62); assert.equal(clarification.result.score, 93);
-    assert.equal(clarification.semanticClarificationOf.resultHash, auditResultHash(original.result));
-    assert.deepEqual(Object.keys(original.result), Object.keys(original.result).sort());
+    assert.equal(callResult(f, original)!.score, 62); assert.equal(callResult(f, clarification)!.score, 93);
+    assert.equal(clarification.semanticClarificationOf.resultHash, auditResultHash(callResult(f, original)));
+    assert.deepEqual(Object.keys(callResult(f, original)!), Object.keys(callResult(f, original)!).sort());
     assert.equal(job.contentWork.recoveryAttempts ?? 0, 0);
   }
   f.assertOffline();
@@ -2165,7 +2175,7 @@ test("SLC48 restart after persisted clarification but before article application
     const admitted = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken,
       key: receipt.logicalKey, requestHash: receipt.requestHash, ceilingMicroUsd: receipt.ceilingMicroUsd,
       ...(receipt.semanticClarificationOf ? { semanticClarificationOf: receipt.semanticClarificationOf } : {}) });
-    const complete = { jobId: job._id, workerToken, key: admitted.key, actualMicroUsd: receipt.actualMicroUsd, result: receipt.result };
+    const complete = { jobId: job._id, workerToken, key: admitted.key, actualMicroUsd: receipt.actualMicroUsd, result: callResult(template, receipt) };
     await f.invoke("contentWork:completeProviderCall", complete);
     await f.invoke("contentWork:completeProviderCall", complete);
   }
@@ -2200,7 +2210,7 @@ test("P95 a material defect that asks for no change is clarified once; a real de
     const after = f.get(job._id)!, clarifications = after.contentWork.providerCalls.filter((c: Fields) => c.semanticClarificationOf);
     assert.equal(clarifications.length, selfNegating ? 1 : 0, `selfNegating=${selfNegating}`);
     const original = after.contentWork.providerCalls.find((c: Fields) => c.logicalKey?.endsWith(":audit_final_article"));
-    assert.equal(original.result.score, 62, "the provider's original score is retained, never promoted locally");
+    assert.equal(callResult(f, original)!.score, 62, "the provider's original score is retained, never promoted locally");
     if (selfNegating) {
       const request = f.modelCalls.find(isAuditClarification)!;
       assert.match(request.messages[0].content, /These entries ask for no change, so they are not material defects/);
@@ -2279,9 +2289,9 @@ async function legacySemanticAuditFixture(index = 0, keyOnly = false, legacyScor
   for (const c of template.get(job._id)!.contentWork.providerCalls.slice(existingCount)) {
     const admission = await f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken,
       key: c.logicalKey, requestHash: c.requestHash, ceilingMicroUsd: c.ceilingMicroUsd });
-    const result = c.logicalKey.endsWith(":audit_final_article") ? { ...c.result, score: legacyScore ?? (index === 0 ? 62 : 64), materialDefects: [] } : c.result;
+    const result = c.logicalKey.endsWith(":audit_final_article") ? { ...callResult(template, c), score: legacyScore ?? (index === 0 ? 62 : 64), materialDefects: [] } : callResult(template, c);
     await f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken, key: admission.key, result, actualMicroUsd: c.actualMicroUsd });
-    if (keyOnly) { const saved = f.get(job._id)!.contentWork.providerCalls.at(-1); saved.key = c.logicalKey; delete saved.logicalKey; }
+    if (keyOnly) legacyReceipt(f, f.get(job._id)!.contentWork.providerCalls.at(-1));
   }
   f.setTime(f.now() + 1);
   const current = f.get(job._id)!;
@@ -2295,7 +2305,7 @@ async function legacySemanticAuditFixture(index = 0, keyOnly = false, legacyScor
   await f.invoke("contentWork:control", { siteId: job.siteId, action: "pause", reviewToken: (await f.invoke("contentWork:readiness", { siteId: job.siteId })).reviewToken });
   const call = current.contentWork.providerCalls.at(-1), article = f.get(current.articleId)!;
   const repair = { siteId: job.siteId, jobId: job._id, expectedUpdatedAt: current.updatedAt,
-    articleHash: publicationArtifactHash({ ...article, title: article.title, slug: article.slug, markdown: article.markdown }), callKey: call.key, requestHash: call.requestHash, resultHash: auditResultHash(call.result), reference: "synthetic-reviewed-semantic-repair-v1" };
+    articleHash: publicationArtifactHash({ ...article, title: article.title, slug: article.slug, markdown: article.markdown }), callKey: call.key, requestHash: call.requestHash, resultHash: auditResultHash(callResult(f, call)), reference: "synthetic-reviewed-semantic-repair-v1" };
   template.assertOffline();
   return { ...f, repair };
 }
@@ -2356,7 +2366,7 @@ test("SLC47 legacy repair rejects unrelated failure, stale authority/article, am
     if (defect === "hash") f.repair.resultHash = "0".repeat(64);
     if (defect === "request_hash") f.repair.requestHash = "0".repeat(64);
     if (defect === "updated") job.updatedAt++;
-    if (defect === "malformed") job.contentWork.providerCalls.at(-1).result.notes = null;
+    if (defect === "malformed") callResult(f, job.contentWork.providerCalls.at(-1))!.notes = null;
     if (defect === "counter") job.contentWork.recoveryAttempts = 0;
     const snapshot = JSON.stringify(job), holds = JSON.stringify(f.tables.provider_spend_reservations), calls = f.modelCalls.length;
     await assert.rejects(f.invoke("contentWork:reconcileSemanticAuditFailure", f.repair), Error, defect);
@@ -2422,7 +2432,7 @@ test("SLC50 a single remediation note is preserved without replay or quality-sco
     const work = f.get(id)!.contentWork;
     assert.equal(work.recoveryAttempts ?? 0, 0);
     assert.equal(work.stage === "failed", weak);
-    assert.ok(work.providerCalls.some((c: Fields) => c.result?.notes === "Preserved exact change note."));
+    assert.ok(work.providerCalls.some((c: Fields) => callResult(f, c)?.notes === "Preserved exact change note."));
     const keys = work.providerCalls.map((c: Fields) => c.logicalKey ?? c.key);
     assert.equal(new Set(keys).size, keys.length);
     if (weak) assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0);
@@ -2461,8 +2471,8 @@ test("P99 owner resume still reclassifies a retained pre-P99 inconsistent review
   // Evidence written before P99: both reviews scored 78 with no material defect.
   const clarification = retained.contentWork.providerCalls.at(-1);
   const original = retained.contentWork.providerCalls.find((c: Fields) => c.key === clarification.semanticClarificationOf.key);
-  original.result = { ...original.result, score: 78, materialDefects: [] };
-  clarification.result = { ...clarification.result, score: 78, materialDefects: [] };
+  original.result = { ...callResult(f, original), score: 78, materialDefects: [] };
+  clarification.result = { ...callResult(f, clarification), score: 78, materialDefects: [] };
   clarification.semanticClarificationOf.resultHash = auditResultHash(original.result);
   f.get(job.siteId)!.contentSchedule.paused = true;
   const readiness = await f.invoke("contentWork:readiness", { siteId: job.siteId });
@@ -2579,14 +2589,14 @@ test("SLC47 clarification lineage rejects forged originals, duplicate claims and
   const source = f.get(job._id)!.contentWork.providerCalls.at(-1);
   const args = { jobId: job._id, workerToken, key: (source.logicalKey ?? source.key) + SEMANTIC_AUDIT_SUFFIX,
     requestHash: "b".repeat(64), ceilingMicroUsd: 1_000,
-    semanticClarificationOf: { key: source.key, requestHash: source.requestHash, resultHash: auditResultHash(source.result) } };
+    semanticClarificationOf: { key: source.key, requestHash: source.requestHash, resultHash: auditResultHash(callResult(f, source)) } };
   for (const change of [{ semanticClarificationOf: undefined }, { key: args.key + ":other" },
     { semanticClarificationOf: { ...args.semanticClarificationOf, resultHash: "0".repeat(64) } }])
     await assert.rejects(f.invoke("contentWork:beginProviderCall", { ...args, ...change }));
   const attempts = await Promise.allSettled(Array.from({ length: 3 }, () => f.invoke("contentWork:beginProviderCall", args)));
   assert.equal(attempts.filter(a => a.status === "fulfilled").length, 1);
   const admitted = attempts.find(a => a.status === "fulfilled")! as PromiseFulfilledResult<Fields>;
-  const result = { ...source.result, score: 93 };
+  const result = { ...callResult(f, source), score: 93 };
   const completion = { jobId: job._id, workerToken, key: admitted.value.key, actualMicroUsd: 200, result };
   await f.invoke("contentWork:completeProviderCall", completion); f.restartRuntime();
   await f.invoke("contentWork:completeProviderCall", completion);
@@ -4068,7 +4078,7 @@ test("SLC repair26 completed response checkpoint is immutable, idempotent and re
   const args = { jobId: job._id, workerToken: "resumed-worker", key: call.logicalKey, requestHash: call.requestHash, ceilingMicroUsd: call.ceilingMicroUsd };
   for (let n = 0; n < 3; n++) assert.equal((await f.invoke("contentWork:beginProviderCall", args)).kind, "cached");
   await assert.rejects(f.invoke("contentWork:beginProviderCall", { ...args, requestHash: "different-request" }), /request changed/);
-  await f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken: "resumed-worker", key: call.key, actualMicroUsd: call.actualMicroUsd, result: call.result });
+  await f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken: "resumed-worker", key: call.key, actualMicroUsd: call.actualMicroUsd, result: callResult(f, call) });
   await assert.rejects(f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken: "resumed-worker", key: call.key, actualMicroUsd: call.actualMicroUsd, result: { tampered: true } }), /settlement conflict/);
   assert.equal(f.modelCalls.length, 1); assert.deepEqual(f.get(job._id)!.contentWork.providerCalls[0], call); f.assertOffline();
 });
@@ -8338,6 +8348,32 @@ test("B reserving a content-work slot never loads the month's job documents", as
   const again = await f.invoke("jobs:reserveGenerationSlot", { jobId: job._id, workerToken: "synthetic-worker", siteId: site.id });
   assert.equal(again.reason, "Existing reservation");
   assert.equal(f.tables.usage_log.filter((row: Fields) => row.jobId === job._id).length, 1);
+  f.assertOffline();
+});
+
+// B (P118, Oct 20 2026): provider results were ~90% of a content job's bytes
+// (43-57 KB jobs on the owner sites), and every scheduler wake, usage recount,
+// dashboard re-run and checkpoint write loaded them. They now live in
+// content_call_results; the job keeps a reference and a hash.
+test("B provider results live outside the job document, bound to their job, call and hash", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const job = f.tables.jobs.find(j => j.contentWork?.stage === "ready")!;
+  const completed = job.contentWork.providerCalls.filter((c: Fields) => c.state === "completed");
+  assert.ok(completed.length >= 2, "the draft and its review completed");
+  for (const call of completed) {
+    assert.equal(call.result, undefined, `no result inline for ${call.key}`);
+    const row = f.get(call.resultRef)!;
+    assert.equal(row.jobId, job._id); assert.equal(row.key, call.key); assert.equal(row.resultHash, call.resultHash);
+  }
+  const bytes = JSON.stringify(job).length;
+  assert.ok(bytes < 12_000, `the job document stays small (${bytes} bytes)`);
+  const call = completed[0];
+  const read = async () => (await f.invoke("contentWork:providerCallResultInternal", { jobId: job._id, key: call.key })).result;
+  assert.deepEqual(await read(), f.get(call.resultRef)!.result);
+  f.get(call.resultRef)!.result = { tampered: true };
+  assert.equal(await read(), undefined, "a changed stored result reads as none, never as a replay");
   f.assertOffline();
 });
 

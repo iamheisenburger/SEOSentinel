@@ -467,6 +467,23 @@ async function requireOwner(ctx: MutationCtx, siteId: Id<"sites">) {
 }
 
 type ContentCall = NonNullable<Doc<"jobs">["contentWork"]>["providerCalls"][number];
+/** A provider call's stored result: inline on calls before P118, otherwise in
+ * content_call_results. The row must belong to this job and call and match
+ * the recorded hash; anything else reads as no result (never as a replay). */
+export async function providerCallResult(ctx: QueryCtx | MutationCtx, jobId: Id<"jobs">, call: ContentCall | undefined): Promise<unknown> {
+  if (!call) return undefined;
+  if (call.result !== undefined) return call.result;
+  if (!call.resultRef || !call.resultHash) return undefined;
+  const row = await ctx.db.get(call.resultRef);
+  return row && row.jobId === jobId && row.key === call.key && row.resultHash === call.resultHash &&
+    sha256Hex(JSON.stringify(row.result ?? null)) === call.resultHash ? row.result : undefined;
+}
+const hasProviderResult = (call: ContentCall) => call.result !== undefined || call.resultRef !== undefined;
+/** The action-side read of one retained result (semantic audit clarification). */
+export const providerCallResultInternal = internalQuery({ args: { jobId: v.id("jobs"), key: v.string() }, handler: async (ctx, { jobId, key }) => {
+  const job = await ctx.db.get(jobId);
+  return { result: await providerCallResult(ctx, jobId, job?.contentWork?.providerCalls.find(c => c.key === key)) };
+} });
 const interruptedCreditCall = (c: ContentCall) => c.state === "rejected" && c.rejectionCode === "provider_credit_unavailable" && c.creditRecovery?.requestedAt === undefined;
 function creditRetryToken(job: Doc<"jobs">, call: ContentCall) {
   return sha256Hex(JSON.stringify([job._id, job.siteId, job.contentWork?.profileHash, job.contentWork?.connectionHash,
@@ -531,7 +548,7 @@ export const confirmCreditRestoration = internalMutation({
       return { confirmed: false, confirmedAt: call.creditRecovery.confirmedAt };
     }
     if (job.status !== "failed" || cw.stage !== "failed" || job.workerToken || job.leaseExpiresAt || call !== cw.providerCalls.at(-1) ||
-      cw.providerCalls.some(c => c !== call && c.state === "started") || call.actualMicroUsd !== undefined || call.result !== undefined ||
+      cw.providerCalls.some(c => c !== call && c.state === "started") || call.actualMicroUsd !== undefined || hasProviderResult(call) ||
       (cw.recoveryAttempts ?? 0) >= MAX_CONTENT_RECOVERIES || cw.providerCalls.length >= 20 ||
       cw.providerCalls.some(c => c.creditRecovery?.fundingReference === args.fundingReference)) throw new Error("Interrupted provider attempt is not eligible for restoration");
     const used = cw.providerCalls.reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
@@ -591,11 +608,12 @@ export const reconcileSemanticAuditFailure = internalMutation({
       Boolean(job.error?.includes("materialDefects") && job.error.includes("score below 85"));
     if (!terminal && !pending) throw new Error("Only the legacy semantic-audit parsing failure is repairable");
     const call = cw.providerCalls.at(-1), baseKey = `${cw.replacements}:${cw.revisions}:review:audit_final_article`;
+    const callResult = await providerCallResult(ctx, job._id, call);
     if (!call || call.key !== args.callKey || (call.logicalKey ?? call.key) !== baseKey ||
       call.requestHash !== args.requestHash || !/^[a-f0-9]{64}$/.test(args.requestHash) ||
-      call.state !== "completed" || !retainedContradictoryContentAudit(call.result) || auditResultHash(call.result) !== args.resultHash ||
+      call.state !== "completed" || !retainedContradictoryContentAudit(callResult) || auditResultHash(callResult) !== args.resultHash ||
       cw.providerCalls.some(c => c.semanticClarificationOf || c.key.includes(SEMANTIC_AUDIT_SUFFIX) || c.state === "started" ||
-        (c.state === "completed" && (!Number.isSafeInteger(c.actualMicroUsd) || c.actualMicroUsd! < 0 || c.result === undefined)) ||
+        (c.state === "completed" && (!Number.isSafeInteger(c.actualMicroUsd) || c.actualMicroUsd! < 0 || !hasProviderResult(c))) ||
         (c.state === "rejected" && !(c.rejectionStatus === 400 && c.rejectionCode === "provider_credit_unavailable" &&
           c.creditRecovery?.requestedAt !== undefined && validProviderRequestId(c.rejectionRequestId))))) {
       throw new Error("Exact completed legacy audit evidence required; uncertain calls cannot be replayed");
@@ -1141,13 +1159,15 @@ export const readiness = query({
       // The bounded view holds every open item exactly, so counts are complete.
       complete: fullInventory ? jobs.length <= LIMIT : true, ready: jobs.filter(j => j.contentWork?.stage === "ready" && !j.contentWork.ownerRequest && j.contentWork.retiredAt === undefined &&
         j.contentWork.profileHash === confirmedContentProfileHash(site) && j.contentWork.connectionHash === s?.connectionHash && bindingCurrent).length,
-      work: jobs.filter(j => j.contentWork && !j.contentWork.ownerRequest).map(j => {
+      work: (await Promise.all(jobs.filter(j => j.contentWork && !j.contentWork.ownerRequest).map(async j => {
         const lastReview = j.contentWork!.providerCalls.at(-1);
         // This repaired failure can be rechecked through ordinary owner Resume.
         // The mutation still verifies lineage, unchanged source and no writes;
         // exposing the control grants no execution or spending authority.
         const rejectedReview = j.status === "failed" && j.contentWork!.failure === "content_audit_clarification_inconsistent" &&
-          lastReview?.state === "completed" && retainedContradictoryContentAudit(lastReview.result);
+          lastReview?.state === "completed" && retainedContradictoryContentAudit(await providerCallResult(ctx, j._id, lastReview));
+        return { j, lastReview, rejectedReview };
+      }))).map(({ j, rejectedReview }) => {
         const call = j.contentWork!.providerCalls.find(c => interruptedCreditCall(c) && c.creditRecovery);
         const creditRetry = j.status === "failed" && j.contentWork!.stage === "failed" && call && j.contentWork!.retiredAt === undefined
           ? { jobId: j._id, callKey: call.key, token: creditRetryToken(j, call) } : null;
@@ -1185,6 +1205,7 @@ async function reconcileCompletedReviewRejection(ctx: MutationCtx, site: Doc<"si
   const call = cw.providerCalls.at(-1), lineage = call?.semanticClarificationOf;
   const original = cw.providerCalls.find(c => c.key === lineage?.key);
   const article = job.articleId ? await ctx.db.get(job.articleId) : null;
+  const originalResult = await providerCallResult(ctx, job._id, original), callResult = await providerCallResult(ctx, job._id, call);
   // Reclassify only a completed review, never retry its provider call. The
   // ordinary revision/replacement limits and all financial receipts survive.
   if (job.status !== "failed" || cw.stage !== "failed" || cw.operation || cw.retiredAt !== undefined ||
@@ -1193,8 +1214,8 @@ async function reconcileCompletedReviewRejection(ctx: MutationCtx, site: Doc<"si
     !call || !lineage || !original || original.state !== "completed" || call.state !== "completed" ||
     (original.logicalKey ?? original.key) !== `${cw.replacements}:${cw.revisions}:review:audit_final_article` ||
     (call.logicalKey ?? call.key) !== `${original.logicalKey ?? original.key}${SEMANTIC_AUDIT_SUFFIX}` ||
-    original.requestHash !== lineage.requestHash || auditResultHash(original.result) !== lineage.resultHash ||
-    !retainedContradictoryContentAudit(original.result) || !retainedContradictoryContentAudit(call.result) ||
+    original.requestHash !== lineage.requestHash || auditResultHash(originalResult) !== lineage.resultHash ||
+    !retainedContradictoryContentAudit(originalResult) || !retainedContradictoryContentAudit(callResult) ||
     cw.providerCalls.some(c => c.state === "started" || (c.state === "completed" && (!Number.isSafeInteger(c.actualMicroUsd) || c.actualMicroUsd! < 0))) ||
     !article || article.siteId !== site._id || article.updatedAt > job.updatedAt || article.status === "published" ||
     article.publicationAttemptedAt || article.publicationReceipt || article.publicationLeaseOwner || article.publicationOutcomeUnverifiedAt || article.publishedContentHash) {
@@ -1202,8 +1223,8 @@ async function reconcileCompletedReviewRejection(ctx: MutationCtx, site: Doc<"si
   }
   await ctx.db.patch(job._id, { status: "done", error: undefined, nextAttemptAt: undefined,
     result: { qualityQuarantined: true, previousFailure: cw.failure, previousUpdatedAt: job.updatedAt,
-      rejectedReviewKey: call.key, rejectedReviewHash: auditResultHash(call.result) }, updatedAt: Date.now() });
-  await contentWorkCompleted(ctx, job, inconsistentAuditFeedback(call.result));
+      rejectedReviewKey: call.key, rejectedReviewHash: auditResultHash(callResult) }, updatedAt: Date.now() });
+  await contentWorkCompleted(ctx, job, inconsistentAuditFeedback(callResult));
   return true;
 }
 
@@ -2304,20 +2325,22 @@ export const beginProviderCall = internalMutation({
     const previousCalls = cw.providerCalls.filter(c => (c.logicalKey ?? c.key) === args.key);
     if (args.semanticClarificationOf || args.key.includes(SEMANTIC_AUDIT_SUFFIX)) {
       const lineage = args.semanticClarificationOf, original = cw.providerCalls.find(c => c.key === lineage?.key);
+      const originalResult = await providerCallResult(ctx, job._id, original);
       const expectedBase = `${cw.replacements}:${cw.revisions}:review:audit_final_article`;
       if (!lineage || !original || (original.logicalKey ?? original.key) !== expectedBase || args.key !== expectedBase + SEMANTIC_AUDIT_SUFFIX ||
         original.state !== "completed" || !Number.isSafeInteger(original.actualMicroUsd) || !original.requestHash ||
-        original.requestHash !== lineage.requestHash || auditResultHash(original.result) !== lineage.resultHash ||
+        original.requestHash !== lineage.requestHash || auditResultHash(originalResult) !== lineage.resultHash ||
         // P101: or it asserts a repetition; the worker checked the exact article repeats nothing.
-        !clarifiableContentAudit(original.result)) throw new Error("content_audit_original_checkpoint_changed");
+        !clarifiableContentAudit(originalResult)) throw new Error("content_audit_original_checkpoint_changed");
       if (previousCalls.some(c => JSON.stringify(c.semanticClarificationOf) !== JSON.stringify(lineage))) throw new Error("content_audit_clarification_lineage_changed");
       if (previousCalls.some(c => c.state !== "completed")) throw new Error("content_audit_clarification_already_attempted");
     }
     if (previousCalls.some(c => c.requestHash !== args.requestHash)) throw new Error("Content checkpoint request changed; reconcile the persisted result");
     const completed = previousCalls.find(c => c.state === "completed");
     if (completed) {
-      if (completed.result === undefined) throw new Error("Content checkpoint response unavailable; no paid replay");
-      return { kind: "cached" as const, result: completed.result };
+      const cached = await providerCallResult(ctx, job._id, completed);
+      if (cached === undefined) throw new Error("Content checkpoint response unavailable; no paid replay");
+      return { kind: "cached" as const, result: cached };
     }
     if (cw.providerCalls.some(interruptedCreditCall)) {
       throw new Error("Content provider credit unavailable; reconcile the retained attempt before new execution");
@@ -2384,9 +2407,19 @@ export const completeProviderCall = internalMutation({
     // A stop cannot erase an in-flight cost. Validate immutable lineage, but
     // permit its original worker to record the result after expiry/stop.
     await contentValidationBinding(ctx, site, Date.now(), job);
-    if (call.state === "rejected" || (call.state === "completed" && (call.actualMicroUsd !== args.actualMicroUsd || JSON.stringify(call.result) !== JSON.stringify(args.result)))) throw new Error("Content provider settlement conflict");
-    const providerCalls = cw.providerCalls.map(c => c.key === args.key ? { ...c, state: "completed" as const, actualMicroUsd: args.actualMicroUsd, result: args.result } : c);
-    if (new TextEncoder().encode(JSON.stringify(providerCalls)).length > 700_000) throw new Error("Content checkpoint storage bound exceeded; reserved ceiling retained");
+    if (call.state === "rejected" || (call.state === "completed" && (call.actualMicroUsd !== args.actualMicroUsd ||
+      JSON.stringify(await providerCallResult(ctx, job._id, call)) !== JSON.stringify(args.result)))) throw new Error("Content provider settlement conflict");
+    // The same receipt again (a worker retry after its write) changes nothing.
+    if (call.state === "completed") return;
+    // P118: the result is stored in its own row; the job keeps its reference
+    // and hash, so every reader of the job no longer loads it.
+    const serialized = JSON.stringify(args.result ?? null);
+    if (new TextEncoder().encode(serialized).length > 700_000) throw new Error("Content checkpoint storage bound exceeded; reserved ceiling retained");
+    const resultHash = sha256Hex(serialized);
+    const resultRef = args.result === undefined ? undefined
+      : await ctx.db.insert("content_call_results", { siteId: site._id, jobId: job._id, key: args.key, result: args.result, resultHash, createdAt: Date.now() });
+    const providerCalls = cw.providerCalls.map(c => c.key === args.key ? { ...c, state: "completed" as const, actualMicroUsd: args.actualMicroUsd,
+      ...(resultRef ? { resultRef, resultHash } : {}) } : c);
     await ctx.db.patch(job._id, { contentWork: { ...cw, providerCalls } });
   },
 });

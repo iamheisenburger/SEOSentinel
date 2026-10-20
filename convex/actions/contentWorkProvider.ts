@@ -56,8 +56,9 @@ export async function contentStructuredCall(args: { system: string; userMessage:
     if (!latest?.contentWork) throw new Error("content_audit_original_checkpoint_missing");
     current = latest.contentWork;
     const original = current.providerCalls.find(c => (c.logicalKey ?? c.key) === baseKey && c.state === "completed");
-    if (!original?.requestHash || auditResultHash(original.result) !== auditResultHash(clarifyAudit.originalResult)) throw new Error("content_audit_original_checkpoint_changed");
-    semanticClarificationOf = { key: original.key, requestHash: original.requestHash, resultHash: auditResultHash(original.result) };
+    const originalResult = original ? (await s.ctx.runQuery(internal.contentWork.providerCallResultInternal, { jobId: s.job._id, key: original.key })).result : undefined;
+    if (!original?.requestHash || auditResultHash(originalResult) !== auditResultHash(clarifyAudit.originalResult)) throw new Error("content_audit_original_checkpoint_changed");
+    semanticClarificationOf = { key: original.key, requestHash: original.requestHash, resultHash: auditResultHash(originalResult) };
   }
   const previous = current.providerCalls.find(c => (c.logicalKey ?? c.key) === logicalKey);
   // Writing and rewriting may use a stronger model; every check keeps the

@@ -644,6 +644,18 @@ export default defineSchema({
   // When the account's next usage recount is due (B, Oct 20 2026): a burst of
   // article starts and retirements shares one trailing recount. Its own table,
   // so the debounce never re-runs the dashboard queries that read the count.
+  // A content provider call's result, out of the job document (B, P118, Oct 20
+  // 2026): results were ~90% of a job's bytes, and every scheduler wake, usage
+  // recount, dashboard re-run and checkpoint write read them. Site deletion
+  // removes them with the site's jobs.
+  content_call_results: defineTable({
+    siteId: v.id("sites"),
+    jobId: v.id("jobs"),
+    key: v.string(),
+    result: v.any(),
+    resultHash: v.string(),
+    createdAt: v.number(),
+  }).index("by_job_key", ["jobId", "key"]).index("by_site", ["siteId"]),
   account_usage_recounts: defineTable({
     userId: v.string(),
     dueAt: v.number(),
@@ -1310,6 +1322,8 @@ export default defineSchema({
         reservationId: v.optional(v.id("provider_spend_reservations")),
         state: v.union(v.literal("started"), v.literal("completed"), v.literal("rejected")), actualMicroUsd: v.optional(v.number()),
         result: v.optional(v.any()), rejectionStatus: v.optional(v.number()), rejectionCode: v.optional(v.string()),
+        // Since P118 the result lives in content_call_results (older calls keep it inline).
+        resultRef: v.optional(v.id("content_call_results")), resultHash: v.optional(v.string()),
         rejectionTrackingVersion: v.optional(v.literal(1)), rejectionRequestId: v.optional(v.string()), rejectionRecordedAt: v.optional(v.number()),
         rejectionStage: v.optional(v.union(v.literal("prepare"), v.literal("review"))),
         creditRecovery: v.optional(v.object({ confirmedAt: v.number(), fundingReference: v.string(), requestedAt: v.optional(v.number()),
