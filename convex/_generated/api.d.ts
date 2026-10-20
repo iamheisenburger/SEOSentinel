@@ -87,6 +87,7 @@ import type * as lib_contentSelection from "../lib/contentSelection.js";
 import type * as lib_contentToolRequest from "../lib/contentToolRequest.js";
 import type * as lib_contentUsage from "../lib/contentUsage.js";
 import type * as lib_currentGscRows from "../lib/currentGscRows.js";
+import type * as lib_customerEmail from "../lib/customerEmail.js";
 import type * as lib_dataForSeoAccountBalance from "../lib/dataForSeoAccountBalance.js";
 import type * as lib_dataForSeoLocale from "../lib/dataForSeoLocale.js";
 import type * as lib_expectedClickBackfillFleet from "../lib/expectedClickBackfillFleet.js";
@@ -303,6 +304,7 @@ declare const fullApi: ApiFromModules<{
   "lib/contentToolRequest": typeof lib_contentToolRequest;
   "lib/contentUsage": typeof lib_contentUsage;
   "lib/currentGscRows": typeof lib_currentGscRows;
+  "lib/customerEmail": typeof lib_customerEmail;
   "lib/dataForSeoAccountBalance": typeof lib_dataForSeoAccountBalance;
   "lib/dataForSeoLocale": typeof lib_dataForSeoLocale;
   "lib/expectedClickBackfillFleet": typeof lib_expectedClickBackfillFleet;

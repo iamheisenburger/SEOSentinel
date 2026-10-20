@@ -1743,20 +1743,27 @@ export default defineSchema({
     keywordsUnavailable: v.optional(v.boolean()),
     costMicroUsd: v.optional(v.number()),
     costUncertain: v.optional(v.boolean()),
+    // The check logic that produced the result (FREE_CHECK_VERSION) and what
+    // each stage kept, so a thin result can be explained (operator read only).
+    version: v.optional(v.number()),
+    diagnostics: v.optional(v.object({ seedSource: v.union(v.literal("model"), v.literal("homepage")), seeds: v.array(v.string()),
+      discovered: v.number(), ranked: v.number(), judged: v.number(), kept: v.number() })),
   }).index("by_domain", ["domain"]).index("by_requested", ["requestedAt"]),
   // Daily limits for free checks: per visitor (an HMAC of IP and day, so a
-  // row can't be linked to a person or across days) and the day's spend.
+  // row can't be linked to a person or across days), the day's spend, and
+  // report emails (per visitor, per address as an HMAC of address and day,
+  // and per day). No IP or email address is ever stored.
   free_check_quota: defineTable({
-    kind: v.union(v.literal("visitor"), v.literal("events"), v.literal("spend")),
+    kind: v.union(v.literal("visitor"), v.literal("events"), v.literal("spend"), v.literal("emails"), v.literal("address"), v.literal("email_total")),
     key: v.string(),
     day: v.string(),
     count: v.number(),
     microUsd: v.optional(v.number()),
   }).index("by_key", ["key"]).index("by_kind_day", ["kind", "day"]),
-  // Acquisition counts (checks, signup clicks, signups); a checked domain at
-  // most, never a person.
+  // Acquisition counts (checks, signup clicks, signups, emailed reports); a
+  // checked domain at most, never a person.
   acquisition_events: defineTable({
-    kind: v.union(v.literal("check_started"), v.literal("check_cached"), v.literal("signup_click"), v.literal("signup")),
+    kind: v.union(v.literal("check_started"), v.literal("check_cached"), v.literal("signup_click"), v.literal("signup"), v.literal("report_emailed")),
     source: v.literal("free_check"),
     domain: v.optional(v.string()),
     at: v.number(),

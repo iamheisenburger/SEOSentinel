@@ -1,10 +1,12 @@
-import { internalMutation, internalQuery, mutation, query, type MutationCtx } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, mutation, query, type MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { FREE_CHECK_CACHE_MS, FREE_CHECK_DAILY_CAP_MICRO_USD, FREE_CHECK_EVENT_DAILY_LIMIT, FREE_CHECK_FAILED_RETRY_MS,
-  FREE_CHECK_IP_DAILY_LIMIT, FREE_CHECK_RESERVATION_MICRO_USD, FREE_CHECK_RUNNING_MS, freeCheckDay, freeCheckDomain,
+import { FREE_CHECK_CACHE_MS, FREE_CHECK_DAILY_CAP_MICRO_USD, FREE_CHECK_EMAIL_ADDRESS_DAILY_LIMIT, FREE_CHECK_EMAIL_DAILY_LIMIT,
+  FREE_CHECK_EMAIL_VISITOR_DAILY_LIMIT, FREE_CHECK_EVENT_DAILY_LIMIT, FREE_CHECK_FAILED_RETRY_MS, FREE_CHECK_IP_DAILY_LIMIT,
+  FREE_CHECK_RESERVATION_MICRO_USD, FREE_CHECK_RUNNING_MS, FREE_CHECK_VERSION, freeCheckDay, freeCheckDomain, freeCheckReportEmail,
   freeCheckView } from "./lib/missedSearches";
+import { plausibleEmail, sendCustomerEmail } from "./lib/customerEmail";
 
 /** The free Missed Searches Checker (P122, Oct 20 2026). pentra.dev's
  * /api/check route calls `request` and `track` through the internal HTTP API
@@ -22,6 +24,8 @@ const outcome = v.union(
     keywordsUnavailable: v.boolean() }),
   v.object({ kind: v.literal("failed"), error: v.string() }),
 );
+const diagnostics = v.object({ seedSource: v.union(v.literal("model"), v.literal("homepage")), seeds: v.array(v.string()),
+  discovered: v.number(), ranked: v.number(), judged: v.number(), kept: v.number() });
 
 async function counter(ctx: MutationCtx, key: string) {
   return ctx.db.query("free_check_quota").withIndex("by_key", q => q.eq("key", key)).first();
@@ -30,7 +34,7 @@ async function counter(ctx: MutationCtx, key: string) {
 /** Visitor counters are useless after their day: a few are removed per
  * request (the day's spend rows are cost history and are kept). */
 async function trimVisitorCounters(ctx: MutationCtx, day: string) {
-  for (const kind of ["visitor", "events"] as const) {
+  for (const kind of ["visitor", "events", "emails", "address"] as const) {
     const old = await ctx.db.query("free_check_quota").withIndex("by_kind_day", q => q.eq("kind", kind).lt("day", day)).take(10);
     for (const row of old) await ctx.db.delete(row._id);
   }
@@ -45,7 +49,7 @@ export const request = internalMutation({ args: { domain: v.string(), visitor: v
   if (existing) {
     const age = now - (existing.completedAt ?? existing.requestedAt);
     const reuse = existing.status === "running" ? now - existing.requestedAt < FREE_CHECK_RUNNING_MS
-      : existing.status === "done" ? age < FREE_CHECK_CACHE_MS : age < FREE_CHECK_FAILED_RETRY_MS;
+      : existing.status === "done" ? age < FREE_CHECK_CACHE_MS && existing.version === FREE_CHECK_VERSION : age < FREE_CHECK_FAILED_RETRY_MS;
     if (reuse) {
       if (existing.status === "done") await ctx.db.insert("acquisition_events", { kind: "check_cached", source: "free_check", domain, at: now });
       return { status: existing.status, domain };
@@ -66,7 +70,8 @@ export const request = internalMutation({ args: { domain: v.string(), visitor: v
   if (existing) {
     checkId = existing._id;
     await ctx.db.patch(checkId, { ...fresh, completedAt: undefined, error: undefined, businessName: undefined, countryName: undefined,
-      missed: undefined, almost: undefined, health: undefined, keywordsUnavailable: undefined, costMicroUsd: undefined, costUncertain: undefined });
+      missed: undefined, almost: undefined, health: undefined, keywordsUnavailable: undefined, costMicroUsd: undefined, costUncertain: undefined,
+      version: undefined, diagnostics: undefined });
   } else checkId = await ctx.db.insert("free_checks", { domain, ...fresh });
   await ctx.db.insert("acquisition_events", { kind: "check_started", source: "free_check", domain, at: now });
   await ctx.scheduler.runAfter(0, internal.actions.freeCheck.run, { checkId, domain, requestedAt: now, day,
@@ -86,14 +91,15 @@ export const progress = internalMutation({ args: { checkId: v.id("free_checks"),
  * hold stays counted when a paid call's cost is uncertain). A run that a
  * newer one replaced writes nothing but its cost. */
 export const complete = internalMutation({ args: { checkId: v.id("free_checks"), requestedAt: v.number(), day: v.string(),
-  reservedMicroUsd: v.number(), costMicroUsd: v.number(), costUncertain: v.boolean(), outcome },
+  reservedMicroUsd: v.number(), costMicroUsd: v.number(), costUncertain: v.boolean(), outcome, diagnostics: v.optional(diagnostics) },
   handler: async (ctx, args) => {
     const spend = await counter(ctx, `spend:${args.day}`);
     const settled = args.costUncertain ? Math.max(args.costMicroUsd, args.reservedMicroUsd) : args.costMicroUsd;
     if (spend) await ctx.db.patch(spend._id, { microUsd: Math.max(0, (spend.microUsd ?? 0) - args.reservedMicroUsd + settled) });
     const row = await ctx.db.get(args.checkId);
     if (!row || row.status !== "running" || row.requestedAt !== args.requestedAt) return;
-    const cost = { costMicroUsd: settled, costUncertain: args.costUncertain, completedAt: Date.now(), step: undefined };
+    const cost = { costMicroUsd: settled, costUncertain: args.costUncertain, completedAt: Date.now(), step: undefined,
+      version: FREE_CHECK_VERSION, ...(args.diagnostics ? { diagnostics: args.diagnostics } : {}) };
     if (args.outcome.kind === "failed") await ctx.db.patch(args.checkId, { status: "failed", error: args.outcome.error, ...cost });
     else {
       const done = args.outcome;
@@ -125,6 +131,52 @@ export const track = internalMutation({ args: { kind: v.literal("signup_click"),
     return { recorded: true };
   } });
 
+/** One report email: the check has missed searches, and the visitor's, the
+ * address's and the day's limits allow it. Returns the email to send. */
+export const claimReport = internalMutation({ args: { domain: v.string(), emailKey: v.string(), visitor: v.string() },
+  handler: async (ctx, args) => {
+    const domain = freeCheckDomain(args.domain);
+    const row = domain ? await ctx.db.query("free_checks").withIndex("by_domain", q => q.eq("domain", domain)).first() : null;
+    if (!row || row.status !== "done" || !row.missed?.length) return { status: "no_result" as const };
+    const day = freeCheckDay(Date.now());
+    const limits = [
+      { kind: "emails" as const, key: `emails:${args.visitor}`, max: FREE_CHECK_EMAIL_VISITOR_DAILY_LIMIT },
+      { kind: "address" as const, key: `address:${args.emailKey}`, max: FREE_CHECK_EMAIL_ADDRESS_DAILY_LIMIT },
+      { kind: "email_total" as const, key: `email_total:${day}`, max: FREE_CHECK_EMAIL_DAILY_LIMIT },
+    ];
+    const counters = await Promise.all(limits.map(limit => counter(ctx, limit.key)));
+    if (limits.some((limit, i) => (counters[i]?.count ?? 0) >= limit.max)) return { status: "limited" as const };
+    for (const [i, limit] of limits.entries()) {
+      const row = counters[i];
+      if (row) await ctx.db.patch(row._id, { count: row.count + 1 });
+      else await ctx.db.insert("free_check_quota", { kind: limit.kind, key: limit.key, day, count: 1 });
+    }
+    return { status: "ok" as const, ...freeCheckReportEmail(row) };
+  } });
+
+/** An emailed report, counted by checked domain. */
+export const recordReport = internalMutation({ args: { domain: v.string() }, handler: async (ctx, args) => {
+  const domain = freeCheckDomain(args.domain);
+  if (domain) await ctx.db.insert("acquisition_events", { kind: "report_emailed", source: "free_check", domain, at: Date.now() });
+} });
+
+/** Email a check's full report to the address the visitor typed (P123). The
+ * address is used for this one send and never stored. */
+export const emailReport = internalAction({ args: { domain: v.string(), email: v.string(), emailKey: v.string(), visitor: v.string() },
+  handler: async (ctx, args): Promise<{ status: "sent" | "failed" | "limited" | "no_result" | "invalid" }> => {
+    const email = plausibleEmail(args.email);
+    if (!email) return { status: "invalid" };
+    const claim = await ctx.runMutation(internal.freeCheck.claimReport, { domain: args.domain, emailKey: args.emailKey, visitor: args.visitor });
+    if (claim.status !== "ok") return { status: claim.status };
+    const sent = await sendCustomerEmail({ to: email, subject: claim.subject, text: claim.text });
+    if (!sent.sent) {
+      console.warn(`Free check report not sent: ${sent.error ?? "unknown"}`);
+      return { status: "failed" };
+    }
+    await ctx.runMutation(internal.freeCheck.recordReport, { domain: args.domain });
+    return { status: "sent" };
+  } });
+
 /** A signed-in owner who came from a free check saved that website: counted
  * once per website, and only when the account really has it. */
 export const recordSignup = mutation({ args: { domain: v.string() }, handler: async (ctx, args) => {
@@ -140,6 +192,15 @@ export const recordSignup = mutation({ args: { domain: v.string() }, handler: as
   return { recorded: true };
 } });
 
+/** One check's stages and cost (operator read): explains a thin result. */
+export const diagnosticsFor = internalQuery({ args: { domain: v.string() }, handler: async (ctx, args) => {
+  const domain = freeCheckDomain(args.domain);
+  const row = domain ? await ctx.db.query("free_checks").withIndex("by_domain", q => q.eq("domain", domain)).first() : null;
+  return row ? { domain: row.domain, status: row.status, version: row.version ?? 1, requestedAt: row.requestedAt, completedAt: row.completedAt ?? null,
+    error: row.error ?? null, costMicroUsd: row.costMicroUsd ?? null, missed: row.missed?.length ?? 0, almost: row.almost?.length ?? 0,
+    diagnostics: row.diagnostics ?? null } : null;
+} });
+
 /** The free tool's numbers since a time (operator read): checks run and
  * reused, their outcomes and cost, signup clicks and signups. */
 export const numbers = internalQuery({ args: { since: v.number() }, handler: async (ctx, { since }) => {
@@ -148,6 +209,7 @@ export const numbers = internalQuery({ args: { since: v.number() }, handler: asy
   const checks = await ctx.db.query("free_checks").withIndex("by_requested", q => q.gte("requestedAt", since)).take(5_000);
   return {
     since, started: count("check_started"), reused: count("check_cached"), signupClicks: count("signup_click"), signups: count("signup"),
+    reportsEmailed: count("report_emailed"),
     done: checks.filter(c => c.status === "done").length, failed: checks.filter(c => c.status === "failed").length,
     running: checks.filter(c => c.status === "running").length,
     withResults: checks.filter(c => c.status === "done" && (c.missed?.length ?? 0) > 0).length,

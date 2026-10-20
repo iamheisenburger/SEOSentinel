@@ -1,28 +1,36 @@
 import { NextResponse } from "next/server";
 import { callPentraInternal } from "@/lib/pentra-internal-api";
-import { clientIp, freeCheckVisitor } from "@/lib/free-check";
+import { clientIp, freeCheckEmailKey, freeCheckVisitor } from "@/lib/free-check";
 import { freeCheckDomain } from "../../../../convex/lib/missedSearches";
+import { plausibleEmail } from "../../../../convex/lib/customerEmail";
 
-/** The free Missed Searches Checker: start a check for a website, or count a
- * signup click from a result page. No sign-in; limits and the daily spend cap
- * live in Convex (convex/freeCheck.ts). */
+/** The free Missed Searches Checker: start a check for a website, count a
+ * signup click from a result page, or email a check's full report to the
+ * address the visitor typed. No sign-in; limits and the daily spend cap live
+ * in Convex (convex/freeCheck.ts). */
 export async function POST(request: Request) {
-  const body = (await request.json().catch(() => null)) as { url?: unknown; event?: unknown; domain?: unknown } | null;
-  const signupClick = body?.event === "signup_click";
-  const raw = signupClick ? body?.domain : body?.url;
+  const body = (await request.json().catch(() => null)) as { url?: unknown; event?: unknown; domain?: unknown; email?: unknown } | null;
+  const event = body?.event === "signup_click" || body?.event === "email" ? body.event : "check";
+  const raw = event === "check" ? body?.url : body?.domain;
   const domain = typeof raw === "string" ? freeCheckDomain(raw.slice(0, 300)) : null;
-  if (!signupClick && !domain) return NextResponse.json({ error: "Enter your website address, like yourbusiness.com." }, { status: 400 });
+  const email = event === "email" && typeof body?.email === "string" ? plausibleEmail(body.email.slice(0, 254)) : null;
+  if (event === "check" && !domain) return NextResponse.json({ error: "Enter your website address, like yourbusiness.com." }, { status: 400 });
+  if (event === "email" && (!domain || !email)) return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
   const secret = process.env.PENTRA_INTERNAL_SECRET?.trim();
   if (!secret) return NextResponse.json({ error: "Free checks aren't available right now. Try again later." }, { status: 503 });
-  const visitor = freeCheckVisitor(clientIp(request.headers), Date.now(), secret);
-  if (signupClick) {
+  const now = Date.now(), visitor = freeCheckVisitor(clientIp(request.headers), now, secret);
+  if (event === "signup_click") {
     await callPentraInternal("/internal/free-check", { op: "signup_click", visitor, ...(domain ? { domain } : {}) }).catch(() => null);
     return NextResponse.json({ ok: true });
   }
   try {
-    const result = await callPentraInternal<{ status: string; domain: string | null }>("/internal/free-check", { op: "check", domain, visitor });
+    const result = event === "email"
+      ? await callPentraInternal<{ status: string }>("/internal/free-check",
+        { op: "email", domain, email, emailKey: freeCheckEmailKey(email!, now, secret), visitor })
+      : await callPentraInternal<{ status: string; domain: string | null }>("/internal/free-check", { op: "check", domain, visitor });
     return NextResponse.json(result);
   } catch {
-    return NextResponse.json({ error: "Pentra couldn't start the check just now. Try again in a minute." }, { status: 502 });
+    return NextResponse.json({ error: event === "email" ? "Pentra couldn't send it just now. Try again in a minute."
+      : "Pentra couldn't start the check just now. Try again in a minute." }, { status: 502 });
   }
 }

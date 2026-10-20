@@ -80,3 +80,14 @@ export function extractBusinessPrefill(html: string, host = ""): BusinessPrefill
     .filter(q => { const key = q.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; }).slice(0, 8);
   return { name, summary, product, audience, questions, ...(host ? primaryCta(html, host) : { ctaText: "", ctaUrl: "" }) };
 }
+
+/** The homepage's own words for a model to read (the free check's search
+ * seeds): title, description, headings and the first paragraphs, bounded. */
+export function homepageDigest(html: string): { title: string; description: string; headings: string[]; text: string } {
+  const title = decode(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "");
+  const seen = new Set<string>();
+  const headings = ["h1", "h2", "h3"].flatMap(tag => tagTexts(html, tag)).filter(h => h.length >= 3 && h.length <= 120)
+    .filter(h => { const key = h.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; }).slice(0, 25);
+  return { title: clip(title, 160), description: clip(meta(html, "description") || meta(html, "og:description"), 300), headings,
+    text: clip(tagTexts(html, "p").filter(p => p.length >= 40).join(" "), 1500) };
+}

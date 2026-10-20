@@ -50,6 +50,41 @@ function StartButton({ domain, label }: { domain: string; label: string }) {
   </div>;
 }
 
+/** Email the full list (P123): one email to the address typed, which Pentra
+ * doesn't keep. */
+function EmailReport({ domain }: { domain: string }) {
+  const [email, setEmail] = useState(""), [busy, setBusy] = useState(false), [note, setNote] = useState(""), [sent, setSent] = useState(false);
+  async function send(event: React.FormEvent) {
+    event.preventDefault();
+    if (!email.trim() || busy) return;
+    setBusy(true); setNote("");
+    try {
+      const response = await fetch("/api/check", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "email", domain, email: email.trim() }) });
+      const body = (await response.json().catch(() => ({}))) as { status?: string; error?: string };
+      if (body.status === "sent") { setSent(true); setNote(`Sent to ${email.trim()}. It should arrive within a minute; check your spam folder if it doesn't.`); }
+      else setNote(body.error ?? (body.status === "limited" ? "That's the most report emails for today. Try again tomorrow."
+        : body.status === "invalid" ? "Enter a valid email address." : "Pentra couldn't send it just now. Try again in a minute."));
+    } catch { setNote("Pentra couldn't send it just now. Check your connection and try again."); }
+    finally { setBusy(false); }
+  }
+  return <form onSubmit={send} noValidate className="mt-5 border-t border-white/[0.06] pt-5">
+    <label htmlFor="free-check-email" className="text-[14px] font-medium text-[#F7F8F8]">Email me the full list</label>
+    <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+      <input id="free-check-email" type="email" autoComplete="email" value={email} disabled={sent} placeholder="you@yourbusiness.com"
+        onChange={e => { setEmail(e.target.value); setNote(""); }}
+        className="min-w-0 flex-1 rounded-lg border border-white/[0.1] bg-[#08090A] px-3 py-2.5 text-[14px] text-[#F7F8F8] placeholder:text-[#62666D] focus:border-white/30 focus:outline-none disabled:opacity-60" />
+      <button type="submit" disabled={busy || sent || !email.trim()}
+        className="rounded-lg border border-white/[0.1] px-4 py-2.5 text-[14px] font-medium text-[#F7F8F8] transition hover:border-white/[0.18] hover:bg-white/[0.04] disabled:opacity-50">
+        {busy ? "Sending…" : sent ? "Sent" : "Send"}
+      </button>
+    </div>
+    <p role="status" className={`mt-2 text-[12px] ${note && !sent ? "text-[#F59E0B]" : "text-[#62666D]"}`}>
+      {note || "One email with every missed search. Pentra doesn't keep your address or add you to a list."}
+    </p>
+  </form>;
+}
+
 function Running({ view }: { view: View }) {
   const current = Math.max(0, STEPS.indexOf(view.step ?? ""));
   return <section className={PANEL} aria-live="polite">
@@ -112,6 +147,7 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
           <SignupCta domain={view.domain} signedIn={signedIn}>See all {view.totalMissed}</SignupCta>
         </div>
       </div>}
+      {view.totalMissed > 0 && <EmailReport domain={view.domain} />}
     </section>
 
     {view.almost.length > 0 && <section className={PANEL} aria-labelledby="free-check-almost">

@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { brandTerms, checkSeeds, excludedFromMissed, freeCheckDomain, freeCheckLocale, freeCheckView, healthSummary, isBrandedKeyword,
-  selectAlmostThere, selectMissedSearches, siteCoverage, FREE_CHECK_DAILY_CAP_MICRO_USD, FREE_CHECK_HEALTH_CHECKS,
-  FREE_CHECK_RESERVATION_MICRO_USD, FREE_CHECK_VISIBLE } from "../convex/lib/missedSearches.ts";
+import { brandTerms, checkSeeds, excludedFromMissed, freeCheckDomain, freeCheckLocale, freeCheckReportEmail, freeCheckView, healthSummary,
+  isBrandedKeyword, parseSearchSeeds, searchSeedRequest, selectAlmostThere, selectMissedSearches, siteCoverage, FREE_CHECK_DAILY_CAP_MICRO_USD,
+  FREE_CHECK_EMAIL_ADDRESS_DAILY_LIMIT, FREE_CHECK_HEALTH_CHECKS, FREE_CHECK_RESERVATION_MICRO_USD, FREE_CHECK_VERSION,
+  FREE_CHECK_VISIBLE } from "../convex/lib/missedSearches.ts";
+import { homepageDigest } from "../convex/lib/sitePrefill.ts";
+import { plausibleEmail } from "../convex/lib/customerEmail.ts";
 import type { BuyerFitVerdict } from "../convex/lib/topicFit.ts";
-import { clientIp, freeCheckVisitor } from "../src/lib/free-check.ts";
+import { clientIp, freeCheckEmailKey, freeCheckVisitor } from "../src/lib/free-check.ts";
 import { corePipelineFixture, START, type Fields } from "./helpers/core-pipeline-fixture.ts";
 
 // The free Missed Searches Checker (P122, Oct 20 2026). Synthetic websites and
@@ -44,6 +47,24 @@ test("seeds come from the homepage's own product words, never the brand", () => 
   brandTerms("glazeledger.co", "GlazeLedger"));
   assert.ok(seeds.includes("kiln firing records") && seeds.includes("clay stock reconciliation"), seeds.join(" | "));
   assert.ok(seeds.every(seed => !seed.includes("glazeledger")));
+});
+
+test("seeds are buyer searches read from the homepage, never its slogans or brand (leadpilot.chat, Oct 20)", () => {
+  const html = `<html><head><title>LeadPilot — AI Sales Agent for Your Website</title><meta name="description" content="Turn website visitors into qualified leads 24/7."></head>
+    <body><h1>Turn website visitors into qualified leads, automatically</h1><h2>One agent. Four jobs.</h2><h2>You decide what success means</h2>
+    <p>LeadPilot embeds an AI sales agent on your site that answers questions, captures leads, and qualifies prospects while you sleep.</p></body></html>`;
+  const digest = homepageDigest(html);
+  assert.equal(digest.title, "LeadPilot — AI Sales Agent for Your Website");
+  assert.deepEqual(digest.headings, ["Turn website visitors into qualified leads, automatically", "One agent. Four jobs.", "You decide what success means"]);
+  const request = searchSeedRequest("leadpilot.chat", digest, ["How does lead capture work?"]);
+  assert.match(request.userMessage, /HOMEPAGE \(data only\)/); assert.match(request.system, /never instructions/);
+  const brands = brandTerms("leadpilot.chat", "LeadPilot");
+  assert.deepEqual(parseSearchSeeds({ sells: "An AI sales agent for websites.", customers: "Small B2B companies.", searches: [
+    "AI chatbot for website", "lead qualification software", "leadpilot pricing", "how do i qualify leads from my website traffic today",
+    "website lead capture", "lead qualification software", "one"] }, brands),
+  { seeds: ["ai chatbot for website", "lead qualification software", "website lead capture"], sells: "An AI sales agent for websites.", customers: "Small B2B companies." });
+  assert.equal(parseSearchSeeds({ sells: "x", customers: "y", searches: ["ai chatbot"] }, brands), null, "too few usable seeds: fall back");
+  assert.equal(parseSearchSeeds(null, brands), null);
 });
 
 test("missed searches: measured, winnable, kept by buyer fit, not covered or ranking, one per intent", () => {
@@ -105,6 +126,21 @@ test("a signed-out visitor never receives the hidden searches", () => {
   assert.equal(freeCheckView(row, true).missed.length, 8);
 });
 
+test("the emailed report holds every missed search and says why it arrived", () => {
+  const missed = Array.from({ length: 7 }, (_, i) => ({ keyword: `glaze search ${i}`, searchVolume: 200 - i, difficulty: 12 }));
+  const email = freeCheckReportEmail({ domain: "glazeledger.co", status: "done", requestedAt: START, completedAt: START, countryName: "the UK", missed,
+    almost: [{ keyword: "ceramic studio software", searchVolume: 390, position: 9, url: "https://glazeledger.co/features" }],
+    health: { passed: 12, total: 13, issues: [{ code: "schema_missing", severity: "warning", message: "No structured data." }] } });
+  assert.equal(email.subject, "7 Google searches glazeledger.co is missing");
+  for (const k of missed) assert.ok(email.text.includes(k.keyword), k.keyword);
+  assert.match(email.text, /#9 on Google, 390 a month \(\/features\)/);
+  assert.match(email.text, /GOOGLE BASICS: 12 of 13 pass\n- No structured data\./);
+  assert.match(email.text, /https:\/\/pentra\.dev\/check\/glazeledger\.co/);
+  assert.match(email.text, /only email we'll send you about it/);
+  assert.equal(plausibleEmail(" Owner@GlazeLedger.co "), "owner@glazeledger.co");
+  for (const bad of ["owner@", "owner@glazeledger", "a b@c.co", "<x>@c.co", `${"a".repeat(250)}@c.co`]) assert.equal(plausibleEmail(bad), null, bad);
+});
+
 test("a visitor is an HMAC of IP and day, never the IP", () => {
   const headers = new Headers({ "x-forwarded-for": "203.0.113.7, 10.0.0.1" });
   assert.equal(clientIp(headers), "203.0.113.7");
@@ -112,6 +148,9 @@ test("a visitor is an HMAC of IP and day, never the IP", () => {
   assert.match(day1, /^[a-f0-9]{64}$/); assert.equal(day1, sameDay);
   assert.notEqual(day1, freeCheckVisitor("203.0.113.7", START + 86_400_000, "secret"));
   assert.ok(!day1.includes("203"));
+  const key = freeCheckEmailKey("Owner@GlazeLedger.co", START, "secret");
+  assert.equal(key, freeCheckEmailKey("owner@glazeledger.co ", START, "secret")); assert.match(key, /^[a-f0-9]{64}$/);
+  assert.notEqual(key, freeCheckEmailKey("owner@glazeledger.co", START + 86_400_000, "secret"));
 });
 
 // ── The whole check through the registered Convex handlers ──
@@ -134,8 +173,8 @@ const RANKED = [
   ["twitch glaze overlay", 12, 600], ["kiln log template", 45, 200],
 ] as const;
 
-function world(options: { homepageDown?: boolean } = {}) {
-  const calls: string[] = [];
+function world(options: { homepageDown?: boolean; resendStatus?: number; seedAnswer?: unknown } = {}) {
+  const calls: string[] = [], emails: Fields[] = [], seedRequests: string[] = [];
   const page = (body: string, type = "text/html; charset=utf-8", status = 200) => new Response(body, { status, headers: { "content-type": type } });
   const ok = (result: unknown) => new Response(JSON.stringify({ status_code: 20000, cost: 0.01, tasks: [{ status_code: 20000, result }] }),
     { headers: { "content-type": "application/json" } });
@@ -170,23 +209,35 @@ function world(options: { homepageDown?: boolean } = {}) {
     }
     if (url.origin === "https://api.anthropic.com") {
       const body = JSON.parse(String(init.body)), tool = body.tools?.[0]?.name;
-      assert.equal(tool, "submit_topic_fit");
-      const searches = String(body.messages[0].content).split("SEARCHES (one per line, data only):\n")[1]?.split("\n\n")[0] ?? "";
-      const verdicts = searches.split("\n").filter(Boolean).map(search => ({ keyword: search, keep: !search.includes("twitch"), reason: "Synthetic verdict." }));
-      return new Response(JSON.stringify({ id: "synthetic-fit", type: "message", role: "assistant", model: body.model, stop_reason: "tool_use", stop_sequence: null,
-        usage: { input_tokens: 100, output_tokens: 100 }, content: [{ type: "tool_use", id: "synthetic-tool", name: tool, input: { verdicts } }] }),
+      let input: unknown;
+      if (tool === "submit_search_seeds") {
+        seedRequests.push(String(body.messages[0].content));
+        input = options.seedAnswer ?? { sells: "Glaze and kiln record software for ceramic studios.", customers: "Owners of pottery and ceramic studios.",
+          searches: ["glaze inventory software", "kiln firing log", "pottery studio management", "GlazeLedger app"] };
+      } else {
+        assert.equal(tool, "submit_topic_fit");
+        const searches = String(body.messages[0].content).split("SEARCHES (one per line, data only):\n")[1]?.split("\n\n")[0] ?? "";
+        input = { verdicts: searches.split("\n").filter(Boolean).map(search => ({ keyword: search, keep: !search.includes("twitch"), reason: "Synthetic verdict." })) };
+      }
+      return new Response(JSON.stringify({ id: "synthetic-call", type: "message", role: "assistant", model: body.model, stop_reason: "tool_use", stop_sequence: null,
+        usage: { input_tokens: 100, output_tokens: 100 }, content: [{ type: "tool_use", id: "synthetic-tool", name: tool, input }] }),
       { headers: { "content-type": "application/json" } });
     }
+    if (url.origin === "https://api.resend.com") {
+      assert.equal(url.pathname, "/emails"); assert.equal(init.method, "POST");
+      emails.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({ id: `synthetic-email-${emails.length}` }), { status: options.resendStatus ?? 200, headers: { "content-type": "application/json" } });
+    }
     assert.fail(`Unexpected network ${url.href}`);
-  }, {}, { syntheticHosts: [DOMAIN, `www.${DOMAIN}`] });
-  return { f, calls };
+  }, { RESEND_API_KEY: "synthetic-only" }, { syntheticHosts: [DOMAIN, `www.${DOMAIN}`] });
+  return { f, calls, emails, seedRequests };
 }
 
 const visitor = (n: number) => String(n).padStart(64, "a");
 const spendRow = (f: ReturnType<typeof corePipelineFixture>) => f.tables.free_check_quota.find(r => r.kind === "spend")!;
 
 test("a free check finds missed searches, holds and settles its cost, and is reused for a week", async () => {
-  const { f, calls } = world();
+  const { f, calls, seedRequests } = world();
   assert.deepEqual(await f.invoke("freeCheck:request", { domain: "https://www.GlazeLedger.co/pricing", visitor: visitor(1) }), { status: "running", domain: DOMAIN });
   assert.equal(spendRow(f).microUsd, FREE_CHECK_RESERVATION_MICRO_USD, "the worst case is held before any paid call");
   assert.deepEqual(await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(2) }), { status: "running", domain: DOMAIN });
@@ -216,10 +267,16 @@ test("a free check finds missed searches, holds and settles its cost, and is reu
   assert.ok(paid >= 4 && paid <= 6, `DataForSEO calls: ${paid}`);
   let usd = 0;
   for (let i = 0; i < paid; i++) usd += 0.01;
-  const cost = Math.ceil(usd * 1_000_000) + 60;
+  const cost = Math.ceil(usd * 1_000_000) + 60 + 60;
   assert.equal(spendRow(f).microUsd, cost);
   assert.equal(f.tables.free_checks[0].costMicroUsd, cost);
   assert.ok(!calls.some(c => c.includes("google_ads")), "no Google Ads request (the costly source) for a free check");
+  assert.equal(seedRequests.length, 1); assert.match(seedRequests[0], /Headings: Glaze inventory software for ceramic studios \| Kiln firing records/);
+  const diagnostics = await f.invoke("freeCheck:diagnosticsFor", { domain: DOMAIN });
+  assert.equal(diagnostics.version, FREE_CHECK_VERSION);
+  assert.deepEqual(diagnostics.diagnostics.seeds, ["glaze inventory software", "kiln firing log", "pottery studio management"], "the brand seed is dropped");
+  assert.equal(diagnostics.diagnostics.seedSource, "model");
+  assert.ok(diagnostics.diagnostics.discovered > 0 && diagnostics.diagnostics.judged > 0 && diagnostics.diagnostics.kept > 0);
 
   // Reused for a week at no cost; then checked again.
   f.setTime(START + 6 * 86_400_000);
@@ -230,6 +287,19 @@ test("a free check finds missed searches, holds and settles its cost, and is reu
   assert.equal(f.tables._scheduled_functions.length, 2);
   assert.equal(f.tables.free_checks.length, 1, "one row per website");
   assert.equal((await f.invoke("freeCheck:get", { domain: DOMAIN })).missed.length, 0, "the old result is not mixed into the new run");
+  f.assertOffline();
+});
+
+test("a result from an older version of the check runs again; a failed seed call falls back to the homepage's words", async () => {
+  const { f, seedRequests } = world({ seedAnswer: { sells: "", customers: "", searches: [] } });
+  await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(1) });
+  await f.runNextScheduled();
+  const first = await f.invoke("freeCheck:diagnosticsFor", { domain: DOMAIN });
+  assert.equal(first.diagnostics.seedSource, "homepage"); assert.equal(seedRequests.length, 1);
+  assert.ok(first.diagnostics.seeds.includes("kiln firing records"), first.diagnostics.seeds.join(" | "));
+  f.tables.free_checks[0].version = FREE_CHECK_VERSION - 1;
+  assert.equal((await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(2) })).status, "running");
+  assert.equal(f.tables._scheduled_functions.length, 2);
   f.assertOffline();
 });
 
@@ -268,6 +338,44 @@ test("an unreachable website fails clearly and returns its hold; a replaced run 
   await f.invoke("freeCheck:complete", { checkId, requestedAt, day, reservedMicroUsd, costMicroUsd: 0, costUncertain: false,
     outcome: { kind: "failed", error: "stale" } });
   assert.equal(f.tables.free_checks[0].status, "running");
+  f.assertOffline();
+});
+
+test("the full report is emailed once on request, within limits, and the address is never stored", async () => {
+  const { f, emails } = world();
+  const ask = (n: number, email = "Owner@GlazeLedger.co", key = "b") => f.invoke("freeCheck:emailReport",
+    { domain: DOMAIN, email, emailKey: key.repeat(64), visitor: visitor(n) });
+  assert.deepEqual(await ask(1), { status: "no_result" }, "nothing to send before a check finishes");
+  await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(1) });
+  await f.runNextScheduled();
+  assert.deepEqual(await ask(1, "not an email"), { status: "invalid" });
+  assert.deepEqual(await ask(1), { status: "sent" });
+  assert.equal(emails.length, 1);
+  assert.equal(emails[0].from, "Pentra <hello@pentra.dev>"); assert.deepEqual(emails[0].to, ["owner@glazeledger.co"]);
+  assert.equal(emails[0].reply_to, "pentrahelp@gmail.com");
+  assert.equal(emails[0].subject, "6 Google searches glazeledger.co is missing");
+  assert.ok(emails[0].text.includes("clay stock reconciliation"), "the hidden searches are in the requested email");
+  for (let i = 1; i < FREE_CHECK_EMAIL_ADDRESS_DAILY_LIMIT; i++) assert.equal((await ask(2)).status, "sent");
+  assert.deepEqual(await ask(3), { status: "limited" }, "per address and day");
+  assert.equal((await ask(3, "other@studio.co", "c")).status, "sent");
+  assert.equal((await ask(3, "third@studio.co", "d")).status, "sent");
+  assert.equal((await ask(3, "fourth@studio.co", "e")).status, "sent");
+  assert.deepEqual(await ask(3, "fifth@studio.co", "f"), { status: "limited" }, "per visitor and day (a refused request isn't counted)");
+  const stored = JSON.stringify(Object.entries(f.tables).filter(([table]) => table !== "_scheduled_functions"));
+  for (const address of ["owner@glazeledger.co", "other@studio.co"]) assert.ok(!stored.includes(address), `${address} is not stored`);
+  assert.equal((await f.invoke("freeCheck:numbers", { since: START - 1 })).reportsEmailed, emails.length);
+  assert.equal(emails.length, 5);
+  f.assertOffline();
+});
+
+test("a report Resend refuses is reported as not sent and not counted", async () => {
+  const { f, emails } = world({ resendStatus: 500 });
+  await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(1) });
+  await f.runNextScheduled();
+  assert.deepEqual(await f.invoke("freeCheck:emailReport", { domain: DOMAIN, email: "owner@glazeledger.co", emailKey: "b".repeat(64), visitor: visitor(1) }),
+    { status: "failed" });
+  assert.equal(emails.length, 1);
+  assert.equal(f.tables.acquisition_events.filter(e => e.kind === "report_emailed").length, 0);
   f.assertOffline();
 });
 

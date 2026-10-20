@@ -12,3 +12,10 @@ export function freeCheckVisitor(ip: string, now: number, secret: string): strin
   const day = new Date(now).toISOString().slice(0, 10);
   return createHmac("sha256", secret).update(`pentra-free-check-visitor:${day}:${ip}`).digest("hex");
 }
+
+/** The same for an email address: the daily report limit per address, with
+ * the address itself never stored. */
+export function freeCheckEmailKey(email: string, now: number, secret: string): string {
+  const day = new Date(now).toISOString().slice(0, 10);
+  return createHmac("sha256", secret).update(`pentra-free-check-email:${day}:${email.trim().toLowerCase()}`).digest("hex");
+}

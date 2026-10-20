@@ -1170,8 +1170,9 @@ http.route({
 });
 
 // The free Missed Searches Checker (P122): pentra.dev's /api/check route
-// starts checks and records signup clicks with an HMAC of the visitor's IP
-// and day (convex/freeCheck.ts holds the limits and the spend cap).
+// starts checks, records signup clicks and emails reports (P123), with an
+// HMAC of the visitor's IP and day (convex/freeCheck.ts holds the limits and
+// the spend cap).
 http.route({
   path: "/internal/free-check",
   method: "POST",
@@ -1184,6 +1185,10 @@ http.route({
     if (body?.op === "check" && domain) return json(await ctx.runMutation(internal.freeCheck.request, { domain, visitor }));
     if (body?.op === "signup_click") {
       return json(await ctx.runMutation(internal.freeCheck.track, { kind: "signup_click", visitor, ...(domain ? { domain } : {}) }));
+    }
+    if (body?.op === "email" && domain && typeof body.email === "string" && body.email.length <= 254 &&
+      typeof body.emailKey === "string" && /^[a-f0-9]{64}$/.test(body.emailKey)) {
+      return json(await ctx.runAction(internal.freeCheck.emailReport, { domain, email: body.email, emailKey: body.emailKey, visitor }));
     }
     return json({ error: "Invalid free check payload" }, 400);
   }),
