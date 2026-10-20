@@ -94,3 +94,54 @@ export function missedSlotEmail(input: { domain: string; deadlineAt: number; tim
   ];
   return { subject: `Your ${day} article for ${input.domain} is late`, text: lines.join("\n") };
 }
+
+/** A calendar month (UTC) by its key, "2026-10". */
+export function monthWindow(key: string): { key: string; label: string; startMs: number; endMs: number; startDate: string; endDate: string } {
+  const [year, month] = key.split("-").map(Number);
+  const start = Date.UTC(year, month - 1, 1), end = Date.UTC(year, month, 1);
+  return { key, label: new Date(start).toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" }),
+    startMs: start, endMs: end, startDate: new Date(start).toISOString().slice(0, 10), endDate: new Date(end - 86_400_000).toISOString().slice(0, 10) };
+}
+
+/** The month a report covers: the one before `now`. */
+export function reportMonth(now: number) {
+  const current = new Date(now);
+  return monthWindow(new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() - 1, 1)).toISOString().slice(0, 7));
+}
+
+export type MonthlySearch = { clicks: number; impressions: number; position: number | null; pagesSeen: number }
+  | "not_connected" | "incomplete" | "see_dashboard";
+
+/** D4 (P127): what Pentra did for a site last month, and what Google showed.
+ * Null when there is nothing to report (nothing published or improved and no
+ * complete Search Console month). */
+export function monthlyReportEmail(input: { domain: string; month: { label: string }; published: Array<{ title: string; url: string }>;
+  improved: number; search: MonthlySearch; intervalMs: number | null; nextAt: number | null; timeZone?: string }): { subject: string; text: string } | null {
+  const searchReady = typeof input.search === "object";
+  if (!input.published.length && !input.improved && !searchReady) return null;
+  const count = (n: number) => n.toLocaleString("en-US");
+  const month = input.month.label.split(" ")[0];
+  const lines = [`Here's what Pentra did for ${input.domain} in ${input.month.label}.`, ""];
+  lines.push(input.published.length ? `Published: ${input.published.length} new article${input.published.length === 1 ? "" : "s"}` : "Published: no new articles");
+  for (const article of input.published.slice(0, 10)) lines.push(`- "${article.title}" ${article.url}`);
+  if (input.published.length > 10) lines.push(`- and ${input.published.length - 10} more in your dashboard`);
+  if (input.improved) lines.push("", `Improved: ${input.improved} existing article${input.improved === 1 ? "" : "s"}, for searches Google already shows them for.`);
+  lines.push("");
+  if (typeof input.search === "object") {
+    const s = input.search;
+    lines.push(`From Google (your Search Console, all of ${month}):`, `- ${count(s.clicks)} clicks and ${count(s.impressions)} impressions`);
+    if (s.position !== null) lines.push(`- average position ${s.position}`);
+    lines.push(`- ${count(s.pagesSeen)} page${s.pagesSeen === 1 ? "" : "s"} shown in search`);
+    if (s.clicks === 0) lines.push("New articles usually take weeks to months to earn clicks; impressions come first.");
+  } else if (input.search === "incomplete") {
+    lines.push(`Google's data for ${month} isn't complete yet, so this report leaves it out. Your dashboard shows the latest numbers.`);
+  } else if (input.search === "see_dashboard") {
+    lines.push(`Your dashboard has your Search Console numbers for ${month}.`);
+  } else {
+    lines.push("Connect Google Search Console in your dashboard to see clicks and impressions here, and to let Pentra improve the pages closest to page one.");
+  }
+  const perWeek = input.intervalMs && input.intervalMs > 0 ? Math.max(1, Math.round(WEEK_MS / input.intervalMs)) : null;
+  if (input.nextAt) lines.push("", `Next: your next article is due ${siteDate(input.nextAt, input.timeZone)}${perWeek ? `, and Pentra keeps publishing about ${perWeek} a week` : ""}.`);
+  lines.push("", "Your dashboard: https://pentra.dev/dashboard", "", "Pentra", "", settingsFooter(input.domain));
+  return { subject: `Your ${input.month.label} report for ${input.domain}`, text: lines.join("\n") };
+}

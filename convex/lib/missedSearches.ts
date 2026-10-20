@@ -40,7 +40,7 @@ export const FREE_CHECK_VISIBLE = 5;
 /** Report emails a day: per visitor, per address, and for all checks together. */
 export const FREE_CHECK_EMAIL_VISITOR_DAILY_LIMIT = 3;
 export const FREE_CHECK_EMAIL_ADDRESS_DAILY_LIMIT = 2;
-export const FREE_CHECK_EMAIL_DAILY_LIMIT = 80;
+export const FREE_CHECK_EMAIL_DAILY_LIMIT = 50;
 
 export type MissedSearch = { keyword: string; searchVolume: number; difficulty: number };
 export type AlmostSearch = { keyword: string; searchVolume: number; position: number; url: string };

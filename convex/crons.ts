@@ -178,5 +178,8 @@ crons.daily(
 
 // Weekly on-page health check for sites on the content service.
 crons.weekly("site-health", { dayOfWeek: "monday", hourUTC: 7, minuteUTC: 30 }, internal.siteHealth.scheduleWeekly, {});
+// D4 (P127): each content-service site's owner gets last month's report on the
+// 3rd, once Google's data for the month is complete.
+crons.monthly("customer-monthly-report", { day: 3, hourUTC: 15, minuteUTC: 0 }, internal.customerEmails.monthlyReports, {});
 
 export default crons;

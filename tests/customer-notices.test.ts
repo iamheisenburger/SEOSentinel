@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { firstArticleEmail, missedSlotCause, missedSlotEmail } from "../convex/lib/customerNotices.ts";
+import { firstArticleEmail, missedSlotCause, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth } from "../convex/lib/customerNotices.ts";
 
 // D4 (P125-P126, Oct 20 2026): what Pentra tells a site's owner, in plain words.
 
@@ -39,4 +39,33 @@ test("the first-article email names the article, the next slot and what Search C
   assert.match(email.text, /"How to prepare for a garden visit"\nhttps:\/\/cedarcare\.example\/blog\/visit/);
   assert.match(email.text, /around Thursday, October 22, then keeps to your schedule \(about 7 a week\)/);
   assert.match(email.text, /Your Google Search Console is connected/);
+});
+
+test("the monthly report covers last calendar month", () => {
+  assert.deepEqual(reportMonth(Date.UTC(2026, 10, 3, 15)), { key: "2026-10", label: "October 2026", startMs: Date.UTC(2026, 9, 1),
+    endMs: Date.UTC(2026, 10, 1), startDate: "2026-10-01", endDate: "2026-10-31" });
+  assert.equal(reportMonth(Date.UTC(2027, 0, 3)).key, "2026-12", "January reports December");
+  assert.equal(monthWindow("2026-02").endDate, "2026-02-28");
+});
+
+test("the monthly report lists the work and Google's numbers, and is skipped with nothing to say", () => {
+  const month = monthWindow("2026-10");
+  const published = Array.from({ length: 12 }, (_, i) => ({ title: `Article ${i + 1}`, url: `https://cedarcare.example/blog/a${i + 1}` }));
+  const report = monthlyReportEmail({ domain: "cedarcare.example", month, published, improved: 2,
+    search: { clicks: 0, impressions: 1240, position: 31.4, pagesSeen: 9 }, intervalMs: 86_400_000, nextAt: Date.UTC(2026, 10, 4, 17), timeZone: "UTC" })!;
+  assert.equal(report.subject, "Your October 2026 report for cedarcare.example");
+  assert.match(report.text, /Published: 12 new articles\n- "Article 1" https:\/\/cedarcare\.example\/blog\/a1/);
+  assert.match(report.text, /- and 2 more in your dashboard/);
+  assert.doesNotMatch(report.text, /Article 11"/);
+  assert.match(report.text, /Improved: 2 existing articles, for searches Google already shows them for\./);
+  assert.match(report.text, /From Google \(your Search Console, all of October\):\n- 0 clicks and 1,240 impressions\n- average position 31\.4\n- 9 pages shown in search/);
+  assert.match(report.text, /New articles usually take weeks to months to earn clicks; impressions come first\./);
+  assert.match(report.text, /Next: your next article is due Wednesday, November 4, and Pentra keeps publishing about 7 a week\./);
+  const unconnected = monthlyReportEmail({ domain: "cedarcare.example", month, published: published.slice(0, 1), improved: 0, search: "not_connected",
+    intervalMs: null, nextAt: null })!;
+  assert.match(unconnected.text, /Published: 1 new article\n/);
+  assert.match(unconnected.text, /Connect Google Search Console in your dashboard/);
+  assert.doesNotMatch(unconnected.text, /Next:/);
+  assert.equal(monthlyReportEmail({ domain: "cedarcare.example", month, published: [], improved: 0, search: "not_connected", intervalMs: null, nextAt: null }), null);
+  assert.equal(monthlyReportEmail({ domain: "cedarcare.example", month, published: [], improved: 0, search: "incomplete", intervalMs: null, nextAt: null }), null);
 });

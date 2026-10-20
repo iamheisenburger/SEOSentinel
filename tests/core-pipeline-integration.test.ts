@@ -8299,6 +8299,30 @@ test("D4 the owner hears once when an Autopilot article is 6 hours late, and why
   f.assertOffline();
 });
 
+// D4 (P127, Oct 20 2026): on the 3rd, every content-service site's owner gets
+// last month's report once: what was published, improved, and Google's numbers.
+test("D4 the owner gets last month's report once, on the 3rd", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  await f.invoke("customerEmails:recordContact", { userId: f.get(site.id)!.userId, email: "owner@reservoirnote.example" });
+  f.restartRuntime({ RESEND_API_KEY: "re_synthetic" });
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "verified"));
+  const article = f.get(f.tables.jobs.find(j => j.contentWork?.stage === "verified")!.articleId)!;
+  f.setTime(Date.UTC(2026, 9, 3, 15));
+  assert.deepEqual(await f.invoke("customerEmails:monthlyReports", {}), { noted: 1 });
+  assert.deepEqual(await f.invoke("customerEmails:monthlyReports", {}), { noted: 0 }, "once a month");
+  const log = f.tables.customer_emails.find(e => e.kind === "monthly_report")!;
+  assert.equal(log.key, "2026-09");
+  assert.deepEqual(await f.invoke("customerEmails:send", { logId: log._id }), { status: "sent" });
+  const report = f.opsEmails.find(e => e.subject === `Your September 2026 report for ${site.domain}`)!;
+  assert.deepEqual(report.to, ["owner@reservoirnote.example"]);
+  assert.ok(String(report.text).includes(`"${article.title}" ${article.publicUrl}`), "the month's article is listed with its live link");
+  assert.match(String(report.text), /Google's data for September isn't complete yet, so this report leaves it out\./,
+    "a month with missing Search Console days is never reported as zero");
+  assert.doesNotMatch(String(report.text), /Next:/, "a slot already past is not announced as next");
+  f.assertOffline();
+});
+
 // A5 (Oct 19 2026): Anthropic credit was out for 9 days and X credit for 3
 // with no alert; Telegram now belongs to the X reply system, so operator
 // alerts go by email once RESEND_API_KEY and PENTRA_ALERT_EMAIL_TO are set.

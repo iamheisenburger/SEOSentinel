@@ -3,7 +3,12 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { plausibleEmail, sendCustomerEmail } from "./lib/customerEmail";
-import { firstArticleEmail, missedSlotEmail, type MissedSlotCause } from "./lib/customerNotices";
+import { firstArticleEmail, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth, type MissedSlotCause,
+  type MonthlySearch } from "./lib/customerNotices";
+import { collectCurrentDomainPublishedSummariesSince, gscConnectionMatchesCurrentDomain } from "./lib/siteDomainBinding";
+import { publishedArticlePageUrl } from "./lib/searchPerformance";
+import { isCompleteGscDateRange } from "./lib/gscSearchAnalytics";
+import { takeCurrentGscPageRows } from "./lib/currentGscRows";
 import { accountDeletionKey } from "./lib/accountDeletion";
 
 /** D4 (P125, Oct 20 2026): service emails to a site's owner about their own
@@ -15,6 +20,8 @@ import { accountDeletionKey } from "./lib/accountDeletion";
 const RETRY_MS = 15 * 60_000, MAX_ATTEMPTS = 2;
 /** At most one late-article email a site a day, however many slots slip. */
 const MISSED_SLOT_EMAIL_SPACING_MS = 24 * 3_600_000;
+/** Monthly reports: sites per page, and the gap between sends (Resend allows a few a second). */
+const REPORT_PAGE = 20, REPORT_SPACING_MS = 1_500, REPORT_GSC_ROW_LIMIT = 12_000;
 const missedSlotCauses = v.union(v.literal("connection"), v.literal("plan"), v.literal("writing_service"), v.literal("internal"),
   v.literal("checks"), v.literal("no_topics"), v.literal("preparing"));
 
@@ -82,6 +89,28 @@ export const noteMissedSlot = internalMutation({ args: { siteId: v.id("sites"), 
     return { noted: true };
   } });
 
+/** P127: on the 3rd of each month (Google's data for the month is complete by
+ * then) every content-service site's owner gets last month's report, once.
+ * Paged over sites; the sends are spaced out. */
+export const monthlyReports = internalMutation({ args: { cursor: v.optional(v.union(v.string(), v.null())), month: v.optional(v.string()),
+  offset: v.optional(v.number()) }, handler: async (ctx, args) => {
+  const now = Date.now(), month = args.month ?? reportMonth(now).key;
+  const page = await ctx.db.query("sites").paginate({ cursor: args.cursor ?? null, numItems: REPORT_PAGE });
+  let offset = args.offset ?? 0, noted = 0;
+  for (const site of page.page) {
+    if (site.deletionStatus || site.accountDeletionRequestedAt || site.serviceMode !== "growth_first" || !site.contentSchedule) continue;
+    const logged = await ctx.db.query("customer_emails")
+      .withIndex("by_site_kind_key", q => q.eq("siteId", site._id).eq("kind", "monthly_report").eq("key", month)).first();
+    if (logged) continue;
+    const logId = await ctx.db.insert("customer_emails", { siteId: site._id, kind: "monthly_report", key: month, status: "pending", attempts: 0,
+      createdAt: now, updatedAt: now });
+    await ctx.scheduler.runAfter(offset * REPORT_SPACING_MS, internal.customerEmails.send, { logId });
+    offset++; noted++;
+  }
+  if (!page.isDone) await ctx.scheduler.runAfter(0, internal.customerEmails.monthlyReports, { cursor: page.continueCursor, month, offset });
+  return { noted };
+} });
+
 /** One pending email, with its message, the owner's address and the attempts so far. */
 export const noticeContext = internalQuery({ args: { logId: v.id("customer_emails") }, handler: async (ctx, { logId }) => {
   const log = await ctx.db.get(logId);
@@ -90,19 +119,47 @@ export const noticeContext = internalQuery({ args: { logId: v.id("customer_email
   if (!site || site.deletionStatus || site.accountDeletionRequestedAt) return null;
   const contact = site.userId ? await ctx.db.query("account_contacts").withIndex("by_user", q => q.eq("userId", site.userId!)).first() : null;
   const domain = site.domain.replace(/^https?:\/\//, "").replace(/\/.*$/, ""), timeZone = site.contentSchedule?.timezone;
-  let message: { subject: string; text: string } | null = null;
+  let message: { subject: string; text: string } | null = null, skipReason = "no_longer_true";
   if (log.kind === "first_article" && log.articleId) {
     const article = await ctx.db.get(log.articleId);
     if (article?.status === "published" && article.publicUrl) message = firstArticleEmail({ domain, title: article.title, url: article.publicUrl,
       nextAt: site.contentSchedule?.nextDeadlineAt ?? null, intervalMs: site.contentSchedule?.intervalMs ?? null, timeZone,
       searchConsole: Boolean(site.gscRefreshToken && site.gscProperty) });
+  } else if (log.kind === "monthly_report") {
+    // What Pentra did last month, and Google's numbers when the whole month is in.
+    const window = monthWindow(log.key);
+    const published = (await collectCurrentDomainPublishedSummariesSince(ctx, site, window.startMs))
+      .filter(a => typeof a.publishedAt === "number" && a.publishedAt < window.endMs).sort((a, b) => a.publishedAt! - b.publishedAt!)
+      .map(a => ({ title: a.title, url: a.publicUrl ?? publishedArticlePageUrl(site.domain, site.urlStructure, a.slug) }));
+    const improved = (await ctx.db.query("jobs").withIndex("by_site_content_stage", q => q.eq("siteId", site._id).eq("contentWork.stage", "verified"))
+      .order("desc").take(100)).filter(j => j.contentWork?.intent === "improve" && (j.contentWork.verifiedAt ?? 0) >= window.startMs &&
+        (j.contentWork.verifiedAt ?? 0) < window.endMs).length;
+    let search: MonthlySearch = "not_connected";
+    if (gscConnectionMatchesCurrentDomain(site) && site.gscReceiptStatus !== "revoked") {
+      if (!isCompleteGscDateRange(site.gscDateEpochs ?? [], window.startDate, window.endDate)) search = "incomplete";
+      else {
+        const rows = await takeCurrentGscPageRows(ctx, site, REPORT_GSC_ROW_LIMIT, { startDate: window.startDate, endDate: window.endDate });
+        if (rows.exhausted) search = "see_dashboard";
+        else {
+          const impressions = rows.rows.reduce((n, r) => n + r.impressions, 0);
+          search = { clicks: rows.rows.reduce((n, r) => n + r.clicks, 0), impressions,
+            position: impressions > 0 ? Math.round(rows.rows.reduce((n, r) => n + r.weightedPosition, 0) / impressions * 10) / 10 : null,
+            pagesSeen: new Set(rows.rows.filter(r => r.impressions > 0).map(r => r.page)).size };
+        }
+      }
+    }
+    message = monthlyReportEmail({ domain, month: window, published, improved, search, intervalMs: site.contentSchedule?.paused ? null : site.contentSchedule?.intervalMs ?? null,
+      // Only a slot still ahead is announced (an overdue one is reported by the late-article email).
+      nextAt: site.contentSchedule && !site.contentSchedule.paused && site.contentSchedule.nextDeadlineAt > Date.now()
+        ? site.contentSchedule.nextDeadlineAt : null, timeZone });
+    if (!message) skipReason = "nothing_to_report";
   } else if (log.kind === "missed_slot" && log.cause) {
     // A slot that has since been published or skipped past needs no email.
     if (site.contentSchedule && site.contentSchedule.nextDeadlineAt === Number(log.key) && !site.contentSchedule.paused) {
       message = missedSlotEmail({ domain, deadlineAt: Number(log.key), timeZone, cause: log.cause as MissedSlotCause });
     }
   }
-  return { attempts: log.attempts, message, contact: contact ? { email: contact.email, emailUpdates: contact.emailUpdates } : null };
+  return { attempts: log.attempts, message, skipReason, contact: contact ? { email: contact.email, emailUpdates: contact.emailUpdates } : null };
 } });
 
 export const markEmail = internalMutation({ args: { logId: v.id("customer_emails"), status: v.union(v.literal("pending"), v.literal("sent"),
@@ -116,7 +173,7 @@ async function sendNotice(ctx: ActionCtx, logId: Id<"customer_emails">): Promise
   const context = await ctx.runQuery(internal.customerEmails.noticeContext, { logId });
   if (!context) return { status: "not_pending" };
   if (!context.message) {
-    await ctx.runMutation(internal.customerEmails.markEmail, { logId, status: "skipped", reason: "no_longer_true", attempts: context.attempts });
+    await ctx.runMutation(internal.customerEmails.markEmail, { logId, status: "skipped", reason: context.skipReason, attempts: context.attempts });
     return { status: "skipped" };
   }
   if (!context.contact || !context.contact.emailUpdates) {

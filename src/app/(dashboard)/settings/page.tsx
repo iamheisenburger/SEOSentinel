@@ -308,7 +308,7 @@ function EmailUpdatesSection() {
       </div>
       <div className="space-y-3 px-5 py-5">
         <p className="text-[13px] leading-relaxed text-[#8A8F98]">
-          Pentra emails you about your own sites: when your first article is live, and when a scheduled article is late (with the reason).
+          Pentra emails you about your own sites: when your first article is live, when a scheduled article is late (with the reason), and once a month with what Pentra did and what Google showed.
           {contact ? <> They go to <span className="text-[#F7F8F8]">{contact.email}</span>, your account&apos;s email.</> : " They go to your account's verified email."}
         </p>
         <label className="flex items-center gap-3 text-[13px] text-[#F7F8F8]">
