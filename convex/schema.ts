@@ -1745,6 +1745,8 @@ export default defineSchema({
     status: v.union(v.literal("pending"), v.literal("sent"), v.literal("skipped"), v.literal("failed")),
     reason: v.optional(v.string()),
     articleId: v.optional(v.id("articles")),
+    // Why a slot was late (missed_slot): what the owner is told.
+    cause: v.optional(v.string()),
     attempts: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),

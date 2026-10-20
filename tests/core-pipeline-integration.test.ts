@@ -8254,6 +8254,51 @@ test("D4 no first-article email when the owner turned emails off, or the site al
   off.assertOffline(); older.assertOffline();
 });
 
+// D4 (P126, Oct 20 2026): when an Autopilot article is 6h+ late, the owner
+// hears it and why, once per slot and at most daily; never when they paused it.
+test("D4 the owner hears once when an Autopilot article is 6 hours late, and why", async () => {
+  const hour = 3_600_000;
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  await f.invoke("customerEmails:recordContact", { userId: f.get(site.id)!.userId, email: "owner@reservoirnote.example" });
+  f.restartRuntime({ RESEND_API_KEY: "re_synthetic" });
+  const deadline = f.now() - 5 * hour;
+  f.get(site.id)!.contentSchedule.nextDeadlineAt = deadline;
+  await f.invoke("contentHealth:runContentHealth", { notify: "problems" });
+  assert.equal((f.tables.customer_emails ?? []).length, 0, "5 hours late: not yet");
+  f.setTime(f.now() + 2 * hour);
+  await f.invoke("contentHealth:runContentHealth", { notify: "problems" });
+  assert.deepEqual(f.tables.customer_emails.map(e => [e.kind, e.key, e.cause, e.status]), [["missed_slot", String(deadline), "preparing", "pending"]]);
+  assert.deepEqual(await f.invoke("customerEmails:send", { logId: f.tables.customer_emails[0]._id }), { status: "sent" });
+  const email = f.opsEmails.find(e => e.from === "Pentra <hello@pentra.dev>")!;
+  assert.deepEqual(email.to, ["owner@reservoirnote.example"]);
+  assert.match(email.subject, new RegExp(`article for ${site.domain.replace(/\./g, "\\.")} is late$`));
+  assert.match(email.text, /Why: The article is taking longer than usual to prepare\./);
+  assert.match(email.text, /You don't need to do anything/);
+  await f.invoke("contentHealth:runContentHealth", { notify: "problems" });
+  f.setTime(f.now() + 6 * hour);
+  await f.invoke("contentHealth:runContentHealth", { notify: "always" });
+  assert.equal(f.tables.customer_emails.length, 1, "the same slot is never emailed twice");
+  // A later slot that slips within a day of the last email waits for the next day.
+  f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() - 7 * hour;
+  await f.invoke("contentHealth:runContentHealth", { notify: "problems" });
+  assert.equal(f.tables.customer_emails.length, 1, "at most one late-article email a site a day");
+  // Paused by the owner: not a missed article.
+  f.setTime(f.now() + 25 * hour);
+  f.get(site.id)!.contentSchedule.paused = true;
+  await f.invoke("contentHealth:runContentHealth", { notify: "problems" });
+  assert.equal(f.tables.customer_emails.length, 1);
+  // A slot that is no longer due by the time the email runs is not sent.
+  f.get(site.id)!.contentSchedule.paused = false;
+  await f.invoke("contentHealth:runContentHealth", { notify: "problems" });
+  const second = f.tables.customer_emails.find(e => e.status === "pending")!;
+  f.get(site.id)!.contentSchedule.nextDeadlineAt += 86_400_000;
+  assert.deepEqual(await f.invoke("customerEmails:send", { logId: second._id }), { status: "skipped" });
+  assert.equal(f.get(second._id)!.reason, "no_longer_true");
+  f.assertOffline();
+});
+
 // A5 (Oct 19 2026): Anthropic credit was out for 9 days and X credit for 3
 // with no alert; Telegram now belongs to the X reply system, so operator
 // alerts go by email once RESEND_API_KEY and PENTRA_ALERT_EMAIL_TO are set.

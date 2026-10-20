@@ -6,6 +6,7 @@ import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning
 import { contentIssue } from "./lib/contentCustomer";
 import { eligiblePlannedTopics, fallbackTopicProposals, topicResearchDueAt } from "./contentWork";
 import { healthFingerprint, opsEmailConfigured, sendOpsEmail } from "./lib/opsEmail";
+import { missedSlotCause } from "./lib/customerNotices";
 
 /**
  * Daily Autopilot health check.
@@ -20,6 +21,8 @@ import { healthFingerprint, opsEmailConfigured, sendOpsEmail } from "./lib/opsEm
  */
 
 export const HEALTH_OVERDUE_GRACE_MS = 60 * 60_000;
+/** P126: an Autopilot article this late gets its owner an email saying why. */
+export const CUSTOMER_LATE_EMAIL_MS = 6 * 3_600_000;
 
 export type SiteHealth = {
   siteId: Id<"sites">;
@@ -42,6 +45,10 @@ export type SiteHealth = {
   lastResearch?: NonNullable<Doc<"sites">["contentSchedule"]>["topicsResearchReceipt"] | null;
   researchDueAt: number | null;
   nudge: boolean;
+  /** For the owner's late-article email (P126): the due slot's failure code, and whether the owner paused or reviews first. */
+  failure?: string | null;
+  paused?: boolean;
+  reviewFirst?: boolean;
 };
 
 export function describeSiteHealth(input: {
@@ -146,6 +153,8 @@ async function siteHealthFor(ctx: QueryCtx, site: Doc<"sites">, now: number, top
     unresolvedFailures: [...new Set(unresolved)], destinationVerified, topicsLeft, plannedTopics, researchDueAt,
   });
   return { siteId: site._id, domain: site.canonicalDomain ?? site.domain, ...verdict, lastPublishedAt, nextDeadlineAt, intervalMs: schedule.intervalMs,
+    failure: failedAtSlot && !covered ? failedAtSlot.contentWork!.failure ?? "failed" : null, paused: Boolean(schedule.paused),
+    reviewFirst: Boolean(site.approvalRequired || schedule.ownerReviewedOnly),
     readyForNextSlots, strandedReady, destinationVerified, topicsLeft, plannedTopics,
     lastResearchAt: schedule.topicsReplenishedAt ?? null, lastResearchAdded: schedule.topicsReplenishAdded ?? null,
     lastResearch: schedule.topicsResearchReceipt ?? null, researchDueAt };
@@ -251,6 +260,16 @@ export const runContentHealth = internalAction({
     }
     let nudged = 0;
     for (const site of all) if (site.nudge) { await ctx.runMutation(internal.contentHealth.nudgeSite, { siteId: site.siteId }); nudged++; }
+    // P126: the owner of an Autopilot site whose article is 6h+ late hears why
+    // (once per slot, at most once a day per site; never when they paused it or
+    // review every article first).
+    if ((notify ?? "problems") !== "never") for (const site of all) {
+      if (site.paused || site.reviewFirst || site.nextDeadlineAt === null || now - site.nextDeadlineAt < CUSTOMER_LATE_EMAIL_MS) continue;
+      try {
+        await ctx.runMutation(internal.customerEmails.noteMissedSlot, { siteId: site.siteId, deadlineAt: site.nextDeadlineAt,
+          cause: missedSlotCause({ destinationVerified: site.destinationVerified, plannedTopics: site.plannedTopics, failure: site.failure ?? null }) });
+      } catch (error) { console.warn(`Late-article email not decided for ${site.siteId}: ${error instanceof Error ? error.message : "unknown"}`); }
+    }
     const attention = all.filter(s => s.status === "attention").length;
     const mode = notify ?? "problems";
     let notified = false;

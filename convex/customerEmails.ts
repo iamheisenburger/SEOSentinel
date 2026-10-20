@@ -1,8 +1,9 @@
-import { internalAction, internalMutation, internalQuery, mutation, query, type MutationCtx } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { firstArticleEmail, plausibleEmail, sendCustomerEmail } from "./lib/customerEmail";
+import { plausibleEmail, sendCustomerEmail } from "./lib/customerEmail";
+import { firstArticleEmail, missedSlotEmail, type MissedSlotCause } from "./lib/customerNotices";
 import { accountDeletionKey } from "./lib/accountDeletion";
 
 /** D4 (P125, Oct 20 2026): service emails to a site's owner about their own
@@ -12,6 +13,10 @@ import { accountDeletionKey } from "./lib/accountDeletion";
  * key and logged, so a retry or a second verification never sends twice. */
 
 const RETRY_MS = 15 * 60_000, MAX_ATTEMPTS = 2;
+/** At most one late-article email a site a day, however many slots slip. */
+const MISSED_SLOT_EMAIL_SPACING_MS = 24 * 3_600_000;
+const missedSlotCauses = v.union(v.literal("connection"), v.literal("plan"), v.literal("writing_service"), v.literal("internal"),
+  v.literal("checks"), v.literal("no_topics"), v.literal("preparing"));
 
 /** The owner's verified address, from pentra.dev's plan sync. No write when unchanged. */
 export const recordContact = internalMutation({ args: { userId: v.string(), email: v.string() }, handler: async (ctx, args) => {
@@ -57,19 +62,47 @@ export async function noteFirstArticleLive(ctx: MutationCtx, site: Doc<"sites">,
   const logId = await ctx.db.insert("customer_emails", { siteId: site._id, kind: "first_article", key: "first",
     status: earlier ? "skipped" : "pending", ...(earlier ? { reason: "not_first_article" } : {}), articleId: article._id,
     attempts: 0, createdAt: now, updatedAt: now });
-  if (!earlier) await ctx.scheduler.runAfter(0, internal.customerEmails.sendFirstArticle, { logId });
+  if (!earlier) await ctx.scheduler.runAfter(0, internal.customerEmails.send, { logId });
 }
 
-export const firstArticleContext = internalQuery({ args: { logId: v.id("customer_emails") }, handler: async (ctx, { logId }) => {
+/** P126: content health found an Autopilot slot 6h+ late. The owner hears why,
+ * once per slot and at most once a day per site. */
+export const noteMissedSlot = internalMutation({ args: { siteId: v.id("sites"), deadlineAt: v.number(), cause: missedSlotCauses },
+  handler: async (ctx, { siteId, deadlineAt, cause }) => {
+    const key = String(deadlineAt), now = Date.now();
+    const sameSlot = await ctx.db.query("customer_emails")
+      .withIndex("by_site_kind_key", q => q.eq("siteId", siteId).eq("kind", "missed_slot").eq("key", key)).first();
+    if (sameSlot) return { noted: false };
+    const latest = await ctx.db.query("customer_emails")
+      .withIndex("by_site_kind_key", q => q.eq("siteId", siteId).eq("kind", "missed_slot")).order("desc").first();
+    if (latest && now - latest.createdAt < MISSED_SLOT_EMAIL_SPACING_MS) return { noted: false };
+    const logId = await ctx.db.insert("customer_emails", { siteId, kind: "missed_slot", key, status: "pending", cause, attempts: 0,
+      createdAt: now, updatedAt: now });
+    await ctx.scheduler.runAfter(0, internal.customerEmails.send, { logId });
+    return { noted: true };
+  } });
+
+/** One pending email, with its message, the owner's address and the attempts so far. */
+export const noticeContext = internalQuery({ args: { logId: v.id("customer_emails") }, handler: async (ctx, { logId }) => {
   const log = await ctx.db.get(logId);
-  if (!log || log.status !== "pending" || !log.articleId) return null;
-  const [site, article] = await Promise.all([ctx.db.get(log.siteId), ctx.db.get(log.articleId)]);
-  if (!site || site.deletionStatus || !article || article.status !== "published" || !article.publicUrl) return null;
+  if (!log || log.status !== "pending") return null;
+  const site = await ctx.db.get(log.siteId);
+  if (!site || site.deletionStatus || site.accountDeletionRequestedAt) return null;
   const contact = site.userId ? await ctx.db.query("account_contacts").withIndex("by_user", q => q.eq("userId", site.userId!)).first() : null;
-  return { attempts: log.attempts, domain: site.domain.replace(/^https?:\/\//, "").replace(/\/.*$/, ""), title: article.title, url: article.publicUrl,
-    nextAt: site.contentSchedule?.nextDeadlineAt ?? null, intervalMs: site.contentSchedule?.intervalMs ?? null,
-    timeZone: site.contentSchedule?.timezone, searchConsole: Boolean(site.gscRefreshToken && site.gscProperty),
-    contact: contact ? { email: contact.email, emailUpdates: contact.emailUpdates } : null };
+  const domain = site.domain.replace(/^https?:\/\//, "").replace(/\/.*$/, ""), timeZone = site.contentSchedule?.timezone;
+  let message: { subject: string; text: string } | null = null;
+  if (log.kind === "first_article" && log.articleId) {
+    const article = await ctx.db.get(log.articleId);
+    if (article?.status === "published" && article.publicUrl) message = firstArticleEmail({ domain, title: article.title, url: article.publicUrl,
+      nextAt: site.contentSchedule?.nextDeadlineAt ?? null, intervalMs: site.contentSchedule?.intervalMs ?? null, timeZone,
+      searchConsole: Boolean(site.gscRefreshToken && site.gscProperty) });
+  } else if (log.kind === "missed_slot" && log.cause) {
+    // A slot that has since been published or skipped past needs no email.
+    if (site.contentSchedule && site.contentSchedule.nextDeadlineAt === Number(log.key) && !site.contentSchedule.paused) {
+      message = missedSlotEmail({ domain, deadlineAt: Number(log.key), timeZone, cause: log.cause as MissedSlotCause });
+    }
+  }
+  return { attempts: log.attempts, message, contact: contact ? { email: contact.email, emailUpdates: contact.emailUpdates } : null };
 } });
 
 export const markEmail = internalMutation({ args: { logId: v.id("customer_emails"), status: v.union(v.literal("pending"), v.literal("sent"),
@@ -78,11 +111,12 @@ export const markEmail = internalMutation({ args: { logId: v.id("customer_emails
     await ctx.db.patch(logId, { status, attempts, updatedAt: Date.now(), ...(reason ? { reason } : { reason: undefined }) });
   } });
 
-/** Send the first-article email (one retry 15 minutes later if Resend refuses it). */
-export const sendFirstArticle = internalAction({ args: { logId: v.id("customer_emails") }, handler: async (ctx, { logId }): Promise<{ status: string }> => {
-  const context = await ctx.runQuery(internal.customerEmails.firstArticleContext, { logId });
-  if (!context) {
-    await ctx.runMutation(internal.customerEmails.markEmail, { logId, status: "skipped", reason: "article_or_site_gone", attempts: 0 });
+/** Send one decided email (one retry 15 minutes later if Resend refuses it). */
+async function sendNotice(ctx: ActionCtx, logId: Id<"customer_emails">): Promise<{ status: string }> {
+  const context = await ctx.runQuery(internal.customerEmails.noticeContext, { logId });
+  if (!context) return { status: "not_pending" };
+  if (!context.message) {
+    await ctx.runMutation(internal.customerEmails.markEmail, { logId, status: "skipped", reason: "no_longer_true", attempts: context.attempts });
     return { status: "skipped" };
   }
   if (!context.contact || !context.contact.emailUpdates) {
@@ -90,8 +124,7 @@ export const sendFirstArticle = internalAction({ args: { logId: v.id("customer_e
     await ctx.runMutation(internal.customerEmails.markEmail, { logId, status: "skipped", reason, attempts: context.attempts });
     return { status: "skipped" };
   }
-  const message = firstArticleEmail(context);
-  const sent = await sendCustomerEmail({ to: context.contact.email, ...message });
+  const sent = await sendCustomerEmail({ to: context.contact.email, ...context.message });
   const attempts = context.attempts + 1;
   if (sent.sent) {
     await ctx.runMutation(internal.customerEmails.markEmail, { logId, status: "sent", attempts });
@@ -99,6 +132,10 @@ export const sendFirstArticle = internalAction({ args: { logId: v.id("customer_e
   }
   const retry = attempts < MAX_ATTEMPTS;
   await ctx.runMutation(internal.customerEmails.markEmail, { logId, status: retry ? "pending" : "failed", reason: sent.error ?? "send_failed", attempts });
-  if (retry) await ctx.scheduler.runAfter(RETRY_MS, internal.customerEmails.sendFirstArticle, { logId });
+  if (retry) await ctx.scheduler.runAfter(RETRY_MS, internal.customerEmails.send, { logId });
   return { status: retry ? "retrying" : "failed" };
-} });
+}
+
+export const send = internalAction({ args: { logId: v.id("customer_emails") }, handler: async (ctx, { logId }) => sendNotice(ctx, logId) });
+/** P125's name for the same send, kept for anything it already scheduled. */
+export const sendFirstArticle = internalAction({ args: { logId: v.id("customer_emails") }, handler: async (ctx, { logId }) => sendNotice(ctx, logId) });
