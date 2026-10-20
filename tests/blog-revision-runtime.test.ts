@@ -132,3 +132,18 @@ test("an acknowledged revision cannot expose an unpublished original or an unrel
   f.tables.articles[0].status = "published";
   assert.equal(await f.run("getPublishedBySlug", { domain: "unrelated.example" }), null);
 });
+
+// Oct 20 2026: a wording repair's draft ("slug") was found before the
+// published original ("/slug") and pentra.dev's page answered 404.
+test("a correction's draft with the same slug never hides the published article", async () => {
+  const f = fixture();
+  f.tables.published_article_revisions.splice(0);
+  f.tables.articles[0].slug = "/workflow";
+  f.tables.articles.push({ _id: "draft", siteId: "site", slug: "workflow", status: "revision", title: "Correction draft",
+    markdown: "Draft text", createdAt: 3000 });
+  const result = await f.run("getPublishedBySlug");
+  assert.equal(result?.title, "Original article", "the published original, not the draft");
+  assert.equal(result?.markdown, f.base.markdown);
+  f.tables.articles[0].status = "rejected";
+  assert.equal(await f.run("getPublishedBySlug"), null, "a draft alone is never public");
+});

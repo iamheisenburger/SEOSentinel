@@ -117,6 +117,12 @@ async function currentPublishedArticles(
   );
 }
 
+/** The published article for a slug, stored with or without a leading slash.
+ * A correction's or refresh's own draft shares the article's slug and is never
+ * the public article: on Oct 20 2026 a wording repair's draft ("slug") was
+ * found before the published original ("/slug") and pentra.dev's
+ * /blog/keyword-research-tracking-2 answered 404. Bounded: a slug has the
+ * article and a few drafts. */
 async function currentArticleBySlug(
   ctx: QueryCtx,
   site: Doc<"sites">,
@@ -124,13 +130,13 @@ async function currentArticleBySlug(
 ) {
   const candidates = [slug, `/${slug}`];
   for (const candidate of candidates) {
-    const article = siteUsesLegacyDomainReceipts(site)
+    const articles = siteUsesLegacyDomainReceipts(site)
       ? await ctx.db
         .query("articles")
         .withIndex("by_site_slug", (q) =>
           q.eq("siteId", site._id).eq("slug", candidate)
         )
-        .first()
+        .take(20)
       : await ctx.db
         .query("articles")
         .withIndex("by_site_domain_revision_slug", (q) =>
@@ -140,8 +146,9 @@ async function currentArticleBySlug(
             .eq("domainRevision", siteCanonicalDomainRevision(site))
             .eq("slug", candidate)
         )
-        .first();
-    if (article && articleMatchesCurrentDomain(site, article)) return article;
+        .take(20);
+    const article = articles.find((row) => row.status === "published" && articleMatchesCurrentDomain(site, row));
+    if (article) return article;
   }
   return null;
 }
