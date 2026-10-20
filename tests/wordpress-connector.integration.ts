@@ -557,3 +557,48 @@ test('real WordPress Review first: the owner requests a draft, approves it, and 
   assert.equal(f.get(job.articleId)!.status, 'published');
   f.setIdentity(null);
 });
+
+// C3 (Oct 20 2026): most WordPress sites run an SEO plugin that writes its own
+// title ("Post – Site"), canonical and social tags. Pentra's live check needs
+// exactly one canonical and the reviewed title, so an article on such a site
+// could go live and never verify, stalling the schedule.
+test('real WordPress with Yoast SEO or Rank Math: Pentra publishes and verifies the exact article', async t => {
+  for (const plugin of ['yoast', 'rankmath']) await t.test(plugin, async () => {
+    const local = command({ operation: 'setup' });
+    assert.equal(command({ operation: 'seo_plugin', plugin }).active.length, 1);
+    try {
+      const [username, password] = Buffer.from(local.auth, 'base64').toString().split(':');
+      const domain = `seo-${plugin}-${randomUUID().slice(0, 8)}.example`;
+      let latestHtml = '';
+      const f = setup({ growthFirst: true, businesses: [{ ...slcBusinesses[0], domain }], wordpress: { username, password,
+        transport: async (url, init) => {
+          assert.equal(url.hostname, domain);
+          const response = await fetch(root + url.pathname + url.search, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers).entries()), 'X-Pentra-Fixture-Host': domain }, redirect: 'manual' });
+          if (!url.pathname.startsWith('/wp-json/')) latestHtml = await response.clone().text();
+          return response;
+        } } });
+      const site = await createEmptyContentSite(f), owner = f.get(site.id)!.userId;
+      f.setIdentity(owner);
+      let r = await f.invoke('contentWork:readiness', { siteId: site.id });
+      await f.invoke('contentWork:selectServiceMode', { siteId: site.id, mode: 'growth_first', ownerReviewedOnly: true,
+        confirmBusinessProfile: true, reviewToken: r.reviewToken });
+      r = await f.invoke('contentWork:readiness', { siteId: site.id });
+      const requested = await f.invoke('contentWork:requestDraft', { siteId: site.id, reviewToken: r.reviewToken,
+        requestKey: `wordpress-seo-plugin-${plugin}`, maximumMicroUsd: r.ownerDraft.maximumMicroUsd });
+      await pumpUntil(f, () => ['ready', 'failed'].includes(f.get(requested.jobId)!.contentWork.stage));
+      const job = f.get(requested.jobId)!;
+      assert.equal(job.contentWork.stage, 'ready');
+      await f.invoke('actions/pipeline:publishApproved', { siteId: site.id, articleId: job.articleId });
+      await pumpUntil(f, () => ['verified', 'failed'].includes(f.get(job.articleId)!.publicUrlStatus), 200, START + 48 * 60 * 60_000);
+      const article = f.get(job.articleId)!;
+      const head = latestHtml.slice(0, latestHtml.indexOf('</head>'));
+      assert.equal(article.publicUrlStatus, 'verified', JSON.stringify({ failure: article.publicUrlCheckError, attempts: article.publicUrlCheckAttempts,
+        titles: head.match(/<title>[^<]*<\/title>|<meta[^>]+(?:og:title|twitter:title)[^>]*>/g), canonicals: head.match(/<link[^>]+rel=["']canonical["'][^>]*>/g),
+        descriptions: head.match(/<meta[^>]+name=["']description["'][^>]*>/g) }));
+      assert.equal(article.status, 'published');
+      t.diagnostic(JSON.stringify({ plugin, titles: head.match(/<title>[^<]*<\/title>|<meta[^>]+(?:og:title|twitter:title)[^>]*>/g),
+        canonicals: head.match(/<link[^>]+rel=["']canonical["'][^>]*>/g)?.length, generator: head.match(/Yoast SEO|Rank Math[^-]*/g)?.slice(0, 2) }));
+      f.setIdentity(null);
+    } finally { command({ operation: 'seo_plugin', plugin: 'none' }); }
+  });
+});

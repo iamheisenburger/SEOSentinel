@@ -83,6 +83,20 @@ test("new customers see one clear Autopilot or Review-first choice, not delivery
   assert.match(running, /Articles live/); assert.match(running, /4 of your 10 monthly articles used \(all sites; held-back drafts don&#x27;t count\)/);
 });
 
+// Phase 4 (Oct 20 2026): Search Console is the owner's own Google account, so
+// Pentra cannot connect it; without it Pentra can only publish new articles.
+test("owners without Search Console see what connecting it unlocks; connected owners do not", () => {
+  const running = { ...state, autopilot: { selectable: true, on: true }, plan: { tier: "starter", articlesPerMonth: 10, autopilotIntervalMs: 259_200_000 },
+    schedule: { ...state.schedule, paused: false, autopilotSelected: true }, results: { live: 3, liveThisMonth: 2, planUsedThisMonth: 4 } };
+  for (const component of ["content-work-overview", "content-work-service"]) {
+    const missing = render(component, { ...running, searchConsole: { connected: false } }).html;
+    assert.match(missing, /Connect Google Search Console/);
+    assert.match(missing, /can only publish new articles/);
+    assert.doesNotMatch(missing, /read-only/i, "the scope also submits sitemaps; never claim read-only");
+    assert.doesNotMatch(render(component, { ...running, searchConsole: { connected: true } }).html, /Connect Google Search Console/);
+  }
+});
+
 function renderSidebar(queryState: unknown, siteOverrides: Record<string, unknown> = {}) {
   const code = buildSync({ entryPoints: ["src/components/layout/sidebar.tsx"], bundle: true, platform: "node", format: "cjs",
     packages: "external", external: ["@/hooks/usePlanLimits", "@/contexts/site-context"], write: false }).outputFiles[0].text;

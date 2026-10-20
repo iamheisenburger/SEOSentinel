@@ -1134,6 +1134,8 @@ export const readiness = query({
       profile: { name: site.siteName ?? site.domain, summary: site.siteSummary ?? "", audience: site.targetAudienceSummary ?? "", productUsage: site.productUsage ?? "", offerings: site.keyFeatures ?? [], questions: site.painPoints ?? [] },
       destination: { kind: site.publishMethod ?? "manual", domain: site.domain, repository: site.publishMethod === "github" ? `${site.repoOwner ?? ""}/${site.repoName ?? ""}` : null,
         branch: site.repoDefaultBranch ?? null, contentDirectory: directory, verified },
+      // The dashboard asks owners to connect it: improvements and results need it.
+      searchConsole: { connected: gscConnectionMatchesCurrentDomain(site) },
       entitlement: await contentEntitlementAuthorized(ctx, site), enabled: Boolean(site.autopilotEnabled), approvalRequired: Boolean(site.approvalRequired),
       bindingCurrent,
       reconciliation: { needed: reconciliation.needed, staleItems: reconciliation.stale.length, issues: reconciliation.issues },

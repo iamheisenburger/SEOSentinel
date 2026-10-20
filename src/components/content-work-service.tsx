@@ -14,6 +14,7 @@ import { CMS_PLATFORM_LABELS, isApiCmsMethod } from "../../convex/lib/cmsDestina
 import { contentServiceStatus, fundingMessage } from "../lib/content-service-status";
 import { AutopilotSwitch, PentraSetupChoice } from "./pentra-setup-choice";
 import { useVisibleQuery } from "@/hooks/useVisibleQuery";
+import { SearchConsolePrompt } from "./search-console-prompt";
 
 export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
   const state = useVisibleQuery(api.contentWork.readiness, { siteId });
@@ -102,6 +103,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
         </div>
         {!state.entitlement && <p role="alert" className="text-[#F2994A]">Your plan isn&apos;t active. <Link href="/upgrade" className={link}>Plans &amp; billing</Link></p>}
         {!state.destination.verified && <p role="alert" className="text-[#F2994A]">Connect and verify your website in <Link href={`/sites/${siteId}?tab=settings`} className={link}>website settings</Link>.</p>}
+        {state.searchConsole?.connected === false && <SearchConsolePrompt siteId={siteId} />}
         {needsReview.length > 0 && <p role="alert" className="text-[#F2994A]">{needsReview.length === 1 ? "A draft needs" : `${needsReview.length} drafts need`} your review in <Link href="/articles" className={link}>Articles</Link>. Nothing was published.</p>}
         {state.funding.status !== "available" && <p>{fundingMessage(state.funding, state.schedule?.timezone ?? "UTC")}{" "}
           {state.funding.status === "blocked" && <Link href="/upgrade" className={link}>Plans &amp; billing</Link>}</p>}

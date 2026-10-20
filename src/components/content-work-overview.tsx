@@ -9,6 +9,7 @@ import { contentServiceStatus, fundingMessage } from "../lib/content-service-sta
 import { AdoptAutopilot, AutopilotSwitch } from "./pentra-setup-choice";
 import { topicTitle } from "@/lib/topic-title";
 import { useVisibleQuery } from "@/hooks/useVisibleQuery";
+import { SearchConsolePrompt } from "./search-console-prompt";
 export const money = (value: number | null) => value === null ? "Unknown" : `$${(value / 1_000_000).toFixed(4)}`;
 export const shownTime = (value: number, zone = "UTC") => new Intl.DateTimeFormat("en", { timeZone: zone, dateStyle: "medium", timeStyle: "long" }).format(value);
 export const fundingCopy = { available: "Internal capacity currently available; every paid admission rechecks it.", blocked: "Admission blocked by the existing spending or entitlement guards.", unknown: "Funding readiness unknown. No extra spending is authorized.", unconfigured: "Provider pricing is not configured. Preparation is not funded." };
@@ -70,6 +71,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
       <AdoptAutopilot siteId={siteId} reviewToken={state.reviewToken} intervalMs={state.plan.autopilotIntervalMs} articlesPerMonth={state.plan.articlesPerMonth} />}
     {state.autopilot?.on && s && !s.paused && s.nextDeadlineAt > state.funding.checkedAt &&
       <p className="text-[14px] text-[#F7F8F8]">Next article is scheduled for <span className="font-medium">{when(s.nextDeadlineAt)}</span>.</p>}
+    {state.searchConsole?.connected === false && <SearchConsolePrompt siteId={siteId} />}
     {plain && state.results && <ResultsStrip siteId={siteId} live={state.results.live} liveThisMonth={state.results.liveThisMonth}
       planPerMonth={state.plan?.articlesPerMonth ?? null} planUsed={state.results.planUsedThisMonth ?? 0} />}
     {/* Results first: the clicks trend sits directly under the headline numbers. */}

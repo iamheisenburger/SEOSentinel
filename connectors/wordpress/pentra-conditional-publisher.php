@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Pentra Conditional Publisher
  * Description: Authenticated, revision-bound publishing of explicitly selected classic posts/pages.
- * Version: 1.1.0
+ * Version: 1.2.0
  * Requires PHP: 8.1
  * License: GPL-2.0-or-later
  */
@@ -316,11 +316,19 @@ final class Pentra_Conditional_Publisher {
     }
     static function metadata() {
         global $wpdb;
+        static $cache = [];
         if (!is_singular(['post','page'])) { return null; }
-        $p = self::permission(get_queried_object_id());
+        $id = get_queried_object_id();
+        if (array_key_exists($id, $cache)) { return $cache[$id]; }
+        $p = self::permission($id);
         $meta = $p ? json_decode($p['metadata'], true) : null;
-        $row = $meta ? $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->posts} WHERE ID=%d", get_queried_object_id()), ARRAY_A) : null;
-        return $row && ($meta['sourceRevision'] ?? '') === self::revision($row) && ($meta['canonical'] ?? '') === get_permalink((int)$row['ID']) ? $meta : null;
+        $row = $meta ? $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->posts} WHERE ID=%d", $id), ARRAY_A) : null;
+        return $cache[$id] = ($row && ($meta['sourceRevision'] ?? '') === self::revision($row) && ($meta['canonical'] ?? '') === get_permalink((int)$row['ID']) ? $meta : null);
+    }
+    /** For a post Pentra published: its exact reviewed value; else the site's own. */
+    static function exact($key, $value) {
+        $meta = self::metadata();
+        return $meta && isset($meta[$key]) && is_string($meta[$key]) && $meta[$key] !== '' ? $meta[$key] : $value;
     }
     static function head() {
         $meta = self::metadata(); if (!$meta || empty($meta['canonical'])) { return; }
@@ -336,3 +344,18 @@ add_action('wp_head', ['Pentra_Conditional_Publisher', 'head'], 1);
 add_filter('pre_get_document_title', function($title) {
     $meta = Pentra_Conditional_Publisher::metadata(); return $meta['title'] ?? $title;
 });
+// Yoast SEO and Rank Math (1.2.0): a post Pentra published shows its exact
+// reviewed title in the page and social titles (no "Post - Site" suffix), and
+// exactly one canonical and description: Pentra's (head() above) instead of a
+// second copy from the SEO plugin. Pages Pentra did not publish are untouched.
+foreach (['wpseo_title', 'wpseo_opengraph_title', 'wpseo_twitter_title',
+    'rank_math/frontend/title', 'rank_math/opengraph/facebook/og_title', 'rank_math/opengraph/twitter/twitter_title'] as $hook) {
+    add_filter($hook, function($value) { return Pentra_Conditional_Publisher::exact('title', $value); }, 99);
+}
+foreach (['wpseo_opengraph_desc', 'wpseo_twitter_description',
+    'rank_math/opengraph/facebook/og_description', 'rank_math/opengraph/twitter/twitter_description'] as $hook) {
+    add_filter($hook, function($value) { return Pentra_Conditional_Publisher::exact('description', $value); }, 99);
+}
+foreach (['wpseo_canonical', 'wpseo_metadesc', 'rank_math/frontend/canonical', 'rank_math/frontend/description'] as $hook) {
+    add_filter($hook, function($value) { return Pentra_Conditional_Publisher::metadata() ? '' : $value; }, 99);
+}

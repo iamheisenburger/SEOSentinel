@@ -17,6 +17,9 @@ for (const [file, url, checksum] of [
   ['frankenphp', 'https://github.com/php/frankenphp/releases/download/v1.12.7/frankenphp-mac-arm64', 'ccee0d248da3d0112aea7e73fd903a3cc325ef9d096ad63462b6bd3f9005a753'],
   ['wordpress.zip', 'https://wordpress.org/wordpress-7.1.zip', 'd1ae02b5ae18428031ffc3943659fa87ab361d827f4aa804adf9276e4dc75df6'],
   ['sqlite.zip', 'https://downloads.wordpress.org/plugin/sqlite-database-integration.3.0.2.zip', '1602e75577ad9b3a7e3e4a6a44a81b9541cdee2124d48928faf61c6fd3cd4f74'],
+  // The two most installed SEO plugins, installed inactive; a test activates one at a time.
+  ['wordpress-seo.zip', 'https://downloads.wordpress.org/plugin/wordpress-seo.28.7.zip', '148b0ae90d90e82fb871bb8524755331d92154d4e30978d752f078416275420e'],
+  ['rank-math.zip', 'https://downloads.wordpress.org/plugin/seo-by-rank-math.1.0.280.zip', '9ae865e3440a96526e6db1d721a7a6f41dca1e46f116630d3bdb9686fa8aa290'],
   ...(mysql ? [['mysql-8.4.11-macos15-arm64.tar.gz', 'https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-macos15-arm64.tar.gz', 'b96e00493bc3499b9ffd7f08d65c5d64933af0383a8287d9873b64f94c2d6009']] : []),
 ]) {
   const target = path.join(fixture, file);
@@ -33,6 +36,9 @@ if (!mysql) {
   if (!existsSync(path.join(plugins, 'sqlite-database-integration/db.copy'))) execFileSync('unzip', ['-q', path.join(fixture, 'sqlite.zip'), '-d', plugins]);
   copyFileSync(path.join(plugins, 'sqlite-database-integration/db.copy'), path.join(wordpress, 'wp-content/db.php'));
 } else if (existsSync(path.join(wordpress, 'wp-content/db.php'))) throw new Error('MySQL fixture must use native wpdb, not a database drop-in');
+for (const [zip, entry] of [['wordpress-seo.zip', 'wordpress-seo/wp-seo.php'], ['rank-math.zip', 'seo-by-rank-math/rank-math.php']]) {
+  if (!existsSync(path.join(plugins, entry))) execFileSync('unzip', ['-q', path.join(fixture, zip), '-d', plugins]);
+}
 copyFileSync('tests/fixtures/wordpress-config.php', path.join(wordpress, 'wp-config.php'));
 const installed = path.join(plugins, 'pentra-conditional-publisher');
 mkdirSync(installed, { recursive: true });

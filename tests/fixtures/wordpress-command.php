@@ -57,4 +57,18 @@ if ($request['operation'] === 'create') {
     $engine = ($request['transactional'] ?? true) ? 'InnoDB' : 'MyISAM';
     $ok = $wpdb->query("ALTER TABLE {$wpdb->prefix}pentra_receipts ENGINE=$engine");
     echo wp_json_encode(['ok'=>$ok !== false]);
+} elseif ($request['operation'] === 'seo_plugin') {
+    // Exactly one pinned SEO plugin (or none) is active in this local fixture.
+    require_once ABSPATH . 'wp-admin/includes/plugin.php';
+    $plugins = ['yoast' => 'wordpress-seo/wp-seo.php', 'rankmath' => 'seo-by-rank-math/rank-math.php'];
+    foreach ($plugins as $name => $file) { if ($name !== ($request['plugin'] ?? '') && is_plugin_active($file)) { deactivate_plugins($file, true); } }
+    if (isset($plugins[$request['plugin'] ?? ''])) {
+        $result = activate_plugin($plugins[$request['plugin']]);
+        if (is_wp_error($result)) { throw new RuntimeException($result->get_error_message()); }
+        // A live Rank Math site has finished its setup; until then it prints nothing.
+        if ($request['plugin'] === 'rankmath') { update_option('rank_math_wizard_completed', true); update_option('rank_math_registration_skip', true); }
+    }
+    // A customer's site is public: SEO plugins print canonicals only for indexable sites.
+    update_option('blog_public', isset($plugins[$request['plugin'] ?? '']) ? '1' : '0');
+    echo wp_json_encode(['active' => array_values(array_filter($plugins, 'is_plugin_active'))]);
 } else { exit(3); }
