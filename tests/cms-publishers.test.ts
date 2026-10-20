@@ -12,7 +12,9 @@ import {
 import {
   ghostAdminToken,
   ghostDeliveryTag,
+  hostedPostState,
   publishToCms,
+  updateHostedPost,
   verifyCmsDestination,
   webflowFieldMap,
   type CmsRequest,
@@ -333,4 +335,66 @@ test("Ghost verifies the public site, publishes with a private delivery tag and 
   await assert.rejects(publishToCms({ site: ghostSite, article, deliveryKey, contentHash, publicUrl: ghostUrl, urlStructure: "/[slug]/",
     hadPriorAttempt: true, beforeExternalMutation: async () => { throw new Error("must not write"); }, request: theirs.request }), /belongs to a different publication/);
   assert.equal(theirs.created(), 0);
+});
+
+// ── C2: improving Pentra's own hosted posts (Oct 20 2026) ──────
+// Neither Shopify nor Webflow has a conditional update, so the revision is
+// read again right before the write and an owner's change is refused.
+
+test("C2 Shopify updates Pentra's own article only from the revision Pentra saw, with a hidden revision marker", async () => {
+  let updatedAt = "2026-10-01T00:00:01Z", body = "<p>Old.</p>", marker: string | null = null, updates = 0;
+  type Metafield = { namespace: string; key: string; type: string; value: string };
+  const server = recorder(({ url, body: requestBody }) => {
+    if (url.endsWith("/admin/oauth/access_token")) return { status: 200, body: { access_token: "shpat_synthetic_token_value", scope: "read_content,write_content", expires_in: 86399 } };
+    const { query, variables } = JSON.parse(requestBody!);
+    if (query.includes("PentraArticleRevision")) {
+      return { status: 200, body: { data: { article: { id: variables.id, updatedAt, body, isPublished: true, metafield: marker ? { value: marker } : null } } } };
+    }
+    assert.match(query, /PentraUpdateArticle/);
+    updates += 1;
+    const input = variables.article as { body: string; metafields: Metafield[] };
+    assert.ok(input.metafields.some(m => m.namespace === "global" && m.key === "title_tag" && m.type === "single_line_text_field"));
+    body = input.body; updatedAt = "2026-10-01T00:00:02Z";
+    marker = input.metafields.find(m => m.namespace === "pentra" && m.key === "revision")!.value;
+    return { status: 200, body: { data: { articleUpdate: { article: { id: variables.id, updatedAt }, userErrors: [] } } } };
+  });
+  const id = "gid://shopify/Article/9", revisionKey = "c".repeat(64);
+  const state = await hostedPostState(shopifySite, id, server.request);
+  assert.deepEqual(state, { id, revision: "2026-10-01T00:00:01Z", html: "<p>Old.</p>" });
+  let writes = 0;
+  const updated = await updateHostedPost(shopifySite, server.request, { id, expectedRevision: state.revision, title: article.title, html: "<p>New.</p>",
+    metaTitle: article.metaTitle, metaDescription: article.metaDescription, revisionKey, beforeWrite: async () => { writes += 1; } });
+  assert.deepEqual(updated, { revision: "2026-10-01T00:00:02Z" });
+  assert.equal(writes, 1); assert.equal(updates, 1); assert.equal(body, "<p>New.</p>");
+  assert.equal((await hostedPostState(shopifySite, id, server.request)).marker, revisionKey, "Pentra's own write is provable after a lost response");
+  // The article changed since the revision Pentra holds: refused before any write.
+  await assert.rejects(updateHostedPost(shopifySite, server.request, { id, expectedRevision: "2026-10-01T00:00:01Z", title: article.title, html: "<p>Newer.</p>",
+    revisionKey, beforeWrite: async () => { throw new Error("must not write"); } }), /changed since Pentra last saw it/);
+  assert.equal(updates, 1);
+});
+
+test("C2 Webflow updates Pentra's own live item only from the revision Pentra saw, never moving its address", async () => {
+  let lastUpdated = "2026-10-01T00:00:01.000Z", html = "<p>Old.</p>", patches = 0;
+  const server = recorder(({ url, method, body }) => {
+    if (url === "https://api.webflow.com/v2/sites") return { status: 200, body: { sites: [{ id: "site-1", shortName: "maple-works", customDomains: [{ id: "d1", url: "www.maple.example" }] }] } };
+    if (url === "https://api.webflow.com/v2/sites/site-1/collections") return { status: 200, body: { collections: [{ id: "col-1", slug: "blog", displayName: "Blog Posts" }] } };
+    if (url === "https://api.webflow.com/v2/collections/col-1") return { status: 200, body: { id: "col-1", slug: "blog", fields: webflowFields } };
+    assert.equal(url, "https://api.webflow.com/v2/collections/col-1/items/item-1/live");
+    if (method === "GET") return { status: 200, body: { id: "item-1", lastUpdated, isDraft: false, isArchived: false, fieldData: { name: article.title, slug: article.slug, "post-body": html } } };
+    assert.equal(method, "PATCH");
+    patches += 1;
+    const payload = JSON.parse(body!);
+    assert.equal(payload.fieldData.slug, undefined, "the address never changes");
+    html = payload.fieldData["post-body"]; lastUpdated = "2026-10-01T00:00:02.000Z";
+    return { status: 200, body: { id: "item-1", lastUpdated, fieldData: payload.fieldData } };
+  });
+  const state = await hostedPostState(webflowSite, "item-1", server.request);
+  assert.deepEqual(state, { id: "item-1", revision: "2026-10-01T00:00:01.000Z", html: "<p>Old.</p>" });
+  const updated = await updateHostedPost(webflowSite, server.request, { id: "item-1", expectedRevision: state.revision, title: article.title, html: "<p>New.</p>",
+    metaDescription: article.metaDescription, revisionKey: "d".repeat(64), beforeWrite: async () => {} });
+  assert.deepEqual(updated, { revision: "2026-10-01T00:00:02.000Z" });
+  assert.equal(html, "<p>New.</p>"); assert.equal(patches, 1);
+  await assert.rejects(updateHostedPost(webflowSite, server.request, { id: "item-1", expectedRevision: "2026-10-01T00:00:01.000Z", title: article.title, html: "<p>Newer.</p>",
+    revisionKey: "d".repeat(64), beforeWrite: async () => { throw new Error("must not write"); } }), /changed since Pentra last saw it/);
+  assert.equal(patches, 1);
 });

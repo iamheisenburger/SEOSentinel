@@ -2111,7 +2111,7 @@ export const abandonUnverifiedPublication = mutation({
 
 export const completePublication = internalMutation({
   args: {
-    creationSource: v.optional(v.object({ kind: v.union(v.literal("github"), v.literal("wordpress"), v.literal("ghost")),
+    creationSource: v.optional(v.object({ kind: v.union(v.literal("github"), v.literal("wordpress"), v.literal("ghost"), v.literal("shopify"), v.literal("webflow")),
       sourceContent: v.string(), sourceRevision: v.string(), path: v.optional(v.string()), resourceId: v.optional(v.number()), resourceKey: v.optional(v.string()),
       permission: v.optional(v.string()), permissionRevokedAtReceipt: v.optional(v.boolean()), connectionHash: v.string(), profileHash: v.string() })),
     articleId: v.id("articles"),

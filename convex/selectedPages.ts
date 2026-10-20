@@ -58,7 +58,7 @@ export async function enrollVerifiedCreation(ctx: MutationCtx, site: Doc<"sites"
   const parsed = source.kind === "github" ? parseSelectedMarkdown(source.sourceContent, article.publicUrl) : null;
   if (parsed && (parsed.title !== article.title || parsed.markdown !== stripLeadingDocumentTitle(article.markdown, article.title))) throw new Error("Managed source differs from the verified article title/body");
   if (source.kind === "github" && (!source.path || selectedGitHubPath(site, source.path) !== slug || !/^[a-f0-9]{40}$/.test(source.sourceRevision))) throw new Error("Managed GitHub source does not match its created path");
-  if (source.kind === "ghost" && (source.resourceKey !== article.publicationReceipt.externalId || !source.sourceRevision)) throw new Error("Managed Ghost source does not match its created post");
+  if (isApiCmsMethod(source.kind) && (source.resourceKey !== article.publicationReceipt.externalId || !source.sourceRevision)) throw new Error("Managed hosted-platform source does not match its created post");
   if (source.kind === "wordpress" && (String(source.resourceId) !== article.publicationReceipt.externalId || !/^[a-f0-9]{64}$/.test(source.permission ?? "") || !/^[a-f0-9]{64}$/.test(source.sourceRevision))) throw new Error("Managed WordPress receipt lost its exact resource grant");
   if (source.permissionRevokedAtReceipt) return; // Historical delivery never renews remote edit permission.
   assertUnprotectedPage(article.slug, article.title, source.sourceContent, { pentraCreated: true });

@@ -51,7 +51,7 @@ export function targetedImprovement(base: { kind: string; markdown: string; sour
     !facts.some(f => f.length >= 12 && p.normalize("NFC").replace(/\s+/g, " ").toLowerCase().includes(f)));
   paragraphs.sort((a,b) => terms.filter(t => b.toLowerCase().includes(t)).length - terms.filter(t => a.toLowerCase().includes(t)).length);
   for (const before of paragraphs) {
-    const sources = base.kind === "github" ? [before] : base.kind === "ghost" ? [renderSafePublicationHtml(before)]
+    const sources = base.kind === "github" ? [before] : isApiCmsMethod(base.kind) ? [renderSafePublicationHtml(before)]
       : [plainParagraphHtml(before), preserveWordPressReviewedText(plainParagraphHtml(before))];
     const sourceBefore = sources.find(s => base.sourceContent.includes(s) && base.sourceContent.indexOf(s) === base.sourceContent.lastIndexOf(s));
     if (!sourceBefore) continue;

@@ -225,7 +225,7 @@ async function shopifyContext(site: CmsSite, token: string, request: CmsRequest)
 const SHOPIFY_LOOKUP_QUERY = `query PentraArticle($query: String!) {
   articles(first: 10, query: $query) {
     nodes {
-      id handle title isPublished
+      id handle title isPublished updatedAt
       blog { id }
       metafield(namespace: "${SHOPIFY_DELIVERY_NAMESPACE}", key: "${SHOPIFY_DELIVERY_KEY}") { value }
     }
@@ -234,7 +234,7 @@ const SHOPIFY_LOOKUP_QUERY = `query PentraArticle($query: String!) {
 
 const SHOPIFY_CREATE_MUTATION = `mutation PentraCreateArticle($article: ArticleCreateInput!) {
   articleCreate(article: $article) {
-    article { id handle isPublished blog { id } }
+    article { id handle isPublished updatedAt blog { id } }
     userErrors { code field message }
   }
 }`;
@@ -261,6 +261,7 @@ async function publishShopify(args: PublishArgs): Promise<PublicationReceipt> {
     if (record(node.metafield)?.value !== args.deliveryKey || node.isPublished !== true) {
       throw new Error("Shopify blog already has an article at this address that belongs to a different publication");
     }
+    if (typeof node.updatedAt === "string") args.onCreatedRevision?.({ id: String(node.id), revision: node.updatedAt });
     return receipt({ method: "shopify", deliveryKey: args.deliveryKey, contentHash: args.contentHash, externalId: String(node.id), url: args.publicUrl });
   }
 
@@ -298,6 +299,7 @@ async function publishShopify(args: PublishArgs): Promise<PublicationReceipt> {
     record(node.blog)?.id !== context.blogId) {
     throw new Error("Shopify did not confirm the exact published article address");
   }
+  if (typeof node.updatedAt === "string") args.onCreatedRevision?.({ id: node.id, revision: node.updatedAt });
   return receipt({ method: "shopify", deliveryKey: args.deliveryKey, contentHash: args.contentHash, externalId: node.id, url: args.publicUrl });
 }
 
@@ -392,6 +394,7 @@ async function publishWebflow(args: PublishArgs): Promise<PublicationReceipt> {
     if (!args.hadPriorAttempt || record(item.fieldData)?.name !== article.title || item.isDraft === true || item.isArchived === true) {
       throw new Error("Webflow collection already has an item at this address that belongs to a different publication");
     }
+    if (typeof item.lastUpdated === "string") args.onCreatedRevision?.({ id: String(item.id), revision: item.lastUpdated });
     return receipt({ method: "webflow", deliveryKey: args.deliveryKey, contentHash: args.contentHash, externalId: String(item.id), url: args.publicUrl });
   }
 
@@ -416,6 +419,7 @@ async function publishWebflow(args: PublishArgs): Promise<PublicationReceipt> {
   if (typeof item.id !== "string" || record(item.fieldData)?.slug !== slug || item.isDraft === true) {
     throw new Error("Webflow did not confirm the exact published item address");
   }
+  if (typeof item.lastUpdated === "string") args.onCreatedRevision?.({ id: item.id, revision: item.lastUpdated });
   return receipt({ method: "webflow", deliveryKey: args.deliveryKey, contentHash: args.contentHash, externalId: item.id, url: args.publicUrl });
 }
 
@@ -494,7 +498,7 @@ async function publishGhost(args: PublishArgs): Promise<PublicationReceipt> {
     if (!tags.includes(tag) || existing.status !== "published" || existing.slug !== slug) {
       throw new Error("Ghost site already has a post at this address that belongs to a different publication");
     }
-    if (typeof existing.updated_at === "string") args.onGhostRevision?.({ id: String(existing.id), updatedAt: existing.updated_at });
+    if (typeof existing.updated_at === "string") args.onCreatedRevision?.({ id: String(existing.id), revision: existing.updated_at });
     return receipt({ method: "ghost", deliveryKey: args.deliveryKey, contentHash: args.contentHash, externalId: String(existing.id), url: args.publicUrl });
   }
 
@@ -524,15 +528,15 @@ async function publishGhost(args: PublishArgs): Promise<PublicationReceipt> {
   if (!post || typeof post.id !== "string" || post.slug !== slug || post.status !== "published") {
     throw new Error("Ghost did not confirm the exact published post address");
   }
-  if (typeof post.updated_at === "string") args.onGhostRevision?.({ id: post.id, updatedAt: post.updated_at });
+  if (typeof post.updated_at === "string") args.onCreatedRevision?.({ id: post.id, revision: post.updated_at });
   return receipt({ method: "ghost", deliveryKey: args.deliveryKey, contentHash: args.contentHash, externalId: post.id, url: args.publicUrl });
 }
 
-// ── Improving Pentra's own Ghost posts (C2, Oct 20 2026) ──────
+// ── Improving Pentra's own hosted posts (C2, Oct 20 2026) ──────
 
 /** One Ghost post's current state. Its updated_at is Ghost's own edit marker:
  * an update carrying a stale one is refused with a 409. */
-export async function ghostPostRevision(site: CmsSite, id: string, request: CmsRequest): Promise<{ id: string; updatedAt: string; html: string }> {
+async function ghostPostRevision(site: CmsSite, id: string, request: CmsRequest): Promise<{ id: string; updatedAt: string; html: string }> {
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error("Invalid Ghost post id");
   const found = await ghostGet(site, `/posts/${id}/?formats=html`, request);
   const post = record(((found?.posts as unknown[] | undefined) ?? [])[0]);
@@ -542,7 +546,7 @@ export async function ghostPostRevision(site: CmsSite, id: string, request: CmsR
 
 /** Updates one Ghost post only if nobody edited it since expectedUpdatedAt:
  * Ghost refuses a stale updated_at, so the owner's own edit is never overwritten. */
-export async function updateGhostPost(site: CmsSite, request: CmsRequest, args: { id: string; expectedUpdatedAt: string;
+async function updateGhostPost(site: CmsSite, request: CmsRequest, args: { id: string; expectedUpdatedAt: string;
   title: string; html: string; metaTitle?: string; metaDescription?: string }): Promise<{ id: string; updatedAt: string }> {
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(args.id)) throw new Error("Invalid Ghost post id");
   const response = await request(`${cmsEndpoint(site)}/ghost/api/admin/posts/${args.id}/?source=html`, {
@@ -557,6 +561,109 @@ export async function updateGhostPost(site: CmsSite, request: CmsRequest, args: 
   const post = record(((json(response.text, "Ghost").posts as unknown[] | undefined) ?? [])[0]);
   if (!post || post.id !== args.id || typeof post.updated_at !== "string") throw new Error("Ghost did not confirm the exact updated post");
   return { id: args.id, updatedAt: post.updated_at };
+}
+
+const SHOPIFY_REVISION_KEY = "revision";
+const SHOPIFY_ARTICLE_REVISION_QUERY = `query PentraArticleRevision($id: ID!) {
+  article(id: $id) {
+    id updatedAt body isPublished
+    metafield(namespace: "${SHOPIFY_DELIVERY_NAMESPACE}", key: "${SHOPIFY_REVISION_KEY}") { value }
+  }
+}`;
+const SHOPIFY_UPDATE_MUTATION = `mutation PentraUpdateArticle($id: ID!, $article: ArticleUpdateInput!) {
+  articleUpdate(id: $id, article: $article) {
+    article { id updatedAt }
+    userErrors { code field message }
+  }
+}`;
+
+/** A hosted post's current state: the platform's own edit marker (Ghost and
+ * Shopify updatedAt, Webflow lastUpdated), its body HTML and, on Shopify, the
+ * hidden marker of the last Pentra revision written to it. */
+export type HostedPostState = { id: string; revision: string; html: string; marker?: string };
+
+export async function hostedPostState(site: CmsSite, id: string, request: CmsRequest): Promise<HostedPostState> {
+  const method = site.publishMethod;
+  if (method === "ghost") {
+    const post = await ghostPostRevision(site, id, request);
+    return { id, revision: post.updatedAt, html: post.html };
+  }
+  if (method === "shopify") {
+    if (!/^gid:\/\/shopify\/Article\/\d{1,20}$/.test(id)) throw new Error("Invalid Shopify article id");
+    const token = await shopifyAccessToken(site, request);
+    const data = await shopifyGraphql(site, token, SHOPIFY_ARTICLE_REVISION_QUERY, { id }, request, "read");
+    const article = record(data.article);
+    if (!article || article.id !== id || typeof article.updatedAt !== "string" || article.isPublished !== true) {
+      throw new Error("Shopify article is missing or no longer published");
+    }
+    const marker = record(article.metafield)?.value;
+    return { id, revision: article.updatedAt, html: typeof article.body === "string" ? article.body : "", ...(typeof marker === "string" ? { marker } : {}) };
+  }
+  if (method === "webflow") {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error("Invalid Webflow item id");
+    const context = await webflowContext(site, request);
+    const item = await webflowGet(site, `/collections/${encodeURIComponent(context.collectionId)}/items/${encodeURIComponent(id)}/live`, request);
+    if (item.id !== id || typeof item.lastUpdated !== "string" || item.isDraft === true || item.isArchived === true) {
+      throw new Error("Webflow item is missing or no longer live");
+    }
+    const html = record(item.fieldData)?.[context.fields.body];
+    return { id, revision: item.lastUpdated, html: typeof html === "string" ? html : "" };
+  }
+  throw new Error("Not a hosted-platform publishing destination");
+}
+
+/** Updates Pentra's own hosted post only from the exact revision Pentra last
+ * saw. Ghost enforces that itself (a stale updated_at is refused). Shopify
+ * and Webflow have no conditional update, so the revision is read again
+ * immediately before the write and any change is refused: an owner's edit is
+ * never knowingly overwritten (only an edit landing in that same moment could
+ * race). beforeWrite runs only once the write is actually going ahead. */
+export async function updateHostedPost(site: CmsSite, request: CmsRequest, args: { id: string; expectedRevision: string;
+  title: string; html: string; metaTitle?: string; metaDescription?: string; revisionKey: string; beforeWrite: () => Promise<void> }): Promise<{ revision: string }> {
+  const method = site.publishMethod;
+  if (!isApiCmsMethod(method)) throw new Error("Not a hosted-platform publishing destination");
+  const changed = () => new Error(`${label(method)} post changed since Pentra last saw it; the owner's edit is never overwritten`);
+  if (method === "ghost") {
+    await args.beforeWrite();
+    const updated = await updateGhostPost(site, request, { id: args.id, expectedUpdatedAt: args.expectedRevision, title: args.title,
+      html: args.html, metaTitle: args.metaTitle, metaDescription: args.metaDescription });
+    return { revision: updated.updatedAt };
+  }
+  if ((await hostedPostState(site, args.id, request)).revision !== args.expectedRevision) throw changed();
+  if (method === "shopify") {
+    const token = await shopifyAccessToken(site, request);
+    await args.beforeWrite();
+    const updated = await shopifyGraphql(site, token, SHOPIFY_UPDATE_MUTATION, { id: args.id, article: {
+      title: args.title,
+      body: args.html,
+      ...(args.metaDescription ? { summary: `<p>${escapeHtml(plainText(args.metaDescription, 500))}</p>` } : {}),
+      metafields: [
+        // Proof of Pentra's own write if the response is lost (never shown to readers).
+        { namespace: SHOPIFY_DELIVERY_NAMESPACE, key: SHOPIFY_REVISION_KEY, type: "single_line_text_field", value: args.revisionKey },
+        { namespace: "global", key: "title_tag", type: "single_line_text_field", value: plainText(args.metaTitle ?? args.title, 255) },
+        ...(args.metaDescription ? [{ namespace: "global", key: "description_tag", type: "single_line_text_field", value: plainText(args.metaDescription, 320) }] : []),
+      ],
+    } }, request, "write");
+    const result = record(updated.articleUpdate);
+    const userErrors = (result?.userErrors as unknown[] | undefined) ?? [];
+    if (userErrors.length) throw new Error(`Shopify rejected the update: ${userErrors.map((error) => String(record(error)?.message ?? "error")).join("; ").slice(0, 200)}`);
+    const node = record(result?.article);
+    if (!node || node.id !== args.id || typeof node.updatedAt !== "string") throw new Error("Shopify did not confirm the exact updated article");
+    return { revision: node.updatedAt };
+  }
+  const context = await webflowContext(site, request);
+  const fieldData: Record<string, unknown> = { name: args.title, [context.fields.body]: args.html };
+  if (context.fields.summary && args.metaDescription) fieldData[context.fields.summary] = plainText(args.metaDescription, 256);
+  await args.beforeWrite();
+  const response = await request(`${WEBFLOW_API}/collections/${encodeURIComponent(context.collectionId)}/items/${encodeURIComponent(args.id)}/live`, {
+    method: "PATCH",
+    headers: { ...webflowHeaders(site), "Content-Type": "application/json" },
+    body: JSON.stringify({ isArchived: false, isDraft: false, fieldData }),
+  });
+  if (response.status < 200 || response.status >= 300) throw new Error(`Webflow API error (${response.status}): ${response.text.slice(0, 200)}`);
+  const item = json(response.text, "Webflow");
+  if (item.id !== args.id || typeof item.lastUpdated !== "string") throw new Error("Webflow did not confirm the exact updated item");
+  return { revision: item.lastUpdated };
 }
 
 // ── Shared entry points ─────────────────────────────────
@@ -578,8 +685,9 @@ type PublishArgs = {
   hadPriorAttempt: boolean;
   beforeExternalMutation: () => Promise<void>;
   request: CmsRequest;
-  /** Ghost: the created post's id and updated_at, so Pentra can improve it later. */
-  onGhostRevision?: (post: { id: string; updatedAt: string }) => void;
+  /** The created post's id and the platform's own edit marker (Ghost and
+   * Shopify updatedAt, Webflow lastUpdated), so Pentra can improve it later. */
+  onCreatedRevision?: (post: { id: string; revision: string }) => void;
 };
 
 export async function verifyCmsDestination(

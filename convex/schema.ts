@@ -731,7 +731,7 @@ export default defineSchema({
 
   pages: defineTable({
     editable: v.optional(v.object({
-      version: v.number(), active: v.boolean(), kind: v.union(v.literal("github"), v.literal("wordpress"), v.literal("ghost")),
+      version: v.number(), active: v.boolean(), kind: v.union(v.literal("github"), v.literal("wordpress"), v.literal("ghost"), v.literal("shopify"), v.literal("webflow")),
       path: v.optional(v.string()), resourceId: v.optional(v.number()), resourceKey: v.optional(v.string()), permission: v.optional(v.string()),
       revocationStatus: v.optional(v.union(v.literal("pending"), v.literal("confirmed"), v.literal("failed"))),
       connectionHash: v.string(), profileHash: v.string(), sourceRevision: v.string(), sourceContent: v.string(),
@@ -952,9 +952,9 @@ export default defineSchema({
     ]),
 
   articles: defineTable({
-    contentWorkCreationSource: v.optional(v.object({ kind: v.union(v.literal("github"), v.literal("wordpress"), v.literal("ghost")),
+    contentWorkCreationSource: v.optional(v.object({ kind: v.union(v.literal("github"), v.literal("wordpress"), v.literal("ghost"), v.literal("shopify"), v.literal("webflow")),
       sourceContent: v.string(), sourceRevision: v.string(), path: v.optional(v.string()), resourceId: v.optional(v.number()),
-      // A hosted platform's own post id (Ghost: a string).
+      // A hosted platform's own post id (Ghost, Shopify, Webflow: a string).
       resourceKey: v.optional(v.string()),
       permission: v.optional(v.string()), permissionRevokedAtReceipt: v.optional(v.boolean()), connectionHash: v.string(), profileHash: v.string() })),
     contentWorkSourceJobId: v.optional(v.id("jobs")),
