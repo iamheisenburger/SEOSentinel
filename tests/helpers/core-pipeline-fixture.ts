@@ -50,7 +50,7 @@ function source(name: string) {
 /** Infrastructure only. Every function reference dispatches the actual
  * registered handler. Mutations are serializable with rollback; indexed
  * queries use the real schema's field ordering, never a canned result. */
-export function corePipelineFixture(network: (url: URL, init: RequestInit, f: ReturnType<typeof corePipelineFixture>) => Promise<Response>, environment: Record<string, string> = {}, boundary: { serializeValues?: boolean } = {}) {
+export function corePipelineFixture(network: (url: URL, init: RequestInit, f: ReturnType<typeof corePipelineFixture>) => Promise<Response>, environment: Record<string, string> = {}, boundary: { serializeValues?: boolean; syntheticHosts?: string[] } = {}) {
   let now = START, serial = 0;
   let identitySubject: string | null = null;
   let mutationTail: Promise<unknown> = Promise.resolve();
@@ -90,7 +90,7 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
       }
       if (["node:dns/promises", "dns/promises"].includes(id)) return {
         lookup: async (host: string) => {
-          if (!/\.(example|example\.gov|example\.edu)$/.test(host)) die(`Unexpected DNS ${host}`);
+          if (!/\.(example|example\.gov|example\.edu)$/.test(host) && !boundary.syntheticHosts?.includes(host)) die(`Unexpected DNS ${host}`);
           return [{ address: "93.184.216.34", family: 4 }];
         },
       };

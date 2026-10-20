@@ -18,8 +18,9 @@ type ResearchContext = { domain: string; language: string; targetCountry: string
   canonicalDomain: string; domainRevision: number; business: BuyerFitBusiness; maximumDifficulty?: number };
 
 /** One buyer-fit call for a batch of keywords (convex/lib/topicFit.ts). It
- * throws when no verdict came back; the caller then counts the call's ceiling. */
-async function judgeBuyerFit(business: BuyerFitBusiness, keywords: string[]): Promise<{ verdicts: Map<string, BuyerFitVerdict>; costMicroUsd: number }> {
+ * throws when no verdict came back; the caller then counts the call's ceiling.
+ * The free checker (convex/actions/freeCheck.ts) judges its searches with it too. */
+export async function judgeBuyerFit(business: BuyerFitBusiness, keywords: string[]): Promise<{ verdicts: Map<string, BuyerFitVerdict>; costMicroUsd: number }> {
   const request = buyerFitRequest(business, keywords);
   if (request.keywords.length === 0) return { verdicts: new Map(), costMicroUsd: 0 };
   const apiKey = process.env.ANTHROPIC_API_KEY;

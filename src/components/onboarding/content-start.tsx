@@ -1,8 +1,8 @@
 "use client";
 import { useAuth } from "@clerk/nextjs";
-import { useAction, useMutation } from "convex/react";
+import { useAction, useConvexAuth, useMutation } from "convex/react";
 import { ConvexError } from "convex/values";
-import { useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import Link from "next/link";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -11,6 +11,7 @@ import { Input, Textarea } from "@/components/ui/input";
 import { ContentWorkService } from "@/components/content-work-service";
 import { CMS_PLATFORM_LABELS, isApiCmsMethod } from "../../../convex/lib/cmsDestinations";
 import { userErrorMessage } from "@/lib/user-error";
+import { FREE_CHECK_DOMAIN_KEY } from "@/lib/free-check-key";
 
 /** Content-only onboarding reuses the owner-authenticated site writer, trusted
  * billing sync and existing connection UI. It launches no paid legacy bootstrap
@@ -24,11 +25,13 @@ export function ContentStart() {
   const ctaValid = !ctaUrl.trim() || /^https:\/\/[^\s<>"'()[\]]{3,300}$/.test(ctaUrl.trim());
   const prefillSite = useAction(api.actions.onboardingPrefill.prefill);
   const [filling, setFilling] = useState(false), [fillNote, setFillNote] = useState("");
-  async function fillFromWebsite() {
-    if (!domain.trim()) return;
+  const { isAuthenticated } = useConvexAuth(), recordSignup = useMutation(api.freeCheck.recordSignup);
+  const [fromFreeCheck, setFromFreeCheck] = useState(false), freeCheckRead = useRef(false);
+  async function fillFromWebsite(target = domain) {
+    if (!target.trim()) return;
     setFilling(true); setFillNote("");
     try {
-      const found = await prefillSite({ domain: domain.trim() });
+      const found = await prefillSite({ domain: target.trim() });
       const keep = (current: string, next: string) => current.trim() ? current : next;
       setName(v => keep(v, found.name)); setSummary(v => keep(v, found.summary)); setProduct(v => keep(v, found.product));
       setAudience(v => keep(v, found.audience)); setQuestions(v => keep(v, found.questions.join("\n")));
@@ -39,6 +42,18 @@ export function ContentStart() {
       setFillNote(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Pentra couldn't read that website. Fill in the details yourself.");
     } finally { setFilling(false); }
   }
+  // A visitor who came from the free SEO check starts with that website, filled in.
+  const startFromFreeCheck = useEffectEvent((checked: string) => {
+    setFromFreeCheck(true); setDomain(current => current.trim() ? current : checked);
+    void fillFromWebsite(checked);
+  });
+  useEffect(() => {
+    if (!isAuthenticated || freeCheckRead.current) return;
+    freeCheckRead.current = true;
+    let checked = "";
+    try { checked = window.localStorage.getItem(FREE_CHECK_DOMAIN_KEY) ?? ""; } catch { checked = ""; }
+    if (checked) startFromFreeCheck(checked);
+  }, [isAuthenticated]);
   async function save() {
     if (!userId || !confirmed) return;
     setBusy(true); setError("");
@@ -52,6 +67,10 @@ export function ContentStart() {
         ...(ctaUrl.trim() ? { ctaUrl: ctaUrl.trim(), ctaText: ctaText.trim().slice(0, 60) || "Get started" } : {}),
         autopilotEnabled: false, approvalRequired: true, inferToneNiche: false, language: "en" });
       setSiteId(id);
+      if (fromFreeCheck) {
+        void recordSignup({ domain: domain.trim() }).catch(() => undefined);
+        try { window.localStorage.removeItem(FREE_CHECK_DOMAIN_KEY); } catch { /* nothing to clear */ }
+      }
     } catch (err) {
       setError(err instanceof Error && err.message === "billing"
         ? "We couldn't confirm your plan just now. Wait a moment and try again. Nothing was charged."
@@ -83,7 +102,7 @@ export function ContentStart() {
       <h2 id="setup-website" className={H2}>Your website</h2>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <div className="flex-1"><Input label="Website domain" value={domain} onChange={edit(setDomain)} placeholder="yourbusiness.com" /></div>
-        <Button disabled={!domain.trim() || filling} loading={filling} onClick={fillFromWebsite}>Fill in from my website</Button>
+        <Button disabled={!domain.trim() || filling} loading={filling} onClick={() => fillFromWebsite()}>Fill in from my website</Button>
       </div>
       <p className={HELP} role="status">{fillNote || "Pentra reads your homepage and suggests the details below. You check them before anything is written."}</p>
     </section>

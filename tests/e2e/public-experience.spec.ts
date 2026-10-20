@@ -26,6 +26,20 @@ test("sign-up remains inside the same Pentra product shell", async ({ page }) =>
   }
 });
 
+test("the free SEO check is public and turns away an address that isn't a website", async ({ page }) => {
+  await page.goto("/check");
+  await expect(page.getByRole("heading", { name: "Which Google searches is your website missing?" })).toBeVisible();
+  await page.getByLabel("Your website address").fill("not a website");
+  await page.getByRole("button", { name: "Check my site" }).click();
+  await expect(page.getByText("Enter your website address, like yourbusiness.com.")).toBeVisible();
+});
+
+test("a free check's result page is shareable but never indexed", async ({ page }) => {
+  await page.goto("/check/www.GlazeLedger.co");
+  await expect(page).toHaveURL(/\/check\/glazeledger\.co$/);
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
+});
+
 test("unsubscribe is branded, confirmation-first, and never cacheable", async ({ page }) => {
   const response = await page.goto(`/unsubscribe/${"A".repeat(43)}`);
   expect(response?.status()).toBe(200);

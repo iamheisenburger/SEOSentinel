@@ -641,9 +641,6 @@ export default defineSchema({
     used: v.number(),
     updatedAt: v.number(),
   }).index("by_user_month", ["userId", "monthStart"]),
-  // When the account's next usage recount is due (B, Oct 20 2026): a burst of
-  // article starts and retirements shares one trailing recount. Its own table,
-  // so the debounce never re-runs the dashboard queries that read the count.
   // A content provider call's result, out of the job document (B, P118, Oct 20
   // 2026): results were ~90% of a job's bytes, and every scheduler wake, usage
   // recount, dashboard re-run and checkpoint write read them. Site deletion
@@ -656,6 +653,9 @@ export default defineSchema({
     resultHash: v.string(),
     createdAt: v.number(),
   }).index("by_job_key", ["jobId", "key"]).index("by_site", ["siteId"]),
+  // When the account's next usage recount is due (B, Oct 20 2026): a burst of
+  // article starts and retirements shares one trailing recount. Its own table,
+  // so the debounce never re-runs the dashboard queries that read the count.
   account_usage_recounts: defineTable({
     userId: v.string(),
     dueAt: v.number(),
@@ -1724,6 +1724,43 @@ export default defineSchema({
     userId: v.string(),
     requestedAt: v.number(),
   }).index("by_user_requested", ["userId", "requestedAt"]),
+
+  // The free Missed Searches Checker (P122, Oct 20 2026): one cached result
+  // per checked website (public data about a public site; no visitor data).
+  free_checks: defineTable({
+    domain: v.string(),
+    status: v.union(v.literal("running"), v.literal("done"), v.literal("failed")),
+    requestedAt: v.number(),
+    completedAt: v.optional(v.number()),
+    step: v.optional(v.string()),
+    error: v.optional(v.string()),
+    businessName: v.optional(v.string()),
+    countryName: v.optional(v.string()),
+    missed: v.optional(v.array(v.object({ keyword: v.string(), searchVolume: v.number(), difficulty: v.number() }))),
+    almost: v.optional(v.array(v.object({ keyword: v.string(), searchVolume: v.number(), position: v.number(), url: v.string() }))),
+    health: v.optional(v.object({ passed: v.number(), total: v.number(),
+      issues: v.array(v.object({ code: v.string(), severity: v.union(v.literal("critical"), v.literal("warning")), message: v.string() })) })),
+    keywordsUnavailable: v.optional(v.boolean()),
+    costMicroUsd: v.optional(v.number()),
+    costUncertain: v.optional(v.boolean()),
+  }).index("by_domain", ["domain"]).index("by_requested", ["requestedAt"]),
+  // Daily limits for free checks: per visitor (an HMAC of IP and day, so a
+  // row can't be linked to a person or across days) and the day's spend.
+  free_check_quota: defineTable({
+    kind: v.union(v.literal("visitor"), v.literal("events"), v.literal("spend")),
+    key: v.string(),
+    day: v.string(),
+    count: v.number(),
+    microUsd: v.optional(v.number()),
+  }).index("by_key", ["key"]).index("by_kind_day", ["kind", "day"]),
+  // Acquisition counts (checks, signup clicks, signups); a checked domain at
+  // most, never a person.
+  acquisition_events: defineTable({
+    kind: v.union(v.literal("check_started"), v.literal("check_cached"), v.literal("signup_click"), v.literal("signup")),
+    source: v.literal("free_check"),
+    domain: v.optional(v.string()),
+    at: v.number(),
+  }).index("by_at", ["at"]).index("by_kind_domain", ["kind", "domain"]),
 
   published_article_revisions: defineTable({
     contentWorkJobId: v.optional(v.id("jobs")),

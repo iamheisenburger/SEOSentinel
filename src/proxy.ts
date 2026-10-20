@@ -6,12 +6,12 @@ import {
 } from "next/server";
 
 const PUBLIC_EXACT_ROUTES = new Set([
-  "/", "/pricing", "/contact", "/beta", "/x-reply", "/api/webhooks/clerk-billing",
+  "/", "/pricing", "/contact", "/beta", "/x-reply", "/api/webhooks/clerk-billing", "/api/check",
   "/api/github/callback", "/api/gsc/callback",
   "/api/outreach/gmail/callback", "/sitemap.xml", "/robots.txt",
 ]);
 const PUBLIC_ROUTE_PREFIXES = [
-  "/legal", "/sign-in", "/sign-up", "/unsubscribe", "/blog",
+  "/legal", "/sign-in", "/sign-up", "/unsubscribe", "/blog", "/check",
 ];
 
 // Search-engine verification files in public/ (e.g. the IndexNow key) are public by design.
@@ -57,7 +57,7 @@ const clerkAppMiddleware = clerkMiddleware(async (auth, request) => {
   const knownPrefixes = new Set([
     "dashboard", "settings", "articles", "jobs", "sites", "plan", "upgrade",
     "pricing", "contact", "beta", "legal", "sign-in", "sign-up", "api", "_next", "blog",
-    "analytics", "backlinks", "unsubscribe", "e2e-acceptance", "x-reply",
+    "analytics", "backlinks", "unsubscribe", "e2e-acceptance", "x-reply", "check",
   ]);
   const pathParts = pathname.split("/").filter(Boolean);
   // Pentra's own site uses /blog/[slug]; an unknown path there is a real 404,

@@ -17,6 +17,7 @@ import type * as actions_expectedClickBackfillFleet from "../actions/expectedCli
 import type * as actions_expectedClickDemandBackfill from "../actions/expectedClickDemandBackfill.js";
 import type * as actions_expectedClickEvidenceBackfill from "../actions/expectedClickEvidenceBackfill.js";
 import type * as actions_expectedClickMigration from "../actions/expectedClickMigration.js";
+import type * as actions_freeCheck from "../actions/freeCheck.js";
 import type * as actions_growthTopics from "../actions/growthTopics.js";
 import type * as actions_gscSync from "../actions/gscSync.js";
 import type * as actions_managedOutreachMailbox from "../actions/managedOutreachMailbox.js";
@@ -46,6 +47,7 @@ import type * as crons from "../crons.js";
 import type * as executionAuthorization from "../executionAuthorization.js";
 import type * as expectedClickDemandBackfill from "../expectedClickDemandBackfill.js";
 import type * as expectedClickEvidenceBackfill from "../expectedClickEvidenceBackfill.js";
+import type * as freeCheck from "../freeCheck.js";
 import type * as growthLoop from "../growthLoop.js";
 import type * as http from "../http.js";
 import type * as jobs from "../jobs.js";
@@ -115,6 +117,7 @@ import type * as lib_manualPublication from "../lib/manualPublication.js";
 import type * as lib_markdownCitations from "../lib/markdownCitations.js";
 import type * as lib_markdownPublishing from "../lib/markdownPublishing.js";
 import type * as lib_mediaQuality from "../lib/mediaQuality.js";
+import type * as lib_missedSearches from "../lib/missedSearches.js";
 import type * as lib_moneyPages from "../lib/moneyPages.js";
 import type * as lib_onboardingClaim from "../lib/onboardingClaim.js";
 import type * as lib_oneSetup from "../lib/oneSetup.js";
@@ -230,6 +233,7 @@ declare const fullApi: ApiFromModules<{
   "actions/expectedClickDemandBackfill": typeof actions_expectedClickDemandBackfill;
   "actions/expectedClickEvidenceBackfill": typeof actions_expectedClickEvidenceBackfill;
   "actions/expectedClickMigration": typeof actions_expectedClickMigration;
+  "actions/freeCheck": typeof actions_freeCheck;
   "actions/growthTopics": typeof actions_growthTopics;
   "actions/gscSync": typeof actions_gscSync;
   "actions/managedOutreachMailbox": typeof actions_managedOutreachMailbox;
@@ -259,6 +263,7 @@ declare const fullApi: ApiFromModules<{
   executionAuthorization: typeof executionAuthorization;
   expectedClickDemandBackfill: typeof expectedClickDemandBackfill;
   expectedClickEvidenceBackfill: typeof expectedClickEvidenceBackfill;
+  freeCheck: typeof freeCheck;
   growthLoop: typeof growthLoop;
   http: typeof http;
   jobs: typeof jobs;
@@ -328,6 +333,7 @@ declare const fullApi: ApiFromModules<{
   "lib/markdownCitations": typeof lib_markdownCitations;
   "lib/markdownPublishing": typeof lib_markdownPublishing;
   "lib/mediaQuality": typeof lib_mediaQuality;
+  "lib/missedSearches": typeof lib_missedSearches;
   "lib/moneyPages": typeof lib_moneyPages;
   "lib/onboardingClaim": typeof lib_onboardingClaim;
   "lib/oneSetup": typeof lib_oneSetup;

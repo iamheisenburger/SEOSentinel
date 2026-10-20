@@ -28,7 +28,7 @@ const bundle = build({ stdin: { contents: `
           if(n==='contentWork:readiness')return f.state; if(n==='selectedPages:list')return {complete:true,pages:[]};if(n==='siteHealth:latest')return null;if(n==='topics:listBySite')return [];
           if(n==='searchPerformance:contentOutcome')return {status:'incomplete',current:null}; throw Error('Unexpected query '+n)};
         export const useMutation=ref=>async args=>{const f=window.contentFixture;f.calls.push({name:getFunctionName(ref),args});const r=f.response??{status:'preparing',issues:[]};if(getFunctionName(ref)==='contentWork:selectServiceMode'&&r.changed)f.state={...f.state,serviceMode:args.mode};return r};
-        export const useAction=useMutation;`, resolveDir: process.cwd() };
+        export const useAction=useMutation; export const useConvexAuth=()=>({isLoading:false,isAuthenticated:true});`, resolveDir: process.cwd() };
     });
   } }] }).then(r => r.outputFiles[0].text);
 

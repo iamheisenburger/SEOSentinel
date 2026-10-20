@@ -4,7 +4,7 @@ import { action, internalAction, type ActionCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { ConvexError, v } from "convex/values";
 import type { Id } from "../_generated/dataModel";
-import { analyzePageHealth, articleDiscoveryFindings, discoveryFindings, discoveryPageKey, healthScore, linkedPageKeys, listingPageCandidates, robotsTxtFindings, sitemapIndexChildren, sitemapPageKeys, sitemapUrls, speedFindings, type PageHealthResult } from "../lib/siteHealth";
+import { accessFindings, analyzePageHealth, articleDiscoveryFindings, discoveryFindings, discoveryPageKey, healthScore, linkedPageKeys, listingPageCandidates, robotsTxtFindings, sitemapIndexChildren, sitemapPageKeys, sitemapUrls, speedFindings, type PageHealthResult } from "../lib/siteHealth";
 import { safeFetchPublicText, safePublicRedirectStatus } from "../lib/safeOutbound";
 import { fetchPage } from "../lib/fetchPage";
 
@@ -75,13 +75,9 @@ async function runCheck(ctx: ActionCtx, siteId: Id<"sites">, userId?: string) {
   }
   if (results[0] && results[0].status === 200) results[0].issues.push(...speedFindings(await pageSpeed(home)));
   if (results[0] && results[0].status > 0) {
-    if (robots.blocksAll) results[0].issues.unshift({ code: "robots_blocks_all", severity: "critical",
-      message: "Your robots.txt tells Google not to crawl any page on this site, so nothing can rank." });
-    // Answer-engine pass: AI search can only cite pages its crawler may read.
-    if (!robots.blocksAll && robots.aiBlocked.length) results[0].issues.push({ code: "ai_answers_blocked", severity: "warning",
-      message: `Your robots.txt stops ${robots.aiBlocked.join(", ")} from reading this site, so they can't cite it in AI answers.` });
-    if (!sitemapFound) results[0].issues.push({ code: "sitemap_missing", severity: "warning",
-      message: "No sitemap found at /sitemap.xml or in robots.txt. A sitemap helps Google find new articles quickly." });
+    const access = accessFindings(robots, sitemapFound);
+    results[0].issues.unshift(...access.filter(issue => issue.severity === "critical"));
+    results[0].issues.push(...access.filter(issue => issue.severity !== "critical"));
     // Discovery pass: canonical homepage, real 404s and a permanent www redirect.
     const missing = await fetchPage(`https://${host}/pentra-health-check-${Date.now().toString(36)}-missing`);
     const alternate = host.startsWith("www.") ? host.slice(4) : `www.${host}`;

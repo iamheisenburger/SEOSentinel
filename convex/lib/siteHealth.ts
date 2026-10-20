@@ -118,6 +118,20 @@ export function analyzePageHealth(page: PageHealthInput): PageHealthResult {
   return { url: page.url, status: page.status, title: cleanTitle, metaDescription: description, h1Count, wordCount, internalLinkCount, issues };
 }
 
+/** Site-wide access findings: robots.txt shutting out Google or AI answer
+ * crawlers, and no sitemap. */
+export function accessFindings(robots: { blocksAll: boolean; aiBlocked: string[] }, sitemapFound: boolean): PageHealthIssue[] {
+  const issues: PageHealthIssue[] = [];
+  if (robots.blocksAll) issues.push({ code: "robots_blocks_all", severity: "critical",
+    message: "Your robots.txt tells Google not to crawl any page on this site, so nothing can rank." });
+  // Answer-engine pass: AI search can only cite pages its crawler may read.
+  if (!robots.blocksAll && robots.aiBlocked.length) issues.push({ code: "ai_answers_blocked", severity: "warning",
+    message: `Your robots.txt stops ${robots.aiBlocked.join(", ")} from reading this site, so they can't cite it in AI answers.` });
+  if (!sitemapFound) issues.push({ code: "sitemap_missing", severity: "warning",
+    message: "No sitemap found at /sitemap.xml or in robots.txt. A sitemap helps Google find new articles quickly." });
+  return issues;
+}
+
 /** Site-level discovery checks learned from real sites whose articles Google
  * never found: a missing homepage canonical lets Google pick another host,
  * a temporary www redirect keeps both hosts alive, and a "soft 404" (a normal

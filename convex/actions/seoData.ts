@@ -629,6 +629,41 @@ export async function getDomainAuthority(
 }
 
 /**
+ * The searches a domain already ranks for in Google's organic results
+ * (DataForSEO Labs, top 100), most searched first. One billable task; the
+ * free checker uses it to tell missed searches from ones the site is close on.
+ */
+export async function getRankedKeywords(
+  domain: string,
+  locationCode = 2840,
+  languageCode = "en",
+  limit = 100,
+  options: { request?: KeywordDiscoveryRequest } = {},
+): Promise<Array<{ keyword: string; searchVolume: number; position: number; url: string }>> {
+  const target = authorityDomain(domain);
+  if (!target || (!getDataForSEOCredentials() && !options.request)) return [];
+  const request = options.request ?? dataForSEORequest;
+  const data = await request("dataforseo_labs/google/ranked_keywords/live", [{
+    target,
+    location_code: locationCode,
+    language_code: dataForSeoLanguageCode(languageCode),
+    item_types: ["organic"],
+    order_by: ["keyword_data.keyword_info.search_volume,desc"],
+    limit: Math.max(1, Math.min(limit, 100)),
+  }]);
+  const ranked: Array<{ keyword: string; searchVolume: number; position: number; url: string }> = [];
+  for (const item of data.tasks?.[0]?.result?.[0]?.items ?? []) {
+    const keyword = item?.keyword_data?.keyword;
+    const serp = item?.ranked_serp_element?.serp_item;
+    const volume = item?.keyword_data?.keyword_info?.search_volume;
+    if (typeof keyword !== "string" || typeof serp?.rank_group !== "number" || typeof serp?.url !== "string" ||
+      !/^https?:\/\//i.test(serp.url)) continue;
+    ranked.push({ keyword, searchVolume: typeof volume === "number" && volume > 0 ? volume : 0, position: serp.rank_group, url: serp.url });
+  }
+  return ranked;
+}
+
+/**
  * Compute a recommended max KD ceiling based on domain metrics.
  * Low-authority domains should target low-difficulty keywords.
  * Returns a number 0-100.

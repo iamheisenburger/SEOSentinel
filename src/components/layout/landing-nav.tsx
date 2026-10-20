@@ -11,6 +11,7 @@ const navLinks = [
   { label: "How it works", href: "/#pipeline" },
   { label: "Pricing", href: "/#pricing" },
   { label: "FAQ", href: "/#faq" },
+  { label: "Free SEO check", href: "/check" },
   { label: "Blog", href: "/blog" },
   { label: "Contact", href: "/contact" },
 ];
@@ -33,7 +34,7 @@ export function LandingNav() {
           </Link>
 
           {/* Desktop nav */}
-          <div className="hidden md:flex items-center gap-8">
+          <div className="hidden lg:flex items-center gap-8">
             {navLinks.map((link) => (
               link.href.startsWith("/") && !link.href.includes("#") ? (
                 <Link
@@ -85,7 +86,7 @@ export function LandingNav() {
 
             {/* Mobile menu button */}
             <button
-              className="md:hidden ml-1 p-1.5 text-[#8A8F98] hover:text-white transition cursor-pointer"
+              className="lg:hidden ml-1 p-1.5 text-[#8A8F98] hover:text-white transition cursor-pointer"
               onClick={() => setMobileOpen(!mobileOpen)}
             >
               {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
@@ -96,7 +97,7 @@ export function LandingNav() {
 
       {/* Mobile dropdown */}
       {mobileOpen && (
-        <div className="md:hidden border-t border-white/[0.04] bg-[#08090A]/95 backdrop-blur-xl px-6 py-4 space-y-3">
+        <div className="lg:hidden border-t border-white/[0.04] bg-[#08090A]/95 backdrop-blur-xl px-6 py-4 space-y-3">
           {navLinks.map((link) => (
             link.href.startsWith("/") && !link.href.includes("#") ? (
               <Link
