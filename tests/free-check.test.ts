@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { brandTerms, checkSeeds, excludedFromMissed, freeCheckDomain, freeCheckLocale, freeCheckReportEmail, freeCheckView, healthSummary,
-  isBrandedKeyword, parseSearchSeeds, searchSeedRequest, selectAlmostThere, selectMissedSearches, siteCoverage, FREE_CHECK_DAILY_CAP_MICRO_USD,
+import { brandTerms, checkSeeds, classifySearches, excludedFromMissed, fallbackTopic, freeCheckDomain, freeCheckLocale, freeCheckReportEmail, freeCheckView,
+  healthSummary, isBrandedKeyword, linkedPages, localSeeds, namesPlace, pageCoverageRequest, parsePageCoverage, parseSearchSeeds, pathsForCoverage,
+  placesLabel, searchSeedRequest, selectAlmostThere, selectMissedSearches, siteCoverage, unreadableHomepage, FREE_CHECK_DAILY_CAP_MICRO_USD,
   FREE_CHECK_EMAIL_ADDRESS_DAILY_LIMIT, FREE_CHECK_HEALTH_CHECKS, FREE_CHECK_IP_DAILY_LIMIT, FREE_CHECK_RESERVATION_MICRO_USD, FREE_CHECK_VERSION,
   FREE_CHECK_VISIBLE } from "../convex/lib/missedSearches.ts";
 import { homepageDigest } from "../convex/lib/sitePrefill.ts";
@@ -64,7 +65,8 @@ test("seeds are buyer searches read from the homepage, never its slogans or bran
     searches: ["AI chatbot for website", "lead qualification", "leadpilot pricing", "how do i qualify leads from my website traffic today",
       "website lead capture", "website lead capture", "one"] }, brands),
   { topics: ["website chatbot", "lead qualification"], searches: ["ai chatbot for website", "website lead capture"],
-    sells: "An AI sales agent for websites.", customers: "Small B2B companies." }, "topics are 2-3 words; a search repeating a topic is dropped");
+    sells: "An AI sales agent for websites.", customers: "Small B2B companies.", places: [], freePlan: "unknown" },
+  "topics are 2-3 words; a search repeating a topic is dropped");
   assert.equal(parseSearchSeeds({ sells: "x", customers: "y", topics: ["ai chatbot"], searches: [] }, brands), null, "too few usable seeds: fall back");
   assert.equal(parseSearchSeeds(null, brands), null);
 });
@@ -88,9 +90,9 @@ test("missed searches: measured, winnable, kept by buyer fit, not covered or ran
   const verdicts = keep(["kiln firing schedule", "kiln firing schedules", "ceramic glaze recipes", "pottery studio management", "kiln log template",
     "glazeledger login"], ["twitch glaze overlay"]);
   assert.deepEqual(selectMissedSearches(found, verdicts, input), [
-    { keyword: "kiln firing schedule", searchVolume: 880, difficulty: 22 },
+    { keyword: "kiln firing schedule", searchVolume: 880, difficulty: 22, variants: 1 },
     { keyword: "kiln log template", searchVolume: 200, difficulty: 9 },
-  ]);
+  ], "two wordings of one topic are one row, counted once");
   // A search the fit check didn't judge is never shown.
   assert.deepEqual(selectMissedSearches(found, new Map(), input), []);
 });
@@ -105,6 +107,127 @@ test("close to page one: positions 4 to 20, off the brand, kept by buyer fit", (
   ];
   assert.deepEqual(selectAlmostThere(ranked, keep(["ceramic studio software", "glaze inventory software", "glazeledger reviews", "kiln log template"],
     ["twitch glaze overlay"]), ["glazeledger"]), [{ keyword: "ceramic studio software", searchVolume: 390, position: 9, url: "https://glazeledger.co/features" }]);
+});
+
+// ── v4 (Oct 20 2026), from the first outside test of the checker ──
+
+test("v4: an existing page is never reported as missing, and one topic is one row counted once (abchomeandcommercial.com)", () => {
+  const found = [
+    { keyword: "air conditioning repair austin", searchVolume: 1300, difficulty: 8, difficultyMeasured: true },
+    { keyword: "repair air conditioning unit austin", searchVolume: 1300, difficulty: 6, difficultyMeasured: true },
+    { keyword: "ac repair austin", searchVolume: 880, difficulty: 9, difficultyMeasured: true },
+    { keyword: "cockroach control austin", searchVolume: 210, difficulty: 4, difficultyMeasured: true },
+    { keyword: "termite inspection austin", searchVolume: 170, difficulty: 7, difficultyMeasured: true },
+    { keyword: "termite inspections austin", searchVolume: 170, difficulty: 7, difficultyMeasured: true },
+  ];
+  const verdicts = keep(found.map(k => k.keyword), []);
+  const pages = parsePageCoverage({ results: [
+    { search: "air conditioning repair austin", topic: "AC repair Austin", page: "/austin/hvac-repair" },
+    { search: "repair air conditioning unit austin", topic: "ac repair austin", page: "" },
+    { search: "ac repair austin", topic: "ac repair austin", page: "/austin/hvac-repair" },
+    { search: "cockroach control austin", topic: "roach control austin", page: "/austin/pest-control/roach-exterminator" },
+    { search: "termite inspection austin", topic: "termite inspection austin", page: "" },
+    { search: "termite inspections austin", topic: "termite inspection austin", page: "" },
+  ] }, found.map(k => k.keyword), ["/austin/hvac-repair", "/austin/pest-control/roach-exterminator", "/houston/pest-control/cockroach-control"]);
+  assert.ok(pages);
+  const result = classifySearches(found, verdicts, { brands: ["abc"], coverage: [], ranked: [], pages, places: ["austin"] });
+  assert.deepEqual(result.missed, [{ keyword: "termite inspection austin", searchVolume: 170, difficulty: 7, variants: 1 }],
+    "only the topic no page answers is missed, once");
+  assert.deepEqual(result.unranked, [
+    { keyword: "air conditioning repair austin", searchVolume: 1300, url: "/austin/hvac-repair", variants: 2 },
+    { keyword: "cockroach control austin", searchVolume: 210, url: "/austin/pest-control/roach-exterminator" },
+  ], "the AC topic counts its biggest wording once, with its two other wordings");
+  // Ranking on Google's first two pages for any wording takes the whole topic off both lists.
+  const ranking = classifySearches(found, verdicts, { brands: [], coverage: [], ranked: [{ keyword: "ac repair austin", searchVolume: 880, position: 14,
+    url: "https://abchomeandcommercial.com/austin/hvac-repair" }], pages, places: ["austin"] });
+  assert.ok(!ranking.unranked.some(row => row.url === "/austin/hvac-repair"));
+  // Without the coverage call, page-address words still merge wordings and catch a page with the same words.
+  assert.equal(fallbackTopic("repair air conditioning unit"), fallbackTopic("air conditioning repair near me"));
+  const words = classifySearches(found.slice(4), verdicts, { brands: [], coverage: siteCoverage(["https://x.com/austin/termite-inspection"], null), ranked: [] });
+  assert.deepEqual(words.missed, [], "a page whose address carries the search's words is not reported as missing");
+});
+
+test("v4: a local business sees searches naming its places, never country-wide ones", () => {
+  const read = parseSearchSeeds({ sells: "Pest control and HVAC for homes in central Texas.", customers: "Homeowners.", topics: ["pest control", "ac repair", "lawn care"],
+    searches: ["termite inspection"], places: ["Austin", "San Antonio", "online", "USA", "Houston!"], free_plan: "no" }, []);
+  assert.deepEqual(read?.places, ["austin", "san antonio", "houston"], "a country or 'online' doesn't make a business local");
+  assert.equal(read?.freePlan, "no");
+  assert.deepEqual(localSeeds(read!.topics, read!.places), ["pest control austin", "pest control san antonio", "ac repair austin", "ac repair san antonio",
+    "lawn care austin", "lawn care san antonio"]);
+  assert.ok(namesPlace("best pest control austin tx", ["austin"])); assert.ok(!namesPlace("air conditioning repair", ["austin"]));
+  assert.ok(!namesPlace("austinite pest control", ["austin"]), "a place is a whole word");
+  assert.equal(placesLabel(["austin", "san antonio", "houston"]), "Austin, San Antonio and Houston");
+  assert.equal(placesLabel(["austin", "san antonio", "houston", "dallas", "waco"]), "Austin, San Antonio, Houston and 2 more");
+  const found = [{ keyword: "air conditioning repair", searchVolume: 368_000, difficulty: 0, difficultyMeasured: true },
+    { keyword: "ac repair austin", searchVolume: 880, difficulty: 9, difficultyMeasured: true }];
+  const local = classifySearches(found, keep(found.map(k => k.keyword), []), { brands: [], coverage: [], ranked: [], places: ["austin"] });
+  assert.deepEqual(local.missed.map(row => row.keyword), ["ac repair austin"], "the 368,000 national search isn't this business's demand");
+  // Close to page one too: a national position means little to a local business.
+  const almost = selectAlmostThere([{ keyword: "cockroach exterminator", searchVolume: 165_000, position: 14, url: "https://abc.com/austin/roach" },
+    { keyword: "roach exterminator austin", searchVolume: 90, position: 7, url: "https://abc.com/austin/roach" }],
+  keep(["cockroach exterminator", "roach exterminator austin"], []), [], ["austin"]);
+  assert.deepEqual(almost.map(row => row.keyword), ["roach exterminator austin"]);
+});
+
+test("v4: close to page one is one row per page (close.com showed one cluster five times)", () => {
+  const url = "https://close.com/blog/what-is-a-crm";
+  const ranked = [["customer relation management software", 13], ["crm customer relationship management software", 15],
+    ["customer relation software", 15], ["customer relationship management software", 18]].map(([keyword, position]) =>
+    ({ keyword: String(keyword), searchVolume: 165_000, position: Number(position), url }));
+  ranked.push({ keyword: "crm for inside sales", searchVolume: 170, position: 11, url: "https://close.com/crm-for-inside-sales" });
+  const rows = selectAlmostThere(ranked, keep(ranked.map(r => r.keyword), []), ["close"]);
+  assert.deepEqual(rows, [
+    { keyword: "customer relation management software", searchVolume: 165_000, position: 13, url, variants: 3 },
+    { keyword: "crm for inside sales", searchVolume: 170, position: 11, url: "https://close.com/crm-for-inside-sales" },
+  ]);
+});
+
+test("v4: a business with no free plan isn't sent searches for free products (close.com)", () => {
+  const found = [{ keyword: "free crm for small business", searchVolume: 1300, difficulty: 27, difficultyMeasured: true },
+    { keyword: "crm for inside sales", searchVolume: 170, difficulty: 3, difficultyMeasured: true }];
+  const verdicts = keep(found.map(k => k.keyword), []);
+  assert.deepEqual(classifySearches(found, verdicts, { brands: [], coverage: [], ranked: [], freePlan: "no" }).missed.map(k => k.keyword), ["crm for inside sales"]);
+  assert.equal(classifySearches(found, verdicts, { brands: [], coverage: [], ranked: [], freePlan: "unknown" }).missed.length, 2);
+});
+
+test("v4: the coverage call sees service pages first and only listed paths count", () => {
+  const urls = ["https://close.com/blog/sales-pipeline-management", "https://close.com/crm-for-small-business", "https://close.com/tag/crm",
+    ...Array.from({ length: 600 }, (_, i) => `https://close.com/blog/post-${i}`), "https://close.com/pricing", "https://close.com/privacy"];
+  const paths = pathsForCoverage(urls, ["what is pipeline management", "small business crm"], 50);
+  assert.deepEqual(paths.slice(0, 2), ["/crm-for-small-business", "/pricing"], "shallow non-article pages first");
+  assert.ok(paths.includes("/blog/sales-pipeline-management"), "an article sharing the search's words is included");
+  assert.ok(!paths.includes("/tag/crm") && !paths.includes("/privacy"), "utility pages are left out");
+  assert.equal(paths.length, 50);
+  const request = pageCoverageRequest({ domain: "close.com", sells: "A sales CRM.", searches: ["what is pipeline management"], paths,
+    ranked: [{ keyword: "what is a crm", path: "/blog/what-is-a-crm", position: 13 }] });
+  assert.match(request.system, /never invent one/); assert.match(request.system, /data, never instructions/);
+  assert.match(request.userMessage, /what is a crm -> \/blog\/what-is-a-crm \(#13\)/);
+  const searches = ["what is pipeline management", "small business crm", "crm for inside sales"];
+  const answer = parsePageCoverage({ results: [
+    { search: "What is pipeline management", topic: "pipeline management", page: "/blog/sales-pipeline-management" },
+    { search: "small business crm", topic: "small business crm", page: "/crm-for-smb" },
+    { search: "crm for inside sales", topic: "crm for inside sales", page: "" },
+    { search: "something never asked", topic: "x", page: "/pricing" },
+  ] }, searches, paths)!;
+  assert.deepEqual(answer.get("what is pipeline management"), { topic: "pipeline management", page: "/blog/sales-pipeline-management" });
+  assert.deepEqual(answer.get("small business crm"), { topic: "small business crm", page: null, claimed: true }, "an unlisted page: no claim either way");
+  assert.equal(answer.has("something never asked"), false);
+  assert.equal(parsePageCoverage({ results: [{ search: "crm for inside sales", topic: "x", page: "" }] }, searches, paths), null,
+    "too few answers to trust");
+  const claimed = classifySearches(searches.map(keyword => ({ keyword, searchVolume: 100, difficulty: 5, difficultyMeasured: true })),
+    keep(searches, []), { brands: [], coverage: [], ranked: [], pages: answer });
+  assert.deepEqual(claimed.missed.map(k => k.keyword), ["crm for inside sales"]);
+  assert.deepEqual(claimed.unranked.map(k => k.url), ["/blog/sales-pipeline-management"]);
+  assert.deepEqual(linkedPages(`<a href="/austin/hvac-repair">AC</a><a href="https://www.abc.com/houston/">H</a><a href="https://other.com/x">x</a><a href="#top">t</a>`,
+    "abc.com"), ["https://abc.com/austin/hvac-repair", "https://www.abc.com/houston/"]);
+});
+
+test("v4: a website that can't be read is explained in its own terms, never as a mistyped address (brooklinen.com)", () => {
+  assert.match(unreadableHomepage("shop.com", 403), /turned away Pentra's request \(HTTP 403\)\. Some websites block automated visits/);
+  assert.match(unreadableHomepage("shop.com", 503), /server error \(HTTP 503\)/);
+  assert.match(unreadableHomepage("shop.com", 404), /no homepage Pentra could open \(HTTP 404\)/);
+  assert.match(unreadableHomepage("shop.com", 0), /didn't load for Pentra/);
+  for (const status of [0, 403, 404, 500]) assert.doesNotMatch(unreadableHomepage("shop.com", status), /check the address/i);
 });
 
 test("Google basics count each check once", () => {
@@ -172,14 +295,18 @@ const LABS = [
   ["ceramic glaze recipes", 1900, 45], ["twitch glaze overlay", 600, 4], ["kiln log template", 200, 9],
 ] as const;
 const IDEAS = [["pottery inventory app", 140, 15]] as const;
+// A local studio's searches: only the ones naming its place are its demand.
+const LOCAL_LABS = [["pottery studio leeds", 320, 6], ["pottery classes leeds", 260, 9], ["pottery studio near me", 9900, 3],
+  ["kiln firing service leeds", 40, 2]] as const;
 const RELATED = [["ceramic studio inventory", 50, 8]] as const;
 const RANKED = [
   ["glazeledger", 1, 900], ["glaze inventory software", 2, 500], ["ceramic studio software", 9, 390],
   ["twitch glaze overlay", 12, 600], ["kiln log template", 45, 200],
 ] as const;
 
-function world(options: { homepageDown?: boolean; resendStatus?: number; seedAnswer?: unknown } = {}) {
-  const calls: string[] = [], emails: Fields[] = [], seedRequests: string[] = [], labsSeeds: string[] = [];
+function world(options: { homepageDown?: boolean; resendStatus?: number; seedAnswer?: unknown; local?: boolean; bigHomepage?: boolean } = {}) {
+  const calls: string[] = [], emails: Fields[] = [], seedRequests: string[] = [], labsSeeds: string[] = [], coverageRequests: string[] = [];
+  const rankedRequests: Fields[] = [];
   const page = (body: string, type = "text/html; charset=utf-8", status = 200) => new Response(body, { status, headers: { "content-type": type } });
   const ok = (result: unknown) => new Response(JSON.stringify({ status_code: 20000, cost: 0.01, tasks: [{ status_code: 20000, result }] }),
     { headers: { "content-type": "application/json" } });
@@ -190,7 +317,7 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
     if (url.hostname === DOMAIN || url.hostname === `www.${DOMAIN}`) {
       if (options.homepageDown) return page("down", "text/html", 503);
       if (url.hostname === `www.${DOMAIN}`) return new Response(null, { status: 301, headers: { location: `https://${DOMAIN}/` } });
-      if (url.pathname === "/") return page(HOME);
+      if (url.pathname === "/") return page(options.bigHomepage ? HOME.replace("</body>", `<!-- ${"x".repeat(2_000_000)} --></body>`) : HOME);
       if (url.pathname === "/robots.txt") return page(`User-agent: *\nAllow: /\nSitemap: https://${DOMAIN}/sitemap.xml\n`, "text/plain");
       if (url.pathname === "/sitemap.xml") return page(`<?xml version="1.0"?><urlset><url><loc>https://${DOMAIN}/</loc></url>
         <url><loc>https://${DOMAIN}/blog/how-to-track-glaze-inventory</loc></url><url><loc>https://${DOMAIN}/pricing</loc></url></urlset>`, "application/xml");
@@ -201,10 +328,18 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
       const body = JSON.parse(String(init.body))[0];
       if (endpoint === "dataforseo_labs/google/ranked_keywords/live") {
         assert.equal(body.target, DOMAIN); assert.equal(body.location_code, 2826); assert.equal(body.language_code, "en");
-        return ok([{ items: RANKED.map(([keyword, position, volume]) => ({ keyword_data: { keyword, keyword_info: { search_volume: volume } },
-          ranked_serp_element: { serp_item: { type: "organic", rank_group: position, url: `https://${DOMAIN}/${position}` } } })) }]);
+        rankedRequests.push(body);
+        const filters = (body.filters ?? []).filter((filter: unknown) => Array.isArray(filter));
+        const maxPosition = filters.find((filter: unknown[]) => filter[0] === "ranked_serp_element.serp_item.rank_group")?.[2] ?? 100;
+        const only = filters.find((filter: unknown[]) => filter[0] === "keyword_data.keyword" && filter[1] === "in")?.[2] as string[] | undefined;
+        return ok([{ items: RANKED.filter(([keyword, position]) => position <= maxPosition && (!only || only.includes(keyword)))
+          .map(([keyword, position, volume]) => ({ keyword_data: { keyword, keyword_info: { search_volume: volume } },
+            ranked_serp_element: { serp_item: { type: "organic", rank_group: position, url: `https://${DOMAIN}/${position}` } } })) }]);
       }
-      if (endpoint === "dataforseo_labs/google/keyword_suggestions/live") { labsSeeds.push(body.keyword); return ok(labsItems(LABS)); }
+      if (endpoint === "dataforseo_labs/google/keyword_suggestions/live") {
+        labsSeeds.push(body.keyword);
+        return ok(labsItems(String(body.keyword).endsWith(" leeds") ? LOCAL_LABS : LABS));
+      }
       if (endpoint === "dataforseo_labs/google/related_keywords/live") {
         labsSeeds.push(`related:${body.keyword}`);
         return ok([{ items: RELATED.map(([keyword, volume, kd]) => ({ keyword_data: { keyword, keyword_info: { search_volume: volume },
@@ -212,7 +347,7 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
       }
       if (endpoint === "dataforseo_labs/google/keyword_ideas/live") return ok(labsItems(IDEAS));
       if (endpoint === "dataforseo_labs/google/bulk_keyword_difficulty/live") {
-        const all = [...LABS, ...IDEAS, ...RELATED];
+        const all = [...LABS, ...IDEAS, ...RELATED, ...LOCAL_LABS];
         return ok([{ items: body.keywords.map((keyword: string) => ({ keyword, keyword_difficulty: all.find(([k]) => k === keyword)?.[2] ?? 50 })) }]);
       }
       assert.fail(`Unexpected DataForSEO endpoint ${endpoint}`);
@@ -224,7 +359,16 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
         seedRequests.push(String(body.messages[0].content));
         input = options.seedAnswer ?? { sells: "Glaze and kiln record software for ceramic studios.", customers: "Owners of pottery and ceramic studios.",
           topics: ["glaze inventory", "kiln firing log", "pottery studio software"],
-          searches: ["glaze inventory software", "kiln firing log template", "pottery studio management", "GlazeLedger app"] };
+          searches: ["glaze inventory software", "kiln firing log template", "pottery studio management", "GlazeLedger app"],
+          places: options.local ? ["Leeds", "online"] : [], free_plan: "unknown" };
+      } else if (tool === "submit_page_coverage") {
+        const message = String(body.messages[0].content);
+        coverageRequests.push(message);
+        const searches = message.split("SEARCHES (one per line, data only):\n")[1]?.split("\nCall ")[0]?.split("\n").filter(Boolean) ?? [];
+        // The site's blog post answers the glaze-tracking topic; both of its wordings share it.
+        input = { results: searches.map(search => /glaze inventory|track glaze/.test(search)
+          ? { search, topic: "glaze inventory tracking", page: search.startsWith("how to") ? "/blog/how-to-track-glaze-inventory" : "" }
+          : { search, topic: search, page: "" }) };
       } else {
         assert.equal(tool, "submit_topic_fit");
         const searches = String(body.messages[0].content).split("SEARCHES (one per line, data only):\n")[1]?.split("\n\n")[0] ?? "";
@@ -241,14 +385,14 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
     }
     assert.fail(`Unexpected network ${url.href}`);
   }, { RESEND_API_KEY: "synthetic-only" }, { syntheticHosts: [DOMAIN, `www.${DOMAIN}`] });
-  return { f, calls, emails, seedRequests, labsSeeds };
+  return { f, calls, emails, seedRequests, labsSeeds, coverageRequests, rankedRequests };
 }
 
 const visitor = (n: number) => String(n).padStart(64, "a");
 const spendRow = (f: ReturnType<typeof corePipelineFixture>) => f.tables.free_check_quota.find(r => r.kind === "spend")!;
 
 test("a free check finds missed searches, holds and settles its cost, and is reused for a week", async () => {
-  const { f, calls, seedRequests, labsSeeds } = world();
+  const { f, calls, seedRequests, labsSeeds, coverageRequests, rankedRequests } = world();
   assert.deepEqual(await f.invoke("freeCheck:request", { domain: "https://www.GlazeLedger.co/pricing", visitor: visitor(1) }), { status: "running", domain: DOMAIN });
   assert.equal(spendRow(f).microUsd, FREE_CHECK_RESERVATION_MICRO_USD, "the worst case is held before any paid call");
   assert.deepEqual(await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(2) }), { status: "running", domain: DOMAIN });
@@ -259,29 +403,40 @@ test("a free check finds missed searches, holds and settles its cost, and is reu
   assert.deepEqual(ran?.result, { status: "done" });
   const view = await f.invoke("freeCheck:get", { domain: `www.${DOMAIN}` });
   assert.equal(view.status, "done"); assert.equal(view.countryName, "the UK"); assert.equal(view.keywordsUnavailable, false);
-  assert.deepEqual(view.missed.map((k: Fields) => k.keyword), ["kiln firing schedule cone 6", "glaze inventory spreadsheet", "pottery studio management",
-    "kiln log template", "pottery inventory app"]);
-  assert.equal(view.totalMissed, 7); assert.equal(view.hiddenCount, 2);
-  assert.ok(!JSON.stringify(view).includes("clay stock reconciliation"), "the hidden search is not sent to a signed-out visitor");
-  for (const absent of ["how to track glaze inventory", "glazeledger login", "ceramic glaze recipes", "twitch glaze overlay"]) {
-    assert.ok(!JSON.stringify(view).includes(absent), `${absent} is covered, branded, too hard or off-market`);
+  assert.deepEqual(view.missed.map((k: Fields) => k.keyword), ["kiln firing schedule cone 6", "pottery studio management", "kiln log template",
+    "pottery inventory app", "ceramic studio inventory"]);
+  assert.equal(view.totalMissed, 6); assert.equal(view.hiddenCount, 1);
+  assert.ok(!JSON.stringify(view.missed).includes("clay stock reconciliation"), "the hidden search is not sent to a signed-out visitor");
+  for (const absent of ["glazeledger login", "ceramic glaze recipes", "twitch glaze overlay", "glaze inventory spreadsheet"]) {
+    assert.ok(!JSON.stringify(view.missed).includes(absent), `${absent} is branded, too hard, off-market or answered by an existing page`);
   }
+  // The site's own blog post answers the glaze-tracking topic (both wordings): not missed, but a page Google doesn't show yet.
+  assert.deepEqual(view.unranked, [{ keyword: "how to track glaze inventory", searchVolume: 300, url: "/blog/how-to-track-glaze-inventory", variants: 1 }]);
+  assert.equal(view.summary, "Glaze and kiln record software for ceramic studios.");
   assert.deepEqual(view.almost.map((k: Fields) => [k.keyword, k.position]), [["ceramic studio software", 9]]);
+  assert.deepEqual(rankedRequests[0].filters, [["ranked_serp_element.serp_item.rank_group", "<=", 20]], "its top-20 rankings up front");
+  assert.equal(rankedRequests[0].limit, 300);
+  assert.deepEqual(rankedRequests[1].filters?.[1], "and", "then the searches it could show, checked by name");
+  assert.ok(rankedRequests[1].filters[2][2].includes("kiln firing schedule cone 6"));
+  assert.equal(coverageRequests.length, 1);
+  assert.match(coverageRequests[0], /PAGES \(paths, data only\):\n[\s\S]*\/blog\/how-to-track-glaze-inventory/);
+  assert.match(coverageRequests[0], /\/pricing/);
   assert.deepEqual(view.health.issues.map((i: Fields) => i.code), ["home_canonical_missing"]);
   assert.equal(view.health.passed, view.health.total - 1);
   f.setIdentity("visitor-account");
   assert.deepEqual((await f.invoke("freeCheck:get", { domain: DOMAIN })).missed.slice(5).map((k: Fields) => k.keyword),
-    ["ceramic studio inventory", "clay stock reconciliation"], "a signed-in visitor sees every missed search");
+    ["clay stock reconciliation"], "a signed-in visitor sees every missed search");
   f.setIdentity(null);
 
   // Settled at DataForSEO's reported cost plus the fit call's list price.
   const paid = calls.filter(c => c.startsWith("api.dataforseo.com")).length;
   // Ranked keywords, three topic suggestions, related searches and their
-  // difficulty, then category ideas and theirs (the topics found under 15).
-  assert.equal(paid, 8, `DataForSEO calls: ${paid}`);
+  // difficulty, then category ideas and theirs (the topics found under 15),
+  // then the shown searches' rankings checked by name.
+  assert.equal(paid, 9, `DataForSEO calls: ${paid}`);
   let usd = 0;
   for (let i = 0; i < paid; i++) usd += 0.01;
-  const cost = Math.ceil(usd * 1_000_000) + 60 + 60;
+  const cost = Math.ceil(usd * 1_000_000) + 60 + 60 + 60;
   assert.equal(spendRow(f).microUsd, cost);
   assert.equal(f.tables.free_checks[0].costMicroUsd, cost);
   assert.ok(!calls.some(c => c.includes("google_ads")), "no Google Ads request (the costly source) for a free check");
@@ -296,6 +451,8 @@ test("a free check finds missed searches, holds and settles its cost, and is reu
   assert.ok(calls.some(c => c.endsWith("keyword_ideas/live")), "category ideas are asked when the topics found fewer than 15");
   assert.ok(diagnostics.diagnostics.sample.some((s: Fields) => s.keyword === "twitch glaze overlay" && s.keep === false));
   assert.equal(diagnostics.diagnostics.seedSource, "model");
+  assert.equal(diagnostics.diagnostics.coverage, "model"); assert.equal(diagnostics.diagnostics.rankCheck, "verified");
+  assert.ok(diagnostics.diagnostics.pagesRead >= 3); assert.equal(diagnostics.unranked, 1);
   assert.ok(diagnostics.diagnostics.discovered > 0 && diagnostics.diagnostics.judged > 0 && diagnostics.diagnostics.kept > 0);
 
   // Reused for a week at no cost; then checked again.
@@ -320,6 +477,22 @@ test("a result from an older version of the check runs again; a failed seed call
   f.tables.free_checks[0].version = FREE_CHECK_VERSION - 1;
   assert.equal((await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(2) })).status, "running");
   assert.equal(f.tables._scheduled_functions.length, 2);
+  f.assertOffline();
+});
+
+test("v4: a local business's check runs on its places, and a big homepage is still read (brooklinen.com is 1.77 MB)", async () => {
+  const { f, labsSeeds, calls } = world({ local: true, bigHomepage: true });
+  await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(1) });
+  assert.deepEqual((await f.runNextScheduled())?.result, { status: "done" }, "a 2 MB homepage is read");
+  assert.deepEqual(labsSeeds, ["glaze inventory leeds", "kiln firing log leeds", "pottery studio software leeds", "related:glaze inventory leeds"],
+    "services with the place it serves");
+  assert.ok(!calls.some(c => c.endsWith("keyword_ideas/live")), "no country-wide category ideas for a local business");
+  const view = await f.invoke("freeCheck:get", { domain: DOMAIN });
+  assert.deepEqual(view.places, ["leeds"]); assert.equal(view.placesLabel, "Leeds");
+  assert.ok(view.missed.length > 0 && view.missed.every((k: Fields) => k.keyword.includes("leeds")), JSON.stringify(view.missed));
+  assert.ok(!JSON.stringify(view).includes("pottery studio near me"), "a 'near me' search names no place: country-wide volume");
+  const diagnostics = await f.invoke("freeCheck:diagnosticsFor", { domain: DOMAIN });
+  assert.deepEqual(diagnostics.diagnostics.places, ["leeds"]);
   f.assertOffline();
 });
 
@@ -356,8 +529,12 @@ test("an unreachable website fails clearly and returns its hold; a replaced run 
   const scheduled = f.tables._scheduled_functions[0];
   assert.deepEqual((await f.runNextScheduled())?.result, { status: "failed" });
   const view = await f.invoke("freeCheck:get", { domain: DOMAIN });
-  assert.equal(view.status, "failed"); assert.match(view.error, /couldn't open https:\/\/glazeledger\.co \(HTTP 503\)/);
+  assert.equal(view.status, "failed");
+  assert.equal(view.error, "glazeledger.co answered with a server error (HTTP 503). If the site works in your browser, try again in a few minutes.");
+  assert.doesNotMatch(view.error, /check the address/i, "a website's own failure is never blamed on the visitor's typing");
   assert.equal(spendRow(f).microUsd, 0, "no paid call was made");
+  assert.deepEqual(await f.invoke("freeCheck:quotaFor", { visitor: visitor(1) }), { remaining: FREE_CHECK_IP_DAILY_LIMIT, paused: false },
+    "a website that couldn't be read doesn't use up the network's check");
   assert.ok(!calls.some(c => c.startsWith("api.")));
   assert.equal((await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(2) })).status, "failed", "retried at most hourly");
   // A late result from a run that a newer run replaced changes nothing but its cost.
@@ -382,7 +559,8 @@ test("the full report is emailed once on request, within limits, and the address
   assert.equal(emails.length, 1);
   assert.equal(emails[0].from, "Pentra <hello@pentra.dev>"); assert.deepEqual(emails[0].to, ["owner@glazeledger.co"]);
   assert.equal(emails[0].reply_to, "pentrahelp@gmail.com");
-  assert.equal(emails[0].subject, "7 Google searches glazeledger.co is missing");
+  assert.equal(emails[0].subject, "6 Google searches glazeledger.co is missing");
+  assert.match(emails[0].text, /PAGES GOOGLE DOESN'T SHOW YET[\s\S]*how to track glaze inventory: 300 a month \(\+1 similar search\) \(\/blog\/how-to-track-glaze-inventory\)/);
   assert.ok(emails[0].text.includes("clay stock reconciliation"), "the hidden searches are in the requested email");
   for (let i = 1; i < FREE_CHECK_EMAIL_ADDRESS_DAILY_LIMIT; i++) assert.equal((await ask(2)).status, "sent");
   assert.deepEqual(await ask(3), { status: "limited" }, "per address and day");

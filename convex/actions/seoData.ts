@@ -638,18 +638,23 @@ export async function getRankedKeywords(
   locationCode = 2840,
   languageCode = "en",
   limit = 100,
-  options: { request?: KeywordDiscoveryRequest } = {},
+  options: { request?: KeywordDiscoveryRequest; maxPosition?: number; keywords?: string[] } = {},
 ): Promise<Array<{ keyword: string; searchVolume: number; position: number; url: string }>> {
   const target = authorityDomain(domain);
   if (!target || (!getDataForSEOCredentials() && !options.request)) return [];
   const request = options.request ?? dataForSEORequest;
+  // Optional filters: only positions up to maxPosition, and/or only these searches.
+  const filters: unknown[] = [];
+  if (options.maxPosition) filters.push(["ranked_serp_element.serp_item.rank_group", "<=", options.maxPosition]);
+  if (options.keywords?.length) filters.push(...(filters.length ? ["and"] : []), ["keyword_data.keyword", "in", options.keywords]);
   const data = await request("dataforseo_labs/google/ranked_keywords/live", [{
     target,
     location_code: locationCode,
     language_code: dataForSeoLanguageCode(languageCode),
     item_types: ["organic"],
     order_by: ["keyword_data.keyword_info.search_volume,desc"],
-    limit: Math.max(1, Math.min(limit, 100)),
+    limit: Math.max(1, Math.min(limit, 1000)),
+    ...(filters.length ? { filters } : {}),
   }]);
   const ranked: Array<{ keyword: string; searchVolume: number; position: number; url: string }> = [];
   for (const item of data.tasks?.[0]?.result?.[0]?.items ?? []) {

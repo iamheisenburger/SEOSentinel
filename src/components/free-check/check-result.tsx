@@ -14,10 +14,12 @@ type View = NonNullable<FunctionReturnType<typeof api.freeCheck.get>>;
 
 const EYEBROW = "font-mono text-[12px] uppercase tracking-[0.12em] text-[#62666D]";
 const PANEL = "rounded-xl border border-white/[0.06] bg-[#0B0C0E] p-5 md:p-6";
-const STEPS = ["Reading your homepage", "Checking what Google can see", "Finding searches your customers make", "Checking which searches fit your business"];
+const STEPS = ["Reading your homepage", "Checking what Google can see", "Finding searches your customers make", "Checking which searches fit your business",
+  "Checking the pages you already have"];
 
 const number = (value: number) => value.toLocaleString("en-US");
 const competition = (difficulty: number) => difficulty < 15 ? "Very low" : "Low";
+const similar = (variants?: number) => variants ? `+${variants} similar ${variants === 1 ? "search" : "searches"}` : null;
 const pagePath = (url: string) => { try { return decodeURI(new URL(url).pathname); } catch { return url; } };
 
 /** To signup (or, signed in, to a new website's setup) with the checked
@@ -52,7 +54,7 @@ function StartButton({ domain, label }: { domain: string; label: string }) {
 
 /** Email the full list (P123): one email to the address typed, which Pentra
  * doesn't keep. */
-function EmailReport({ domain }: { domain: string }) {
+function EmailReport({ domain, full }: { domain: string; full: boolean }) {
   const [email, setEmail] = useState(""), [busy, setBusy] = useState(false), [note, setNote] = useState(""), [sent, setSent] = useState(false);
   async function send(event: React.FormEvent) {
     event.preventDefault();
@@ -69,7 +71,7 @@ function EmailReport({ domain }: { domain: string }) {
     finally { setBusy(false); }
   }
   return <form onSubmit={send} noValidate className="mt-5 border-t border-white/[0.06] pt-5">
-    <label htmlFor="free-check-email" className="text-[14px] font-medium text-[#F7F8F8]">Email me the full list</label>
+    <label htmlFor="free-check-email" className="text-[14px] font-medium text-[#F7F8F8]">{full ? "Email me the full list" : "Email me this report"}</label>
     <div className="mt-2 flex flex-col gap-2 sm:flex-row">
       <input id="free-check-email" type="email" autoComplete="email" value={email} disabled={sent} placeholder="you@yourbusiness.com"
         onChange={e => { setEmail(e.target.value); setNote(""); }}
@@ -80,7 +82,7 @@ function EmailReport({ domain }: { domain: string }) {
       </button>
     </div>
     <p role="status" className={`mt-2 text-[12px] ${note && !sent ? "text-[#F59E0B]" : "text-[#62666D]"}`}>
-      {note || "One email with every missed search. Pentra doesn't keep your address or add you to a list."}
+      {note || `One email with ${full ? "every missed search" : "this report"}. Pentra doesn't keep your address or add you to a list.`}
     </p>
   </form>;
 }
@@ -107,11 +109,15 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
   return <div className="space-y-6">
     <section className={PANEL}>
       <p className={EYEBROW}>Missed searches{view.countryName ? ` · Google in ${view.countryName}` : ""}</p>
-      <h1 className="mt-3 text-2xl font-semibold tracking-tight text-[#F7F8F8] md:text-3xl [text-wrap:balance]">
-        {view.totalMissed > 0 ? `${view.totalMissed} Google searches ${view.domain} is missing` : `No missed searches found for ${view.domain}`}
+      <h1 className="mt-3 text-2xl font-semibold tracking-tight text-[#F7F8F8] md:text-3xl [text-wrap:balance] [overflow-wrap:anywhere]">
+        {view.totalMissed > 0 ? `${view.totalMissed} Google ${view.totalMissed === 1 ? "search" : "searches"} ${view.domain} is missing` : `No missed searches found for ${view.domain}`}
       </h1>
+      {view.summary && <p className="mt-2 text-[13px] leading-relaxed text-[#62666D]">
+        Pentra read {view.domain} as: {view.summary}{view.placesLabel ? ` Serves ${view.placesLabel}.` : ""}
+      </p>}
       {view.totalMissed > 0 ? <p className="mt-3 text-[15px] leading-relaxed text-[#8A8F98]">
-        People who could become your customers make these searches about {number(view.monthlySearches)} times a month in total.
+        {view.placesLabel ? `People in ${view.placesLabel} make these searches about ${number(view.monthlySearches)} times a month.`
+          : `People who could become your customers make these searches about ${number(view.monthlySearches)} times a month.`}
         {" "}{view.domain} has no page for them and doesn&apos;t appear on Google&apos;s first two pages. Each has low competition, so a good page has a real chance to rank.
       </p> : <p className="mt-3 text-[15px] leading-relaxed text-[#8A8F98]">
         {view.keywordsUnavailable
@@ -127,8 +133,10 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
           </tr></thead>
           <tbody>
             {view.missed.map(row => <tr key={row.keyword} className="border-t border-white/[0.06]">
-              <td className="px-4 py-3 text-[#F7F8F8]">{row.keyword}</td>
-              <td className="px-4 py-3 text-right tabular-nums text-[#D0D6E0]">{number(row.searchVolume)}</td>
+              <td className="px-4 py-3 text-[#F7F8F8]">{row.keyword}
+                {similar(row.variants) && <span className="block text-[12px] text-[#62666D]">{similar(row.variants)}</span>}</td>
+              <td className="px-4 py-3 text-right tabular-nums text-[#D0D6E0]">{number(row.searchVolume)}
+                <span className="block text-[12px] text-[#62666D] sm:hidden">{competition(row.difficulty)} competition</span></td>
               <td className="hidden px-4 py-3 text-right text-[#8A8F98] sm:table-cell">{competition(row.difficulty)} <span className="text-[#62666D]">({row.difficulty}/100)</span></td>
             </tr>)}
           </tbody>
@@ -147,16 +155,27 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
           <SignupCta domain={view.domain} signedIn={signedIn}>See all {view.totalMissed}</SignupCta>
         </div>
       </div>}
-      {view.totalMissed > 0 && <EmailReport domain={view.domain} />}
+      {view.totalMissed > 0 && <EmailReport domain={view.domain} full={view.hiddenCount > 0} />}
     </section>
+
+    {view.unranked.length > 0 && <section className={PANEL} aria-labelledby="free-check-unranked">
+      <h2 id="free-check-unranked" className="text-[17px] font-semibold text-[#F7F8F8]">Pages Google doesn&apos;t show yet</h2>
+      <p className="mt-1.5 text-[14px] leading-relaxed text-[#8A8F98]">{view.domain} has a page for these searches, but Google doesn&apos;t show it on its first two pages. Improving that page is usually faster than writing a new one.</p>
+      <ul className="mt-4 divide-y divide-white/[0.06]">
+        {view.unranked.map(row => <li key={row.url} className="py-3 text-[14px]">
+          <span className="block text-[#F7F8F8]">{row.keyword}</span>
+          <span className="block text-[#8A8F98]">{number(row.searchVolume)} a month{similar(row.variants) ? ` · ${similar(row.variants)}` : ""} · <span className="text-[#62666D] [overflow-wrap:anywhere]">{pagePath(row.url)}</span></span>
+        </li>)}
+      </ul>
+    </section>}
 
     {view.almost.length > 0 && <section className={PANEL} aria-labelledby="free-check-almost">
       <h2 id="free-check-almost" className="text-[17px] font-semibold text-[#F7F8F8]">Close to page one</h2>
-      <p className="mt-1.5 text-[14px] leading-relaxed text-[#8A8F98]">{view.domain} already shows up for these searches, just below the top three. Improving the page that ranks is usually the quickest win.</p>
+      <p className="mt-1.5 text-[14px] leading-relaxed text-[#8A8F98]">{view.domain} already shows up for these searches at positions 4 to 20 on Google. Improving the page that ranks is usually the quickest win.</p>
       <ul className="mt-4 divide-y divide-white/[0.06]">
-        {view.almost.map(row => <li key={row.keyword} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-3 text-[14px]">
-          <span className="text-[#F7F8F8]">{row.keyword}</span>
-          <span className="text-[#8A8F98]"><span className="text-[#D0D6E0]">#{row.position}</span> on Google · {number(row.searchVolume)} a month · <span className="text-[#62666D]">{pagePath(row.url)}</span></span>
+        {view.almost.map(row => <li key={row.url} className="py-3 text-[14px]">
+          <span className="block text-[#F7F8F8]">{row.keyword}</span>
+          <span className="block text-[#8A8F98]"><span className="text-[#D0D6E0]">#{row.position}</span> on Google · {number(row.searchVolume)} a month{similar(row.variants) ? ` · ${similar(row.variants)}` : ""} · <span className="text-[#62666D] [overflow-wrap:anywhere]">{pagePath(row.url)}</span></span>
         </li>)}
       </ul>
     </section>}

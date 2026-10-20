@@ -13,7 +13,7 @@ const WRAP = "mx-auto w-full max-w-[1100px] px-6";
 const EYEBROW = "font-mono text-[12px] uppercase tracking-[0.12em] text-[#62666D]";
 
 const SHOWS = [
-  ["Missed searches", "Real searches with monthly volume, made by people who could buy from you, where your site has no page and isn't on Google's first two pages. Only searches with low competition, so a smaller site can win them."],
+  ["Missed searches", "Real searches with monthly volume, made by people who could buy from you, where your site has no page and isn't on Google's first two pages. Only searches with low competition, so a smaller site can win them. Pages you already have that Google doesn't show are listed separately."],
   ["Close to page one", "Searches you already show up for at positions 4 to 20. Improving the page that ranks is usually the fastest way to more visitors."],
   ["Google basics", "Whether Google can crawl and understand your homepage: robots.txt, sitemap, title, description, headings, canonical address, structured data and more."],
 ] as const;
@@ -27,6 +27,7 @@ const HOW = [
 const FAQ = [
   ["Is the SEO check really free?", "Yes. The check is free and needs no account. Each website's result is kept for 7 days, so you can share its link. To see every missed search, create a free Pentra account."],
   ["Where do the numbers come from?", "Monthly searches and competition come from Google data through DataForSEO, for the country your website targets. Pentra never invents a search: every one has measured demand."],
+  ["Does it work for a local business?", "Yes. When your homepage shows you serve particular cities or areas, Pentra checks the searches that name them, like \"ac repair austin\", because a country-wide search isn't your customers' and isn't one a local page can win."],
   ["What does competition mean?", "How hard it is to reach Google's first page for a search, on a 0 to 100 scale. The check shows searches up to 30, which a smaller website can realistically win with one good page."],
   ["What happens if I sign up?", "Pentra starts with the missed searches from your check, checked against the business facts you confirm. It learns what you sell, writes fact-checked articles for those searches and publishes them to your site (WordPress, Shopify, Webflow, Ghost or GitHub, or you paste them in). Then it improves the pages closest to page one. The free plan includes 3 articles a month, with no credit card."],
   ["Does the check change my website?", "No. It only reads your public pages, the way Google does."],

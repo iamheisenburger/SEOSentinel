@@ -1763,8 +1763,14 @@ export default defineSchema({
     error: v.optional(v.string()),
     businessName: v.optional(v.string()),
     countryName: v.optional(v.string()),
-    missed: v.optional(v.array(v.object({ keyword: v.string(), searchVolume: v.number(), difficulty: v.number() }))),
-    almost: v.optional(v.array(v.object({ keyword: v.string(), searchVolume: v.number(), position: v.number(), url: v.string() }))),
+    // v4: what Pentra read the business as selling, and the places a local business serves.
+    summary: v.optional(v.string()),
+    places: v.optional(v.array(v.string())),
+    // variants: other wordings of the same topic, which one page answers.
+    missed: v.optional(v.array(v.object({ keyword: v.string(), searchVolume: v.number(), difficulty: v.number(), variants: v.optional(v.number()) }))),
+    almost: v.optional(v.array(v.object({ keyword: v.string(), searchVolume: v.number(), position: v.number(), url: v.string(), variants: v.optional(v.number()) }))),
+    // v4: searches the site has a page for that Google doesn't show on its first two pages.
+    unranked: v.optional(v.array(v.object({ keyword: v.string(), searchVolume: v.number(), url: v.string(), variants: v.optional(v.number()) }))),
     health: v.optional(v.object({ passed: v.number(), total: v.number(),
       issues: v.array(v.object({ code: v.string(), severity: v.union(v.literal("critical"), v.literal("warning")), message: v.string() })) })),
     keywordsUnavailable: v.optional(v.boolean()),
@@ -1775,7 +1781,9 @@ export default defineSchema({
     version: v.optional(v.number()),
     diagnostics: v.optional(v.object({ seedSource: v.union(v.literal("model"), v.literal("homepage")), seeds: v.array(v.string()),
       topics: v.optional(v.array(v.string())), sample: v.optional(v.array(v.object({ keyword: v.string(), keep: v.boolean(), reason: v.string() }))),
-      discovered: v.number(), ranked: v.number(), judged: v.number(), kept: v.number() })),
+      discovered: v.number(), ranked: v.number(), judged: v.number(), kept: v.number(),
+      places: v.optional(v.array(v.string())), freePlan: v.optional(v.string()), coverage: v.optional(v.union(v.literal("model"), v.literal("words"))),
+      pagesRead: v.optional(v.number()), rankCheck: v.optional(v.union(v.literal("verified"), v.literal("partial"))) })),
   }).index("by_domain", ["domain"]).index("by_requested", ["requestedAt"]),
   // Daily limits for free checks: per visitor (an HMAC of IP and day, so a
   // row can't be linked to a person or across days), the day's spend, and

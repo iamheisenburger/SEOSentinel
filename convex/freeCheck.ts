@@ -16,17 +16,21 @@ import { plausibleEmail, sendCustomerEmail } from "./lib/customerEmail";
  * known. A finished check is reused for a week. */
 
 const issue = v.object({ code: v.string(), severity: v.union(v.literal("critical"), v.literal("warning")), message: v.string() });
+export const missedRow = v.object({ keyword: v.string(), searchVolume: v.number(), difficulty: v.number(), variants: v.optional(v.number()) });
+export const almostRow = v.object({ keyword: v.string(), searchVolume: v.number(), position: v.number(), url: v.string(), variants: v.optional(v.number()) });
+export const unrankedRow = v.object({ keyword: v.string(), searchVolume: v.number(), url: v.string(), variants: v.optional(v.number()) });
 const outcome = v.union(
-  v.object({ kind: v.literal("done"), businessName: v.string(), countryName: v.string(),
-    missed: v.array(v.object({ keyword: v.string(), searchVolume: v.number(), difficulty: v.number() })),
-    almost: v.array(v.object({ keyword: v.string(), searchVolume: v.number(), position: v.number(), url: v.string() })),
+  v.object({ kind: v.literal("done"), businessName: v.string(), countryName: v.string(), summary: v.string(), places: v.array(v.string()),
+    missed: v.array(missedRow), almost: v.array(almostRow), unranked: v.array(unrankedRow),
     health: v.object({ passed: v.number(), total: v.number(), issues: v.array(issue) }),
     keywordsUnavailable: v.boolean() }),
-  v.object({ kind: v.literal("failed"), error: v.string() }),
+  v.object({ kind: v.literal("failed"), error: v.string(), refund: v.optional(v.boolean()) }),
 );
-const diagnostics = v.object({ seedSource: v.union(v.literal("model"), v.literal("homepage")), seeds: v.array(v.string()),
-      topics: v.optional(v.array(v.string())), sample: v.optional(v.array(v.object({ keyword: v.string(), keep: v.boolean(), reason: v.string() }))),
-  discovered: v.number(), ranked: v.number(), judged: v.number(), kept: v.number() });
+export const checkDiagnostics = v.object({ seedSource: v.union(v.literal("model"), v.literal("homepage")), seeds: v.array(v.string()),
+  topics: v.optional(v.array(v.string())), sample: v.optional(v.array(v.object({ keyword: v.string(), keep: v.boolean(), reason: v.string() }))),
+  discovered: v.number(), ranked: v.number(), judged: v.number(), kept: v.number(),
+  places: v.optional(v.array(v.string())), freePlan: v.optional(v.string()), coverage: v.optional(v.union(v.literal("model"), v.literal("words"))),
+  pagesRead: v.optional(v.number()), rankCheck: v.optional(v.union(v.literal("verified"), v.literal("partial"))) });
 
 async function counter(ctx: MutationCtx, key: string) {
   return ctx.db.query("free_check_quota").withIndex("by_key", q => q.eq("key", key)).first();
@@ -71,12 +75,13 @@ export const request = internalMutation({ args: { domain: v.string(), visitor: v
   if (existing) {
     checkId = existing._id;
     await ctx.db.patch(checkId, { ...fresh, completedAt: undefined, error: undefined, businessName: undefined, countryName: undefined,
-      missed: undefined, almost: undefined, health: undefined, keywordsUnavailable: undefined, costMicroUsd: undefined, costUncertain: undefined,
+      missed: undefined, almost: undefined, unranked: undefined, summary: undefined, places: undefined,
+      health: undefined, keywordsUnavailable: undefined, costMicroUsd: undefined, costUncertain: undefined,
       version: undefined, diagnostics: undefined });
   } else checkId = await ctx.db.insert("free_checks", { domain, ...fresh });
   await ctx.db.insert("acquisition_events", { kind: "check_started", source: "free_check", domain, at: now });
   await ctx.scheduler.runAfter(0, internal.actions.freeCheck.run, { checkId, domain, requestedAt: now, day,
-    reservedMicroUsd: FREE_CHECK_RESERVATION_MICRO_USD });
+    reservedMicroUsd: FREE_CHECK_RESERVATION_MICRO_USD, visitor: args.visitor });
   await trimVisitorCounters(ctx, day);
   return { status: "running" as const, domain };
 } });
@@ -104,11 +109,18 @@ export const progress = internalMutation({ args: { checkId: v.id("free_checks"),
  * hold stays counted when a paid call's cost is uncertain). A run that a
  * newer one replaced writes nothing but its cost. */
 export const complete = internalMutation({ args: { checkId: v.id("free_checks"), requestedAt: v.number(), day: v.string(),
-  reservedMicroUsd: v.number(), costMicroUsd: v.number(), costUncertain: v.boolean(), outcome, diagnostics: v.optional(diagnostics) },
+  reservedMicroUsd: v.number(), costMicroUsd: v.number(), costUncertain: v.boolean(), outcome, diagnostics: v.optional(checkDiagnostics),
+  visitor: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const spend = await counter(ctx, `spend:${args.day}`);
     const settled = args.costUncertain ? Math.max(args.costMicroUsd, args.reservedMicroUsd) : args.costMicroUsd;
     if (spend) await ctx.db.patch(spend._id, { microUsd: Math.max(0, (spend.microUsd ?? 0) - args.reservedMicroUsd + settled) });
+    // A website that couldn't be read cost nothing and isn't the visitor's
+    // doing: the check doesn't count against their network's daily checks.
+    if (args.outcome.kind === "failed" && args.outcome.refund && args.visitor && args.day === freeCheckDay(Date.now())) {
+      const used = await counter(ctx, `visitor:${args.visitor}`);
+      if (used && used.count > 0) await ctx.db.patch(used._id, { count: used.count - 1 });
+    }
     const row = await ctx.db.get(args.checkId);
     if (!row || row.status !== "running" || row.requestedAt !== args.requestedAt) return;
     const cost = { costMicroUsd: settled, costUncertain: args.costUncertain, completedAt: Date.now(), step: undefined,
@@ -117,7 +129,8 @@ export const complete = internalMutation({ args: { checkId: v.id("free_checks"),
     else {
       const done = args.outcome;
       await ctx.db.patch(args.checkId, { status: "done", businessName: done.businessName, countryName: done.countryName,
-        missed: done.missed, almost: done.almost, health: done.health, keywordsUnavailable: done.keywordsUnavailable, ...cost });
+        summary: done.summary || undefined, places: done.places, missed: done.missed, almost: done.almost, unranked: done.unranked,
+        health: done.health, keywordsUnavailable: done.keywordsUnavailable, ...cost });
     }
   } });
 
@@ -211,6 +224,7 @@ export const diagnosticsFor = internalQuery({ args: { domain: v.string() }, hand
   const row = domain ? await ctx.db.query("free_checks").withIndex("by_domain", q => q.eq("domain", domain)).first() : null;
   return row ? { domain: row.domain, status: row.status, version: row.version ?? 1, requestedAt: row.requestedAt, completedAt: row.completedAt ?? null,
     error: row.error ?? null, costMicroUsd: row.costMicroUsd ?? null, missed: row.missed?.length ?? 0, almost: row.almost?.length ?? 0,
+    unranked: row.unranked?.length ?? 0, summary: row.summary ?? null, places: row.places ?? [],
     diagnostics: row.diagnostics ?? null } : null;
 } });
 

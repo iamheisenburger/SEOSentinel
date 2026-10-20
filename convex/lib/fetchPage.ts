@@ -7,9 +7,9 @@ import { safeFetchPublicText } from "./safeOutbound";
  * every redirect re-validated). Never throws: status 0 means unreachable. */
 const PAGE_TYPES = [/^text\/(?:html|plain|xml)(?:;|$)/i, /^application\/(?:xhtml\+xml|xml|rss\+xml)(?:;|$)/i];
 
-export async function fetchPage(url: string): Promise<{ status: number; finalUrl: string; html: string; robots: string | null }> {
+export async function fetchPage(url: string, options: { maxBytes?: number } = {}): Promise<{ status: number; finalUrl: string; html: string; robots: string | null }> {
   try {
-    const page = await safeFetchPublicText(url, { maxRedirects: 3, maxBytes: 1_500_000, timeoutMs: 10_000,
+    const page = await safeFetchPublicText(url, { maxRedirects: 3, maxBytes: options.maxBytes ?? 1_500_000, timeoutMs: 10_000,
       allowedContentTypes: PAGE_TYPES, headers: { "User-Agent": "PentraSiteHealth/1.0 (+https://pentra.dev)", Accept: "text/html,application/xhtml+xml,application/xml" } });
     return { status: 200, finalUrl: page.url, html: page.text, robots: null };
   } catch (error) {
