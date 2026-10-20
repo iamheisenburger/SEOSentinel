@@ -7368,9 +7368,11 @@ const ghostKeyId = "a1".repeat(12), ghostKeySecret = "c3".repeat(32);
 
 /** A synthetic Ghost site: the Admin API (JWT-authenticated) plus the public
  * pages it serves at /{slug}/ once a post is published. */
-function syntheticGhostSite(domain: string, options: { loseFirstCreateResponse?: boolean; ownerPostAt?: string } = {}) {
+function syntheticGhostSite(domain: string, options: { loseFirstCreateResponse?: boolean; ownerPostAt?: string; loseFirstUpdateResponse?: boolean } = {}) {
   const posts = new Map<string, GhostJson>();
-  let creates = 0, lost = false;
+  let creates = 0, lost = false, updates = 0, lostUpdate = false, clock = 0;
+  // Ghost's own edit marker: every write moves updated_at.
+  const stamp = () => new Date(Date.UTC(2026, 9, 1) + (++clock) * 1000).toISOString();
   if (options.ownerPostAt) posts.set(options.ownerPostAt, { id: "owner-post", slug: options.ownerPostAt, status: "published", title: "Owner's own post", tags: [] });
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
   const transport = async (url: URL, init: RequestInit) => {
@@ -7389,11 +7391,28 @@ function syntheticGhostSite(domain: string, options: { loseFirstCreateResponse?:
         return post ? json({ posts: [post] }) : json({ errors: [{ type: "NotFoundError" }] }, 404);
       }
       if (path === "/posts/" && (init.method ?? "GET") === "GET") return json({ posts: [] });
+      const byId = path.match(/^\/posts\/([A-Za-z0-9_-]+)\/$/);
+      if (byId) {
+        const post = [...posts.values()].find(p => p.id === byId[1]);
+        if (!post) return json({ errors: [{ type: "NotFoundError" }] }, 404);
+        if ((init.method ?? "GET") === "GET") return json({ posts: [post] });
+        assert.equal(init.method, "PUT"); assert.equal(url.searchParams.get("source"), "html");
+        const input = JSON.parse(String(init.body)).posts[0];
+        // Ghost refuses an update carrying a stale updated_at.
+        if (input.updated_at !== post.updated_at) return json({ errors: [{ type: "UpdateCollisionError" }] }, 409);
+        Object.assign(post, { title: input.title, html: input.html, meta_title: input.meta_title, meta_description: input.meta_description, updated_at: stamp() });
+        updates += 1;
+        if (options.loseFirstUpdateResponse && !lostUpdate) {
+          lostUpdate = true; // Ghost saved the update but the response never arrived.
+          return json({ errors: [{ type: "InternalServerError" }] }, 503);
+        }
+        return json({ posts: [post] });
+      }
       assert.equal(path, "/posts/"); assert.equal(init.method, "POST"); assert.equal(url.searchParams.get("source"), "html");
       creates += 1;
       const input = JSON.parse(String(init.body)).posts[0];
       const post = { id: `post-${creates}`, slug: input.slug, title: input.title, status: input.status, html: input.html,
-        meta_title: input.meta_title, meta_description: input.meta_description, tags: input.tags, url: `https://${domain}/${input.slug}/` };
+        meta_title: input.meta_title, meta_description: input.meta_description, tags: input.tags, url: `https://${domain}/${input.slug}/`, updated_at: stamp() };
       posts.set(input.slug, post);
       if (options.loseFirstCreateResponse && !lost) {
         lost = true; // Ghost stored the post but the response never arrived.
@@ -7407,7 +7426,9 @@ function syntheticGhostSite(domain: string, options: { loseFirstCreateResponse?:
       `<link rel="canonical" href="${url.href}"></head><body><main><h1>${post.title}</h1>${post.html}</main></body></html>`,
     { headers: { "content-type": "text/html" } });
   };
-  return { posts, transport, creates: () => creates };
+  // The owner edits a post in Ghost's own editor.
+  const edit = (id: string, html: string) => { const post = [...posts.values()].find(p => p.id === id)!; Object.assign(post, { html, updated_at: stamp() }); };
+  return { posts, transport, creates: () => creates, updates: () => updates, edit };
 }
 
 function ghostHostedSetup(options: Parameters<typeof syntheticGhostSite>[1] = {}) {
@@ -7441,6 +7462,59 @@ test("Autopilot publishes to a Ghost site end to end: verified connection, one p
   assert.deepEqual(post.tags, [{ name: `#pentra-${article.publicationReceipt.deliveryKey.replace(/^pentra:/, "")}` }]);
   assert.doesNotMatch(post.html, new RegExp(`<h1>${article.title}</h1>`), "Ghost renders the title; the body must not repeat it");
   f.assertOffline();
+});
+
+// C2 (Oct 20 2026): Shopify, Webflow and Ghost published on Autopilot, but their
+// articles never became improvable (GitHub and WordPress ones do). Ghost first:
+// its Admin API refuses an update carrying a stale updated_at, so the owner's
+// own edit in Ghost is never overwritten.
+test("C2 Pentra improves its own Ghost post: exact correction and rollback, never over the owner's edit, lost update reconciled", async t => {
+  for (const scenario of ["delivered", "lost_update", "owner_edited"] as const) await t.test(scenario, async () => {
+    const { f, ghost, site } = ghostHostedSetup(scenario === "lost_update" ? { loseFirstUpdateResponse: true } : {});
+    await f.invoke("publisher:verifyPublicationDestinationInternal", { siteId: site.id });
+    f.get(site.id)!.gscDateEpochs = [];
+    await selectGrowth(f);
+    await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.intent === "create" && j.contentWork.stage === "verified")));
+    const article = f.tables.articles.find(a => a.status === "published")!;
+    const page = f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!;
+    assert.ok(page, "the verified Ghost post became an improvable page");
+    assert.equal(page.editable.kind, "ghost");
+    const post = [...ghost.posts.values()].find(p => p.id === page.editable.resourceKey)!;
+    assert.equal(page.editable.sourceRevision, post.updated_at, "bound to Ghost's own edit marker");
+    const before = page.editable.markdown.split(/\n\s*\n/).map((p: string) => p.trim()).find((p: string) => /^[A-Za-z]/.test(p) &&
+      !/[\n\[\]`#*<>|{}]|https?:/i.test(p) && p.split(/\s+/).length >= 8 && p.split(/\s+/).length <= 100 &&
+      !/\b(?:pricing|price|checkout|legal|privacy|terms|founder)\b|[$€£]/i.test(p));
+    assert.ok(before, "a plain paragraph to correct");
+    const original = post.html, summary = f.get(site.id)!.siteSummary, deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+    if (scenario === "owner_edited") ghost.edit(post.id, post.html.replace("</p>", " The owner added this sentence in Ghost.</p>"));
+    f.setIdentity(`synthetic-owner-${site.domain}`);
+    const id = await f.invoke("actions/contentCorrections:correct", { siteId: site.id, pageId: page._id, baseRevision: page.editable.sourceRevision,
+      confirm: true, kind: "factual_correction", before, field: "siteSummary",
+      reason: "Owner confirms this paragraph should state the confirmed business summary exactly." });
+    f.setIdentity(null);
+    await pumpUntil(f, () => f.get(id)!.status === "failed" || ["verified", "failed"].includes(f.get(id)!.contentWork.stage), 200, f.now() + 6 * 3_600_000);
+    if (scenario === "owner_edited") {
+      assert.equal(f.get(id)!.status, "failed");
+      assert.match(f.get(id)!.error, /owner's edit is never overwritten/);
+      assert.match(post.html, /The owner added this sentence in Ghost/, "the owner's edit is never overwritten");
+      assert.equal(ghost.updates(), 0);
+      f.assertOffline();
+      return;
+    }
+    assert.equal(f.get(id)!.contentWork.stage, "verified", JSON.stringify(f.get(id)!.contentWork.failure));
+    assert.ok(post.html.includes(summary) && !post.html.includes(before), "Ghost shows the exact correction");
+    assert.equal(ghost.updates(), 1, "one update; a lost acknowledgement is reconciled by reading the post, never by writing twice");
+    assert.equal(f.get(page._id)!.editable.sourceRevision, post.updated_at);
+    assert.equal(ghost.creates(), 1);
+    f.setIdentity(`synthetic-owner-${site.domain}`);
+    const rollback = await f.invoke("contentImprovements:requestRollback", { siteId: site.id, revisionId: f.get(id)!.contentWork.revisionId, confirm: true });
+    f.setIdentity(null);
+    await pumpUntil(f, () => f.get(rollback)!.contentWork.stage === "verified", 200, f.now() + 6 * 3_600_000);
+    assert.equal(post.html, original, "rollback restores the exact earlier post");
+    assert.equal(ghost.updates(), 2);
+    assert.ok(f.get(site.id)!.contentSchedule.nextDeadlineAt >= deadline, "corrections never move the schedule back");
+    f.assertOffline();
+  });
 });
 
 test("a lost Ghost create response is reconciled by reading the post back, never by publishing twice", async () => {

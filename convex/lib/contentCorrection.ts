@@ -1,6 +1,7 @@
 import type { Doc } from "../_generated/dataModel";
 import { contentWords, exactReplacement, preserveWordPressReviewedText } from "./contentSelection.ts";
 import { readerVisibleDefects } from "./articleQuality.ts";
+import { renderSafePublicationHtml } from "./safeMarkdownHtml.ts";
 
 export type CorrectiveInput = {
   kind: "factual_correction" | "technical_repair" | "reader_text_repair";
@@ -76,7 +77,8 @@ export function planCorrectiveChange(site: Doc<"sites">, page: Doc<"pages">, inp
     after = exactReplacement(before, `](${brokenUrl})`, `](${input.targetUrl})`);
   }
   exactReplacement(e.markdown, before, after);
-  const pairs = e.kind === "github" ? [[before, after]] : [false, true].flatMap(rel => {
+  // Ghost holds the exact HTML Pentra rendered, so its paragraphs map through the same renderer.
+  const pairs = e.kind === "github" ? [[before, after]] : e.kind === "ghost" ? [[renderSafePublicationHtml(before), after === "" ? "" : renderSafePublicationHtml(after)]] : [false, true].flatMap(rel => {
     // A removed paragraph removes its whole <p> element, never leaving an empty one.
     const old = html(before, rel), next = after === "" ? "" : html(after, rel);
     return [[old, preserveWordPressReviewedText(next)], [preserveWordPressReviewedText(old), preserveWordPressReviewedText(next)]];

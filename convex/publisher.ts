@@ -43,7 +43,8 @@ import {
 } from "./lib/publicationReceipts";
 import { stripLeadingDocumentTitle } from "./lib/markdownPublishing";
 import { CMS_PLATFORM_LABELS, cmsUrlStructure, isApiCmsMethod } from "./lib/cmsDestinations";
-import { publishToCms, verifyCmsDestination, type CmsRequest, type CmsSite } from "./lib/cmsPublishers";
+import { ghostPostRevision, publishToCms, updateGhostPost, verifyCmsDestination, type CmsRequest, type CmsSite } from "./lib/cmsPublishers";
+import { correctionVisibleText } from "./lib/publishedCorrection";
 import { revisionArticleRecord } from "./lib/revisionArtifact";
 import {
   PUBLICATION_AUDIT_VERSION,
@@ -1571,6 +1572,7 @@ async function publishToHostedPlatform(
   rendererVersion: string,
   beforeExternalMutation: BeforeExternalMutation,
   hadPriorAttempt: boolean,
+  onGhostRevision?: (post: { id: string; updatedAt: string }) => void,
 ): Promise<{ method: string; postUrl: string; receipt: PublicationReceipt }> {
   const method = site.publishMethod;
   if (!isApiCmsMethod(method)) throw new Error("Not a hosted-platform publishing destination");
@@ -1600,6 +1602,7 @@ async function publishToHostedPlatform(
     hadPriorAttempt,
     beforeExternalMutation,
     request: cmsRequest,
+    onGhostRevision,
   });
   return { method, postUrl: receipt.url, receipt };
 }
@@ -2512,6 +2515,29 @@ async function publishContentImprovement(ctx: ActionCtx, siteId: Id<"sites">, jo
     receipt = { method: "github", deliveryKey, contentHash: revision.nextArtifactHash, externalId: delivered.sha,
       url: delivered.commitUrl, status: "committed", receivedAt: Date.now() };
     result = { method: "github", filePath: e.path, commitUrl: delivered.commitUrl, receipt };
+  } else if (e.kind === "ghost") {
+    // C2: Pentra's own Ghost post. The next HTML is spliced into the exact HTML
+    // Pentra last sent; Ghost refuses the update if anyone edited the post since.
+    if (!e.resourceKey) throw new Error("Ghost improvement source contract changed");
+    const { correction: c, editTarget: t } = claimed.jobContentWork;
+    const after = c?.sourceAfter ?? renderSafePublicationHtml(added);
+    sourceContent = rollback ? rollback.selectedSource.sourceContent : c ? exactReplacement(e.sourceContent, c.sourceBefore, after)
+      : t ? exactReplacement(e.sourceContent, t.sourceBefore, after) : e.sourceContent + "\n" + after;
+    const current = await ghostPostRevision(site as CmsSite, e.resourceKey, cmsRequest);
+    let updatedAt: string;
+    if (current.updatedAt === e.sourceRevision) {
+      await beforeExternalMutation();
+      updatedAt = (await updateGhostPost(site as CmsSite, cmsRequest, { id: e.resourceKey, expectedUpdatedAt: e.sourceRevision,
+        title: article.title, html: sourceContent, metaTitle: article.metaTitle ?? article.title, metaDescription: article.metaDescription })).updatedAt;
+    } else if (revision.attemptedAt && correctionVisibleText(current.html) === correctionVisibleText(sourceContent)) {
+      // The acknowledgement of Pentra's own update was lost; the post already
+      // shows exactly the reviewed text, so it is reconciled, never resent.
+      updatedAt = current.updatedAt;
+    } else throw new Error("Ghost post changed since Pentra last saw it; the owner's edit is never overwritten");
+    sourceRevision = updatedAt;
+    receipt = { method: "ghost", deliveryKey, contentHash: revision.nextArtifactHash, externalId: e.resourceKey,
+      url: page.url, status: "published", receivedAt: Date.now() };
+    result = { method: "ghost", postUrl: page.url, receipt };
   } else {
     const body = wordpressImprovementBody(e, article, revision, claimed.jobContentWork, rollback);
     sourceContent = body.content;
@@ -3004,17 +3030,28 @@ async function publishArticleHandler(
           break;
         case "shopify":
         case "webflow":
-        case "ghost":
+        case "ghost": {
+          let ghostPost: { id: string; updatedAt: string } | undefined;
+          const rendererVersion = sealedConfig.rendererVersion ?? PUBLISHER_RENDERER_VERSION;
           result = await publishToHostedPlatform(
             { ...deliverySite, publishMethod: method },
             article as ArticleRecord,
             deliveryKey,
             contentHash,
-            sealedConfig.rendererVersion ?? PUBLISHER_RENDERER_VERSION,
+            rendererVersion,
             beforeExternalMutation,
             hadPriorAttempt,
+            post => { ghostPost = post; },
           );
+          // C2: a Ghost post Pentra created becomes improvable, bound to the exact
+          // HTML Pentra sent and Ghost's own edit marker (updated_at).
+          if (method === "ghost" && site.serviceMode === "growth_first" && ghostPost && ghostPost.id === result.receipt?.externalId) {
+            creationSource = { kind: "ghost", resourceKey: ghostPost.id, sourceRevision: ghostPost.updatedAt,
+              sourceContent: renderSafePublicationHtmlForVersion(stripLeadingDocumentTitle(article.markdown, article.title), rendererVersion),
+              connectionHash: contentConnectionHash(lockedSite), profileHash: confirmedContentProfileHash(lockedSite) };
+          }
           break;
+        }
         default:
           throw new Error(`Unsupported automatic publication method: ${method}`);
       }

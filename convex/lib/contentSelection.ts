@@ -4,6 +4,7 @@ import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./siteDomainBi
 import { containsExecutableMdx, evidenceRequiredParagraphs, STRICT_PUBLICATION_MIN_WORDS, articleWordCeiling } from "./articleQuality.ts";
 import { publishedArticlePublicUrl } from "./publicationLive.ts";
 import { cmsConnectionComplete, isApiCmsMethod } from "./cmsDestinations.ts";
+import { renderSafePublicationHtml } from "./safeMarkdownHtml.ts";
 
 export const CONTENT_PAGE_REVIEW_MS = 7 * 86_400_000;
 export function contentConsentToken(site: Doc<"sites">) {
@@ -50,7 +51,8 @@ export function targetedImprovement(base: { kind: string; markdown: string; sour
     !facts.some(f => f.length >= 12 && p.normalize("NFC").replace(/\s+/g, " ").toLowerCase().includes(f)));
   paragraphs.sort((a,b) => terms.filter(t => b.toLowerCase().includes(t)).length - terms.filter(t => a.toLowerCase().includes(t)).length);
   for (const before of paragraphs) {
-    const sources = base.kind === "github" ? [before] : [plainParagraphHtml(before), preserveWordPressReviewedText(plainParagraphHtml(before))];
+    const sources = base.kind === "github" ? [before] : base.kind === "ghost" ? [renderSafePublicationHtml(before)]
+      : [plainParagraphHtml(before), preserveWordPressReviewedText(plainParagraphHtml(before))];
     const sourceBefore = sources.find(s => base.sourceContent.includes(s) && base.sourceContent.indexOf(s) === base.sourceContent.lastIndexOf(s));
     if (!sourceBefore) continue;
     const maxWords = Math.min(contentWords(before) + 60, articleWordCeiling() - contentWords(base.markdown) + contentWords(before));

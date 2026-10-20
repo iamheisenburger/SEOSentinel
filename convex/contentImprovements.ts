@@ -228,7 +228,7 @@ export const attempted = internalMutation({ args: { ...claimArgs, revisionId: v.
     attempts: revision.attempts + 1, updatedAt: Date.now() });
   if (page?.editable?.kind === "wordpress") await ctx.scheduler.runAt(site.publicationLeaseExpiresAt!, internal.publisher.verifyContentImprovement, { siteId: site._id, jobId: job._id });
 } });
-const receipt = v.object({ method: v.union(v.literal("github"), v.literal("wordpress")), deliveryKey: v.string(), contentHash: v.string(),
+const receipt = v.object({ method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("ghost")), deliveryKey: v.string(), contentHash: v.string(),
   externalId: v.string(), url: v.string(), status: v.string(), receivedAt: v.number() });
 export const delivered = internalMutation({ args: { ...claimArgs, revisionId: v.id("published_article_revisions"), receipt,
   sourceContent: v.string(), sourceRevision: v.string(), permission: v.optional(v.string()), receiptRecoveryLeaseOwner: v.optional(v.string()), permissionRevokedAtReceipt: v.optional(v.boolean()) }, handler: async (ctx, args) => {

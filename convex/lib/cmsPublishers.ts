@@ -33,7 +33,7 @@ export const GHOST_ACCEPT_VERSION = "v5.0";
 
 export type CmsRequest = (
   url: string,
-  init: { method: "GET" | "POST"; headers: Record<string, string>; body?: string },
+  init: { method: "GET" | "POST" | "PUT" | "PATCH"; headers: Record<string, string>; body?: string },
 ) => Promise<{ status: number; text: string }>;
 
 export type CmsSite = CmsConnection & {
@@ -487,13 +487,14 @@ async function publishGhost(args: PublishArgs): Promise<PublicationReceipt> {
   const slug = assertSafeSlug(article.slug, "ghost");
   await verifyGhost(site, request, args.urlStructure);
   const tag = ghostDeliveryTag(args.deliveryKey);
-  const found = await ghostGet(site, `/posts/slug/${encodeURIComponent(slug)}/?include=tags&fields=id,slug,status,title`, request, true);
+  const found = await ghostGet(site, `/posts/slug/${encodeURIComponent(slug)}/?include=tags&fields=id,slug,status,title,updated_at`, request, true);
   const existing = found ? record(((found.posts as unknown[] | undefined) ?? [])[0]) : null;
   if (existing) {
     const tags = ((existing.tags as unknown[] | undefined) ?? []).map((entry) => record(entry)?.name);
     if (!tags.includes(tag) || existing.status !== "published" || existing.slug !== slug) {
       throw new Error("Ghost site already has a post at this address that belongs to a different publication");
     }
+    if (typeof existing.updated_at === "string") args.onGhostRevision?.({ id: String(existing.id), updatedAt: existing.updated_at });
     return receipt({ method: "ghost", deliveryKey: args.deliveryKey, contentHash: args.contentHash, externalId: String(existing.id), url: args.publicUrl });
   }
 
@@ -523,7 +524,39 @@ async function publishGhost(args: PublishArgs): Promise<PublicationReceipt> {
   if (!post || typeof post.id !== "string" || post.slug !== slug || post.status !== "published") {
     throw new Error("Ghost did not confirm the exact published post address");
   }
+  if (typeof post.updated_at === "string") args.onGhostRevision?.({ id: post.id, updatedAt: post.updated_at });
   return receipt({ method: "ghost", deliveryKey: args.deliveryKey, contentHash: args.contentHash, externalId: post.id, url: args.publicUrl });
+}
+
+// ── Improving Pentra's own Ghost posts (C2, Oct 20 2026) ──────
+
+/** One Ghost post's current state. Its updated_at is Ghost's own edit marker:
+ * an update carrying a stale one is refused with a 409. */
+export async function ghostPostRevision(site: CmsSite, id: string, request: CmsRequest): Promise<{ id: string; updatedAt: string; html: string }> {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error("Invalid Ghost post id");
+  const found = await ghostGet(site, `/posts/${id}/?formats=html`, request);
+  const post = record(((found?.posts as unknown[] | undefined) ?? [])[0]);
+  if (!post || post.id !== id || typeof post.updated_at !== "string" || post.status !== "published") throw new Error("Ghost post is missing or no longer published");
+  return { id, updatedAt: post.updated_at, html: typeof post.html === "string" ? post.html : "" };
+}
+
+/** Updates one Ghost post only if nobody edited it since expectedUpdatedAt:
+ * Ghost refuses a stale updated_at, so the owner's own edit is never overwritten. */
+export async function updateGhostPost(site: CmsSite, request: CmsRequest, args: { id: string; expectedUpdatedAt: string;
+  title: string; html: string; metaTitle?: string; metaDescription?: string }): Promise<{ id: string; updatedAt: string }> {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(args.id)) throw new Error("Invalid Ghost post id");
+  const response = await request(`${cmsEndpoint(site)}/ghost/api/admin/posts/${args.id}/?source=html`, {
+    method: "PUT",
+    headers: { ...ghostHeaders(site), "Content-Type": "application/json" },
+    body: JSON.stringify({ posts: [{ title: args.title, html: args.html, updated_at: args.expectedUpdatedAt,
+      meta_title: plainText(args.metaTitle ?? args.title, 300),
+      ...(args.metaDescription ? { custom_excerpt: plainText(args.metaDescription, 300), meta_description: plainText(args.metaDescription, 500) } : {}) }] }),
+  });
+  if (response.status === 409) throw new Error("Ghost post changed since Pentra last saw it; the owner's edit is never overwritten");
+  if (response.status < 200 || response.status >= 300) throw new Error(`Ghost API error (${response.status}): ${response.text.slice(0, 200)}`);
+  const post = record(((json(response.text, "Ghost").posts as unknown[] | undefined) ?? [])[0]);
+  if (!post || post.id !== args.id || typeof post.updated_at !== "string") throw new Error("Ghost did not confirm the exact updated post");
+  return { id: args.id, updatedAt: post.updated_at };
 }
 
 // ── Shared entry points ─────────────────────────────────
@@ -545,6 +578,8 @@ type PublishArgs = {
   hadPriorAttempt: boolean;
   beforeExternalMutation: () => Promise<void>;
   request: CmsRequest;
+  /** Ghost: the created post's id and updated_at, so Pentra can improve it later. */
+  onGhostRevision?: (post: { id: string; updatedAt: string }) => void;
 };
 
 export async function verifyCmsDestination(

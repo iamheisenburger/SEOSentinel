@@ -40,7 +40,7 @@ export type SafePublicTextOptions = {
 };
 
 export type SafePublicRequestOptions = {
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "PUT" | "PATCH";
   expectedHost?: string;
   maxBytes?: number;
   maxRequestBytes?: number;
@@ -195,7 +195,7 @@ function requestPinnedText(
   target: { url: URL; address: ResolvedAddress },
   options: Required<Pick<SafePublicTextOptions, "maxBytes" | "timeoutMs">> &
     SafePublicTextOptions & {
-      method?: "GET" | "POST";
+      method?: "GET" | "POST" | "PUT" | "PATCH";
       body?: string | Buffer;
     },
 ): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; text: string }> {

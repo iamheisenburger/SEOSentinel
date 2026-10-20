@@ -731,8 +731,8 @@ export default defineSchema({
 
   pages: defineTable({
     editable: v.optional(v.object({
-      version: v.number(), active: v.boolean(), kind: v.union(v.literal("github"), v.literal("wordpress")),
-      path: v.optional(v.string()), resourceId: v.optional(v.number()), permission: v.optional(v.string()),
+      version: v.number(), active: v.boolean(), kind: v.union(v.literal("github"), v.literal("wordpress"), v.literal("ghost")),
+      path: v.optional(v.string()), resourceId: v.optional(v.number()), resourceKey: v.optional(v.string()), permission: v.optional(v.string()),
       revocationStatus: v.optional(v.union(v.literal("pending"), v.literal("confirmed"), v.literal("failed"))),
       connectionHash: v.string(), profileHash: v.string(), sourceRevision: v.string(), sourceContent: v.string(),
       markdown: v.string(), title: v.string(), metaTitle: v.string(), description: v.string(), header: v.optional(v.string()),
@@ -952,8 +952,10 @@ export default defineSchema({
     ]),
 
   articles: defineTable({
-    contentWorkCreationSource: v.optional(v.object({ kind: v.union(v.literal("github"), v.literal("wordpress")),
+    contentWorkCreationSource: v.optional(v.object({ kind: v.union(v.literal("github"), v.literal("wordpress"), v.literal("ghost")),
       sourceContent: v.string(), sourceRevision: v.string(), path: v.optional(v.string()), resourceId: v.optional(v.number()),
+      // A hosted platform's own post id (Ghost: a string).
+      resourceKey: v.optional(v.string()),
       permission: v.optional(v.string()), permissionRevokedAtReceipt: v.optional(v.boolean()), connectionHash: v.string(), profileHash: v.string() })),
     contentWorkSourceJobId: v.optional(v.id("jobs")),
     contentWorkConsumedByJobId: v.optional(v.id("jobs")),
