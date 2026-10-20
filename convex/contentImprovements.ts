@@ -191,6 +191,7 @@ export const claim = internalMutation({ args: claimArgs, handler: async (ctx, ar
     const baseHash = publicationArtifactHash(base), revisionKey = sha256Hex(JSON.stringify([job._id, cw.baseRevision, cw.approvedArtifactHash]));
     const id = await ctx.db.insert("published_article_revisions", {
       siteId: site._id, articleId: article._id, contentWorkJobId: job._id, selectedPageId: page._id,
+      ...(page.editable.managedArticleId ? { servedArticleId: page.editable.managedArticleId } : {}),
       selectedSource: page.editable, actionFingerprint: cw.opportunity ?? "selected_page_improvement", kind: rollback ? "rollback" : correction?.kind === "factual_correction" || correction?.kind === "reader_text_repair" ? "editorial_correction" : correction ? "renderer_repair" : "content_improvement",
       ...(rollback ? { rollbackOfRevisionId: rollback._id } : {}),
       revisionKey, status: "prepared", rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
@@ -320,8 +321,12 @@ export const claimLiveRecheck = internalMutation({ args: { siteId: v.id("sites")
   if (revision?.siteId !== site._id || revision.contentWorkJobId !== job._id || revision.status !== "failed" || !revision.receipt || !revision.deliveredSource ||
     revision.liveVerifiedAt || revision.ambiguityDispositionAt || revision.liveVerificationAttempts < 5 ||
     (revision.liveRechecks ?? 0) >= LIVE_RECHECK_LIMIT || (revision.liveVerificationLeaseExpiresAt ?? 0) > Date.now()) return null;
+  // A revision from before P133 learns which published article it changes,
+  // so a page Pentra's own blog serves can show it for this re-check.
+  const managed = (revision.selectedSource as { managedArticleId?: Id<"articles"> } | undefined)?.managedArticleId;
   await ctx.db.patch(revision._id, { liveRechecks: (revision.liveRechecks ?? 0) + 1, liveVerificationLeaseOwner: args.leaseOwner,
-    liveVerificationLeaseExpiresAt: Date.now() + 60_000, updatedAt: Date.now() });
+    liveVerificationLeaseExpiresAt: Date.now() + 60_000, updatedAt: Date.now(),
+    ...(!revision.servedArticleId && managed ? { servedArticleId: managed } : {}) });
   return { site, job, revision: (await ctx.db.get(revision._id))! };
 } });
 export const liveRechecked = internalMutation({ args: { siteId: v.id("sites"), jobId: v.id("jobs"), leaseOwner: v.string(), nextArtifactHash: v.string(), error: v.optional(v.string()) },

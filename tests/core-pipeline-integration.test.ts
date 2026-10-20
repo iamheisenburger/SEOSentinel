@@ -7502,6 +7502,7 @@ test("C2 Pentra improves its own Ghost post: exact correction and rollback, neve
       return;
     }
     assert.equal(f.get(id)!.contentWork.stage, "verified", JSON.stringify(f.get(id)!.contentWork.failure));
+    assert.equal(f.get(f.get(id)!.contentWork.revisionId)!.servedArticleId, article._id, "the revision names the published article it changes (P133)");
     assert.ok(post.html.includes(summary) && !post.html.includes(before), "Ghost shows the exact correction");
     assert.equal(ghost.updates(), 1, "one update; a lost acknowledgement is reconciled by reading the post, never by writing twice");
     assert.equal(f.get(page._id)!.editable.sourceRevision, post.updated_at);

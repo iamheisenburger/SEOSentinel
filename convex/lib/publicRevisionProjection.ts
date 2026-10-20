@@ -9,13 +9,24 @@ import { artifactSnapshot, revisionArtifactRendererVersion } from "./revisionArt
 
 /** Acknowledged bytes must be served BEFORE the independent live verifier can
  * confirm them. Prepared/attempted rows never qualify. Reads stay article-bound. */
+const ACKNOWLEDGED = ["verified", "rolled_back", "verification_pending", "unverified", "failed"] as const;
+/** The newest delivered improvement of one of Pentra's own published articles
+ * (a correction, targeted improvement or refresh of its enrolled page). */
+async function latestDeliveredImprovement(ctx: QueryCtx, articleId: Id<"articles">) {
+  const groups = await Promise.all(ACKNOWLEDGED.map(status =>
+    ctx.db.query("published_article_revisions").withIndex("by_served_article_status_created", q =>
+      q.eq("servedArticleId", articleId).eq("status", status)).order("desc").take(status === "unverified" || status === "failed" ? 8 : 1)));
+  return groups.flat().filter(row => row.receipt && !(row.status === "failed" && row.ambiguityDispositionAt)).sort((a, b) =>
+    b.createdAt - a.createdAt || b._creationTime - a._creationTime)[0];
+}
+
 async function latestAcknowledgedRevision(ctx: QueryCtx, articleId: Id<"articles">) {
   // A delivered revision whose live checks failed is still what the
   // destination holds (its receipt is exact), so it is served too: on Oct 20
   // 2026 a wording repair's checks failed against a 404 caused elsewhere, and
   // without being served its bounded re-check could never pass. One set aside
   // by an owner or operator decision (ambiguity disposition) is not.
-  const groups = await Promise.all((["verified", "rolled_back", "verification_pending", "unverified", "failed"] as const).map(status =>
+  const groups = await Promise.all(ACKNOWLEDGED.map(status =>
     ctx.db.query("published_article_revisions").withIndex("by_article_status_created", q =>
       q.eq("articleId", articleId).eq("status", status)).order("desc").take(status === "unverified" || status === "failed" ? 8 : 1)));
   return groups.flat().filter(row => row.receipt && !(row.status === "failed" && row.ambiguityDispositionAt)).sort((a, b) =>
@@ -23,9 +34,40 @@ async function latestAcknowledgedRevision(ctx: QueryCtx, articleId: Id<"articles
 }
 
 export async function publicRevisionProjection(ctx: QueryCtx, site: Doc<"sites">, article: Doc<"articles">): Promise<Doc<"articles"> | null> {
-  const revision = await latestAcknowledgedRevision(ctx, article._id);
+  const [revision, improvement] = await Promise.all([latestAcknowledgedRevision(ctx, article._id), latestDeliveredImprovement(ctx, article._id)]);
+  if (improvement && (!revision || improvement.createdAt > revision.createdAt)) return projectDeliveredImprovement(site, article, improvement);
   if (!revision) return article;
   return projectAcknowledgedRevision(site, article, revision);
+}
+
+const normalizeSlug = (slug: string) => slug.replace(/^\//, "");
+const ACKNOWLEDGED_RECEIPT_STATUS = { github: "committed", wordpress: "published", webhook: "accepted", shopify: "published", webflow: "published",
+  ghost: "published" } as const;
+/** P133 (Oct 20 2026): an improvement of an article whose public page Pentra's
+ * own blog serves (pentra.dev) is public once delivered, like an editorial
+ * revision: its exact receipt (this revision's delivery key, the next
+ * artifact's hash, the article's own destination) and the article's slug.
+ * Before this, such a correction committed to GitHub never reached the page,
+ * so its live check could never pass. Inconsistent bytes are never served. */
+function projectDeliveredImprovement(site: Doc<"sites">, article: Doc<"articles">, revision: Doc<"published_article_revisions">): Doc<"articles"> | null {
+  try {
+    const next = artifactSnapshot(revision.nextArtifact as PublishedRevisionArtifact);
+    const receipt = revision.receipt as { method?: string; status?: string; deliveryKey?: string; contentHash?: string; receivedAt?: number } | undefined;
+    const method = article.publicationReceipt ? validatePublicationReceipt(article.publicationReceipt).method : null;
+    if (!receipt || !method || revision.siteId !== site._id || revision.servedArticleId !== article._id || article.siteId !== site._id ||
+      article.status !== "published" || !articleMatchesCurrentDomain(site, article) || receipt.method !== method ||
+      receipt.status !== ACKNOWLEDGED_RECEIPT_STATUS[method as keyof typeof ACKNOWLEDGED_RECEIPT_STATUS] ||
+      receipt.deliveryKey !== `pentra:${revision.revisionKey}` || receipt.contentHash !== revision.nextArtifactHash ||
+      publicationArtifactHashForAuditVersion(next, revision.nextAuditVersion ?? PUBLICATION_AUDIT_VERSION) !== revision.nextArtifactHash ||
+      normalizeSlug(next.slug) !== normalizeSlug(article.slug) || !revision.attemptedAt || !receipt.receivedAt || receipt.receivedAt < revision.attemptedAt) {
+      return null;
+    }
+    // Only the public read changes: the article, its receipts, hashes and
+    // publication date stay exactly as published.
+    return { ...article, ...next, slug: article.slug, updatedAt: receipt.receivedAt };
+  } catch {
+    return null;
+  }
 }
 
 function projectAcknowledgedRevision(site: Doc<"sites">, article: Doc<"articles">, revision: Doc<"published_article_revisions">): Doc<"articles"> | null {
@@ -75,12 +117,14 @@ type PublicArticleRow = Doc<"articles"> | Doc<"article_summaries">;
 export async function projectPublicArticleRows(ctx: QueryCtx, site: Doc<"sites">,
   rows: PublicArticleRow[]): Promise<PublicArticleRow[]> {
   const projected = await Promise.all(rows.map(async row => {
-    const revision = await latestAcknowledgedRevision(ctx, "articleId" in row ? row.articleId : row._id);
+    const articleId = "articleId" in row ? row.articleId : row._id;
+    const [revision, improvement] = await Promise.all([latestAcknowledgedRevision(ctx, articleId), latestDeliveredImprovement(ctx, articleId)]);
     // Preserve the summary read budget: never load full Markdown for unchanged rows.
-    if (!revision) return row;
+    if (!revision && !improvement) return row;
     const article = "articleId" in row ? await ctx.db.get(row.articleId) : row;
     if (!article || article.siteId !== site._id || article.status !== "published" || !articleMatchesCurrentDomain(site, article)) return null;
-    return projectAcknowledgedRevision(site, article, revision);
+    if (improvement && (!revision || improvement.createdAt > revision.createdAt)) return projectDeliveredImprovement(site, article, improvement);
+    return projectAcknowledgedRevision(site, article, revision!);
   }));
   return projected.filter((row): row is PublicArticleRow => row !== null);
 }

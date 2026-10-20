@@ -160,3 +160,51 @@ test("a delivered revision whose live checks failed is still served; one set asi
   delete f.revision.receipt;
   assert.equal((await f.run("getPublishedBySlug")).markdown, f.base.markdown, "a failed write without a receipt is never served");
 });
+
+// P133 (Oct 20 2026): an improvement of Pentra's own published article (a
+// correction, targeted improvement or refresh of its enrolled page) committed
+// to GitHub never reached a page Pentra's own blog serves, so its live check
+// could never pass. Its delivered bytes are now public, under exact checks.
+function deliveredImprovement(f: ReturnType<typeof fixture>, changes: Row = {}) {
+  const next = { ...f.base, markdown: "Keep the original observations available to an authorized reviewer. ".repeat(40) };
+  const nextHash = publicationArtifactHash(next as never);
+  const revisionKey = "c".repeat(64);
+  const row: Row = { _id: "improvement", siteId: "site", articleId: "draft", servedArticleId: "article", status: "failed",
+    kind: "editorial_correction", revisionKey, nextArtifact: next, nextArtifactHash: nextHash, createdAt: 5000, attemptedAt: 5100,
+    liveVerificationAttempts: 5, receipt: { method: "github", revisionKey, deliveryKey: `pentra:${revisionKey}`, contentHash: nextHash,
+      externalId: "repair-commit", status: "committed", url: "https://github.com/owner/repo/commit/repair", receivedAt: 5200 }, ...changes };
+  f.tables.published_article_revisions.push(JSON.parse(JSON.stringify(row)));
+  return { next, row: f.tables.published_article_revisions[f.tables.published_article_revisions.length - 1] };
+}
+
+test("a delivered improvement of Pentra's own article is served on its page and in the listing", async () => {
+  const f = fixture(true);
+  const { next } = deliveredImprovement(f);
+  const page = await f.run("getPublishedBySlug");
+  assert.equal(page.markdown, next.markdown, "the delivered bytes, before the live check passes");
+  assert.equal(page.publishedAt, 1000, "publication history is unchanged");
+  assert.equal(page.updatedAt, 5200);
+  assert.equal(f.tables.articles[0].markdown, f.base.markdown, "the published article itself is never patched");
+  assert.equal((await f.run("listPublishedByDomain")).length, 1);
+});
+
+test("an improvement whose receipt, hash, article or slug doesn't match is never served", async () => {
+  for (const [label, tamper] of [
+    ["another delivery key", (r: Row) => { r.receipt.deliveryKey = `pentra:${"d".repeat(64)}`; }],
+    ["bytes that are not the receipt's", (r: Row) => { r.nextArtifact.markdown = "Swapped text. ".repeat(40); }],
+    ["another destination", (r: Row) => { r.receipt.method = "wordpress"; r.receipt.status = "published"; }],
+    ["another article", (r: Row) => { r.servedArticleId = "other"; }],
+    ["another slug", (r: Row) => { r.nextArtifact.slug = "other-page"; r.nextArtifactHash = publicationArtifactHash(r.nextArtifact); r.receipt.contentHash = r.nextArtifactHash; }],
+  ] as const) {
+    const f = fixture();
+    const { row } = deliveredImprovement(f);
+    tamper(row);
+    const page = await f.run("getPublishedBySlug");
+    assert.ok(page === null || page.markdown !== row.nextArtifact.markdown || label === "another article", label);
+    if (label === "another article") assert.equal(page.markdown, f.next.markdown, "an unrelated revision is not this article's");
+    else assert.equal(page, null, `${label}: inconsistent bytes are never served`);
+  }
+  const f = fixture();
+  deliveredImprovement(f, { ambiguityDispositionAt: 6000 });
+  assert.equal((await f.run("getPublishedBySlug")).markdown, f.next.markdown, "an improvement set aside by a disposition is not served");
+});

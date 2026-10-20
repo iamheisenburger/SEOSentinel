@@ -1800,6 +1800,10 @@ export default defineSchema({
   published_article_revisions: defineTable({
     contentWorkJobId: v.optional(v.id("jobs")),
     selectedPageId: v.optional(v.id("pages")),
+    // An improvement of one of Pentra's own published articles (its enrolled
+    // page): the article whose public page it changes. Pages Pentra's own blog
+    // serves show its delivered bytes (lib/publicRevisionProjection.ts).
+    servedArticleId: v.optional(v.id("articles")),
     selectedSource: v.optional(v.any()),
     deliveredSource: v.optional(v.any()),
     siteId: v.id("sites"),
@@ -1898,6 +1902,7 @@ export default defineSchema({
     .index("by_site_created", ["siteId", "createdAt"])
     .index("by_article_created", ["articleId", "createdAt"])
     .index("by_article_status_created", ["articleId", "status", "createdAt"])
+    .index("by_served_article_status_created", ["servedArticleId", "status", "createdAt"])
     .index("by_status_next_verification", ["status", "liveVerificationNextAt"])
     .index("by_site_lease_owner", ["siteId", "leaseOwner"])
     .index("by_action", ["growthActionId"]),
