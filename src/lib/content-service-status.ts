@@ -9,7 +9,8 @@ type ServiceState = {
  * It never authorizes execution; server guards still own every transition. */
 export function contentServiceStatus(state: ServiceState | null | undefined) {
   const work = state?.work?.filter(w => w.retiredAt === undefined) ?? [];
-  const systemFailure = work.some(w => w.systemFailure);
+  // A failure Autopilot already moved past (parked) is history, not a stop.
+  const systemFailure = work.some(w => w.systemFailure && !w.parked);
   const paused = Boolean(state?.schedule?.paused);
   const status = !state ? "loading" : state.serviceMode !== "growth_first" ? "legacy"
     : state.bindingCurrent === false ? "changed" : state.schedule?.ownerReviewedOnly ? "owner_reviewed" : systemFailure ? "failed" : paused ? "paused"

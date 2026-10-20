@@ -2235,7 +2235,8 @@ test("SLC47 a malformed audit still stops deterministically without infrastructu
     const failed = f.get(job._id)!, saved = JSON.stringify(failed), calls = f.modelCalls.length;
     assert.equal(failed.status, "failed"); assert.match(failed.contentWork.failure, /^content_audit_/);
     assert.equal(failed.contentWork.recoveryAttempts ?? 0, 0); assert.equal(failed.nextAttemptAt, undefined);
-    assert.equal(f.get(job.siteId)!.contentSchedule.paused, true);
+    // P115: the job stops, but an internal failure never pauses the site.
+    assert.notEqual(f.get(job.siteId)!.contentSchedule.paused, true);
     assert.equal(failed.contentWork.providerCalls.filter((c: Fields) => c.semanticClarificationOf).length, kind === "malformed_original" ? 0 : 1);
     for (let i = 0; i < 3; i++) await f.invoke("actions/pipeline:processNextJob", { siteId: job.siteId, jobId: job._id });
     assert.equal(f.modelCalls.length, calls); assert.equal(JSON.stringify(f.get(job._id)), saved);
@@ -8169,6 +8170,33 @@ test("P109 the writer is told the article sits on the business's own site", asyn
   const system = JSON.stringify(writer.system);
   assert.match(system, /This article is published on [^'"]+'s own website\. State its facts directly/);
   assert.match(system, /never as an outside observer of its site/);
+  f.assertOffline();
+});
+
+// P115 (Phase 4, Oct 20 2026): an internal processing failure (here a
+// malformed reviewer answer) paused the whole site until an operator repaired
+// it, and nothing told the customer. On a site that chose Autopilot the slot
+// is now skipped like any failed draft that published nothing.
+test("P115 an internal processing failure never pauses an Autopilot site; the schedule moves past it", async () => {
+  let malformed = 1;
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]],
+    auditResponse: (audit, request) => !isAuditClarification(request) && malformed-- > 0 ? { ...audit, score: undefined } : audit });
+  const site = await selectGrowth(f);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  await pumpUntil(f, () => f.tables.jobs?.some(j => /^content_audit_/.test(j.contentWork?.failure ?? "")), 120);
+  const failed = f.tables.jobs.find(j => /^content_audit_/.test(j.contentWork?.failure ?? ""))!;
+  assert.equal(failed.contentWork.stage, "failed");
+  assert.notEqual(f.get(site.id)!.contentSchedule.paused, true, "the site is not paused");
+  // The schedule continues: the slot gets fresh work instead of a frozen failed slot.
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length >= 1, 200);
+  const owner = f.get(site.id)!.userId;
+  f.setIdentity(owner);
+  const ready = await f.invoke("contentWork:readiness", { siteId: site.id });
+  f.setIdentity(null);
+  const item = ready.work.find((w: Fields) => w.jobId === failed._id);
+  assert.ok(item?.parked, "the failure is history the schedule moved past");
+  assert.notEqual(contentServiceStatus(ready).status, "failed", "the customer does not see a stopped service");
+  assert.notEqual(f.get(site.id)!.contentSchedule.paused, true);
   f.assertOffline();
 });
 

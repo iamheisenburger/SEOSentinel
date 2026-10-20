@@ -95,6 +95,18 @@ const AUTOPILOT_SKIPPABLE_FAILURES = new Set(["bounded_content_quality_exhausted
   // never replayed, but nothing was published, so the slot is recorded as missed and the schedule continues instead of
   // freezing until someone reconciles it (Oct 15 2026: one froze pentra.dev's schedule).
   "content_provider_result_ambiguous_reconciliation_required"]);
+/** An Autopilot site moves past a failed automatic article when nothing was
+ * published and no external write is uncertain: a skippable failure, or an
+ * internal processing failure (a reviewer that answered inconsistently, a
+ * worker that failed every bounded recovery) on work that never attempted
+ * publication. Phase 4 (P115, Oct 20 2026): such failures paused the whole
+ * site until an operator repaired them, and nothing told the customer; under
+ * rule 2a the reviewer is a note, so the slot is recorded as missed (or
+ * replaced) and content health reports it. */
+function autopilotSkippableFailure(job: Doc<"jobs">) {
+  const failure = job.contentWork?.failure ?? "";
+  return AUTOPILOT_SKIPPABLE_FAILURES.has(failure) || (internalContentProcessingError(failure) && !(job.publicationAttempts ?? 0));
+}
 /** After repeated failed automatic articles, the next attempt waits (2h, then
  * 4h; never longer than one cadence interval) instead of retrying at once: a failure
  * that persists (a reviewer regression, a provider outage) must not burn
@@ -121,7 +133,7 @@ export const SLOT_PREP_LEAD_MS = 6 * 3_600_000;
 function autopilotReplaceable(job: Doc<"jobs">) {
   const cw = job.contentWork;
   return Boolean(cw && cw.stage === "failed" && !cw.ownerRequest && cw.retiredAt === undefined && !cw.replacesJobId &&
-    (cw.intent === "create" ? AUTOPILOT_SKIPPABLE_FAILURES.has(cw.failure ?? "") : automaticImprovement(cw)));
+    (cw.intent === "create" ? autopilotSkippableFailure(job) : automaticImprovement(cw)));
 }
 /** Autopilot chose this page improvement or refresh itself. Its failure never
  * holds the slot: nothing was published for it, so the slot gets a new
@@ -1070,7 +1082,7 @@ export const readiness = query({
     // On sites set up with Autopilot, a draft the reviewer would not pass is
     // skipped (the schedule continues); it needs no action from the owner.
     const parkedByAutopilot = (j: Doc<"jobs">) => Boolean(s?.autopilotSelectedAt && !j.contentWork?.ownerRequest && j.contentWork?.intent === "create" &&
-      j.contentWork.stage === "failed" && AUTOPILOT_SKIPPABLE_FAILURES.has(j.contentWork.failure ?? ""));
+      j.contentWork.stage === "failed" && autopilotSkippableFailure(j));
     // A parked draft whose topic the owner has since published (usually as an
     // edited version) is resolved for the owner; the miss itself stays recorded.
     const supersededJobs = new Set<string>();
@@ -1927,7 +1939,7 @@ export const advance = internalMutation({
       !work.some(j => j.contentWork!.replacesJobId === failedSlot._id) && replacementsHealthy(work) &&
       failedSlot.contentWork!.deadlineAt - Date.now() >= AUTOPILOT_REPLACEMENT_LEAD_MS);
     if (failedSlot && !replaceNextSlot && !failedSlot.contentWork!.ownerRequest && (improvementFailed ||
-      (schedule.autopilotSelectedAt && AUTOPILOT_SKIPPABLE_FAILURES.has(failure) &&
+      (schedule.autopilotSelectedAt && autopilotSkippableFailure(failedSlot) &&
         (failedSlot.articleId || failure !== "bounded_content_quality_exhausted") && failedSlot.contentWork!.intent === "create"))) {
       // Autopilot never stalls on a draft the reviewer would not pass, or on a
       // provider response that was incomplete (nothing was published): any
@@ -2260,11 +2272,9 @@ export async function recoverContentWork(ctx: MutationCtx, job: Doc<"jobs">, err
   else if (willRetry) await ctx.scheduler.runAt(nextAttemptAt!, internal.autopilot.dispatchSiteFollowup,
     { siteId: job.siteId!, trigger: "job_retry", reason: `content_recovery_${recoveries + 1}` });
   else await settleFailedContentWork(ctx, job._id);
-  if (!cw.ownerRequest && internalContentProcessingError(failure ?? error) && job.siteId) {
-    const site = await ctx.db.get(job.siteId);
-    if (site?.serviceMode === "growth_first" && site.contentSchedule) await ctx.db.patch(site._id,
-      { contentSchedule: { ...site.contentSchedule, active: false, paused: true }, updatedAt: Date.now() });
-  }
+  // An internal processing failure no longer pauses the site (P115): the slot
+  // is skipped or replaced on Autopilot, content health reports it, and the
+  // owner's own pause stays the only pause.
   return { updated: true, willRetry, nextAttemptAt };
 }
 
