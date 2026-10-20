@@ -139,6 +139,8 @@ test("the emailed report holds every missed search and says why it arrived", () 
   assert.match(email.text, /GOOGLE BASICS: 12 of 13 pass\n- No structured data\./);
   assert.match(email.text, /https:\/\/pentra\.dev\/check\/glazeledger\.co/);
   assert.match(email.text, /only email we'll send you about it/);
+  assert.match(email.text, /Set up your site and it starts with these searches, checked against the business facts you confirm/,
+    "signup starts from the check's searches (P128)");
   assert.equal(plausibleEmail(" Owner@GlazeLedger.co "), "owner@glazeledger.co");
   for (const bad of ["owner@", "owner@glazeledger", "a b@c.co", "<x>@c.co", `${"a".repeat(250)}@c.co`]) assert.equal(plausibleEmail(bad), null, bad);
 });

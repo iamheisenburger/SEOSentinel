@@ -322,8 +322,9 @@ export function freeCheckReportEmail(row: FreeCheckRow): { subject: string; text
   }
   if (view.health) lines.push("", `GOOGLE BASICS: ${view.health.passed} of ${view.health.total} pass`, ...view.health.issues.map(issue => `- ${issue.message}`));
   lines.push("",
-    "Pentra can write these pages for you. It learns what you sell, writes a fact-checked article for each search, publishes it to your site " +
-    "and improves the pages closest to page one. Start free (3 articles a month, no credit card): https://pentra.dev/sign-up",
+    "Pentra can write these pages for you. Set up your site and it starts with these searches, checked against the business facts you confirm: " +
+    "it writes a fact-checked article for each, publishes it to your site and improves the pages closest to page one. " +
+    "Start free (3 articles a month, no credit card): https://pentra.dev/sign-up",
     "", `See this check online: https://pentra.dev/check/${view.domain}`,
     "", "You asked for this report on pentra.dev. It's the only email we'll send you about it. Questions? Just reply.",
     "Pentra, https://pentra.dev");

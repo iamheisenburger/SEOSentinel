@@ -176,7 +176,8 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
     <section className="rounded-xl border border-[#0EA5E9]/25 bg-[#0EA5E9]/[0.05] p-5 md:p-6">
       <h2 className="text-[17px] font-semibold text-[#F7F8F8]">Let Pentra write these pages for you</h2>
       <p className="mt-1.5 text-[14px] leading-relaxed text-[#C9CDD6]">
-        Pentra learns what you sell, writes a fact-checked article for searches like these, publishes it to your site
+        {view.totalMissed > 0 && "Set up your site and Pentra starts with these searches, checked against the business facts you confirm. "}
+        Pentra learns what you sell, writes a fact-checked article for {view.totalMissed > 0 ? "each search" : "searches your customers make"}, publishes it to your site
         (WordPress, Shopify, Webflow, Ghost or GitHub, or you paste it in), and improves the pages closest to page one.
         You see the results in your own Search Console data.
       </p>

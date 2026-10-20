@@ -28,7 +28,7 @@ const FAQ = [
   ["Is the SEO check really free?", "Yes. The check is free and needs no account. Each website's result is kept for 7 days, so you can share its link. To see every missed search, create a free Pentra account."],
   ["Where do the numbers come from?", "Monthly searches and competition come from Google data through DataForSEO, for the country your website targets. Pentra never invents a search: every one has measured demand."],
   ["What does competition mean?", "How hard it is to reach Google's first page for a search, on a 0 to 100 scale. The check shows searches up to 30, which a smaller website can realistically win with one good page."],
-  ["What happens if I sign up?", "Pentra learns what you sell, writes fact-checked articles for searches like these and publishes them to your site (WordPress, Shopify, Webflow, Ghost or GitHub, or you paste them in). Then it improves the pages closest to page one. The free plan includes 3 articles a month, with no credit card."],
+  ["What happens if I sign up?", "Pentra starts with the missed searches from your check, checked against the business facts you confirm. It learns what you sell, writes fact-checked articles for those searches and publishes them to your site (WordPress, Shopify, Webflow, Ghost or GitHub, or you paste them in). Then it improves the pages closest to page one. The free plan includes 3 articles a month, with no credit card."],
   ["Does the check change my website?", "No. It only reads your public pages, the way Google does."],
 ] as const;
 
