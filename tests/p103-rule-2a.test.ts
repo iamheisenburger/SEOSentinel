@@ -78,6 +78,37 @@ test("product claims: numbers about the customer's product must be in the confir
   assert.deepEqual(productNumberMismatches("Pentra Starter costs $39 a month.", profile, "wrong-hash"), [], "unverifiable profile: no verdict");
 });
 
+// P114 (Oct 20 2026): only the LLM claim ledger could let a product quantity
+// go uncited. When it failed on an unrelated sentence, pentra.dev's own
+// confirmed facts ("a pace from 1 to 21 articles a week", "3 articles a month")
+// held 2 of 3 drafts. Under rule 2a the ledger is a note for Autopilot; the
+// confirmed profile is the evidence. Owner review keeps its bar.
+test("P114 Autopilot accepts uncited product quantities the confirmed profile states; anything else still blocks", async () => {
+  const { evaluatePublicationQuality, ownerWaivableIssue } = await import("../convex/lib/articleQuality.ts");
+  const profile = "Name: Pentra\n\nDomain: pentra.dev\n\nPricing: 3 articles/month free tier (no credit card required).\n\n" +
+    "03 Choose Autopilot or Review first Pick a pace from 1 to 21 articles a week, or approve every article yourself.";
+  const draft = (markdown: string, productEvidenceHash = sha(profile)) => ({ title: "A practical guide", markdown,
+    productEvidenceSnapshot: profile, productEvidenceHash, claimEvidenceStatus: "failed", claimEvidence: [] });
+  const uncitedIssue = (article: ReturnType<typeof draft>) =>
+    evaluatePublicationQuality(article, "strict").issues.find((issue) => /quantified outcome or operational claim/.test(issue));
+  const product = "You then choose Autopilot or Review first, and a pace from 1 to 21 articles a week. Pentra has a free plan with 3 articles a month and no credit card required.";
+  const issue = uncitedIssue(draft(product));
+  assert.ok(issue, "the strict gate still reports the uncited quantities");
+  assert.equal(ownerWaivableIssue(issue!, draft(product), "autopilot"), true, "confirmed product facts pass although the ledger failed");
+  assert.equal(ownerWaivableIssue(issue!, draft(product), "owner"), false, "owner review keeps its bar");
+  assert.equal(ownerWaivableIssue(issue!, draft(product, "not-the-hash"), "autopilot"), false, "an unverifiable profile proves nothing");
+  for (const [markdown, why] of [
+    [`${product} Teams that publish weekly increase sign-ups by 40%.`, "a third-party statistic in the same paragraph"],
+    [`${product}\n\nOther tools increase sign-ups by 40%.`, "a third-party statistic in another paragraph"],
+    ["Pentra lets you pick a pace from 1 to 50 articles a week.", "a product number the profile does not state"],
+    ["Most teams pick a pace from 1 to 21 articles a week.", "a paragraph that is not about the product"],
+  ] as const) {
+    const article = draft(markdown), found = uncitedIssue(article);
+    assert.ok(found, why);
+    assert.equal(ownerWaivableIssue(found!, article, "autopilot"), false, why);
+  }
+});
+
 test("checkable fact-check findings: cited, numeric or product sentences; general advice is not", async () => {
   const { checkableFactCheckFindings, autopilotEditPassIssue, autopilotVerificationNote } = await import("../convex/lib/autopilotEditor.ts");
   const findings = [

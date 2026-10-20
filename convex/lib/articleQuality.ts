@@ -94,7 +94,20 @@ export function preservedResearchEvidenceSnapshot(
  * check and editorial review are still required; their findings drive the
  * bounded rewrite instead of a veto. */
 export const AUTOPILOT_ACCEPTANCE = "pentra-autopilot";
-export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number; claimEvidenceStatus?: string }, actor: "owner" | "autopilot" = "owner"): boolean {
+const UNCITED_QUANTITY_ISSUE = /^\d+ quantified outcome or operational claim\(s\) lack an inline citation\.$/;
+export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number; claimEvidenceStatus?: string; markdown?: string } &
+  Partial<Pick<PublicationArticle, "claimEvidence" | "productEvidenceSnapshot" | "productEvidenceHash">>, actor: "owner" | "autopilot" = "owner"): boolean {
+  // Rule 2a (P114, Oct 20 2026): the claim ledger is a note for Autopilot. Its
+  // confirmation was the only way a product quantity could go uncited, so when
+  // it failed on an unrelated sentence, pentra.dev's own confirmed facts ("a
+  // pace from 1 to 21 articles a week", "3 articles a month") held 2 of 3
+  // drafts. Autopilot accepts uncited quantities only when the confirmed
+  // profile states every one of them; any other quantity still blocks.
+  if (actor === "autopilot" && UNCITED_QUANTITY_ISSUE.test(issue) && article.markdown !== undefined) {
+    const uncited = uncitedEvidenceRequiredParagraphs(article.markdown, article);
+    return uncited.length > 0 && uncited.every((paragraph) =>
+      firstPartyQuantitiesStated(paragraph, article.productEvidenceSnapshot, article.productEvidenceHash));
+  }
   const editorial = /^Editorial quality score is (\d+); strict minimum is 85\.$/.exec(issue);
   // The editorial score is the reviewer's judgement of style, not a fact
   // check. Owner decision (Sep 25, Oct 14 2026): it must not throw away
@@ -1381,6 +1394,29 @@ function quantifiedParagraphs(markdown: string): string[] {
         (QUANTIFIED_OUTCOME_PATTERN.test(paragraph) ||
           EVIDENCE_REQUIRED_NUMBER_PATTERN.test(paragraph)),
     );
+}
+
+/** Every quantity phrase the evidence patterns see ("1 to 21 articles",
+ * "3 articles", "increase sign-ups by 40%"), canonical: case, dashes, ranges,
+ * spacing and plural units normalized. */
+function quantityPhrases(value: string): Set<string> {
+  const phrases = new Set<string>();
+  for (const pattern of [QUANTIFIED_OUTCOME_PATTERN, EVIDENCE_REQUIRED_NUMBER_PATTERN]) {
+    for (const match of value.matchAll(new RegExp(pattern.source, "gi"))) {
+      phrases.add(match[0].toLowerCase().replace(/[‑–—]/g, "-").replace(/(\d)\s*(?:-|to)\s*(\$?\d)/g, "$1-$2")
+        .replace(/\s+/g, " ").replace(/(?<=[a-z])s\b/g, "").trim());
+    }
+  }
+  return phrases;
+}
+/** True when a paragraph about the product states only quantities the
+ * confirmed first-party snapshot (verified against its hash) states itself:
+ * "a pace from 1 to 21 articles a week", "3 articles a month". */
+export function firstPartyQuantitiesStated(paragraph: string, productEvidence?: string, productEvidenceHash?: string): boolean {
+  if (!productEvidence?.trim() || !productEvidenceHash || sha256Hex(productEvidence) !== productEvidenceHash ||
+    !referencesNamedProduct(paragraph, productEvidence)) return false;
+  const claimed = quantityPhrases(paragraph), stated = quantityPhrases(productEvidence);
+  return claimed.size > 0 && [...claimed].every((phrase) => stated.has(phrase));
 }
 
 export function uncitedEvidenceRequiredParagraphs(markdown: string,
