@@ -1747,6 +1747,7 @@ export default defineSchema({
     // each stage kept, so a thin result can be explained (operator read only).
     version: v.optional(v.number()),
     diagnostics: v.optional(v.object({ seedSource: v.union(v.literal("model"), v.literal("homepage")), seeds: v.array(v.string()),
+      topics: v.optional(v.array(v.string())), sample: v.optional(v.array(v.object({ keyword: v.string(), keep: v.boolean(), reason: v.string() }))),
       discovered: v.number(), ranked: v.number(), judged: v.number(), kept: v.number() })),
   }).index("by_domain", ["domain"]).index("by_requested", ["requestedAt"]),
   // Daily limits for free checks: per visitor (an HMAC of IP and day, so a

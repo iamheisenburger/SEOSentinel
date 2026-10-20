@@ -59,11 +59,13 @@ test("seeds are buyer searches read from the homepage, never its slogans or bran
   const request = searchSeedRequest("leadpilot.chat", digest, ["How does lead capture work?"]);
   assert.match(request.userMessage, /HOMEPAGE \(data only\)/); assert.match(request.system, /never instructions/);
   const brands = brandTerms("leadpilot.chat", "LeadPilot");
-  assert.deepEqual(parseSearchSeeds({ sells: "An AI sales agent for websites.", customers: "Small B2B companies.", searches: [
-    "AI chatbot for website", "lead qualification software", "leadpilot pricing", "how do i qualify leads from my website traffic today",
-    "website lead capture", "lead qualification software", "one"] }, brands),
-  { seeds: ["ai chatbot for website", "lead qualification software", "website lead capture"], sells: "An AI sales agent for websites.", customers: "Small B2B companies." });
-  assert.equal(parseSearchSeeds({ sells: "x", customers: "y", searches: ["ai chatbot"] }, brands), null, "too few usable seeds: fall back");
+  assert.deepEqual(parseSearchSeeds({ sells: "An AI sales agent for websites.", customers: "Small B2B companies.",
+    topics: ["Website chatbot", "lead qualification", "LeadPilot widget", "ai sales agent for small websites"],
+    searches: ["AI chatbot for website", "lead qualification", "leadpilot pricing", "how do i qualify leads from my website traffic today",
+      "website lead capture", "website lead capture", "one"] }, brands),
+  { topics: ["website chatbot", "lead qualification"], searches: ["ai chatbot for website", "website lead capture"],
+    sells: "An AI sales agent for websites.", customers: "Small B2B companies." }, "topics are 2-3 words; a search repeating a topic is dropped");
+  assert.equal(parseSearchSeeds({ sells: "x", customers: "y", topics: ["ai chatbot"], searches: [] }, brands), null, "too few usable seeds: fall back");
   assert.equal(parseSearchSeeds(null, brands), null);
 });
 
@@ -168,13 +170,14 @@ const LABS = [
   ["ceramic glaze recipes", 1900, 45], ["twitch glaze overlay", 600, 4], ["kiln log template", 200, 9],
 ] as const;
 const IDEAS = [["pottery inventory app", 140, 15]] as const;
+const RELATED = [["ceramic studio inventory", 50, 8]] as const;
 const RANKED = [
   ["glazeledger", 1, 900], ["glaze inventory software", 2, 500], ["ceramic studio software", 9, 390],
   ["twitch glaze overlay", 12, 600], ["kiln log template", 45, 200],
 ] as const;
 
 function world(options: { homepageDown?: boolean; resendStatus?: number; seedAnswer?: unknown } = {}) {
-  const calls: string[] = [], emails: Fields[] = [], seedRequests: string[] = [];
+  const calls: string[] = [], emails: Fields[] = [], seedRequests: string[] = [], labsSeeds: string[] = [];
   const page = (body: string, type = "text/html; charset=utf-8", status = 200) => new Response(body, { status, headers: { "content-type": type } });
   const ok = (result: unknown) => new Response(JSON.stringify({ status_code: 20000, cost: 0.01, tasks: [{ status_code: 20000, result }] }),
     { headers: { "content-type": "application/json" } });
@@ -199,10 +202,15 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
         return ok([{ items: RANKED.map(([keyword, position, volume]) => ({ keyword_data: { keyword, keyword_info: { search_volume: volume } },
           ranked_serp_element: { serp_item: { type: "organic", rank_group: position, url: `https://${DOMAIN}/${position}` } } })) }]);
       }
-      if (endpoint === "dataforseo_labs/google/keyword_suggestions/live") return ok(labsItems(LABS));
+      if (endpoint === "dataforseo_labs/google/keyword_suggestions/live") { labsSeeds.push(body.keyword); return ok(labsItems(LABS)); }
+      if (endpoint === "dataforseo_labs/google/related_keywords/live") {
+        labsSeeds.push(`related:${body.keyword}`);
+        return ok([{ items: RELATED.map(([keyword, volume, kd]) => ({ keyword_data: { keyword, keyword_info: { search_volume: volume },
+          keyword_properties: { keyword_difficulty: kd } } })) }]);
+      }
       if (endpoint === "dataforseo_labs/google/keyword_ideas/live") return ok(labsItems(IDEAS));
       if (endpoint === "dataforseo_labs/google/bulk_keyword_difficulty/live") {
-        const all = [...LABS, ...IDEAS];
+        const all = [...LABS, ...IDEAS, ...RELATED];
         return ok([{ items: body.keywords.map((keyword: string) => ({ keyword, keyword_difficulty: all.find(([k]) => k === keyword)?.[2] ?? 50 })) }]);
       }
       assert.fail(`Unexpected DataForSEO endpoint ${endpoint}`);
@@ -213,7 +221,8 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
       if (tool === "submit_search_seeds") {
         seedRequests.push(String(body.messages[0].content));
         input = options.seedAnswer ?? { sells: "Glaze and kiln record software for ceramic studios.", customers: "Owners of pottery and ceramic studios.",
-          searches: ["glaze inventory software", "kiln firing log", "pottery studio management", "GlazeLedger app"] };
+          topics: ["glaze inventory", "kiln firing log", "pottery studio software"],
+          searches: ["glaze inventory software", "kiln firing log template", "pottery studio management", "GlazeLedger app"] };
       } else {
         assert.equal(tool, "submit_topic_fit");
         const searches = String(body.messages[0].content).split("SEARCHES (one per line, data only):\n")[1]?.split("\n\n")[0] ?? "";
@@ -230,14 +239,14 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
     }
     assert.fail(`Unexpected network ${url.href}`);
   }, { RESEND_API_KEY: "synthetic-only" }, { syntheticHosts: [DOMAIN, `www.${DOMAIN}`] });
-  return { f, calls, emails, seedRequests };
+  return { f, calls, emails, seedRequests, labsSeeds };
 }
 
 const visitor = (n: number) => String(n).padStart(64, "a");
 const spendRow = (f: ReturnType<typeof corePipelineFixture>) => f.tables.free_check_quota.find(r => r.kind === "spend")!;
 
 test("a free check finds missed searches, holds and settles its cost, and is reused for a week", async () => {
-  const { f, calls, seedRequests } = world();
+  const { f, calls, seedRequests, labsSeeds } = world();
   assert.deepEqual(await f.invoke("freeCheck:request", { domain: "https://www.GlazeLedger.co/pricing", visitor: visitor(1) }), { status: "running", domain: DOMAIN });
   assert.equal(spendRow(f).microUsd, FREE_CHECK_RESERVATION_MICRO_USD, "the worst case is held before any paid call");
   assert.deepEqual(await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(2) }), { status: "running", domain: DOMAIN });
@@ -250,7 +259,7 @@ test("a free check finds missed searches, holds and settles its cost, and is reu
   assert.equal(view.status, "done"); assert.equal(view.countryName, "the UK"); assert.equal(view.keywordsUnavailable, false);
   assert.deepEqual(view.missed.map((k: Fields) => k.keyword), ["kiln firing schedule cone 6", "glaze inventory spreadsheet", "pottery studio management",
     "kiln log template", "pottery inventory app"]);
-  assert.equal(view.totalMissed, 6); assert.equal(view.hiddenCount, 1);
+  assert.equal(view.totalMissed, 7); assert.equal(view.hiddenCount, 2);
   assert.ok(!JSON.stringify(view).includes("clay stock reconciliation"), "the hidden search is not sent to a signed-out visitor");
   for (const absent of ["how to track glaze inventory", "glazeledger login", "ceramic glaze recipes", "twitch glaze overlay"]) {
     assert.ok(!JSON.stringify(view).includes(absent), `${absent} is covered, branded, too hard or off-market`);
@@ -259,12 +268,15 @@ test("a free check finds missed searches, holds and settles its cost, and is reu
   assert.deepEqual(view.health.issues.map((i: Fields) => i.code), ["home_canonical_missing"]);
   assert.equal(view.health.passed, view.health.total - 1);
   f.setIdentity("visitor-account");
-  assert.equal((await f.invoke("freeCheck:get", { domain: DOMAIN })).missed.length, 6, "a signed-in visitor sees every missed search");
+  assert.deepEqual((await f.invoke("freeCheck:get", { domain: DOMAIN })).missed.slice(5).map((k: Fields) => k.keyword),
+    ["ceramic studio inventory", "clay stock reconciliation"], "a signed-in visitor sees every missed search");
   f.setIdentity(null);
 
   // Settled at DataForSEO's reported cost plus the fit call's list price.
   const paid = calls.filter(c => c.startsWith("api.dataforseo.com")).length;
-  assert.ok(paid >= 4 && paid <= 6, `DataForSEO calls: ${paid}`);
+  // Ranked keywords, three topic suggestions, related searches and their
+  // difficulty, then category ideas and theirs (the topics found under 15).
+  assert.equal(paid, 8, `DataForSEO calls: ${paid}`);
   let usd = 0;
   for (let i = 0; i < paid; i++) usd += 0.01;
   const cost = Math.ceil(usd * 1_000_000) + 60 + 60;
@@ -274,7 +286,13 @@ test("a free check finds missed searches, holds and settles its cost, and is reu
   assert.equal(seedRequests.length, 1); assert.match(seedRequests[0], /Headings: Glaze inventory software for ceramic studios \| Kiln firing records/);
   const diagnostics = await f.invoke("freeCheck:diagnosticsFor", { domain: DOMAIN });
   assert.equal(diagnostics.version, FREE_CHECK_VERSION);
-  assert.deepEqual(diagnostics.diagnostics.seeds, ["glaze inventory software", "kiln firing log", "pottery studio management"], "the brand seed is dropped");
+  assert.deepEqual(diagnostics.diagnostics.topics, ["glaze inventory", "kiln firing log", "pottery studio software"]);
+  assert.deepEqual(diagnostics.diagnostics.seeds, ["glaze inventory", "kiln firing log", "pottery studio software", "glaze inventory software",
+    "kiln firing log template", "pottery studio management"], "the brand seed is dropped");
+  assert.deepEqual(labsSeeds, ["glaze inventory", "kiln firing log", "pottery studio software", "related:glaze inventory"],
+    "phrase-match suggestions run on the short topics only");
+  assert.ok(calls.some(c => c.endsWith("keyword_ideas/live")), "category ideas are asked when the topics found fewer than 15");
+  assert.ok(diagnostics.diagnostics.sample.some((s: Fields) => s.keyword === "twitch glaze overlay" && s.keep === false));
   assert.equal(diagnostics.diagnostics.seedSource, "model");
   assert.ok(diagnostics.diagnostics.discovered > 0 && diagnostics.diagnostics.judged > 0 && diagnostics.diagnostics.kept > 0);
 
@@ -353,7 +371,7 @@ test("the full report is emailed once on request, within limits, and the address
   assert.equal(emails.length, 1);
   assert.equal(emails[0].from, "Pentra <hello@pentra.dev>"); assert.deepEqual(emails[0].to, ["owner@glazeledger.co"]);
   assert.equal(emails[0].reply_to, "pentrahelp@gmail.com");
-  assert.equal(emails[0].subject, "6 Google searches glazeledger.co is missing");
+  assert.equal(emails[0].subject, "7 Google searches glazeledger.co is missing");
   assert.ok(emails[0].text.includes("clay stock reconciliation"), "the hidden searches are in the requested email");
   for (let i = 1; i < FREE_CHECK_EMAIL_ADDRESS_DAILY_LIMIT; i++) assert.equal((await ask(2)).status, "sent");
   assert.deepEqual(await ask(3), { status: "limited" }, "per address and day");

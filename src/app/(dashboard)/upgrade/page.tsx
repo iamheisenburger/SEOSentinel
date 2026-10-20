@@ -465,7 +465,7 @@ export default function UpgradePage() {
                     </span>
                   ) : tier.featured ? (
                     <span className="rounded-full border border-white/[0.1] px-2 py-0.5 text-[10px] font-medium text-[#D0D6E0]">
-                      Most popular
+                      Recommended
                     </span>
                   ) : null}
                 </div>

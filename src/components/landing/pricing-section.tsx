@@ -122,7 +122,7 @@ export function PricingSection() {
                 {tier.featured && <div aria-hidden className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#0EA5E9] to-transparent" />}
                 <div className="flex items-center justify-between">
                   <p className="text-[14px] font-medium text-[#F7F8F8]">{tier.name}</p>
-                  {tier.featured && <span className="rounded-full bg-[#0EA5E9]/10 px-2 py-0.5 text-[11px] font-medium text-[#0EA5E9]">Most popular</span>}
+                  {tier.featured && <span className="rounded-full bg-[#0EA5E9]/10 px-2 py-0.5 text-[11px] font-medium text-[#0EA5E9]">Recommended</span>}
                 </div>
                 <div className="mt-5 flex items-baseline gap-1">
                   <span className="text-[40px] font-semibold leading-none tracking-[-0.03em]">${price}</span>

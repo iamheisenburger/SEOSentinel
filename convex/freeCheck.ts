@@ -25,6 +25,7 @@ const outcome = v.union(
   v.object({ kind: v.literal("failed"), error: v.string() }),
 );
 const diagnostics = v.object({ seedSource: v.union(v.literal("model"), v.literal("homepage")), seeds: v.array(v.string()),
+      topics: v.optional(v.array(v.string())), sample: v.optional(v.array(v.object({ keyword: v.string(), keep: v.boolean(), reason: v.string() }))),
   discovered: v.number(), ranked: v.number(), judged: v.number(), kept: v.number() });
 
 async function counter(ctx: MutationCtx, key: string) {

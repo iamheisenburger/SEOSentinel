@@ -24,7 +24,8 @@ type Outcome =
     almost: ReturnType<typeof selectAlmostThere>; health: ReturnType<typeof healthSummary>; keywordsUnavailable: boolean }
   | { kind: "failed"; error: string };
 
-type Diagnostics = { seedSource: "model" | "homepage"; seeds: string[]; discovered: number; ranked: number; judged: number; kept: number };
+type Diagnostics = { seedSource: "model" | "homepage"; seeds: string[]; topics?: string[]; discovered: number; ranked: number; judged: number;
+  kept: number; sample?: Array<{ keyword: string; keep: boolean; reason: string }> };
 
 /** One small model call: the searches a buyer would type, read from the
  * homepage (convex/lib/missedSearches.ts searchSeedRequest). Throws when no
@@ -105,24 +106,37 @@ export const run = internalAction({
       const coverage = siteCoverage(sitemap.urls, homeHealth.title);
       // Seeds: what a buyer would type, read from the homepage by one small
       // call; the homepage's own phrases only when that call fails.
-      let read: { seeds: string[]; sells: string; customers: string } | null = null;
+      let read: { topics: string[]; searches: string[]; sells: string; customers: string } | null = null;
       try {
         const proposed = await proposeSeeds(domain, page.html, prefill.questions, brands);
         read = proposed.read; spent.fitMicroUsd += proposed.costMicroUsd;
       } catch { spent.fitMicroUsd += BUYER_FIT_CEILING_MICRO_USD; }
-      const seeds = read?.seeds ?? checkSeeds(prefill, brands);
-      diagnostics = { seedSource: read ? "model" : "homepage", seeds, discovered: 0, ranked: 0, judged: 0, kept: 0 };
+      const seeds = read ? [...read.topics, ...read.searches] : checkSeeds(prefill, brands);
+      diagnostics = { seedSource: read ? "model" : "homepage", seeds, ...(read ? { topics: read.topics } : {}), discovered: 0, ranked: 0, judged: 0, kept: 0 };
       let ranked: RankedKeyword[] = [];
+      const exclude = (keyword: string) => excludedFromMissed(keyword, { brands, coverage, ranked }) ? "existing_intent" as const : undefined;
       const metered = await meterDataForSeoCost(async () => {
         try { ranked = await getRankedKeywords(domain, locationCode, locale.language, 100); } catch { ranked = []; }
         if (seeds.length === 0) return [];
+        // Phrase-match suggestions for every short topic, and Google's related
+        // searches for the first: they stay on the business. Category ideas
+        // range wider, so they are asked only when that leaves too few.
+        let found: Awaited<ReturnType<typeof discoverKeywords>> = [];
         try {
-          // Every product seed and the category ideas, for searches across the
-          // business rather than variations of its first seed.
-          return await discoverKeywords(seeds, locationCode, locale.language, 30, { maxGoogleAdsBatches: 0, maxLabsSeeds: 3,
-            maxRelatedSeeds: 0, minimumResults: 30, maximumDifficulty: FREE_CHECK_MAX_DIFFICULTY, expandProductAnchors: true,
-            excludeKeyword: keyword => excludedFromMissed(keyword, { brands, coverage, ranked }) ? "existing_intent" : undefined });
-        } catch { return []; }
+          found = await discoverKeywords(read?.topics.length ? read.topics : seeds, locationCode, locale.language, 50, { maxGoogleAdsBatches: 0,
+            maxLabsSeeds: 4, maxRelatedSeeds: 1, useKeywordIdeas: false, minimumResults: 30, maximumDifficulty: FREE_CHECK_MAX_DIFFICULTY,
+            expandProductAnchors: true, excludeKeyword: exclude });
+        } catch { found = []; }
+        if (found.length < 15) {
+          try {
+            const known = new Set(found.map(k => normalizeFitKeyword(k.keyword)));
+            const ideas = await discoverKeywords(seeds, locationCode, locale.language, 40, { maxGoogleAdsBatches: 0, maxLabsSeeds: 0,
+              maxRelatedSeeds: 0, useKeywordIdeas: true, minimumResults: 30, maximumDifficulty: FREE_CHECK_MAX_DIFFICULTY,
+              expandProductAnchors: true, excludeKeyword: exclude });
+            found = [...found, ...ideas.filter(k => !known.has(normalizeFitKeyword(k.keyword)))];
+          } catch { /* keep what the topics found */ }
+        }
+        return found;
       });
       spent.dataForSeoUsd = metered.usd; spent.uncertain = metered.uncertain;
       const found = metered.result;
@@ -140,7 +154,8 @@ export const run = internalAction({
         try {
           const fit = await judgeBuyerFit(checkBusiness(domain, prefill, read ?? undefined), candidates);
           verdicts = fit.verdicts; spent.fitMicroUsd += fit.costMicroUsd;
-          diagnostics = { ...diagnostics, judged: verdicts.size, kept: [...verdicts.values()].filter(verdict => verdict.keep).length };
+          diagnostics = { ...diagnostics, judged: verdicts.size, kept: [...verdicts.values()].filter(verdict => verdict.keep).length,
+            sample: [...verdicts.values()].slice(0, 60).map(verdict => ({ keyword: verdict.keyword, keep: verdict.keep, reason: verdict.reason.slice(0, 120) })) };
         } catch {
           spent.fitMicroUsd += BUYER_FIT_CEILING_MICRO_USD;
           return { kind: "failed", error: "Pentra couldn't finish checking which searches fit your business. Try again in an hour." };
