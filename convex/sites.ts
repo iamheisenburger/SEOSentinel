@@ -4076,6 +4076,7 @@ const SITE_DELETION_STAGES = [
   "article_summaries",
   "plan_candidate_checkpoints",
   "content_call_results",
+  "customer_emails",
   "jobs",
   "topic_clusters",
   "pages",
@@ -4791,6 +4792,8 @@ async function deletionRowsForStage(
       return ctx.db.query("article_summaries").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "content_call_results":
       return ctx.db.query("content_call_results").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "customer_emails":
+      return ctx.db.query("customer_emails").withIndex("by_site_kind_key", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "jobs":
       return ctx.db.query("jobs").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "topic_clusters":
@@ -5190,6 +5193,10 @@ export const requestAccountDeletionInternal = internalMutation({
       cadenceAllocationVersion: CADENCE_ALLOCATION_VERSION,
       updatedAt: timestamp,
     };
+    // D4: the account's email for service emails goes with the account.
+    for (const contact of await ctx.db.query("account_contacts").withIndex("by_user", (q) => q.eq("userId", safeUserId)).take(10)) {
+      await ctx.db.delete(contact._id);
+    }
     if (entitlement) {
       await ctx.db.patch(entitlement._id, entitlementFields);
     } else {

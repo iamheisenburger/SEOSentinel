@@ -27,6 +27,7 @@ import { contentConnectionHash, confirmedContentProfileHash, contentConnectionCo
 import { contentFunding, contentIssue } from "./lib/contentCustomer";
 import { assertSafeImprovement } from "./lib/contentSelection";
 import { authorizedWorkPage, chooseImprovement, contentWorkConnection, enrollVerifiedCreation } from "./selectedPages";
+import { noteFirstArticleLive } from "./customerEmails";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes } from "./articles";
 import { AUTOPILOT_ACCEPTANCE, ownerWaivableIssue } from "./lib/articleQuality";
@@ -2198,6 +2199,11 @@ export async function contentWorkVerified(ctx: MutationCtx, site: Doc<"sites">, 
   }
   await ctx.db.patch(job._id, { contentWork: { ...job.contentWork, stage: "verified", publishedAt: article.publishedAt, verifiedAt: checkedAt } });
   await closeVerifiedContentWake(ctx, (await ctx.db.get(job._id))!);
+  // D4: the owner hears when the site's first article is live (never blocks the record).
+  if (job.contentWork.intent === "create") {
+    try { await noteFirstArticleLive(ctx, site, article, checkedAt); }
+    catch (error) { console.warn(`First-article email not scheduled for ${site._id}: ${error instanceof Error ? error.message : "unknown"}`); }
+  }
   if (job.contentWork.ownerRequest) return;
   if (job.contentWork.deadlineAt === site.contentSchedule.nextDeadlineAt) await ctx.db.patch(site._id, {
     contentSchedule: { ...site.contentSchedule, nextDeadlineAt: site.contentSchedule.nextDeadlineAt + site.contentSchedule.intervalMs }, updatedAt: checkedAt });

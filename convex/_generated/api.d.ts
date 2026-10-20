@@ -44,6 +44,7 @@ import type * as contentHealth from "../contentHealth.js";
 import type * as contentImprovements from "../contentImprovements.js";
 import type * as contentWork from "../contentWork.js";
 import type * as crons from "../crons.js";
+import type * as customerEmails from "../customerEmails.js";
 import type * as executionAuthorization from "../executionAuthorization.js";
 import type * as expectedClickDemandBackfill from "../expectedClickDemandBackfill.js";
 import type * as expectedClickEvidenceBackfill from "../expectedClickEvidenceBackfill.js";
@@ -261,6 +262,7 @@ declare const fullApi: ApiFromModules<{
   contentImprovements: typeof contentImprovements;
   contentWork: typeof contentWork;
   crons: typeof crons;
+  customerEmails: typeof customerEmails;
   executionAuthorization: typeof executionAuthorization;
   expectedClickDemandBackfill: typeof expectedClickDemandBackfill;
   expectedClickEvidenceBackfill: typeof expectedClickEvidenceBackfill;

@@ -37,9 +37,14 @@ export async function POST() {
       );
     }
     const authoritative = resolution.entitlement;
+    // Pentra emails the owner about their own sites (first article live) at
+    // their verified primary address only.
+    const primary = user.emailAddresses.find((address) => address.id === user.primaryEmailAddressId);
+    const contactEmail = primary?.verification?.status === "verified" ? primary.emailAddress : undefined;
     await callPentraInternal("/internal/plan/features", {
       userId,
       planFeatures: authoritative.planFeatures,
+      ...(contactEmail ? { contactEmail } : {}),
     });
     return NextResponse.json(
       { ok: true, ...canonicalPlanSummary(authoritative) },

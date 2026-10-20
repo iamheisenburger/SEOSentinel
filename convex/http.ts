@@ -947,6 +947,10 @@ http.route({
       userId: body.userId,
       planFeatures: body.planFeatures as string[],
     });
+    // D4: the owner's verified primary address, for emails about their sites.
+    if (typeof body.contactEmail === "string" && body.contactEmail.length <= 254) {
+      await ctx.runMutation(internal.customerEmails.recordContact, { userId: body.userId, email: body.contactEmail });
+    }
     return json({ ok: true });
   }),
 });

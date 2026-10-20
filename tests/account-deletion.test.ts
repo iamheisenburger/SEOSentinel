@@ -40,6 +40,7 @@ test("verified deletion atomically fences execution before asynchronous purge", 
 
   assert.match(request, /status: "deleting"/);
   assert.match(request, /account_plan_entitlements/);
+  assert.match(request, /query\("account_contacts"\)[\s\S]*ctx\.db\.delete\(contact\._id\)/, "the account's email address is deleted with it");
   assert.ok(
     request.indexOf('status: "deleting"') <
       request.indexOf("continueAccountDeletionPage"),

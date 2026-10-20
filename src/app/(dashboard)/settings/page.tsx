@@ -294,6 +294,37 @@ function PublishingSection({ pubSite }: { pubSite: PublishingSettingsSite }) {
   );
 }
 
+/** D4: Pentra's emails about the owner's own sites, and the switch to stop them. */
+function EmailUpdatesSection() {
+  const contact = useQuery(api.customerEmails.mine);
+  const setEmailUpdates = useMutation(api.customerEmails.setEmailUpdates);
+  const [saving, setSaving] = useState(false);
+  if (contact === undefined) return null;
+  return (
+    <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
+      <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.04]">
+        <Mail className="h-4 w-4 text-[#8A8F98]" />
+        <p className="text-[13px] font-semibold text-[#F7F8F8]">Email updates</p>
+      </div>
+      <div className="space-y-3 px-5 py-5">
+        <p className="text-[13px] leading-relaxed text-[#8A8F98]">
+          Pentra emails you about your own sites, for example when your first article is live.
+          {contact ? <> They go to <span className="text-[#F7F8F8]">{contact.email}</span>, your account&apos;s email.</> : " They go to your account's verified email."}
+        </p>
+        <label className="flex items-center gap-3 text-[13px] text-[#F7F8F8]">
+          <input type="checkbox" className="h-4 w-4 accent-[#F7F8F8]" checked={contact?.emailUpdates ?? true} disabled={!contact || saving}
+            onChange={async (event) => {
+              setSaving(true);
+              try { await setEmailUpdates({ enabled: event.target.checked }); } finally { setSaving(false); }
+            }} />
+          Send me these emails
+        </label>
+        {!contact && <p className="text-[12px] text-[#62666D]">This switch appears once your account&apos;s email is verified.</p>}
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { userId: _clerkId } = useAuth();
   const sites = useQuery(api.sites.list, _clerkId ? { clerkUserId: _clerkId } : {});
@@ -529,6 +560,8 @@ export default function SettingsPage() {
           )}
         </div>
       </div>
+
+      <EmailUpdatesSection />
 
       {/* Publishing */}
       {pubSite && <ContentWorkService key={pubSite._id} siteId={pubSite._id} />}

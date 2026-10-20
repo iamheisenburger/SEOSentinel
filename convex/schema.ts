@@ -1725,6 +1725,31 @@ export default defineSchema({
     requestedAt: v.number(),
   }).index("by_user_requested", ["userId", "requestedAt"]),
 
+  // D4 (P125, Oct 20 2026): the account's own email for service emails about
+  // its sites, copied from Clerk's verified primary address when the owner
+  // opens the dashboard; removed when the account is deleted. emailUpdates
+  // false turns the emails off.
+  account_contacts: defineTable({
+    userId: v.string(),
+    email: v.string(),
+    emailUpdates: v.boolean(),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"]),
+  // Every service email decided for a site's owner, once per kind and key
+  // (the first article; later the missed slot and the month). Site deletion
+  // removes them.
+  customer_emails: defineTable({
+    siteId: v.id("sites"),
+    kind: v.union(v.literal("first_article"), v.literal("missed_slot"), v.literal("monthly_report")),
+    key: v.string(),
+    status: v.union(v.literal("pending"), v.literal("sent"), v.literal("skipped"), v.literal("failed")),
+    reason: v.optional(v.string()),
+    articleId: v.optional(v.id("articles")),
+    attempts: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_site_kind_key", ["siteId", "kind", "key"]),
+
   // The free Missed Searches Checker (P122, Oct 20 2026): one cached result
   // per checked website (public data about a public site; no visitor data).
   free_checks: defineTable({

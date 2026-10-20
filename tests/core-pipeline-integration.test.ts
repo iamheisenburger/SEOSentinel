@@ -8198,6 +8198,62 @@ test("K2 operator readouts read only the newest articles of a site", async () =>
   assert.equal((await f.invoke("articles:listRecentBySiteInternal", { siteId: site.id, limit: 500 })).length, articles.length, "the limit is capped, never unbounded");
 });
 
+// D4 (P125, Oct 20 2026): a new owner hears when their site's first article
+// is live: once, from hello@pentra.dev, at the verified address Clerk gave
+// pentra.dev's plan sync, never when they turned emails off or when the site
+// already had published articles.
+test("D4 the owner gets one email, once, when the site's first article is live", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  const owner = f.get(site.id)!.userId;
+  assert.deepEqual(await f.invoke("customerEmails:recordContact", { userId: owner, email: " Owner@ReservoirNote.example " }), { recorded: true });
+  assert.deepEqual(await f.invoke("customerEmails:recordContact", { userId: owner, email: "owner@reservoirnote.example" }), { recorded: false },
+    "an unchanged address is not written again");
+  f.restartRuntime({ RESEND_API_KEY: "re_synthetic" });
+  await pumpUntil(f, () => (f.tables.customer_emails ?? []).some(e => e.status === "sent"));
+  const verified = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!;
+  const article = f.get(verified.articleId)!;
+  assert.equal(f.opsEmails.length, 1);
+  const email = f.opsEmails[0];
+  assert.equal(email.from, "Pentra <hello@pentra.dev>"); assert.deepEqual(email.to, ["owner@reservoirnote.example"]);
+  assert.equal(email.reply_to, "pentrahelp@gmail.com");
+  assert.equal(email.subject, `Your first article is live on ${site.domain}`);
+  assert.ok(String(email.text).includes(article.publicUrl), "the email links the live article");
+  assert.ok(String(email.text).includes(`"${article.title}"`));
+  assert.match(String(email.text), /Connect Google Search Console in your dashboard/);
+  assert.match(String(email.text), /turn these emails off in Settings: https:\/\/pentra\.dev\/settings/);
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "verified").length >= 2, 200, START + 3 * 60 * 60_000);
+  assert.equal(f.opsEmails.length, 1, "the second article sends nothing");
+  assert.equal(f.tables.customer_emails.length, 1);
+  f.setIdentity(owner);
+  assert.deepEqual(await f.invoke("customerEmails:mine", {}), { email: "owner@reservoirnote.example", emailUpdates: true });
+  f.assertOffline();
+});
+
+test("D4 no first-article email when the owner turned emails off, or the site already had published articles", async () => {
+  const off = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const offSite = await selectGrowth(off);
+  const offOwner = off.get(offSite.id)!.userId;
+  await off.invoke("customerEmails:recordContact", { userId: offOwner, email: "owner@reservoirnote.example" });
+  off.setIdentity(offOwner);
+  assert.deepEqual(await off.invoke("customerEmails:setEmailUpdates", { enabled: false }), { saved: true });
+  off.setIdentity(null);
+  off.restartRuntime({ RESEND_API_KEY: "re_synthetic" });
+  await pumpUntil(off, () => (off.tables.customer_emails ?? []).some(e => e.status !== "pending"));
+  assert.deepEqual(off.tables.customer_emails.map(e => [e.status, e.reason]), [["skipped", "updates_off"]]);
+  assert.equal(off.opsEmails.length, 0);
+
+  const older = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const olderSite = await selectGrowth(older);
+  await older.invoke("customerEmails:recordContact", { userId: older.get(olderSite.id)!.userId, email: "owner@reservoirnote.example" });
+  older.add("articles", { siteId: olderSite.id, status: "published", title: "An article from before", slug: "before", markdown: "Before.", createdAt: START });
+  older.restartRuntime({ RESEND_API_KEY: "re_synthetic" });
+  await pumpUntil(older, () => (older.tables.customer_emails ?? []).length > 0);
+  assert.deepEqual(older.tables.customer_emails.map(e => [e.status, e.reason]), [["skipped", "not_first_article"]]);
+  assert.equal(older.opsEmails.length, 0);
+  off.assertOffline(); older.assertOffline();
+});
+
 // A5 (Oct 19 2026): Anthropic credit was out for 9 days and X credit for 3
 // with no alert; Telegram now belongs to the X reply system, so operator
 // alerts go by email once RESEND_API_KEY and PENTRA_ALERT_EMAIL_TO are set.
