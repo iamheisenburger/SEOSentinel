@@ -68,7 +68,7 @@ export const REFRESH_SECTION_MAX_WORDS = 350;
 const CLOSING_HEADING = /^(?:related\b|further reading|read next|keep reading|sources?\b|references?\b|citations?\b|faqs?\b|frequently asked questions|final\b|conclusion|in conclusion|wrapping up|wrap-up|summary|in summary|key takeaways|takeaways|next steps?\b|(?:the )?bottom line)/i;
 export function refreshInsertTarget(base: { kind: string; markdown: string; sourceContent: string; header?: string },
   articleType?: string): SelectedEditTarget | undefined {
-  if (base.kind !== "github") return;
+  if (base.kind !== "github" && base.kind !== "wordpress" && !isApiCmsMethod(base.kind)) return;
   const headings = base.markdown.split("\n").filter(line => /^## \S/.test(line));
   let anchor: string | undefined;
   for (let index = headings.length - 1; index >= 0; index--) {
@@ -76,12 +76,24 @@ export function refreshInsertTarget(base: { kind: string; markdown: string; sour
     anchor = headings[index];
   }
   if (!anchor) return;
-  const body = base.header ? base.sourceContent.slice(base.header.length) : base.sourceContent;
-  const once = (text: string) => text.indexOf(anchor!) >= 0 && text.indexOf(anchor!) === text.lastIndexOf(anchor!);
-  if (!once(base.markdown) || !once(body)) return;
+  const once = (text: string, part: string) => text.indexOf(part) >= 0 && text.indexOf(part) === text.lastIndexOf(part);
+  if (!once(base.markdown, anchor)) return;
+  // The destination's own copy of the closing heading: the Markdown line on
+  // GitHub; on WordPress, Ghost, Shopify and Webflow the heading as Pentra's
+  // renderer wrote it into the HTML it sent (C2, P130), which is spliced the
+  // same way, so the result equals rendering the refreshed article whole.
+  let sourceBefore: string | undefined = anchor;
+  if (base.kind === "github") {
+    if (!once(base.header ? base.sourceContent.slice(base.header.length) : base.sourceContent, anchor)) return;
+  } else {
+    const rendered = renderSafePublicationHtml(anchor);
+    sourceBefore = (base.kind === "wordpress" ? [preserveWordPressReviewedText(rendered), rendered] : [rendered])
+      .find(candidate => once(base.sourceContent, candidate));
+    if (!sourceBefore) return;
+  }
   const maxWords = Math.min(REFRESH_SECTION_MAX_WORDS, articleWordCeiling(articleType) - contentWords(base.markdown));
   if (maxWords < REFRESH_SECTION_MIN_WORDS) return;
-  return { mode: "insert_section", before: anchor, sourceBefore: anchor, maxWords };
+  return { mode: "insert_section", before: anchor, sourceBefore, maxWords };
 }
 
 /** The new section may restate the article's own facts, reason about them and
@@ -114,8 +126,9 @@ function assertSafeRefreshSection(base: { title: string; markdown: string }, nex
   if (sectionBody.split(/\n\s*\n/).some(paragraph => paragraph.trim().length >= 40 && original.includes(paragraph.trim()))) throw new Error("A refresh section cannot copy existing text");
   if (evidenceRequiredParagraphs(sectionBody, original).length) throw new Error("The refresh section makes claims the article does not support");
   assertSafePublishableMarkdown(next.markdown);
-  // The destination replaces the anchor line with the section plus the anchor.
-  return `${section}\n\n${target.sourceBefore}`;
+  // The destination replaces its copy of the anchor with the section plus the
+  // anchor (Markdown here; rendered by the publisher for an HTML destination).
+  return `${section}\n\n${target.before}`;
 }
 
 function assertSafePublishableMarkdown(markdown: string) {

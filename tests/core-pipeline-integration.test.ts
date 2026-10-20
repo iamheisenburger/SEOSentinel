@@ -7517,6 +7517,45 @@ test("C2 Pentra improves its own Ghost post: exact correction and rollback, neve
   });
 });
 
+// C2 (P130, Oct 20 2026): the page-2 refresh reached only GitHub pages; a
+// customer on Ghost, Shopify, Webflow or WordPress never got it. Pentra's own
+// Ghost post now gets the same refresh: one new section spliced into the exact
+// HTML Pentra sent, written from Ghost's own edit marker, checked live.
+test("C2 Pentra's own Ghost post on Google page 2 gets the refresh section 28 days after publication", async () => {
+  const { f, ghost, site } = ghostHostedSetup();
+  const day = 86_400_000;
+  await f.invoke("publisher:verifyPublicationDestinationInternal", { siteId: site.id });
+  f.get(site.id)!.gscDateEpochs = [];
+  await selectGrowth(f, 7 * day);
+  await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.intent === "create" && j.contentWork.stage === "verified")));
+  const article = f.tables.articles.find(a => a.status === "published")!;
+  const page = f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!;
+  assert.equal(page.editable.kind, "ghost");
+  const post = [...ghost.posts.values()].find(p => p.id === page.editable.resourceKey)!;
+  const enrolledMarkdown = String(page.editable.markdown), enrolledHtml = String(post.html);
+  f.setTime(Math.max(f.now(), page.editable.selectedAt + 29 * day));
+  const date = new Date(f.now() - day).toISOString().slice(0, 10), syncEpoch = `refresh-${date}`;
+  f.get(site.id)!.gscDateEpochs = [{ date, syncEpoch }];
+  f.add("search_performance", { siteId: site.id, date, syncEpoch, page: article.publicUrl, query: String(f.get(article.topicId!)!.primaryKeyword).toLowerCase(),
+    syncVersion: 2, syncedAt: f.now(), clicks: 0, impressions: 40, ctr: 0, position: 14, createdAt: f.now() });
+  await f.invoke("publisher:verifyPublicationDestinationInternal", { siteId: site.id });
+  const refreshed = () => f.tables.jobs.filter(j => j.contentWork?.targetPageId === page._id && j.contentWork?.stage === "verified");
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_work", reason: "synthetic_refresh_evidence" });
+  await pumpUntil(f, () => refreshed().length === 1, 400, START + 120 * day);
+  const job = refreshed()[0];
+  assert.equal(job.contentWork.editTarget?.mode, "insert_section");
+  assert.equal(job.contentWork.editTarget.sourceBefore, renderSafePublicationHtml(job.contentWork.editTarget.before), "the heading as Pentra rendered it");
+  const refreshedMarkdown = String(f.get(page._id)!.editable.markdown);
+  assert.match(refreshedMarkdown, /## A working method for /, "the new section is in the page's markdown");
+  assert.equal(post.html, renderSafePublicationHtml(refreshedMarkdown), "Ghost holds exactly the refreshed article as Pentra renders it");
+  const at = enrolledHtml.indexOf(job.contentWork.editTarget.sourceBefore);
+  assert.ok(at > 0 && post.html.startsWith(enrolledHtml.slice(0, at)) && post.html.endsWith(enrolledHtml.slice(at)), "every other byte of the post is unchanged");
+  assert.ok(refreshedMarkdown.length > enrolledMarkdown.length);
+  assert.equal(f.get(page._id)!.editable.sourceRevision, post.updated_at, "bound to Ghost's new edit marker");
+  assert.equal(ghost.updates(), 1, "one update: the refresh (the weekly schedule kept creating new posts meanwhile)");
+  f.assertOffline();
+});
+
 test("a lost Ghost create response is reconciled by reading the post back, never by publishing twice", async () => {
   const { f, ghost, site } = ghostHostedSetup({ loseFirstCreateResponse: true });
   await f.invoke("publisher:verifyPublicationDestinationInternal", { siteId: site.id });

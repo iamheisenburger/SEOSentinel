@@ -72,13 +72,18 @@ export function refreshSlotAvailable(jobs: RefreshSlotJob[]): boolean {
   return !recent.some((job) => job.contentWork!.intent === "improve");
 }
 
+/** Destinations whose enrolled pages the page-2 refresh can edit: GitHub
+ * Markdown, and (C2, P130) the HTML Pentra sent to WordPress, Ghost, Shopify
+ * and Webflow, spliced with the same renderer. */
+const REFRESHABLE_KINDS = new Set(["github", "wordpress", "ghost", "shopify", "webflow"]);
+
 /** Pentra's own article that the page-2 refresh may reach: an older article
  * adopted for refresh, or one Autopilot wrote and enrolled for edits when it
- * was published (a managed GitHub page, enrolled at publication) that has now
- * been live for at least 28 days. Owner-selected pages are never refreshed. */
+ * was published (a managed page, enrolled at publication) that has now been
+ * live for at least 28 days. Owner-selected pages are never refreshed. */
 export function refreshablePentraPage(editable: { origin?: string; managedArticleId?: unknown; kind: string; selectedAt: number }, now: number): boolean {
   return editable.origin === "published_refresh" || (editable.origin === undefined && Boolean(editable.managedArticleId) &&
-    editable.kind === "github" && now - editable.selectedAt >= REFRESH_MIN_AGE_MS);
+    REFRESHABLE_KINDS.has(editable.kind) && now - editable.selectedAt >= REFRESH_MIN_AGE_MS);
 }
 
 export function refreshArticleOldEnough(publishedAt: number | undefined, now: number): boolean {

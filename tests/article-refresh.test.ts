@@ -72,7 +72,9 @@ test("only a file whose whole history is Pentra's own deliveries can be refreshe
 });
 
 
-import { assertSafeImprovement, refreshInsertTarget } from "../convex/lib/contentSelection.ts";
+import { assertSafeImprovement, exactReplacement, preserveWordPressReviewedText, refreshInsertTarget } from "../convex/lib/contentSelection.ts";
+import { refreshablePentraPage } from "../convex/lib/articleRefresh.ts";
+import { renderSafePublicationHtml } from "../convex/lib/safeMarkdownHtml.ts";
 
 const para = (seed: string, n = 60) => Array.from({ length: n }, (_, i) => `${seed}${i % 7}`).join(" ") + ".";
 const article = [
@@ -124,4 +126,41 @@ test("no refresh when the article has no closing block or no room under its word
   const long = article.replace("## Final note on scope", `${para("long", 2500)}\n\n## Final note on scope`);
   assert.equal(refreshInsertTarget({ ...base, markdown: long, sourceContent: `${base.header}${long}\n` }, "standard"), undefined);
   assert.equal(refreshInsertTarget({ ...base, kind: "wordpress" }, "standard"), undefined);
+});
+
+// C2 (P130, Oct 20 2026): the page-2 refresh reaches Pentra's own pages on
+// WordPress, Ghost, Shopify and Webflow, not only GitHub.
+test("on an HTML destination the refresh splices the rendered section before the rendered closing heading", () => {
+  const section = `## A direct answer for this search\n\n${guidance}`;
+  const cases = [
+    { kind: "ghost", html: renderSafePublicationHtml(article), render: (markdown: string) => renderSafePublicationHtml(markdown) },
+    { kind: "shopify", html: renderSafePublicationHtml(article), render: (markdown: string) => renderSafePublicationHtml(markdown) },
+    { kind: "wordpress", html: preserveWordPressReviewedText(renderSafePublicationHtml(article)),
+      render: (markdown: string) => preserveWordPressReviewedText(renderSafePublicationHtml(markdown)) },
+  ];
+  for (const { kind, html, render } of cases) {
+    const page = { kind, title: "Guide", markdown: article, sourceContent: html };
+    const target = refreshInsertTarget(page, "standard")!;
+    assert.equal(target.mode, "insert_section", kind);
+    assert.equal(target.before, "## Final note on scope", kind);
+    assert.equal(target.sourceBefore, render("## Final note on scope"), `${kind}: the heading as Pentra's renderer wrote it`);
+    const added = assertSafeImprovement(page, { title: "Guide", markdown: withSection(section) }, target);
+    assert.equal(added, `${section}\n\n## Final note on scope`);
+    // What the publisher writes equals rendering the refreshed article whole.
+    assert.equal(exactReplacement(html, target.sourceBefore, render(added)), render(withSection(section)), kind);
+  }
+  assert.equal(refreshInsertTarget({ kind: "ghost", markdown: article, sourceContent: "<p>An owner rewrote this post.</p>" }, "standard"), undefined,
+    "no refresh when the post no longer holds the heading Pentra sent");
+  assert.equal(refreshInsertTarget({ kind: "manual", markdown: article, sourceContent: renderSafePublicationHtml(article) }, "standard"), undefined,
+    "a pasted page is never edited by Pentra");
+});
+
+test("Pentra's own enrolled pages on every API destination become refreshable after four weeks", () => {
+  const now = Date.UTC(2026, 9, 20), old = now - 29 * 86_400_000;
+  for (const kind of ["github", "wordpress", "ghost", "shopify", "webflow"]) {
+    assert.equal(refreshablePentraPage({ kind, managedArticleId: "articles:1", selectedAt: old }, now), true, kind);
+    assert.equal(refreshablePentraPage({ kind, managedArticleId: "articles:1", selectedAt: now - 27 * 86_400_000 }, now), false, `${kind}: too new`);
+  }
+  assert.equal(refreshablePentraPage({ kind: "wordpress", selectedAt: old }, now), false, "an owner-selected page is never refreshed");
+  assert.equal(refreshablePentraPage({ kind: "manual", managedArticleId: "articles:1", selectedAt: old }, now), false);
 });
