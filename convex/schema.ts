@@ -641,6 +641,13 @@ export default defineSchema({
     used: v.number(),
     updatedAt: v.number(),
   }).index("by_user_month", ["userId", "monthStart"]),
+  // When the account's next usage recount is due (B, Oct 20 2026): a burst of
+  // article starts and retirements shares one trailing recount. Its own table,
+  // so the debounce never re-runs the dashboard queries that read the count.
+  account_usage_recounts: defineTable({
+    userId: v.string(),
+    dueAt: v.number(),
+  }).index("by_user", ["userId"]),
   // A5: the last operator alert per kind, so an unchanged problem is not
   // emailed again within a day (convex/lib/opsEmail.ts).
   ops_alert_state: defineTable({

@@ -292,10 +292,21 @@ async function refreshAccountUsage(ctx: MutationCtx, site: Doc<"sites">, added =
     if (row) await ctx.db.patch(row._id, { used: Math.max(0, row.used + added), updatedAt: Date.now() });
     else await storeAccountUsage(ctx, site.userId, monthStart, (await liveAccountArticlesThisMonth(ctx, site)).used);
   }
+  // One trailing recount per burst (B, Oct 20 2026): a publication, its refill
+  // and a replacement within minutes each scheduled a full recount, and each
+  // reads every content job of the month (42 steps, ~20 MB, in five minutes on
+  // the owner account). A recount already due reconciles this change too;
+  // `added` above keeps starts exact at once.
+  const pending = await ctx.db.query("account_usage_recounts").withIndex("by_user", q => q.eq("userId", site.userId!)).first();
+  if (pending && pending.dueAt > Date.now()) return;
+  const dueAt = Date.now() + USAGE_RECOUNT_DEBOUNCE_MS;
+  if (pending) await ctx.db.patch(pending._id, { dueAt });
+  else await ctx.db.insert("account_usage_recounts", { userId: site.userId, dueAt });
   const siteIds = (await ctx.db.query("sites").withIndex("by_user", q => q.eq("userId", site.userId!)).take(LIMIT)).map(owned => owned._id);
-  await ctx.scheduler.runAfter(0, internal.contentWork.recountAccountUsageStep, { userId: site.userId, monthStart, siteIds,
+  await ctx.scheduler.runAt(dueAt, internal.contentWork.recountAccountUsageStep, { userId: site.userId, monthStart, siteIds,
     siteIndex: 0, cursor: null, used: 0, candidates: [], replaced: [] });
 }
+const USAGE_RECOUNT_DEBOUNCE_MS = 5 * 60_000;
 /** Job documents per recount page: each is at most 1 MB, so a page stays far
  * below the 16 MB per-execution read limit. */
 const USAGE_RECOUNT_PAGE = 8;

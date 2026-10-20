@@ -8341,6 +8341,40 @@ test("B reserving a content-work slot never loads the month's job documents", as
   f.assertOffline();
 });
 
+// B (Oct 20 2026): each article start or retirement scheduled a full usage
+// recount, and each recount reads every content job of the month (42 steps,
+// ~20 MB, in five minutes on the owner account at one publication).
+test("B a burst of article starts shares one trailing usage recount, and the count stays exact", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const userId = f.get(site.id)!.userId;
+  const recounts = () => f.tables._scheduled_functions.filter(s => s.name === "contentWork:recountAccountUsageStep" &&
+    s.args.userId === userId && s.args.siteIndex === 0 && s.args.cursor === null);
+  const before = recounts().length, windowEnd = f.now() + 4 * 60_000;
+  // An article is prepared and its refill starts within minutes (one burst).
+  await f.invoke("contentWork:advance", { siteId: site.id });
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.intent === "create").length === 2, 100, windowEnd);
+  const started = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.intent === "create").length;
+  assert.equal(started, 2, "two articles started");
+  assert.equal(recounts().length - before, 1, "the burst shares one recount");
+  const usage = () => (f.tables.account_content_usage ?? []).find((row: Fields) => row.userId === userId)?.used;
+  assert.equal(usage(), started, "the stored count is exact at once");
+  // The trailing recount runs after the window and reconciles to the same count.
+  const due = recounts().at(-1)!.at;
+  assert.ok(due >= f.now() + 4 * 60_000, "it trails the burst");
+  f.setTime(due);
+  for (let n = 0; n < 50 && f.tables._scheduled_functions.some(s => s.name === "contentWork:recountAccountUsageStep" && s.state.kind === "pending" && s.at <= f.now()); n++) {
+    const next = f.tables._scheduled_functions.find(s => s.name === "contentWork:recountAccountUsageStep" && s.state.kind === "pending" && s.at <= f.now())!;
+    await f.invoke(next.name, next.args); next.state = { kind: "success" };
+  }
+  assert.equal(usage(), started);
+  // A change after the window schedules a fresh recount.
+  f.setTime(due + 60_000);
+  await f.invoke("contentWork:advance", { siteId: site.id });
+  f.assertOffline();
+});
+
 // B (Oct 19 2026): Convex reads. contentWork:advance runs on every scheduler
 // wake (~771 KB a run) and read five full published articles just for the last
 // publication time; the growth recovery lane re-read every resolved or
