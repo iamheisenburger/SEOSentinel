@@ -19,6 +19,7 @@ import { inspectSharedProviderBudget, reserveSharedProviderBudget, settleSharedP
 import { contentValidationBinding } from "./lib/providerBudgetAuthorization";
 import { planCheckpointTopicDeletionLocked, planCheckpointTopicExecutionLocked } from "./lib/planCandidateCheckpoint";
 import { CONTENT_FEASIBILITY_VERSION, terminalContentFeasibility } from "./lib/topicLifecycle";
+import { reconcileTopicLifecycle } from "./lib/topicLifecycleDb";
 import type { CadenceScheduleResult } from "./lib/autopilotRunOutcome";
 import { liveAutopilotReadiness, publicationDestinationBlockers } from "./lib/autopilotReadiness";
 import { PUBLISHED_REVISION_LEASE_MS } from "./lib/publishedRevision";
@@ -1649,6 +1650,38 @@ export const recordBuyerFit = internalMutation({ args: { siteId: v.id("sites"), 
     }
     return { recorded };
   } });
+/** A topic stays "queued" only while work holds it. Code before the lifecycle
+ * settlement left researched keywords queued after their job ended, so they
+ * were never written or judged again: LeadPilot held six from Sep 25-Oct 6,
+ * among them "online chat widget" (480 searches a month). The daily buyer-fit
+ * sweep first hands each stale lock to the lifecycle rule (planned, used or
+ * disqualified on its own evidence), then judges what came back. Per-attempt
+ * improvement rows (no measured demand) and topics a live content job holds
+ * stay as they are. */
+const STALE_TOPIC_LOCK_MS = 86_400_000;
+const LIVE_CONTENT_STAGES = ["prepare", "review", "review_failed", "ready", "publish", "verify"] as const;
+export const releaseStaleTopicLocks = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site || site.serviceMode !== "growth_first" || site.deletionStatus || site.accountDeletionRequestedAt) return { released: 0 };
+  const cutoff = Date.now() - STALE_TOPIC_LOCK_MS;
+  const stale = (await ctx.db.query("topic_clusters").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "queued")).take(100))
+    .filter(t => (t.searchVolume ?? 0) > 0 && t.updatedAt < cutoff).slice(0, 20);
+  if (stale.length === 0) return { released: 0 };
+  const held = new Set<string>();
+  for (const stage of LIVE_CONTENT_STAGES) {
+    const jobs = await ctx.db.query("jobs").withIndex("by_site_content_stage", q => q.eq("siteId", siteId).eq("contentWork.stage", stage)).take(50);
+    for (const job of jobs) {
+      const topicId = (job.payload as { topicId?: unknown } | undefined)?.topicId;
+      if (job.contentWork?.retiredAt === undefined && typeof topicId === "string") held.add(topicId);
+    }
+  }
+  let released = 0;
+  for (const topic of stale) {
+    if (held.has(topic._id)) continue;
+    if ((await reconcileTopicLifecycle(ctx, { siteId, topicId: topic._id, apply: true })).changed) released++;
+  }
+  return { released };
+} });
 /** Autopilot sites for the daily buyer-fit sweep, a page at a time. */
 export const buyerFitSweepSites = internalQuery({ args: { cursor: v.union(v.string(), v.null()) }, handler: async (ctx, { cursor }) => {
   const page = await ctx.db.query("sites").paginate({ cursor, numItems: 20 });

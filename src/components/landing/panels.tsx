@@ -42,7 +42,7 @@ const RANKS = [
 export function RankingsPanel() {
   return (
     <div className={PANEL}>
-      <div className={HEAD}><span>Pages close to page one</span><span>positions 4–20 · from Search Console</span></div>
+      <div className={HEAD}><span>Pages close to page one</span><span>Example · positions 4–20 from Search Console</span></div>
       <table className="w-full text-left text-[12.5px]">
         <thead>
           <tr className="text-[10.5px] uppercase tracking-[0.08em] text-[#62666D]">
@@ -80,7 +80,7 @@ const CHECKS = [
 export function HealthPanel() {
   return (
     <div className={PANEL}>
-      <div className={HEAD}><span>Weekly site health</span><span>checked Mon 7:00 AM</span></div>
+      <div className={HEAD}><span>Weekly site health</span><span>Example · checked Mon 7:00 AM</span></div>
       <div className="grid gap-5 p-5 sm:grid-cols-[auto_1fr] sm:items-center">
         <div className="relative mx-auto h-28 w-28" aria-label="Health score 97 out of 100">
           <svg viewBox="0 0 36 36" className="h-full w-full -rotate-90" aria-hidden>

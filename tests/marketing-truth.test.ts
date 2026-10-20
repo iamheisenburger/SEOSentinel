@@ -19,6 +19,9 @@ test("public Pentra copy sells only what the product delivers", () => {
   assert.match(homepage, /Autopilot only publishes articles that pass its checks: every statistic must appear in the source it cites/);
   const landing = ["src/components/landing/run-log.tsx", "src/components/landing/panels.tsx"].map(f => readFileSync(f, "utf8")).join("\n");
   assert.doesNotMatch(`${homepage}\n${landing}`, /blocks any claim|blocks unsupported|no unsupported claims|fail the fact check|invented statistics, quotes/i);
+  // Panels with invented numbers say so in their header, so a crop never passes for a customer's results.
+  assert.match(landing, /Example · positions 4–20 from Search Console/);
+  assert.match(landing, /Example · checked Mon 7:00 AM/);
   // Limits are stated where buyers ask about them (FAQ), not as a "does not do" list.
   assert.match(homepage, /automatic publishing there is coming soon/);
   assert.match(homepage, /No one can honestly guarantee rankings/);

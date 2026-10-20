@@ -4475,6 +4475,42 @@ test("P105 Autopilot writes only searches the business can serve", async t => {
     assert.equal(f.modelCalls.length, calls, "and nothing spent");
     f.assertOffline();
   });
+
+  // P135 (Oct 20 2026): older code left researched keywords "queued" after their
+  // job ended; LeadPilot's "online chat widget" (480 a month) sat there from Oct 5.
+  await t.test("stale_queued_topics_return_to_the_plan_and_are_judged", async () => {
+    const day = 86_400_000;
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000,
+      topicFit: (keyword: string) => !keyword.includes("triage") });
+    const site = await selectGrowth(f);
+    Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+    for (const topic of f.tables.topic_clusters) if (topic.siteId === site.id) topic.status = "used";
+    const saved = f.get(site.id)!;
+    const queued = (primaryKeyword: string, searchVolume: number | undefined, updatedAt: number) => f.add("topic_clusters", { siteId: site.id,
+      primaryKeyword, label: primaryKeyword.replace(/^./, c => c.toUpperCase()), planningCanonicalDomain: saved.canonicalDomain ?? saved.domain,
+      planningDomainRevision: saved.canonicalDomainRevision ?? 0, secondaryKeywords: [], intent: "informational", status: "queued", priority: 50,
+      ...(searchVolume ? { searchVolume, keywordDifficulty: 5, keywordDifficultyMeasured: true } : {}), createdAt: updatedAt, updatedAt });
+    const old = f.now() - 15 * day;
+    const stranded = queued("irrigation pressure alert planning", 480, old), unfit = queued("irrigation pump alert triage", 210, old);
+    const improvement = queued("irrigation valve inspection workflow", undefined, old);
+    const held = queued("irrigation leak alert schedule", 90, old), fresh = queued("irrigation zone alert checklist", 50, f.now());
+    const holder = f.add("jobs", { siteId: site.id, type: "article", status: "done", payload: { topicId: held, bufferFill: true },
+      contentWork: { stage: "ready", deadlineAt: f.now() + 30 * day, windowStartAt: f.now() + 29 * day, profileHash: "p", connectionHash: "c",
+        revisions: 0, replacements: 0, discardedArticleIds: [] }, createdAt: old, updatedAt: old });
+    const swept = await f.invoke("actions/growthTopics:sweepBuyerFitFleet", {});
+    assert.deepEqual(swept, { sites: 1, judged: 2, rejected: 1 }, "both stranded searches are judged");
+    assert.equal(f.get(stranded)!.status, "planned"); assert.equal(f.get(stranded)!.buyerFit.eligible, true);
+    assert.equal(f.get(unfit)!.status, "planned"); assert.equal(f.get(unfit)!.buyerFit.eligible, false);
+    assert.equal(f.get(improvement)!.status, "queued", "a per-attempt improvement row never re-enters the plan");
+    assert.equal(f.get(held)!.status, "queued", "a topic a ready article holds stays queued");
+    assert.equal(f.get(fresh)!.status, "queued", "a fresh lock is left alone");
+    f.tables.jobs.splice(f.tables.jobs.findIndex(j => j._id === holder), 1);
+    const started = await f.invoke("contentWork:advance", { siteId: site.id });
+    const job = f.tables.jobs.find(j => j.contentWork && j.siteId === site.id)!;
+    assert.ok(job, JSON.stringify(started));
+    assert.equal(job.payload.topicId, stranded, "the released search is written");
+    f.assertOffline();
+  });
 });
 
 test("SLC persisted checkpoint survives restart and duplicate workers without another initial draft", async () => {
