@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAction, useQuery, useMutation } from "convex/react";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { api } from "../../../../../convex/_generated/api";
@@ -1094,6 +1094,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
   const contentWordPress = Boolean(site.contentSetupRequestedAt || site.serviceMode === "growth_first");
   const updateSite = useMutation(api.sites.upsert);
   const verifyPublicationDestination = useAction(api.publisher.verifyPublicationDestination);
+  const listGithubRepositories = useAction(api.publisher.listGithubRepositories);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [method, setMethod] = useState(site.publishMethod || "manual");
@@ -1121,6 +1122,15 @@ function ConnectionSection({ site }: { site: SiteView }) {
   const isHosted = isApiCmsMethod(method);
   const hostedAllowed = fullManagedBetaEnabled || contentWordPress;
   const hasGithubToken = !!site.githubConnected;
+  // After GitHub is connected, the owner picks a repository it can publish to
+  // instead of typing its owner and name (Phase 4, D3). Typing still works.
+  const [repoChoices, setRepoChoices] = useState<FunctionReturnType<typeof api.publisher.listGithubRepositories> | null>(null);
+  useEffect(() => {
+    if (!editing || !isGithub || !hasGithubToken || repoChoices) return;
+    let live = true;
+    listGithubRepositories({ siteId: site._id }).then((repos) => { if (live) setRepoChoices(repos); }).catch(() => { if (live) setRepoChoices([]); });
+    return () => { live = false; };
+  }, [editing, isGithub, hasGithubToken, repoChoices, listGithubRepositories, site._id]);
 
   const inputCls = "w-full rounded-lg border border-white/[0.06] bg-[#0E0F11] px-3 py-2 text-[13px] text-[#F7F8F8] placeholder-[#62666D] outline-none focus:border-[#0EA5E9]/50";
 
@@ -1219,6 +1229,25 @@ function ConnectionSection({ site }: { site: SiteView }) {
                   <option value="manual">Copy &amp; Paste</option>
                 </select>
               </div>
+              {isGithub && hasGithubToken && repoChoices && repoChoices.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[12px] font-medium text-[#8A8F98]">Choose a repository</label>
+                  <select
+                    value={repoChoices.some((r) => r.owner === repoOwner && r.name === repoName) ? `${repoOwner}/${repoName}` : ""}
+                    onChange={(event) => {
+                      const choice = repoChoices.find((r) => `${r.owner}/${r.name}` === event.target.value);
+                      if (choice) { setRepoOwner(choice.owner); setRepoName(choice.name); }
+                    }}
+                    className={inputCls}
+                  >
+                    <option value="">Select the repository Pentra publishes to</option>
+                    {repoChoices.map((r) => (
+                      <option key={`${r.owner}/${r.name}`} value={`${r.owner}/${r.name}`}>{r.owner}/{r.name}{r.private ? " (private)" : ""}</option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-[#62666D]">Or type it below.</p>
+                </div>
+              )}
               {isGithub && (
                 <div className="grid grid-cols-2 gap-3">
                   <div className="flex flex-col gap-1.5">
@@ -1311,7 +1340,9 @@ function ConnectionSection({ site }: { site: SiteView }) {
                 <>
                   <Check className="h-4 w-4 text-[#22C55E]" />
                   <span className="flex-1 text-[12px] text-[#4ADE80]">GitHub connected</span>
-                  {!editing && <button onClick={handleVerify} disabled={saving} className="text-[11px] font-medium text-[#0EA5E9] disabled:opacity-50">{saving ? "Checking…" : "Verify repository"}</button>}
+                  {!editing && (site.repoOwner
+                    ? <button onClick={handleVerify} disabled={saving} className="text-[11px] font-medium text-[#0EA5E9] disabled:opacity-50">{saving ? "Checking…" : "Verify repository"}</button>
+                    : <button onClick={() => { setConnectionVerified(false); setEditing(true); }} className="text-[11px] font-medium text-[#0EA5E9]">Choose repository</button>)}
                   <button onClick={() => window.open("/api/github/auth?siteId=" + site._id, "github-oauth", "width=600,height=700,popup=yes")} className="text-[11px] text-[#62666D] hover:text-[#0EA5E9] transition">Reconnect</button>
                 </>
               ) : (

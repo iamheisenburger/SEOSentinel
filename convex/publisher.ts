@@ -88,6 +88,7 @@ import {
 import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
 import { accountDeletionKey } from "./lib/accountDeletion.ts";
 import { withUserFacingErrors } from "./lib/userError";
+import { pushableGithubRepositories, type GithubRepositoryChoice } from "./lib/githubRepositories";
 import {
   expectedPublisherDestinationReceipt,
   publisherAutopublishConsentCurrent,
@@ -1243,6 +1244,26 @@ export const verifyLegacyPublicationDestinationInternal = internalAction({
       return { verified: false as const, reason: failureCode };
     }
   },
+});
+
+/** The repositories the connected GitHub account can publish to, so the owner
+ * picks one instead of typing its owner and name (Phase 4, D3). Read-only;
+ * the token never leaves the server. */
+export const listGithubRepositories = action({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<GithubRepositoryChoice[]> => withUserFacingErrors(
+    "Pentra couldn't list your GitHub repositories. Reconnect GitHub and try again, or type the repository.",
+    async () => {
+      const site = await ctx.runQuery(internal.sites.getFull, { siteId });
+      const identity = await ctx.auth.getUserIdentity();
+      if (!site?.userId || !identity || identity.subject !== site.userId) throw new Error("Not authorized to read this site's GitHub connection");
+      if (!site.githubToken) throw new Error("Connect GitHub first");
+      const response = await fetch("https://api.github.com/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member", {
+        headers: { Authorization: `Bearer ${site.githubToken}`, Accept: "application/vnd.github+json" },
+      });
+      if (!response.ok) throw new Error(`GitHub repository list unavailable (HTTP ${response.status})`);
+      return pushableGithubRepositories(await response.json());
+    }),
 });
 
 export const verifyPublicationDestination = action({

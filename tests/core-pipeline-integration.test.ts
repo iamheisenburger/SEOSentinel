@@ -285,6 +285,9 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
         output: [{ type: "message", id: "synthetic-output", role: "assistant", status: "completed", content: [{ type: "output_text", text: output, annotations: citations }] }], usage: { input_tokens: 100, output_tokens: 100 } });
     }
     if (url.origin === "https://api.github.com") {
+      // The connected account's repositories (D3 repo picker): every synthetic tenant's site repository plus two it cannot use.
+      if (url.pathname === "/user/repos") return json([...[...repositories.keys()].map(owner => ({ name: "website", owner: { login: owner }, private: true, permissions: { push: true } })),
+        { name: "read-only-docs", owner: { login: "other" }, permissions: { push: false } }, { name: "old-blog", owner: { login: "other" }, archived: true, permissions: { push: true } }]);
       const match = url.pathname.match(/^\/repos\/([^/]+)\/website(.*)$/); assert.ok(match);
       const repo = repositories.get(match[1]); assert.ok(repo, "No cross-tenant repository access");
       const path = match[2], method = init.method ?? "GET", body = init.body ? JSON.parse(String(init.body)) : {};
@@ -8197,6 +8200,21 @@ test("P115 an internal processing failure never pauses an Autopilot site; the sc
   assert.ok(item?.parked, "the failure is history the schedule moved past");
   assert.notEqual(contentServiceStatus(ready).status, "failed", "the customer does not see a stopped service");
   assert.notEqual(f.get(site.id)!.contentSchedule.paused, true);
+  f.assertOffline();
+});
+
+// D3 (Phase 4, Oct 20 2026): after connecting GitHub the owner picks the
+// repository instead of typing owner and name. Read-only, owner only.
+test("D3 the GitHub repo picker lists publishable repositories for the site's owner only, with no write", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = f.sites[0], owner = f.get(site.id)!.userId, writes = f.repositories.get(site.name.toLowerCase())!.writes;
+  f.setIdentity(owner);
+  const repos = await f.invoke("publisher:listGithubRepositories", { siteId: site.id });
+  assert.deepEqual(repos, [{ owner: site.name.toLowerCase(), name: "website", private: true }]);
+  f.setIdentity("someone-else");
+  await assert.rejects(f.invoke("publisher:listGithubRepositories", { siteId: site.id }), /couldn't list your GitHub repositories|Not authorized/);
+  f.setIdentity(null);
+  assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, writes);
   f.assertOffline();
 });
 
