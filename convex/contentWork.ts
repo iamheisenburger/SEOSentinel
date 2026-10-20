@@ -942,6 +942,16 @@ export const selectServiceMode = mutation({
       // retain the existing job contract and are never exposed as a deadline.
       intervalMs: site.contentSchedule?.intervalMs ?? args.intervalMs ?? 86_400_000, nextDeadlineAt: site.contentSchedule?.nextDeadlineAt ?? args.firstDeadlineAt ?? Date.now(), timezone: site.contentSchedule?.timezone ?? timezone, active: false, paused: Boolean(args.ownerReviewedOnly),
     }, updatedAt: Date.now() });
+    // P128: start from the missed searches a free check found for this site,
+    // before the first article picks its topic; then one buyer-fit call judges
+    // them against the confirmed profile.
+    if (args.mode === "growth_first") {
+      const selected = await ctx.db.get(site._id);
+      const imported = selected ? await importFreeCheckTopics(ctx, selected) : 0;
+      if (imported > 0 && selected?.contentSchedule?.autopilotSelectedAt) {
+        await ctx.scheduler.runAfter(0, internal.actions.growthTopics.sweepBuyerFit, { siteId: site._id });
+      }
+    }
     if (!args.ownerReviewedOnly) await wake(ctx, site._id);
     return { changed: true };
   },
@@ -1708,6 +1718,63 @@ export const closeTopicResearchReservation = internalMutation({ args: { siteId: 
 
 /** Add researched keywords as planned topics: business-fit only, never a
  * duplicate of an existing topic, page or article intent. */
+type CandidateKeyword = { keyword: string; searchVolume: number; difficulty: number; difficultyMeasured: boolean;
+  source?: "search_console"; position?: number; fit?: { keep: boolean; reason: string } };
+/** Add measured keywords as planned topics through Autopilot's topic gates:
+ * search shape, the site's reach ceiling, no competitor names, business fit,
+ * a buyer-fit drop and no repeat of an existing topic, article or page.
+ * At most 15 per call; Search Console searches first, then by demand. */
+async function insertCandidateTopics(ctx: MutationCtx, site: Doc<"sites">, keywords: CandidateKeyword[], noteFor: (k: CandidateKeyword) => string) {
+  let inventory;
+  try { inventory = await eligiblePlannedTopics(ctx, site); } catch { return null; }
+  const siteId = site._id, signals = tenantTopicBusinessSignals(site);
+  // A keyword that repeats a published article or page could never be
+  // written, so it is not added (it would only take a research slot).
+  const taken: { primaryKeyword: string }[] = [...inventory.topics, ...inventory.pageCoverage];
+  let added = 0;
+  const skipped = { shape: 0, difficulty: 0, competitor: 0, fit: 0, buyerFit: 0, intent: 0 };
+  const profileHash = confirmedContentProfileHash(site);
+  // Searches the site already appears for come first: they are the nearest wins.
+  const fromSearchConsole = (k: { source?: string }) => Number(k.source === "search_console");
+  for (const k of [...keywords].sort((a, b) => fromSearchConsole(b) - fromSearchConsole(a) || b.searchVolume - a.searchVolume)) {
+    if (added >= 15) break;
+    const keyword = k.keyword.trim().toLowerCase().replace(/\s+/g, " ");
+    if (keyword.split(" ").length < 2 || keyword.length > 80) { skipped.shape++; continue; }
+    if (k.difficulty > siteDifficultyCeiling(site)) { skipped.difficulty++; continue; }
+    if (namesCompetitor(keyword, competitorNamesFor(site))) { skipped.competitor++; continue; }
+    const proposal = { primaryKeyword: keyword, label: keyword.replace(/^./, c => c.toUpperCase()) };
+    if (!evaluateTopicBusinessFit({ keyword, label: proposal.label, ...signals }).eligible) { skipped.fit++; continue; }
+    if (k.fit && !k.fit.keep) { skipped.buyerFit++; continue; }
+    if (taken.some(t => contentIntentConflicts(proposal, t))) { skipped.intent++; continue; }
+    await ctx.db.insert("topic_clusters", { siteId, ...proposal, planningCanonicalDomain: siteCanonicalDomain(site)!,
+      ...(k.fit ? { buyerFit: { eligible: true, reason: k.fit.reason.slice(0, 160), version: BUYER_FIT_VERSION, checkedAt: Date.now(), profileHash } } : {}),
+      planningDomainRevision: siteCanonicalDomainRevision(site), secondaryKeywords: [], intent: "informational",
+      priority: Math.max(1, Math.min(90, Math.round(Math.log10(1 + k.searchVolume) * 20 - k.difficulty / 5))), status: "planned",
+      searchVolume: k.searchVolume, keywordDifficulty: k.difficulty, keywordDifficultyMeasured: k.difficultyMeasured,
+      notes: noteFor(k), createdAt: Date.now(), updatedAt: Date.now() });
+    taken.push(proposal); added++;
+  }
+  return { added, skipped };
+}
+
+/** P128: a site set up after a free check (convex/freeCheck.ts) starts from the
+ * missed searches the check found for its domain: real demand, a difficulty a
+ * small site can win, no page for it at the time. They pass the same topic
+ * gates as research; only a current-logic result (version 3+) from the last
+ * 30 days is used. Returns how many topics were added. */
+const FREE_CHECK_IMPORT_MAX_AGE_MS = 30 * 86_400_000, FREE_CHECK_IMPORT_MIN_VERSION = 3;
+async function importFreeCheckTopics(ctx: MutationCtx, site: Doc<"sites">): Promise<number> {
+  const domain = (siteCanonicalDomain(site) ?? site.domain).toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "");
+  const check = await ctx.db.query("free_checks").withIndex("by_domain", q => q.eq("domain", domain)).first();
+  if (!check || check.status !== "done" || (check.version ?? 1) < FREE_CHECK_IMPORT_MIN_VERSION || !check.missed?.length ||
+    Date.now() - (check.completedAt ?? 0) > FREE_CHECK_IMPORT_MAX_AGE_MS) return 0;
+  const checked = new Date(check.completedAt!).toISOString().slice(0, 10);
+  const result = await insertCandidateTopics(ctx, site, check.missed.map(k => ({ keyword: k.keyword, searchVolume: k.searchVolume,
+    difficulty: k.difficulty, difficultyMeasured: true })), k =>
+    `From the free SEO check of ${domain} on ${checked}: about ${k.searchVolume} searches a month at difficulty ${k.difficulty}, and the site had no page for it. Use only supported business facts.`);
+  return result?.added ?? 0;
+}
+
 export const addResearchedTopics = internalMutation({ args: { siteId: v.id("sites"),
   keywords: v.array(v.object({ keyword: v.string(), searchVolume: v.number(), difficulty: v.number(), difficultyMeasured: v.boolean(),
     // Search Console: the site already appears for this search (volume = impressions in 28 days).
@@ -1720,38 +1787,11 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
   handler: async (ctx, { siteId, keywords, research }) => {
     const site = await ctx.db.get(siteId);
     if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return { added: 0 };
-    let inventory;
-    try { inventory = await eligiblePlannedTopics(ctx, site); } catch { return { added: 0 }; }
-    const signals = tenantTopicBusinessSignals(site);
-    // A keyword that repeats a published article or page could never be
-    // written, so it is not added (it would only take a research slot).
-    const taken: { primaryKeyword: string }[] = [...inventory.topics, ...inventory.pageCoverage];
-    let added = 0;
-    const skipped = { shape: 0, difficulty: 0, competitor: 0, fit: 0, buyerFit: 0, intent: 0 };
-    const profileHash = confirmedContentProfileHash(site);
-    // Searches the site already appears for come first: they are the nearest wins.
-    const fromSearchConsole = (k: { source?: string }) => Number(k.source === "search_console");
-    for (const k of [...keywords].sort((a, b) => fromSearchConsole(b) - fromSearchConsole(a) || b.searchVolume - a.searchVolume)) {
-      if (added >= 15) break;
-      const keyword = k.keyword.trim().toLowerCase().replace(/\s+/g, " ");
-      if (keyword.split(" ").length < 2 || keyword.length > 80) { skipped.shape++; continue; }
-      if (k.difficulty > siteDifficultyCeiling(site)) { skipped.difficulty++; continue; }
-      if (namesCompetitor(keyword, competitorNamesFor(site))) { skipped.competitor++; continue; }
-      const proposal = { primaryKeyword: keyword, label: keyword.replace(/^./, c => c.toUpperCase()) };
-      if (!evaluateTopicBusinessFit({ keyword, label: proposal.label, ...signals }).eligible) { skipped.fit++; continue; }
-      if (k.fit && !k.fit.keep) { skipped.buyerFit++; continue; }
-      if (taken.some(t => contentIntentConflicts(proposal, t))) { skipped.intent++; continue; }
-      await ctx.db.insert("topic_clusters", { siteId, ...proposal, planningCanonicalDomain: siteCanonicalDomain(site)!,
-        ...(k.fit ? { buyerFit: { eligible: true, reason: k.fit.reason.slice(0, 160), version: BUYER_FIT_VERSION, checkedAt: Date.now(), profileHash } } : {}),
-        planningDomainRevision: siteCanonicalDomainRevision(site), secondaryKeywords: [], intent: "informational",
-        priority: Math.max(1, Math.min(90, Math.round(Math.log10(1 + k.searchVolume) * 20 - k.difficulty / 5))), status: "planned",
-        searchVolume: k.searchVolume, keywordDifficulty: k.difficulty, keywordDifficultyMeasured: k.difficultyMeasured,
-        notes: k.source === "search_console"
-          ? `Search Console: this site was shown ${k.searchVolume} times in 28 days for this search${typeof k.position === "number" ? ` at average position ${k.position}` : ""}, with no article of its own. Use only supported business facts.`
-          : "Researched keyword (search demand from DataForSEO) for the confirmed business. Use only supported business facts.",
-        createdAt: Date.now(), updatedAt: Date.now() });
-      taken.push(proposal); added++;
-    }
+    const result = await insertCandidateTopics(ctx, site, keywords, k => k.source === "search_console"
+      ? `Search Console: this site was shown ${k.searchVolume} times in 28 days for this search${typeof k.position === "number" ? ` at average position ${k.position}` : ""}, with no article of its own. Use only supported business facts.`
+      : "Researched keyword (search demand from DataForSEO) for the confirmed business. Use only supported business facts.");
+    if (!result) return { added: 0 };
+    const { added, skipped } = result;
     // Record the outcome (an empty result backs off) and let a waiting slot continue either way.
     const receipt = { at: Date.now(), seeds: research?.seeds ?? [], searchConsole: research?.searchConsole ?? 0,
       ...(research?.discovered !== undefined ? { discovered: research.discovered, excludedKnown: research.excludedKnown ?? 0,

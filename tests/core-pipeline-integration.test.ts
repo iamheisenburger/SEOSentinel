@@ -8323,6 +8323,35 @@ test("D4 the owner gets last month's report once, on the 3rd", async () => {
   f.assertOffline();
 });
 
+// P128 (Oct 20 2026): a site set up after a free check starts from the missed
+// searches the check found for it, through the same topic gates as research.
+test("F1 a site set up after a free check starts from the missed searches it found", async () => {
+  // The second search repeats the first; the third is past the site's reach.
+  const freshCheck = (f: ReturnType<typeof setup>, version: number, completedAt: number) => f.add("free_checks", { domain: f.sites[0].domain,
+    status: "done", version, requestedAt: completedAt - 60_000, completedAt, missed: [
+      { keyword: "irrigation maintenance checklist template", searchVolume: 320, difficulty: 18 },
+      { keyword: "Irrigation  maintenance checklist TEMPLATE", searchVolume: 210, difficulty: 12 },
+      { keyword: "irrigation maintenance scheduling app", searchVolume: 170, difficulty: 52 },
+    ] });
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  freshCheck(f, 3, START - 3_600_000);
+  await selectGrowth(f);
+  const imported = f.tables.topic_clusters.filter(t => String(t.notes ?? "").startsWith("From the free SEO check"));
+  assert.deepEqual(imported.map(t => t.primaryKeyword), ["irrigation maintenance checklist template"],
+    "a repeated intent and a difficulty past the site's reach are not added");
+  assert.equal(imported[0].searchVolume, 320); assert.equal(imported[0].keywordDifficulty, 18); assert.equal(imported[0].status, "planned");
+  assert.match(String(imported[0].notes), new RegExp(`^From the free SEO check of ${f.sites[0].domain.replace(/\./g, "\\.")} on \\d{4}-\\d{2}-\\d{2}: about 320 searches a month at difficulty 18`));
+  for (const [version, completedAt] of [[2, START - 3_600_000], [3, START - 31 * 86_400_000]] as const) {
+    const other = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    freshCheck(other, version, completedAt);
+    await selectGrowth(other);
+    assert.equal(other.tables.topic_clusters.filter(t => String(t.notes ?? "").startsWith("From the free SEO check")).length, 0,
+      version < 3 ? "a result from older check logic is not used" : "a check older than 30 days is not used");
+    other.assertOffline();
+  }
+  f.assertOffline();
+});
+
 // A5 (Oct 19 2026): Anthropic credit was out for 9 days and X credit for 3
 // with no alert; Telegram now belongs to the X reply system, so operator
 // alerts go by email once RESEND_API_KEY and PENTRA_ALERT_EMAIL_TO are set.
