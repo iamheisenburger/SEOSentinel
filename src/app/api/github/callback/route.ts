@@ -83,15 +83,16 @@ export async function GET(req: NextRequest) {
     }
   } catch { /* non-critical */ }
 
-  let saved = false;
+  let saved = false, needsRepository = false;
   let saveError = "GitHub authorization succeeded, but the repository connection was not saved.";
   if (siteId) {
     try {
-      await callPentraInternal("/internal/oauth/github", {
+      const result = (await callPentraInternal("/internal/oauth/github", {
         siteId,
         githubToken: accessToken,
-      });
+      })) as { ok?: boolean; needsRepository?: boolean } | undefined;
       saved = true;
+      needsRepository = result?.needsRepository === true;
     } catch (e) {
       console.error("Failed to save GitHub token to Convex:", e);
       saveError = e instanceof Error ? e.message : saveError;
@@ -100,7 +101,7 @@ export async function GET(req: NextRequest) {
     saveError = "The GitHub connection is missing its Pentra site identifier.";
   }
 
-  const msg = saved ? "Connected to GitHub!" : saveError;
+  const msg = !saved ? saveError : needsRepository ? "Connected to GitHub. Now choose the repository Pentra publishes to." : "Connected to GitHub!";
 
   const response = new NextResponse(renderPage(msg, saved, githubUsername, saved), {
     status: saved ? 200 : 400,

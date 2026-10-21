@@ -50,6 +50,7 @@ import {
 import { SetupReadiness } from "@/components/onboarding/setup-readiness";
 import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 import { userErrorMessage } from "@/lib/user-error";
+import { githubContentFolder } from "@/lib/content-setup";
 
 type Tab = "overview" | "articles" | "settings";
 type SiteView = NonNullable<FunctionReturnType<typeof api.sites.get>>;
@@ -819,6 +820,20 @@ function SettingsTab({
   const cadenceMonthlyCost = requiredMonthlyArticlesForCadence(cadence);
   // Growth-first saves never send cadence, so it cannot block them.
   const saveBlocked = !growthFirst && !cadenceValid;
+  // While a new site is being set up, connecting it is the one step left: show
+  // that alone (the first outside new-user run landed on every setting at once).
+  const [showAllSettings, setShowAllSettings] = useState(false);
+  const settingUp = Boolean(site.contentSetupRequestedAt && !site.serviceMode && site.publishMethod !== "manual");
+  if (settingUp && !showAllSettings) {
+    return (
+      <div className="flex flex-col gap-4">
+        <ConnectionSection site={site} />
+        <button type="button" onClick={() => setShowAllSettings(true)} className="self-start text-[12px] text-[#8A8F98] transition hover:text-[#F7F8F8]">
+          Show all settings (tone, language, brand). They&apos;re optional and you can change them any time.
+        </button>
+      </div>
+    );
+  }
   const showSyndicationNotice =
     !growthFirst && Boolean(site.mediumConnected || site.linkedinConnected);
 
@@ -1121,10 +1136,24 @@ function ConnectionSection({ site }: { site: SiteView }) {
   const isManual = method === "manual";
   const isHosted = isApiCmsMethod(method);
   const hostedAllowed = fullManagedBetaEnabled || contentWordPress;
-  const hasGithubToken = !!site.githubConnected;
+  // Signed in to GitHub (the repository may not be chosen yet; choosing it verifies it).
+  const hasGithubToken = !!(site.githubConnected || site.githubAuthorized);
   // After GitHub is connected, the owner picks a repository it can publish to
   // instead of typing its owner and name (Phase 4, D3). Typing still works.
   const [repoChoices, setRepoChoices] = useState<FunctionReturnType<typeof api.publisher.listGithubRepositories> | null>(null);
+  // Connect opens GitHub in a small window; a blocked window used to fail with no message.
+  const connectGithub = () => {
+    setConnectionError(null);
+    const popup = window.open("/api/github/auth?siteId=" + site._id, "github-oauth", "width=600,height=700,popup=yes");
+    if (!popup) setConnectionError("Your browser blocked the GitHub window. Allow pop-ups for pentra.dev, then click Connect again.");
+  };
+  // Connected but no repository yet: open the repository list straight away.
+  const [repoPrompted, setRepoPrompted] = useState(false);
+  useEffect(() => {
+    if (!isGithub || !hasGithubToken || site.repoOwner || editing || repoPrompted) return;
+    setRepoPrompted(true);
+    setEditing(true);
+  }, [isGithub, hasGithubToken, site.repoOwner, editing, repoPrompted]);
   useEffect(() => {
     if (!editing || !isGithub || !hasGithubToken || repoChoices) return;
     let live = true;
@@ -1194,7 +1223,10 @@ function ConnectionSection({ site }: { site: SiteView }) {
             <div className="flex-1">
               <p className="text-[14px] font-medium text-[#F7F8F8]">{labels[method] || method}</p>
               {isGithub && site.repoOwner && !editing && (
-                <p className="text-[12px] text-[#62666D] font-mono">{site.repoOwner}/{site.repoName}</p>
+                <>
+                  <p className="text-[12px] text-[#62666D] font-mono">{site.repoOwner}/{site.repoName}</p>
+                  <p className="text-[11px] text-[#62666D]">Articles are saved as Markdown files in <span className="font-mono">{githubContentFolder(site.urlStructure)}/</span>{site.repoDefaultBranch ? <> on <span className="font-mono">{site.repoDefaultBranch}</span></> : null}.</p>
+                </>
               )}
               {isWp && site.wpUrl && !editing && (
                 <p className="text-[12px] text-[#62666D]">{site.wpUrl}</p>
@@ -1343,13 +1375,13 @@ function ConnectionSection({ site }: { site: SiteView }) {
                   {!editing && (site.repoOwner
                     ? <button onClick={handleVerify} disabled={saving} className="text-[11px] font-medium text-[#0EA5E9] disabled:opacity-50">{saving ? "Checking…" : "Verify repository"}</button>
                     : <button onClick={() => { setConnectionVerified(false); setEditing(true); }} className="text-[11px] font-medium text-[#0EA5E9]">Choose repository</button>)}
-                  <button onClick={() => window.open("/api/github/auth?siteId=" + site._id, "github-oauth", "width=600,height=700,popup=yes")} className="text-[11px] text-[#62666D] hover:text-[#0EA5E9] transition">Reconnect</button>
+                  <button onClick={connectGithub} className="text-[11px] text-[#62666D] hover:text-[#0EA5E9] transition">Reconnect</button>
                 </>
               ) : (
                 <>
                   <KeyRound className="h-4 w-4 text-[#F59E0B]" />
                   <span className="flex-1 text-[12px] text-[#FBBF24]">GitHub not connected</span>
-                  <button onClick={() => window.open("/api/github/auth?siteId=" + site._id, "github-oauth", "width=600,height=700,popup=yes")} className="text-[11px] font-medium text-[#0EA5E9] hover:text-[#38BDF8] transition">Connect</button>
+                  <button onClick={connectGithub} className="text-[11px] font-medium text-[#0EA5E9] hover:text-[#38BDF8] transition">Connect</button>
                 </>
               )}
             </div>

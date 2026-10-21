@@ -743,10 +743,13 @@ http.route({
       );
     }
     if (!repoOwner || !repoName) {
-      return json(
-        { error: "Save the GitHub owner and repository before connecting" },
-        409,
-      );
+      // Connected first; the owner then chooses the repository from a list.
+      try {
+        await ctx.runMutation(internal.sites.setGithubTokenOnlyInternal, { siteId, githubToken: body.githubToken });
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : "GitHub connection could not be saved" }, 409);
+      }
+      return json({ ok: true, needsRepository: true });
     }
 
     let repositoryResponse: Response;

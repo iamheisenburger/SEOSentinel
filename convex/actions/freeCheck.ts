@@ -41,7 +41,7 @@ type Diagnostics = { seedSource: "model" | "homepage"; seeds: string[]; topics?:
  * homepage and the site's sections (convex/lib/missedSearches.ts
  * searchSeedRequest). Throws when no usable answer came back; the caller then
  * counts the call's ceiling. */
-async function proposeSeeds(domain: string, html: string, questions: string[], brands: string[], sections: string[]) {
+export async function proposeSeeds(domain: string, html: string, questions: string[], brands: string[], sections: string[]) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
   const model = process.env.TOPIC_FIT_MODEL ?? BUYER_FIT_MODEL;

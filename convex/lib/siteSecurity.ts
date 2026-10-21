@@ -21,6 +21,8 @@ const SECRET_FIELDS = new Set<string>(SECRET_FIELD_NAMES);
 
 type SiteConnectionFlags = {
   githubConnected: boolean;
+  /** GitHub signed in, repository maybe not chosen yet (the picker needs it). */
+  githubAuthorized: boolean;
   wordpressConfigured: boolean;
   webhookConfigured: boolean;
   webhookSecretConfigured: boolean;
@@ -71,6 +73,7 @@ export function sanitizeSiteForClient<T extends SiteRecord>(
     // actual default branch must have been discovered through the trusted
     // GitHub connection flow and persisted with it.
     githubConnected: Boolean(site.githubToken && site.repoDefaultBranch),
+    githubAuthorized: Boolean(site.githubToken),
     wordpressConfigured: Boolean(
       site.wpUrl && site.wpUsername && site.wpAppPassword,
     ),

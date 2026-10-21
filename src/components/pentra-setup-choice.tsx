@@ -9,6 +9,7 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { PUBLISHER_AUTOPUBLISH_CONSENT_TEXT } from "../../convex/lib/publisherProvisioning";
 import { isApiCmsMethod } from "../../convex/lib/cmsDestinations";
+import { pacesFor } from "@/lib/content-setup";
 
 type SetupState = {
   siteId: Id<"sites">;
@@ -83,8 +84,6 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
 }
 
 /** Autopilot on/off for sites set up through the new flow. */
-const PACES = [1, 2, 4, 7, 14, 21];
-
 export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAvailable = true, paused = false, cadencePerWeek = null, articlesPerMonth = null }:
   { siteId: Id<"sites">; reviewToken: string; on: boolean; intervalMs: number; reviewAvailable?: boolean; paused?: boolean;
     cadencePerWeek?: number | null; articlesPerMonth?: number | null }) {
@@ -115,7 +114,7 @@ export function AutopilotSwitch({ siteId, reviewToken, on, intervalMs, reviewAva
           finally { setBusy(false); }
         }}>
         {!cadencePerWeek && <option value="">Plan default</option>}
-        {PACES.map(n => <option key={n} value={n}>{n} a week</option>)}
+        {pacesFor(articlesPerMonth, cadencePerWeek).map(n => <option key={n} value={n}>{n} a week</option>)}
       </select>
       <span className="text-[12px] text-[#62666D]">Applies from the next article not yet prepared.</span>
     </label>}

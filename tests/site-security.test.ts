@@ -65,4 +65,8 @@ test("a GitHub token without a discovered default branch is not connected", () =
   });
 
   assert.equal(sanitized.githubConnected, false);
+  // Signed in to GitHub, though: the owner can now choose the repository from a list (Oct 21 2026).
+  assert.equal(sanitized.githubAuthorized, true);
+  assert.ok(!JSON.stringify(sanitized).includes("github-secret"), "the token itself never reaches the browser");
+  assert.equal(sanitizeSiteForClient({ domain: "example.com" }).githubAuthorized, false);
 });

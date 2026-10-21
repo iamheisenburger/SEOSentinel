@@ -7289,6 +7289,42 @@ export const setGithubTokenInternal = internalMutation({
   },
 });
 
+/** Connect GitHub before choosing a repository (Oct 21 2026). A new owner has
+ * no repository saved yet, and the connection used to be refused without one,
+ * so "Connect" failed silently and the repository picker (shown only once
+ * GitHub is connected) never appeared: the first outside new-user run had to
+ * type the owner and repository by hand. The token is kept; the repository is
+ * verified when the owner chooses it (publisher.verifyPublicationDestination
+ * reads its default branch and calls setGithubTokenInternal). */
+export const setGithubTokenOnlyInternal = internalMutation({
+  args: { siteId: v.id("sites"), githubToken: v.string() },
+  handler: async (ctx, { siteId, githubToken }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site || !(await siteExecutionAuthorized(ctx, site))) {
+      throw new Error("Site not found");
+    }
+    if (safeGitHubRepositoryPart(site.repoOwner, "owner") || safeGitHubRepositoryPart(site.repoName, "repository name")) {
+      throw new Error("This website already has a GitHub repository saved; connect again to verify it");
+    }
+    if (site.githubToken === githubToken) return { connected: true };
+    await assertConfigUnlocked(ctx, site);
+    await cancelAutonomousJobsForEpochTransition(ctx, siteId, "GitHub connection changed");
+    await ctx.db.patch(site._id, {
+      githubToken,
+      repoDefaultBranch: undefined,
+      autopilotRolloutMode: "observe" as const,
+      autopilotRolloutEpoch: (site.autopilotRolloutEpoch ?? 0) + 1,
+      publicationAdapterVerifiedAt: undefined,
+      publicationAdapterVersion: undefined,
+      publicationAdapterConfigHash: undefined,
+      ...publisherConnectionInvalidationPatch(site, true),
+      updatedAt: now(),
+    });
+    await scheduleManagedPublisherResume(ctx, site._id, true);
+    return { connected: true };
+  },
+});
+
 // Set Google Search Console OAuth tokens via HTTP API
 export const setGscTokenInternal = internalMutation({
   args: {
