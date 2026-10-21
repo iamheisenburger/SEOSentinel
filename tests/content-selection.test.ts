@@ -21,6 +21,19 @@ test("selected source rejects executable MDX, custom frontmatter/layouts, ambigu
   }
   assert.equal(selectedGitHubPath(site as never, "content/blog/guide.mdx"), "guide");
 });
+// P143 (Oct 21 2026): the read-back rejected `<h1>` or `{}` even inside code, so an SEO article that names a
+// tag in code could never be enrolled for improvement.
+test("selected source treats code spans and blocks as text, and still rejects MDX in the prose", () => {
+  const url = "https://tenant.example/blog/guide";
+  const inCode = raw + "\n\nGive every page one `<h1>` and keep `{}` out of titles.\n\n```js\nimport x from \"y\";\nconst page = { title: \"<h1>\" };\n```\n\nDone.";
+  assert.equal(parseSelectedMarkdown(inCode, url).title, "Useful customer guidance");
+  for (const content of [inCode + "\n\nAn <h1> in the prose.", inCode + "\n\nA {value} in the prose.", inCode + "\n\nA <b in the prose",
+    raw + "\n\nA template `{{ site.title }}` still runs in Liquid.", raw + "\n\nOne ` unmatched backtick then {danger}"]) {
+    assert.throws(() => parseSelectedMarkdown(content, url), content.slice(-40));
+  }
+  const base = { title: "Guide", markdown: "Use one `<h1>` per page and confirm it in your template." };
+  assert.ok(assertSafeImprovement(base, { ...base, markdown: base.markdown + "\n\n" + "Useful supported additional guidance ".repeat(15) }));
+});
 test("pricing, checkout/legal and explicitly protected pages cannot be selected", () => {
   for (const slug of ["pricing", "checkout", "privacy-policy", "terms-of-service", "legal"]) assert.throws(() => assertUnprotectedPage(slug, "Page", raw));
   assert.throws(() => assertUnprotectedPage("guide", "Guide", raw + "\npentra-protected: true"));

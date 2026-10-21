@@ -1172,8 +1172,11 @@ const QUANTIFIED_OUTCOME_PATTERN =
 const EVIDENCE_REQUIRED_NUMBER_PATTERN =
   /(?:\$\s?\d[\d,]*(?:\.\d+)?(?:\s*(?:[-–]|to)\s*\$?\d[\d,]*(?:\.\d+)?)?|\b\d[\d,]*(?:\.\d+)?(?:\s*(?:[-–]|to)\s*\d[\d,]*(?:\.\d+)?)?\s*\+?\s*(?:%|x|[-‑–— ]?(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?|questions?|conversations?|orders?|customers?|users?|visitors?|leads?|calls?|employees?|responses?|messages?|sessions?|articles?|posts?|points?|scores?))|\b\d+(?:\s*\/\s*\d+)+\s*(?:points?|scores?)\b|\b(?:above|below|under|over|at\s+least|at\s+most|more\s+than|fewer\s+than)\s+\d+(?:\.\d+)?\b)(?![\w])/i;
 const EXTERNAL_LINK_PATTERN = /\[[^\]]+\]\(https:\/\/[^)]+\)|https:\/\/\S+/;
+// Quantifiers that can't end a sentence (P143, Oct 21 2026: a 155-character
+// cut left pentra.dev's snippet "...your own Search Console data over several.").
+// "more", "each", "all" and "both" can ("...and more."), so they are not here.
 const DANGLING_META_END_PATTERN =
-  /\b(?:a|about|across|after|an|and|as|at|before|by|for|from|in|into|of|on|or|over|the|through|to|toward|towards|under|via|while|with|without|which|that|your|our|their|its|my|whether|than|because|although|unless|if)$/i;
+  /\b(?:a|about|across|after|an|and|as|at|before|by|for|from|in|into|of|on|or|over|the|through|to|toward|towards|under|via|while|with|without|which|that|your|our|their|its|my|whether|than|because|although|unless|if|several|various|multiple|numerous|certain|every)$/i;
 /** Where an over-long meta description is cut: its last sentence end, else
  * its last clause break, at or after `minLength` (the strict gate's snippet
  * floor) and inside `window`. -1 when there is none. */

@@ -451,6 +451,22 @@ test("strict publication rejects metadata cut off after a transitive verb", () =
   );
 });
 
+// P143 (Oct 21 2026): a 155-character cut dropped the noun after a quantifier, leaving pentra.dev's draft snippet
+// "...using your own Search Console data over several."
+test("a cut meta description never ends on a quantifier that needs its noun", () => {
+  assert.equal(
+    clampMetaDescription("I suggest setting blog frequency from topic supply, fact-checking time and page upkeep, then adjusting it using your own Search Console data over several weeks."),
+    "I suggest setting blog frequency from topic supply, fact-checking time and page upkeep, then adjusting it using your own Search Console data.",
+  );
+  assert.equal(clampMetaDescription("Compare the three plans side by side, see what each includes, and choose the one that fits your team today and more."),
+    "Compare the three plans side by side, see what each includes, and choose the one that fits your team today and more.", "\"...and more.\" is complete");
+  const base = { title: "Blog frequency", markdown: `# Blog frequency\n\n${body}`, metaTitle: "How Often Should a Small Business Blog?", wordCount: 960,
+    factCheckScore: 90, editorialQualityScore: 90, mediaQualityStatus: "passed" as const, featuredImage: "https://example.com/reviewed.jpg",
+    reviewedMediaUrls: ["https://example.com/reviewed.jpg"], claimEvidenceStatus: "passed" as const };
+  const cut = evaluatePublicationQuality({ ...base, metaDescription: "I suggest setting blog frequency from topic supply, fact-checking time and page upkeep, then adjusting it using your own Search Console data over several." }, "strict");
+  assert.ok(cut.issues.includes("Meta description ends with a dangling or incomplete phrase."), JSON.stringify(cut.issues));
+});
+
 test("metadata clamping drops an incomplete generated final sentence", () => {
   assert.equal(
     clampMetaDescription(

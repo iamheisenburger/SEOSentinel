@@ -1,7 +1,7 @@
 import type { Doc } from "../_generated/dataModel";
 import { publicationAdapterConfigHash, publicationDeliveryConfig, sha256Hex } from "./publicationArtifact.ts";
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./siteDomainBinding.ts";
-import { containsExecutableMdx, evidenceRequiredParagraphs, STRICT_PUBLICATION_MIN_WORDS, articleWordCeiling } from "./articleQuality.ts";
+import { containsExecutableMdx, evidenceRequiredParagraphs, markdownOutsideCode, STRICT_PUBLICATION_MIN_WORDS, articleWordCeiling } from "./articleQuality.ts";
 import { publishedArticlePublicUrl } from "./publicationLive.ts";
 import { cmsConnectionComplete, isApiCmsMethod } from "./cmsDestinations.ts";
 import { renderSafePublicationHtml } from "./safeMarkdownHtml.ts";
@@ -211,8 +211,11 @@ export function parseSelectedMarkdown(raw: string, expectedUrl: string) {
   }
   const markdown = match[3].trim();
   assertSafePublishableMarkdown(markdown);
-  // Reject MDX execution/custom components before consent is accepted.
-  if (/[{}]|^\s*(?:import|export)\s/m.test(markdown) || /<\/?[A-Za-z]/.test(markdown)) throw new Error("Executable/custom MDX is unsupported");
+  // Reject MDX execution/custom components before consent is accepted. Code
+  // spans and blocks render literally, so `<h1>` or `{}` inside them is text:
+  // pentra.dev's SEO articles name tags in code and could never be enrolled
+  // for improvement (Oct 20 2026). Template-engine code stays blocked above.
+  if (proseRunsMdx(markdown)) throw new Error("Executable/custom MDX is unsupported");
   return { header: match[1], markdown, title: fields.title, metaTitle: fields.metaTitle ?? fields.title,
     description: fields.description ?? "", content: raw };
 }
@@ -257,6 +260,13 @@ export function assertSafeImprovement(base: { title: string; markdown: string },
   const added = next.markdown.trim().slice(original.length).trim();
   if (added.split(/\s+/).length < 40 || original.includes(added)) throw new Error("Monitoring/no-op is not a completed improvement");
   assertSafePublishableMarkdown(next.markdown);
-  if (/[{}]|^\s*(?:import|export)\s/m.test(next.markdown) || /<\/?[A-Za-z]/.test(next.markdown)) throw new Error("Unsupported improvement rendering");
+  if (proseRunsMdx(next.markdown)) throw new Error("Unsupported improvement rendering");
   return added;
+}
+
+/** Braces, import/export lines or any tag opening in the prose (outside code
+ * spans and fenced blocks), where MDX would run or fail to build them. */
+function proseRunsMdx(markdown: string): boolean {
+  const { prose } = markdownOutsideCode(markdown);
+  return /[{}]|^\s*(?:import|export)\s/m.test(prose) || /<\/?[A-Za-z]/.test(prose);
 }
