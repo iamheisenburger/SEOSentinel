@@ -4631,6 +4631,28 @@ test("P105 Autopilot writes only searches the business can serve", async t => {
 
 // P140 (Oct 21 2026): pentra.dev's ready draft repeated a live page; the
 // duplicate check missed "should" and "posts".
+// P152 (Oct 21 2026): waiting articles were sealed under the checks of their day; the Compost Notes test site's next two
+// were written before P149's source-talk check.
+test("P152 a waiting article that fails a reader check added since it was sealed is replaced before its slot", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+  const site = await selectGrowth(f, 8 * 3_600_000);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const waiting = () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready" && j.contentWork.retiredAt === undefined);
+  await pumpUntil(f, () => waiting().length === 2);
+  const [stale, sound] = waiting();
+  const staleArticle = f.get(stale.articleId)!, topicId = stale.payload.topicId;
+  staleArticle.markdown = String(staleArticle.markdown).replace(/\n\n## /, "\n\nThese are practical suggestions, not figures from the sources.\n\n## ");
+  assert.deepEqual(await f.invoke("contentWork:retireDuplicateReadyWork", { siteId: site.id }), { retired: 1 });
+  const retired = f.get(stale._id)!;
+  assert.equal(retired.status, "failed"); assert.equal(retired.contentWork.failure, "reader_visible_defect");
+  assert.notEqual(f.get(staleArticle._id)!.status, "ready", "held back, never published");
+  assert.equal(f.get(topicId)!.status, "planned", "a sound topic goes back to the plan");
+  assert.equal(f.get(sound._id)!.contentWork.stage, "ready", "a clean waiting article stays");
+  assert.deepEqual(await f.invoke("contentWork:retireDuplicateReadyWork", { siteId: site.id }), { retired: 0 });
+  await pumpUntil(f, () => waiting().length === 2);
+  f.assertOffline();
+});
+
 test("P140 near-identical questions are one intent, and a waiting article that repeats a live page is replaced before its slot", async () => {
   const { contentIntentConflicts } = await import("../convex/lib/autopilotBuffer.ts");
   assert.ok(contentIntentConflicts({ primaryKeyword: "how often small business publish blog" },

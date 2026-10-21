@@ -31,7 +31,7 @@ import { authorizedWorkPage, chooseImprovement, contentWorkConnection, enrollVer
 import { noteFirstArticleLive } from "./customerEmails";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes } from "./articles";
-import { AUTOPILOT_ACCEPTANCE, ownerWaivableIssue } from "./lib/articleQuality";
+import { AUTOPILOT_ACCEPTANCE, ownerWaivableIssue, readerVisibleIssues } from "./lib/articleQuality";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
 import { auditResultHash, clarifiableContentAudit, inconsistentAuditFeedback, internalContentProcessingError, retainedContradictoryContentAudit, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 import { contentJobUsesAllowance } from "./lib/contentUsage";
@@ -88,6 +88,8 @@ const AUTOPILOT_SKIPPABLE_FAILURES = new Set(["bounded_content_quality_exhausted
   "content_provider_unavailable",
   // The article repeats a page the site already has (P140): it is held back and the slot gets a new topic.
   "duplicate_intent",
+  // A waiting article fails a reader-visible check added after it was sealed (P152): held back, the slot gets a new article.
+  "reader_visible_defect",
   // The provider refused for lack of credit (a verified refusal receipt, nothing published). Oct 5-14 2026 one such
   // slot froze both owner sites for nine days after the credit was restored; the refused job keeps its receipt and
   // hold exactly as recorded, and the schedule moves on.
@@ -1706,17 +1708,25 @@ export const retireDuplicateReadyWork = internalMutation({ args: { siteId: v.id(
   for (const job of ready) {
     const topicId = (job.payload as { topicId?: Id<"topic_clusters"> } | undefined)?.topicId;
     const topic = topicId ? await ctx.db.get(topicId) : null;
-    if (!topic || topic.siteId !== siteId || !liveIntents.some(page => contentIntentConflicts({ primaryKeyword: topic.primaryKeyword }, page))) continue;
     const article = job.articleId ? await ctx.db.get(job.articleId) : null;
+    const duplicate = Boolean(topic && topic.siteId === siteId && liveIntents.some(page => contentIntentConflicts({ primaryKeyword: topic.primaryKeyword }, page)));
+    // P152 (Oct 21 2026): a waiting article was sealed under the checks of its
+    // day; one that fails a reader-visible check added since (P149's source
+    // talk, found on the Compost Notes test site) is held back before its slot.
+    const defects = !duplicate && article && article.siteId === siteId ? readerVisibleIssues(article) : [];
+    if (!duplicate && defects.length === 0) continue;
     if (article && article.status !== "published" && !article.publicationLeaseOwner && !article.publicationAttemptedAt) {
-      await quarantineUnpublishedArticle(ctx, article._id, ["Repeats a page this site already has, so it was held back and the slot got a new topic."]);
+      await quarantineUnpublishedArticle(ctx, article._id, duplicate ? ["Repeats a page this site already has, so it was held back and the slot got a new topic."]
+        : ["It fails a reader check added after it was written, so it was held back and the slot got a new article.", ...defects.slice(0, 3)]);
     } else if (article) continue;
     await ctx.db.patch(job._id, { status: "failed", nextAttemptAt: undefined, workerToken: undefined, heartbeatAt: undefined, leaseExpiresAt: undefined,
-      contentWork: { ...job.contentWork!, stage: "failed", failure: "duplicate_intent" }, updatedAt: Date.now() });
+      contentWork: { ...job.contentWork!, stage: "failed", failure: duplicate ? "duplicate_intent" : "reader_visible_defect" }, updatedAt: Date.now() });
     // Never published, so it uses none of the month's allowance (an exact recount follows).
     if (countsTowardMonthlyUsage(job, usageMonthBounds().monthStart)) await refreshAccountUsage(ctx, site, -1);
-    if (!planCheckpointTopicExecutionLocked(topic)) {
-      await ctx.db.patch(topic._id, { status: "disqualified", disqualifiedReason: "Repeats a page the site already has.", updatedAt: Date.now() });
+    if (topic && topic.siteId === siteId && !planCheckpointTopicExecutionLocked(topic)) {
+      // A repeated search is covered; a sound topic goes back to the plan to be written again.
+      await ctx.db.patch(topic._id, duplicate ? { status: "disqualified", disqualifiedReason: "Repeats a page the site already has.", updatedAt: Date.now() }
+        : { status: "planned", updatedAt: Date.now() });
     }
     retired++;
   }
