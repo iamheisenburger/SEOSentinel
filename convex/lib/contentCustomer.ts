@@ -10,6 +10,7 @@ import { internalContentProcessingError } from "./contentAudit";
 export function contentIssue(reason?: string) {
   if (!reason) return null;
   if (reason === "owner_rejected_draft") return "You declined this draft. It will not publish. You can request a new draft; previous work and spending remain recorded.";
+  if (reason === "duplicate_intent") return "This draft repeated a page your site already has, so it wasn't published: two pages on one search compete with each other. Pentra wrote this slot about a new topic instead.";
   if (reason === "owner_edited_draft") return "A separately reviewed edit replaces this draft. The original content and spending remain in history.";
   if (reason === "bounded_content_quality_exhausted") return "Your draft is ready for your review. Open it to see the reviewer's notes: if only style notes remain you can accept them and publish; otherwise fix the flagged points and request review. Nothing was published.";
   if (reason === "content_provider_unavailable") return "The writing service was busy through every retry. Nothing was written or published; Autopilot tries again automatically and the missed slot stays on record.";

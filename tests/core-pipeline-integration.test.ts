@@ -4513,6 +4513,48 @@ test("P105 Autopilot writes only searches the business can serve", async t => {
   });
 });
 
+// P140 (Oct 21 2026): pentra.dev's ready draft repeated a live page; the
+// duplicate check missed "should" and "posts".
+test("P140 near-identical questions are one intent, and a waiting article that repeats a live page is replaced before its slot", async () => {
+  const { contentIntentConflicts } = await import("../convex/lib/autopilotBuffer.ts");
+  assert.ok(contentIntentConflicts({ primaryKeyword: "how often small business publish blog" },
+    { primaryKeyword: "How Often Should a Small Business Publish Blog Posts?" }), "question filler and plurals don't make a new intent");
+  assert.ok(!contentIntentConflicts({ primaryKeyword: "how to choose blog topics" }, { primaryKeyword: "How Often Should a Small Business Publish Blog Posts?" }));
+  assert.ok(!contentIntentConflicts({ primaryKeyword: "business analysis process" }, { primaryKeyword: "business status update" }), "business/status/analysis keep their s");
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+  const site = await selectGrowth(f, 8 * 3_600_000);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const waiting = () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready" && j.contentWork.retiredAt === undefined);
+  await pumpUntil(f, () => waiting().length === 2);
+  // The newest draft (the later slot) repeats a live page, as on pentra.dev.
+  const [other, repeat] = waiting().sort((a, b) => a.contentWork.deadlineAt - b.contentWork.deadlineAt);
+  const repeatTopic = f.get(repeat.payload.topicId)!;
+  const usage = () => f.tables.account_content_usage?.find(row => row.userId === f.get(site.id)!.userId)?.used as number | undefined;
+  const used = usage();
+  // The site already has a live page answering the same question.
+  f.add("article_summaries", { articleId: "articles:synthetic-live-page", siteId: site.id, status: "published", slug: "already-live",
+    title: repeatTopic.primaryKeyword.replace(/^./, (c: string) => c.toUpperCase()) + "?" });
+  assert.deepEqual(await f.invoke("contentWork:retireDuplicateReadyWork", { siteId: site.id }), { retired: 1 });
+  const held = f.get(repeat._id)!;
+  assert.equal(held.status, "failed"); assert.equal(held.contentWork.stage, "failed"); assert.equal(held.contentWork.failure, "duplicate_intent");
+  assert.equal(f.get(repeat.articleId)!.status, "review", "held back for the owner, never published");
+  assert.match(f.get(repeat.articleId)!.publicationGateIssues[0], /Repeats a page this site already has/);
+  assert.equal(f.get(other._id)!.contentWork.stage, "ready", "an article that repeats nothing stays");
+  assert.equal(f.get(repeatTopic._id)!.status, "disqualified");
+  assert.deepEqual(await f.invoke("contentWork:retireDuplicateReadyWork", { siteId: site.id }), { retired: 0 }, "nothing left to retire");
+  // The scheduler fills the slot with a different topic, counted once.
+  await pumpUntil(f, () => waiting().length === 2);
+  assert.ok(waiting().every(j => j.payload.topicId !== repeatTopic._id));
+  const replacement = waiting().find(j => j._id !== other._id)!;
+  assert.equal(replacement.contentWork.replacesJobId, repeat._id, "the replacement takes the slot of the held-back article");
+  if (typeof used === "number") {
+    // The exact recount (debounced 5 minutes) settles it: the held-back draft uses no allowance, its replacement one.
+    await pumpUntil(f, () => usage() === used, 60, f.now() + 15 * 60_000);
+    assert.equal(usage(), used, "a replaced slot counts once");
+  }
+  f.assertOffline();
+});
+
 test("SLC persisted checkpoint survives restart and duplicate workers without another initial draft", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], failedOptionalSource: true });
   const site = await selectGrowth(f);

@@ -135,8 +135,10 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
  * BUYER_FIT_MAX_KEYWORDS topics, its spend reserved before the call. */
 export const sweepBuyerFit = internalAction({ args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<{ judged: number; rejected: number }> => {
-    // Stale "queued" locks go back to the plan first, so this sweep judges them too.
+    // Stale "queued" locks go back to the plan first, so this sweep judges them too;
+    // waiting articles that repeat a live page are replaced before their slot.
     await ctx.runMutation(internal.contentWork.releaseStaleTopicLocks, { siteId });
+    await ctx.runMutation(internal.contentWork.retireDuplicateReadyWork, { siteId });
     const context: { business: BuyerFitBusiness; topics: Array<{ topicId: Id<"topic_clusters">; keyword: string }> } | null =
       await ctx.runQuery(internal.contentWork.buyerFitSweepContext, { siteId });
     if (!context || context.topics.length === 0) return { judged: 0, rejected: 0 };

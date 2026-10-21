@@ -518,6 +518,9 @@ function keywordTokens(value: string): string[] {
     "the", "and", "for", "with", "how", "what", "why", "are", "can",
     "your", "that", "this", "from", "have", "will", "when", "use", "using",
     "guide", "tips",
+    // Question filler: "how often should a small business publish blog posts"
+    // asks what "how often small business publish blog" asks (Oct 21 2026).
+    "should", "does", "you", "need", "much", "many",
   ]);
   const aliases = new Map([
     ["automated", "automate"],
@@ -548,7 +551,14 @@ function keywordTokens(value: string): string[] {
   return normalized
     .split(/[^a-z0-9]+/)
     .filter((word) => word.length >= 3 && !stopWords.has(word))
-    .map((word) => aliases.get(word) ?? word);
+    .map((word) => aliases.get(word) ?? singularWord(word));
+}
+
+/** "posts" is "post": a plural never makes a second intent ("business", "status" and "analysis" stay). */
+function singularWord(word: string): string {
+  if (word.length > 4 && word.endsWith("ies")) return `${word.slice(0, -3)}y`;
+  if (word.length > 3 && word.endsWith("s") && !/(?:ss|us|is|os)$/.test(word)) return word.slice(0, -1);
+  return word;
 }
 
 function sharedTokensPreserveOrder(

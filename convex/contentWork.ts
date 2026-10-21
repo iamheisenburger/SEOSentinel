@@ -86,6 +86,8 @@ const LIMIT = 1000;
 const AUTOPILOT_SKIPPABLE_FAILURES = new Set(["bounded_content_quality_exhausted", "content_model_response_invalid", "candidate_rejected_before_draft",
   // The writing service stayed busy (rate limited or overloaded) through every retry: nothing was written or charged for it.
   "content_provider_unavailable",
+  // The article repeats a page the site already has (P140): it is held back and the slot gets a new topic.
+  "duplicate_intent",
   // The provider refused for lack of credit (a verified refusal receipt, nothing published). Oct 5-14 2026 one such
   // slot froze both owner sites for nine days after the credit was restored; the refused job keeps its receipt and
   // hold exactly as recorded, and the schedule moves on.
@@ -1681,6 +1683,45 @@ export const releaseStaleTopicLocks = internalMutation({ args: { siteId: v.id("s
     if ((await reconcileTopicLifecycle(ctx, { siteId, topicId: topic._id, apply: true })).changed) released++;
   }
   return { released };
+} });
+/** A waiting article that repeats a page the site already has is never
+ * published: two pages on one search compete with each other. pentra.dev's
+ * ready /how-often-small-business-publish-blog-capacity-method repeated its
+ * live /how-often-should-small-business-publish-blog-posts (Oct 21 2026; the
+ * duplicate check missed "should" and "posts"). The daily sweep holds such an
+ * article back for the owner (review, with the reason), marks its slot failed
+ * with "duplicate_intent" (a skippable failure, so the slot gets a new topic
+ * the way a draft that failed review does; the replacement is counted once)
+ * and its topic as covered, and wakes the scheduler. */
+export const retireDuplicateReadyWork = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule || site.deletionStatus || site.accountDeletionRequestedAt) return { retired: 0 };
+  const ready = (await ctx.db.query("jobs").withIndex("by_site_content_stage", q => q.eq("siteId", siteId).eq("contentWork.stage", "ready")).take(20))
+    .filter(job => job.status === "done" && job.contentWork?.intent === "create" && !job.contentWork.ownerRequest &&
+      job.contentWork.retiredAt === undefined && !job.contentWork.operation);
+  if (ready.length === 0) return { retired: 0 };
+  const live = await ctx.db.query("article_summaries").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published")).take(500);
+  const liveIntents = live.flatMap(page => [page.title, ...(page.metaKeywords ?? []).slice(0, 1)]).filter(Boolean).map(primaryKeyword => ({ primaryKeyword }));
+  let retired = 0;
+  for (const job of ready) {
+    const topicId = (job.payload as { topicId?: Id<"topic_clusters"> } | undefined)?.topicId;
+    const topic = topicId ? await ctx.db.get(topicId) : null;
+    if (!topic || topic.siteId !== siteId || !liveIntents.some(page => contentIntentConflicts({ primaryKeyword: topic.primaryKeyword }, page))) continue;
+    const article = job.articleId ? await ctx.db.get(job.articleId) : null;
+    if (article && article.status !== "published" && !article.publicationLeaseOwner && !article.publicationAttemptedAt) {
+      await quarantineUnpublishedArticle(ctx, article._id, ["Repeats a page this site already has, so it was held back and the slot got a new topic."]);
+    } else if (article) continue;
+    await ctx.db.patch(job._id, { status: "failed", nextAttemptAt: undefined, workerToken: undefined, heartbeatAt: undefined, leaseExpiresAt: undefined,
+      contentWork: { ...job.contentWork!, stage: "failed", failure: "duplicate_intent" }, updatedAt: Date.now() });
+    // Never published, so it uses none of the month's allowance (an exact recount follows).
+    if (countsTowardMonthlyUsage(job, usageMonthBounds().monthStart)) await refreshAccountUsage(ctx, site, -1);
+    if (!planCheckpointTopicExecutionLocked(topic)) {
+      await ctx.db.patch(topic._id, { status: "disqualified", disqualifiedReason: "Repeats a page the site already has.", updatedAt: Date.now() });
+    }
+    retired++;
+  }
+  if (retired > 0) await wake(ctx, siteId);
+  return { retired };
 } });
 /** Autopilot sites for the daily buyer-fit sweep, a page at a time. */
 export const buyerFitSweepSites = internalQuery({ args: { cursor: v.union(v.string(), v.null()) }, handler: async (ctx, { cursor }) => {
