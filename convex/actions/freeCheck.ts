@@ -12,7 +12,7 @@ import { dataForSeoLocationCode } from "../lib/dataForSeoLocale";
 import { BUYER_FIT_CEILING_MICRO_USD, BUYER_FIT_MAX_KEYWORDS, BUYER_FIT_MODEL, buyerFitCostMicroUsd, normalizeFitKeyword,
   type BuyerFitVerdict } from "../lib/topicFit";
 import { structuredToolChoice } from "../lib/toolChoice";
-import { asksForFree, brandTerms, checkBusiness, checkSeeds, classifySearches, FREE_CHECK_COVERAGE_SEARCHES, FREE_CHECK_HOME_MAX_BYTES,
+import { asksForFree, blockedHomepage, botWall, brandTerms, checkBusiness, checkSeeds, classifySearches, localHeadSeeds, FREE_CHECK_COVERAGE_SEARCHES, FREE_CHECK_HOME_MAX_BYTES,
   FREE_CHECK_MAX_DIFFICULTY, FREE_CHECK_SITEMAP_MAX_BYTES, freeCheckLocale, healthSummary, htmlLang, isBrandedKeyword, linkedPages, localSeeds,
   namesPlace, notACandidate, PAGE_COVERAGE_MAX_TOKENS, PAGE_COVERAGE_TOOL, pageCoverageRequest, parsePageCoverage, parseSearchSeeds,
   pathsForCoverage, SEARCH_SEEDS_MAX_TOKENS, SEARCH_SEEDS_TOOL, searchSeedRequest, selectAlmostThere, siteCoverage, siteSections, unreadableHomepage,
@@ -35,7 +35,7 @@ type Outcome =
 
 type Diagnostics = { seedSource: "model" | "homepage"; seeds: string[]; topics?: string[]; discovered: number; ranked: number; judged: number;
   kept: number; sample?: Array<{ keyword: string; keep: boolean; reason: string }>; places?: string[]; freePlan?: string;
-  coverage?: "model" | "words"; pagesRead?: number; rankCheck?: "verified" | "partial" };
+  coverage?: "model" | "words"; pagesRead?: number; rankCheck?: "verified" | "partial"; homeTitle?: string; country?: string };
 
 /** One small model call: the searches a buyer would type, read from the
  * homepage and the site's sections (convex/lib/missedSearches.ts
@@ -117,6 +117,11 @@ export const run = internalAction({
         if (www.status === 200 || page.status === 0) page = www;
       }
       if (page.status !== 200) return { kind: "failed", error: unreadableHomepage(domain, page.status), refund: true };
+      if (botWall(page.html)) {
+        const www = await fetchPage(`https://www.${domain}/`, { maxBytes: FREE_CHECK_HOME_MAX_BYTES });
+        if (www.status === 200 && !botWall(www.html)) page = www;
+        else return { kind: "failed", error: blockedHomepage(domain), refund: true };
+      }
       const host = new URL(page.finalUrl).hostname.toLowerCase();
       if (host.replace(/^www\./, "") !== domain) {
         return { kind: "failed", error: `${domain} redirects to ${host.replace(/^www\./, "")}. Check that address instead.`, refund: true };
@@ -142,8 +147,6 @@ export const run = internalAction({
       // own words lead to, measured where it sells and in its language. A local
       // business gets searches that name the places it serves.
       await step("Finding searches your customers make");
-      const locale = freeCheckLocale(host, htmlLang(page.html));
-      const locationCode = dataForSeoLocationCode(locale.country);
       const brands = brandTerms(domain, prefill.name);
       const sitePages = [...new Set([...sitemap.urls, ...linkedPages(page.html, host)])];
       const coverage = siteCoverage(sitePages, homeHealth.title);
@@ -152,12 +155,15 @@ export const run = internalAction({
         const proposed = await proposeSeeds(domain, page.html, prefill.questions, brands, siteSections([...sitePages, ...robots.sitemaps]));
         read = proposed.read; spent.fitMicroUsd += proposed.costMicroUsd;
       } catch { spent.fitMicroUsd += BUYER_FIT_CEILING_MICRO_USD; }
+      const locale = freeCheckLocale(host, htmlLang(page.html), read?.country);
+      const locationCode = dataForSeoLocationCode(locale.country);
       const places = read?.places ?? [];
       const local = places.length > 0;
       const offered = (keyword: string) => (!local || namesPlace(keyword, places)) && (read?.freePlan !== "no" || !asksForFree(keyword));
       const seeds = read ? (local ? localSeeds(read.topics.length ? read.topics : read.searches, places) : [...read.topics, ...read.searches])
         : checkSeeds(prefill, brands);
       diagnostics = { seedSource: read ? "model" : "homepage", seeds, ...(read ? { topics: read.topics, freePlan: read.freePlan } : {}),
+        homeTitle: (homeHealth.title ?? "").slice(0, 120), country: locale.country,
         ...(local ? { places } : {}), discovered: 0, ranked: 0, judged: 0, kept: 0, pagesRead: sitePages.length };
       let ranked: RankedKeyword[] = [];
       const exclude = (keyword: string) => notACandidate(keyword, { brands, ranked }) ? "existing_intent" as const : undefined;
@@ -175,6 +181,15 @@ export const run = internalAction({
             maxLabsSeeds: local ? 6 : 4, maxRelatedSeeds: 1, useKeywordIdeas: false, minimumResults: 30, maximumDifficulty: FREE_CHECK_MAX_DIFFICULTY,
             expandProductAnchors: true, excludeKeyword: exclude });
         } catch { found = []; }
+        if (local && found.length < 10 && read) {
+          try {
+            const known = new Set(found.map(k => normalizeFitKeyword(k.keyword)));
+            const heads = await discoverKeywords(localHeadSeeds(read.topics, places), locationCode, locale.language, 50, { maxGoogleAdsBatches: 0,
+              maxLabsSeeds: 6, maxRelatedSeeds: 0, useKeywordIdeas: false, minimumResults: 30, maximumDifficulty: FREE_CHECK_MAX_DIFFICULTY,
+              expandProductAnchors: true, excludeKeyword: exclude });
+            found = [...found, ...heads.filter(k => !known.has(normalizeFitKeyword(k.keyword)))];
+          } catch { /* keep what the services found */ }
+        }
         if (!local && found.length < 15) {
           try {
             const known = new Set(found.map(k => normalizeFitKeyword(k.keyword)));

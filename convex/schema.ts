@@ -1783,7 +1783,8 @@ export default defineSchema({
       topics: v.optional(v.array(v.string())), sample: v.optional(v.array(v.object({ keyword: v.string(), keep: v.boolean(), reason: v.string() }))),
       discovered: v.number(), ranked: v.number(), judged: v.number(), kept: v.number(),
       places: v.optional(v.array(v.string())), freePlan: v.optional(v.string()), coverage: v.optional(v.union(v.literal("model"), v.literal("words"))),
-      pagesRead: v.optional(v.number()), rankCheck: v.optional(v.union(v.literal("verified"), v.literal("partial"))) })),
+      pagesRead: v.optional(v.number()), rankCheck: v.optional(v.union(v.literal("verified"), v.literal("partial"))),
+      homeTitle: v.optional(v.string()), country: v.optional(v.string()) })),
   }).index("by_domain", ["domain"]).index("by_requested", ["requestedAt"]),
   // Daily limits for free checks: per visitor (an HMAC of IP and day, so a
   // row can't be linked to a person or across days), the day's spend, and

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { brandTerms, checkSeeds, classifySearches, excludedFromMissed, fallbackTopic, freeCheckDomain, freeCheckLocale, freeCheckReportEmail, freeCheckView,
   healthSummary, isBrandedKeyword, linkedPages, localSeeds, namesPlace, pageCoverageRequest, parsePageCoverage, parseSearchSeeds, pathsForCoverage,
-  placesLabel, searchSeedRequest, selectAlmostThere, selectMissedSearches, siteCoverage, siteSections, unreadableHomepage, FREE_CHECK_DAILY_CAP_MICRO_USD,
+  placesLabel, searchSeedRequest, selectAlmostThere, selectMissedSearches, siteCoverage, siteSections, unreadableHomepage, botWall, blockedHomepage, localHeadSeeds,
+  FREE_CHECK_DAILY_CAP_MICRO_USD,
   FREE_CHECK_EMAIL_ADDRESS_DAILY_LIMIT, FREE_CHECK_HEALTH_CHECKS, FREE_CHECK_IP_DAILY_LIMIT, FREE_CHECK_RESERVATION_MICRO_USD, FREE_CHECK_VERSION,
   FREE_CHECK_VISIBLE } from "../convex/lib/missedSearches.ts";
 import { homepageDigest } from "../convex/lib/sitePrefill.ts";
@@ -65,7 +66,7 @@ test("seeds are buyer searches read from the homepage, never its slogans or bran
     searches: ["AI chatbot for website", "lead qualification", "leadpilot pricing", "how do i qualify leads from my website traffic today",
       "website lead capture", "website lead capture", "one"] }, brands),
   { topics: ["website chatbot", "lead qualification"], searches: ["ai chatbot for website", "website lead capture"],
-    sells: "An AI sales agent for websites.", customers: "Small B2B companies.", places: [], freePlan: "unknown" },
+    sells: "An AI sales agent for websites.", customers: "Small B2B companies.", places: [], freePlan: "unknown", country: null },
   "topics are 2-3 words; a search repeating a topic is dropped");
   assert.equal(parseSearchSeeds({ sells: "x", customers: "y", topics: ["ai chatbot"], searches: [] }, brands), null, "too few usable seeds: fall back");
   assert.equal(parseSearchSeeds(null, brands), null);
@@ -311,6 +312,9 @@ const LABS = [
   ["ceramic glaze recipes", 1900, 45], ["twitch glaze overlay", 600, 4], ["kiln log template", 200, 9],
 ] as const;
 const IDEAS = [["pottery inventory app", 140, 15]] as const;
+// What a bot-protected site sends an automated visitor instead of its homepage (200, not 403).
+const CLOUDFLARE_CHECK = `<!DOCTYPE html><html lang="en-US"><head><title>Just a moment...</title></head><body><div class="main-wrapper">
+<h2>Checking if the site connection is secure</h2><script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"></script></div></body></html>`;
 // A local studio's searches: only the ones naming its place are its demand.
 const LOCAL_LABS = [["pottery studio leeds", 320, 6], ["pottery classes leeds", 260, 9], ["pottery studio near me", 9900, 3],
   ["kiln firing service leeds", 40, 2]] as const;
@@ -320,7 +324,7 @@ const RANKED = [
   ["twitch glaze overlay", 12, 600], ["kiln log template", 45, 200],
 ] as const;
 
-function world(options: { homepageDown?: boolean; resendStatus?: number; seedAnswer?: unknown; local?: boolean; bigHomepage?: boolean } = {}) {
+function world(options: { homepageDown?: boolean; resendStatus?: number; seedAnswer?: unknown; local?: boolean; bigHomepage?: boolean; botWall?: boolean } = {}) {
   const calls: string[] = [], emails: Fields[] = [], seedRequests: string[] = [], labsSeeds: string[] = [], coverageRequests: string[] = [];
   const rankedRequests: Fields[] = [];
   const page = (body: string, type = "text/html; charset=utf-8", status = 200) => new Response(body, { status, headers: { "content-type": type } });
@@ -332,6 +336,7 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
     calls.push(`${url.hostname}${url.pathname}`);
     if (url.hostname === DOMAIN || url.hostname === `www.${DOMAIN}`) {
       if (options.homepageDown) return page("down", "text/html", 503);
+      if (options.botWall) return page(CLOUDFLARE_CHECK);
       if (url.hostname === `www.${DOMAIN}`) return new Response(null, { status: 301, headers: { location: `https://${DOMAIN}/` } });
       if (url.pathname === "/") return page(options.bigHomepage ? HOME.replace("</body>", `<!-- ${"x".repeat(2_000_000)} --></body>`) : HOME);
       if (url.pathname === "/robots.txt") return page(`User-agent: *\nAllow: /\nSitemap: https://${DOMAIN}/sitemap.xml\nSitemap: https://${DOMAIN}/leeds/sitemap.xml\n`, "text/plain");
@@ -503,8 +508,10 @@ test("v4: a local business's check runs on its places, and a big homepage is sti
   const { f, labsSeeds, calls } = world({ local: true, bigHomepage: true });
   await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(1) });
   assert.deepEqual((await f.runNextScheduled())?.result, { status: "done" }, "a 2 MB homepage is read");
-  assert.deepEqual(labsSeeds, ["glaze inventory leeds", "kiln firing log leeds", "pottery studio software leeds", "related:glaze inventory leeds"],
+  assert.deepEqual(labsSeeds.slice(0, 4), ["glaze inventory leeds", "kiln firing log leeds", "pottery studio software leeds", "related:glaze inventory leeds"],
     "services with the place it serves");
+  assert.deepEqual(labsSeeds.slice(4), ["inventory leeds", "glaze leeds", "firing leeds", "kiln leeds", "software leeds", "studio leeds"],
+    "too few found, so each service's head words with the place are tried (zingermansdeli.com came back empty, Oct 21)");
   assert.ok(!calls.some(c => c.endsWith("keyword_ideas/live")), "no country-wide category ideas for a local business");
   const view = await f.invoke("freeCheck:get", { domain: DOMAIN });
   assert.deepEqual(view.places, ["leeds"]); assert.equal(view.placesLabel, "Leeds");
@@ -513,6 +520,48 @@ test("v4: a local business's check runs on its places, and a big homepage is sti
   const diagnostics = await f.invoke("freeCheck:diagnosticsFor", { domain: DOMAIN });
   assert.deepEqual(diagnostics.diagnostics.places, ["leeds"]);
   f.assertOffline();
+});
+
+test("v6: a bot-check page is never analysed as the homepage, and the network keeps its check (bloomandwild.com)", async () => {
+  assert.equal(botWall(CLOUDFLARE_CHECK), true);
+  assert.equal(botWall(`<html><head><title>Attention Required! | Cloudflare</title></head><body>Sorry, you have been blocked</body></html>`), true);
+  assert.equal(botWall(HOME), false);
+  const { f, calls } = world({ botWall: true });
+  await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(1) });
+  assert.deepEqual((await f.runNextScheduled())?.result, { status: "failed" });
+  const view = await f.invoke("freeCheck:get", { domain: DOMAIN });
+  assert.equal(view.error, blockedHomepage(DOMAIN));
+  assert.match(view.error, /security service stopped Pentra's request with a bot check/);
+  assert.equal(view.health, null, "no Google basics are scored from a page that isn't the site's");
+  assert.ok(!calls.some(c => c.startsWith("api.")), "nothing paid ran");
+  assert.deepEqual(await f.invoke("freeCheck:quotaFor", { visitor: visitor(1) }), { remaining: FREE_CHECK_IP_DAILY_LIMIT, paused: false });
+  f.assertOffline();
+});
+
+test("v6: the country is read from the business when its address says nothing (a UK site on .com)", () => {
+  assert.equal(freeCheckLocale("bloomandwild.com", "en-US", "uk").country, "uk", "the homepage reading beats a default lang region");
+  assert.equal(freeCheckLocale("bloomandwild.com", "en", "uk").countryName, "the UK");
+  assert.equal(freeCheckLocale("shop.de", null, "us").country, "de", "a country-code domain still decides");
+  assert.equal(freeCheckLocale("shop.com", "en-GB", null).country, "uk");
+  assert.equal(freeCheckLocale("shop.com", null, "other").country, "us", "an unsupported country falls back");
+  const read = parseSearchSeeds({ sells: "Flowers by post.", customers: "Gift buyers.", topics: ["flower delivery", "letterbox flowers"], searches: ["send flowers"],
+    places: [], free_plan: "unknown", country: "uk" }, []);
+  assert.equal(read?.country, "uk");
+  assert.equal(parseSearchSeeds({ sells: "x", customers: "y", topics: ["flower delivery", "letterbox flowers"], searches: ["send flowers"], places: [],
+    free_plan: "unknown", country: "narnia" }, [])?.country, null);
+});
+
+test("v6: a local business's services are short names a place completes into a search (zingermansdeli.com)", () => {
+  const local = parseSearchSeeds({ sells: "Deli sandwiches and specialty food.", customers: "People in Ann Arbor.", topics: ["deli", "cheese shop", "Zingermans"],
+    searches: ["corned beef sandwich"], places: ["Ann Arbor"], free_plan: "no", country: "us" }, ["zingermans"]);
+  assert.deepEqual(local?.topics, ["deli", "cheese shop"], "one-word services allowed with a place; the brand never");
+  assert.deepEqual(localSeeds(local!.topics, local!.places), ["deli ann arbor", "cheese shop ann arbor"]);
+  const national = parseSearchSeeds({ sells: "x", customers: "y", topics: ["deli", "cheese shop", "specialty foods"], searches: ["corned beef sandwich"],
+    places: [], free_plan: "no", country: "us" }, []);
+  assert.deepEqual(national?.topics, ["cheese shop", "specialty foods"], "without a place a one-word topic is too broad");
+  assert.deepEqual(localHeadSeeds(["deli sandwiches", "farmhouse cheese", "local food delivery"], ["ann arbor", "ypsilanti"]),
+    ["sandwiches ann arbor", "deli ann arbor", "cheese ann arbor", "farmhouse ann arbor", "food ann arbor"], "generic words like delivery and local are skipped");
+  assert.deepEqual(localHeadSeeds(["deli"], []), []);
 });
 
 test("free checks stop at the network's daily limit and the day's spend cap; the page can show what's left", async () => {

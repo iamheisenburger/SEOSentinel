@@ -30,7 +30,8 @@ export const checkDiagnostics = v.object({ seedSource: v.union(v.literal("model"
   topics: v.optional(v.array(v.string())), sample: v.optional(v.array(v.object({ keyword: v.string(), keep: v.boolean(), reason: v.string() }))),
   discovered: v.number(), ranked: v.number(), judged: v.number(), kept: v.number(),
   places: v.optional(v.array(v.string())), freePlan: v.optional(v.string()), coverage: v.optional(v.union(v.literal("model"), v.literal("words"))),
-  pagesRead: v.optional(v.number()), rankCheck: v.optional(v.union(v.literal("verified"), v.literal("partial"))) });
+  pagesRead: v.optional(v.number()), rankCheck: v.optional(v.union(v.literal("verified"), v.literal("partial"))),
+  homeTitle: v.optional(v.string()), country: v.optional(v.string()) });
 
 async function counter(ctx: MutationCtx, key: string) {
   return ctx.db.query("free_check_quota").withIndex("by_key", q => q.eq("key", key)).first();
