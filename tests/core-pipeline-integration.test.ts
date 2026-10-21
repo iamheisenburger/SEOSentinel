@@ -3479,6 +3479,14 @@ test("SLC29 Search Console requires complete current epochs and distinguishes ze
   assert.equal(r.current.clicks, 3); assert.equal(r.cohorts[0].clicks, 3);
   assert.equal(r.current.impressions, 30); assert.equal(r.current.position, 2); assert.equal(r.current.pagesSeen, 1);
   assert.equal(r.previous.impressions, 0); assert.deepEqual(r.index, { checked: 0, indexed: 0 }, "no URL inspection yet");
+  // P147: an old "unknown to Google" verdict on a page Google now shows in search counts as indexed.
+  Object.assign(f.tables.article_summaries.find(s => s.slug === "new-page")!, { gscInspectedAt: end - 90 * day, gscIndexVerdict: "NEUTRAL",
+    gscCoverageState: "URL is unknown to Google", gscInspectionProperty: stored.gscProperty, gscInspectionConnectionRevision: stored.gscConnectionRevision ?? 0 });
+  f.add("article_summaries", { siteId: site.id, slug: "old-page", title: "Old synthetic page", status: "published", publicUrlStatus: "verified",
+    publishedAt: end - 120 * day, createdAt: end - 120 * day, gscInspectedAt: end - 100 * day, gscIndexVerdict: "NEUTRAL", gscCoverageState: "URL is unknown to Google",
+    gscInspectionProperty: stored.gscProperty, gscInspectionConnectionRevision: stored.gscConnectionRevision ?? 0 });
+  assert.deepEqual((await f.invoke("searchPerformance:contentOutcome", { siteId: site.id })).index, { checked: 2, indexed: 1 },
+    "shown in search proves indexed; a page Google never showed keeps its verdict");
   assert.equal(r.daily.length, 56); assert.deepEqual(r.daily.at(-1), { date: "2026-09-07", clicks: 3 }); assert.deepEqual(r.daily[0], { date: "2026-07-14", clicks: 0 });
   stored.gscDateEpochs.pop(); r = await f.invoke("searchPerformance:contentOutcome", { siteId: site.id });
   assert.equal(r.current.clicks, 3); assert.equal(r.previous, null);

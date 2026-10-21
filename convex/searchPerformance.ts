@@ -72,7 +72,13 @@ export const contentOutcome = query({ args: { siteId: v.id("sites") }, handler: 
   const pages = await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "published")).take(501);
   const checked = pages.filter(p => articleMatchesCurrentDomain(site, p) && p.gscInspectedAt && !p.gscInspectionError && p.gscIndexVerdict &&
     gscInspectionMatchesCurrentConnection(site, p));
-  const index = { checked: checked.length, indexed: checked.filter(p => p.gscIndexVerdict === "PASS").length };
+  // A page Google showed in search in the last 28 days is indexed, whatever an
+  // older inspection said: verdicts outside the 56-day inspection cohort are
+  // never refreshed (P147, Oct 21 2026: pentra.dev pages Google showed, one with
+  // 153 impressions in 28 days, still read "URL is unknown to Google").
+  const shownInSearch = new Set(currentRows.filter(r => r.impressions > 0).map(r => r.page));
+  const index = { checked: checked.length, indexed: checked.filter(p => p.gscIndexVerdict === "PASS" ||
+    shownInSearch.has(publishedArticlePageUrl(site.domain, site.urlStructure, p.slug))).length };
   const cohorts = pages.length > 500 ? null : pages.filter(p => articleMatchesCurrentDomain(site, p) && p.publicUrlStatus === "verified" &&
     p.publishedAt && searchConsoleDate(p.publishedAt) >= currentStart && searchConsoleDate(p.publishedAt) <= through).map(p => {
       const start = addSearchConsoleDays(searchConsoleDate(p.publishedAt!), 1), url = publishedArticlePageUrl(site.domain, site.urlStructure, p.slug);

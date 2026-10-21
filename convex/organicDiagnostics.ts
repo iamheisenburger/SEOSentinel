@@ -278,6 +278,12 @@ export const snapshot = internalQuery({
         buckets[bucket] += row.impressions;
       }
     }
+    // Indexed by inspection, or shown in search in the newest 28 days (an old
+    // verdict outside the inspection cohort is never refreshed; P147).
+    const recentStart = addSearchConsoleDays(through, -27);
+    const shown = new Set(pages.rows.filter(row => row.date >= recentStart && row.impressions > 0).map(row => row.page));
+    const indexedOrShown = inspected.filter(row => row.gscIndexVerdict === "PASS" ||
+      shown.has(publishedArticlePageUrl(site.domain, site.urlStructure, row.slug))).length;
     const pageList = [...byPage.entries()].map(([page, p]) => ({ page, impressions: p.impressions, clicks: p.clicks,
       position: p.impressions ? Math.round((p.weighted / p.impressions) * 10) / 10 : null, article: articleUrls.has(page) }));
     const queriesStart = addSearchConsoleDays(through, -27);
@@ -310,7 +316,7 @@ export const snapshot = internalQuery({
         multiPageQueries: queryList.filter(q => q.pages > 1).length,
         top: queryList.sort((a, b) => b.impressions - a.impressions).slice(0, 25),
       },
-      articles,
+      articles: { ...articles, indexedOrShownInSearch: indexedOrShown },
       improvements: { ...improvements, gates },
       slots,
       quality,
