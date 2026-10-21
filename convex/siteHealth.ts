@@ -38,6 +38,23 @@ export const latest = query({ args: { siteId: v.id("sites") }, handler: async (c
   return await ctx.db.query("site_health_checks").withIndex("by_site_checked", q => q.eq("siteId", siteId)).order("desc").first();
 } });
 
+/** A new Autopilot site gets its first check within two hours of setup, not at
+ * the next Monday's weekly run (P151, Oct 21 2026: the Compost Notes test site
+ * showed "first check pending" 5.5 hours after setup; a Tuesday signup would
+ * wait six days). Reads only sites created in the last seven days. */
+export const scheduleFirstChecks = internalMutation({ args: {}, handler: async (ctx) => {
+  const since = Date.now() - 7 * 86_400_000;
+  const sites = await ctx.db.query("sites").withIndex("by_creation_time", q => q.gt("_creationTime", since)).order("desc").take(200);
+  let scheduled = 0;
+  for (const site of sites) {
+    if (site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt || site.deletionStatus || site.accountDeletionRequestedAt) continue;
+    if (await ctx.db.query("site_health_checks").withIndex("by_site_checked", q => q.eq("siteId", site._id)).first()) continue;
+    await ctx.scheduler.runAfter(scheduled * 20_000, internal.actions.siteHealth.runInternal, { siteId: site._id });
+    scheduled++;
+  }
+  return { scheduled };
+} });
+
 /** Weekly checks for sites on the content service. Bounded fan-out. */
 export const scheduleWeekly = internalMutation({ args: {}, handler: async (ctx) => {
   const sites = await ctx.db.query("sites").order("desc").take(500); // newest first

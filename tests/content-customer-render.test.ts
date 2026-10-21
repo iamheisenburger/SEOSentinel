@@ -43,6 +43,7 @@ function render(component: string, queryState: unknown = state, outcome: unknown
         if (fn === "topics:listBySite") return [
           { _id: "t1", label: "Irrigation valve inspection checklist", primaryKeyword: "irrigation valve inspection", status: "planned", priority: 90 },
           { _id: "t2", label: "Already written topic", primaryKeyword: "written", status: "used", priority: 99 },
+          { _id: "t3", label: "Green waste compost", primaryKeyword: "green waste compost", status: "planned", priority: 80 },
         ];
         assert.fail(`Unexpected query ${fn}`);
       } };
@@ -80,7 +81,15 @@ test("new customers see one clear Autopilot or Review-first choice, not delivery
   assert.match(running, /Autopilot is on/); assert.match(running, /Switch to review first/); assert.match(running, /Site health/);
   assert.match(running, /Coming up next/); assert.match(running, /Irrigation valve inspection checklist/); assert.doesNotMatch(running, /Already written topic/);
   assert.doesNotMatch(running, /Ready buffer|Fixed window|original deadline/);
-  assert.match(running, /Articles live/); assert.match(running, /4 of your 10 monthly articles used \(all sites; held-back drafts don&#x27;t count\)/);
+  assert.match(running, /Articles live/); assert.match(running, /4 of your 10 monthly articles used \(counted when written, all sites; held-back drafts don&#x27;t count\)/);
+  // P151 (Oct 21 2026): a new free account read "3 of your 3 used" with 1 published and 2 written ahead, and saw
+  // each topic twice ('Green waste compost "green waste compost"').
+  assert.match(running, /Irrigation valve inspection checklist<\/span> <span[^>]*>“irrigation valve inspection”/, "a search that adds something is shown");
+  assert.match(running, /Green waste compost<\/span><\/span>/); assert.doesNotMatch(running, /“green waste compost”/, "a search that repeats the title is not");
+  const ahead = render("content-work-overview", { ...state, ready: 2, autopilot: { selectable: true, on: true },
+    plan: { tier: "free", articlesPerMonth: 3, autopilotIntervalMs: 604_800_000 },
+    schedule: { ...state.schedule, paused: false, autopilotSelected: true }, results: { live: 1, liveThisMonth: 1, planUsedThisMonth: 3 } }).html;
+  assert.match(ahead, /3 of your 3 monthly articles used \(counted when written, all sites; 2 ready for upcoming dates; held-back drafts don&#x27;t count\)/);
 });
 
 // Phase 4 (Oct 20 2026): Search Console is the owner's own Google account, so

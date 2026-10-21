@@ -580,6 +580,20 @@ test("SLC29 synthetic empty owner journey starts preparation after explicit cons
   assert.equal(f.tables.pages.some(p => p.slug === "/"), false, "A link target is not an editable-page grant or a fabricated crawl record");
 });
 
+// P151 (Oct 21 2026): the Compost Notes test site showed "first check pending" 5.5 hours after setup: site health ran
+// only on Mondays.
+test("P151 a new Autopilot site's first site health check is scheduled within two hours, once", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const firstChecks = () => f.tables._scheduled_functions.filter(row => row.name === "actions/siteHealth:runInternal" && row.args.siteId === site.id);
+  assert.deepEqual(await f.invoke("siteHealth:scheduleFirstChecks", {}), { scheduled: 1 });
+  assert.equal(firstChecks().length, 1);
+  f.add("site_health_checks", { siteId: site.id, checkedAt: f.now(), score: 90, pages: [] });
+  assert.deepEqual(await f.invoke("siteHealth:scheduleFirstChecks", {}), { scheduled: 0 }, "a site with a check is left to the weekly run");
+  f.assertOffline();
+});
+
 // P145 (Oct 21 2026): the Compost Notes test site's first article listed "Compost Notes is a small test publication
 // run" (its summary sentence cut at eight words) as the home page link under Related reading.
 test("P145 a new site's first article links its home page by the site's name, never a cut summary sentence", async () => {

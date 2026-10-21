@@ -73,7 +73,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
       <p className="text-[14px] text-[#F7F8F8]">Next article is scheduled for <span className="font-medium">{when(s.nextDeadlineAt)}</span>.</p>}
     {state.searchConsole?.connected === false && <SearchConsolePrompt siteId={siteId} />}
     {plain && state.results && <ResultsStrip siteId={siteId} live={state.results.live} liveThisMonth={state.results.liveThisMonth}
-      planPerMonth={state.plan?.articlesPerMonth ?? null} planUsed={state.results.planUsedThisMonth ?? 0} />}
+      planPerMonth={state.plan?.articlesPerMonth ?? null} planUsed={state.results.planUsedThisMonth ?? 0} ready={state.ready ?? 0} />}
     {/* Results first: the clicks trend sits directly under the headline numbers. */}
     {plain && <OrganicOutcome key={`${siteId}-top`} siteId={siteId} simple />}
     <div className="grid gap-4 md:grid-cols-2 md:items-start">
@@ -246,7 +246,7 @@ function ClicksChart({ daily }: { daily: { date: string; clicks: number | null }
 }
 
 /** The result at a glance: what is live, how much of the plan is used, how healthy the site is. */
-function ResultsStrip({ siteId, live, liveThisMonth, planPerMonth, planUsed }: { siteId: Id<"sites">; live: number; liveThisMonth: number; planPerMonth: number | null; planUsed: number }) {
+function ResultsStrip({ siteId, live, liveThisMonth, planPerMonth, planUsed, ready }: { siteId: Id<"sites">; live: number; liveThisMonth: number; planPerMonth: number | null; planUsed: number; ready: number }) {
   const check = useQuery(api.siteHealth.latest, { siteId });
   const tile = (label: string, value: string, hint?: string) => <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] px-4 py-3">
     <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#62666D]">{label}</p>
@@ -255,12 +255,18 @@ function ResultsStrip({ siteId, live, liveThisMonth, planPerMonth, planUsed }: {
   </div>;
   return <div className="grid grid-cols-2 gap-3 md:grid-cols-3" aria-label="Results at a glance">
     {tile("Articles live", String(live), "published and confirmed on your site")}
-    {tile("This month", String(liveThisMonth), planPerMonth ? `published on this site · ${planUsed} of your ${planPerMonth} monthly articles used (all sites; held-back drafts don't count)` : "articles published on this site")}
+    {/* Articles count when written, not when published (P151, Oct 21 2026: a new
+        free account read "3 of your 3 used" with 1 published and 2 written ahead). */}
+    {tile("This month", String(liveThisMonth), planPerMonth ? `published on this site · ${planUsed} of your ${planPerMonth} monthly articles used (counted when written, all sites${ready > 0 ? `; ${ready} ready for upcoming dates` : ""}; held-back drafts don't count)` : "articles published on this site")}
     {tile("Site health", check ? `${check.score}/100` : "—", check ? "latest weekly check" : "first check pending")}
   </div>;
 }
 
 export { topicTitle };
+
+/** The search is shown only when it says something the title doesn't
+ * ('Green waste compost "green waste compost"', P151). */
+const sameWords = (a: string, b: string) => a.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === b.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 /** What Autopilot will write next, so a hands-off customer can see and steer it. */
 function UpcomingTopics({ siteId }: { siteId: Id<"sites"> }) {
@@ -273,7 +279,8 @@ function UpcomingTopics({ siteId }: { siteId: Id<"sites"> }) {
       ? <p className={BODY}>Pentra is researching topics your customers search for. They&apos;ll appear here.</p>
       : <ol className="space-y-2 text-[14px]">{next.map((t, n) => <li key={t._id} className="flex gap-3">
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#0EA5E9]/10 text-[12px] font-semibold text-[#0EA5E9]">{n + 1}</span>
-          <span><span className="text-[#F7F8F8]">{topicTitle(t.label)}</span> <span className="text-[12px] text-[#8A8F98]">“{t.primaryKeyword}”</span></span></li>)}</ol>}
+          <span><span className="text-[#F7F8F8]">{topicTitle(t.label)}</span>{sameWords(topicTitle(t.label), t.primaryKeyword) ? null
+            : <> <span className="text-[12px] text-[#8A8F98]">“{t.primaryKeyword}”</span></>}</span></li>)}</ol>}
     <Link className="text-[13px] text-[#0EA5E9] hover:underline" href="/plan">See or change all topics</Link>
   </section>;
 }
