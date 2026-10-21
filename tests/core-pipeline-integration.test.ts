@@ -4631,6 +4631,28 @@ test("P105 Autopilot writes only searches the business can serve", async t => {
 
 // P140 (Oct 21 2026): pentra.dev's ready draft repeated a live page; the
 // duplicate check missed "should" and "posts".
+// P154 (Oct 21 2026): slot keeping counted fleet-wide (counts only, no identities).
+test("P154 the fleet slot count sees an Autopilot site's published slot and returns no identities", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+  const site = await selectGrowth(f, 8 * 3_600_000);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "verified"));
+  const delivered = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!;
+  f.setTime(Math.max(f.now(), delivered.contentWork.deadlineAt + 2 * 3_600_000));
+  let cursor: string | null = null;
+  const totals = { autopilotSites: 0, due: 0, onTime: 0, late: 0, missed: 0 };
+  for (let pages = 0; pages < 20; pages++) {
+    const page = await f.invoke("contentHealth:fleetSlotCounts", { cursor, now: f.now() });
+    assert.deepEqual(Object.keys(page).sort(), ["continueCursor", "isDone", "totals"], "counts only");
+    for (const key of Object.keys(totals) as (keyof typeof totals)[]) totals[key] += page.totals[key];
+    if (page.isDone) break; cursor = page.continueCursor;
+  }
+  assert.equal(totals.autopilotSites, 1);
+  assert.ok(totals.due >= 1 && totals.onTime + totals.late + totals.missed === totals.due, JSON.stringify(totals));
+  assert.ok(totals.onTime >= 1, JSON.stringify(totals));
+  f.assertOffline();
+});
+
 // P152 (Oct 21 2026): waiting articles were sealed under the checks of their day; the Compost Notes test site's next two
 // were written before P149's source-talk check.
 test("P152 a waiting article that fails a reader check added since it was sealed is replaced before its slot", async () => {

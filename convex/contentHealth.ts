@@ -7,6 +7,7 @@ import { contentIssue } from "./lib/contentCustomer";
 import { eligiblePlannedTopics, fallbackTopicProposals, topicResearchDueAt } from "./contentWork";
 import { healthFingerprint, opsEmailConfigured, sendOpsEmail } from "./lib/opsEmail";
 import { missedSlotCause } from "./lib/customerNotices";
+import { slotOutcomes } from "./lib/slotOutcomes";
 
 /**
  * Daily Autopilot health check.
@@ -181,6 +182,30 @@ export const healthPage = internalQuery({
       if (health) sites.push(health);
     }
     return { isDone: page.isDone, continueCursor: page.continueCursor, sites };
+  },
+});
+
+/** Fleet-wide slot keeping over the last seven days (V4: "every slot on time,
+ * for every customer"), a page of sites at a time. Counts only: no site, domain
+ * or article leaves this query. Owner-requested and retired work are not slots. */
+export const fleetSlotCounts = internalQuery({
+  args: { cursor: v.union(v.string(), v.null()), now: v.number() },
+  handler: async (ctx, { cursor, now }) => {
+    const page = await ctx.db.query("sites").paginate({ cursor, numItems: 10 });
+    const totals = { autopilotSites: 0, due: 0, onTime: 0, late: 0, missed: 0 };
+    for (const site of page.page) {
+      if (site.deletionStatus || site.accountDeletionRequestedAt || site.serviceMode !== "growth_first" || !site.autopilotEnabled ||
+        !site.contentSchedule?.autopilotSelectedAt) continue;
+      totals.autopilotSites += 1;
+      const jobs = (await ctx.db.query("jobs").withIndex("by_site_content_deadline", q => q.eq("siteId", site._id)
+        .gte("contentWork.deadlineAt", now - 7 * 86_400_000).lte("contentWork.deadlineAt", now)).take(200))
+        .filter(job => job.contentWork && !job.contentWork.ownerRequest && !job.contentWork.operation &&
+          (job.contentWork.retiredAt === undefined || job.contentWork.failure === "duplicate_intent" || job.contentWork.failure === "reader_visible_defect"))
+        .map(job => ({ deadlineAt: job.contentWork!.deadlineAt, publishedAt: job.contentWork!.publishedAt }));
+      const counts = slotOutcomes(jobs, now, HEALTH_OVERDUE_GRACE_MS);
+      totals.due += counts.due; totals.onTime += counts.onTime; totals.late += counts.late; totals.missed += counts.missed;
+    }
+    return { isDone: page.isDone, continueCursor: page.continueCursor, totals };
   },
 });
 

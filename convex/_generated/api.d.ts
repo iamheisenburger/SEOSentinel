@@ -184,6 +184,7 @@ import type * as lib_siteHealth from "../lib/siteHealth.js";
 import type * as lib_siteJobActivity from "../lib/siteJobActivity.js";
 import type * as lib_sitePrefill from "../lib/sitePrefill.js";
 import type * as lib_siteSecurity from "../lib/siteSecurity.js";
+import type * as lib_slotOutcomes from "../lib/slotOutcomes.js";
 import type * as lib_smartlead from "../lib/smartlead.js";
 import type * as lib_smartleadNode from "../lib/smartleadNode.js";
 import type * as lib_sourceQuality from "../lib/sourceQuality.js";
@@ -404,6 +405,7 @@ declare const fullApi: ApiFromModules<{
   "lib/siteJobActivity": typeof lib_siteJobActivity;
   "lib/sitePrefill": typeof lib_sitePrefill;
   "lib/siteSecurity": typeof lib_siteSecurity;
+  "lib/slotOutcomes": typeof lib_slotOutcomes;
   "lib/smartlead": typeof lib_smartlead;
   "lib/smartleadNode": typeof lib_smartleadNode;
   "lib/sourceQuality": typeof lib_sourceQuality;
