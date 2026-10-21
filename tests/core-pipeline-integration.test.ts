@@ -580,6 +580,44 @@ test("SLC29 synthetic empty owner journey starts preparation after explicit cons
   assert.equal(f.tables.pages.some(p => p.slug === "/"), false, "A link target is not an editable-page grant or a fabricated crawl record");
 });
 
+// P145 (Oct 21 2026): the Compost Notes test site's first article listed "Compost Notes is a small test publication
+// run" (its summary sentence cut at eight words) as the home page link under Related reading.
+test("P145 a new site's first article links its home page by the site's name, never a cut summary sentence", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await createEmptyContentSite(f);
+  const summary = "ReservoirNote is a small irrigation maintenance scheduling tool run by a two person team for landscape crews.";
+  Object.assign(f.get(site.id)!, { siteSummary: summary });
+  await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork?.stage === "ready"));
+  const article = f.get(f.tables.jobs.find(j => j.contentWork?.stage === "ready")!.articleId)!;
+  const home = (article.internalLinks ?? []).filter((link: { href: string }) => link.href === "/");
+  assert.ok(home.length > 0, JSON.stringify(article.internalLinks));
+  for (const link of home) {
+    assert.ok(!summary.startsWith(link.anchor), `the anchor is not a cut of the summary: ${link.anchor}`);
+    if (!article.markdown.replace(/\n## Related reading[\s\S]*$/, "").includes(link.anchor)) assert.equal(link.anchor, "ReservoirNote home page");
+  }
+  f.assertOffline();
+});
+
+// P145 (Oct 21 2026): the Compost Notes test site's first article published the draft's H1 ("...How to Make It Safely at
+// Home") under its renamed title ("...How to Compost Coop Litter Before Using It"): two headlines on one page.
+test("P145 a renamed article keeps one headline: its body's leading H1 follows the final title", async () => {
+  // The reviewer rejects the title; the revision renames it (as the canary's revision did).
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000,
+    draftResponse: (article: Fields) => ({ ...article, markdown: `# ${article.title}\n\n${article.markdown}` }),
+    metadataResponse: (metadata: Fields) => ({ ...metadata, title: `${metadata.title} in Practice` }),
+    auditResponse: (audit: Fields, request: Fields) => String(request.messages[0].content).includes(" in Practice") ? audit
+      : { ...audit, score: 62, materialDefects: ["The title promises more than the body gives; reword the title to match its scope."] } });
+  await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => ["ready", "failed"].includes(j.contentWork?.stage)));
+  const ready = f.tables.jobs.find(j => j.contentWork?.stage === "ready");
+  assert.ok(ready, diagnostic(f));
+  const article = f.get(ready.articleId)!;
+  assert.match(article.title, / in Practice$/);
+  const first = String(article.markdown).split("\n").find((line: string) => line.trim());
+  assert.ok(!first?.startsWith("# ") || first === `# ${article.title}`, `stale headline: ${first}`);
+  f.assertOffline();
+});
+
 test("SLC29 an unreachable empty-site homepage cannot manufacture an internal-link target or quality approval", async () => {
   const f = setup({ growthFirst: true, failedOptionalSource: true, businesses: [slcBusinesses[0]] }), site = await createEmptyContentSite(f);
   await selectGrowth(f);

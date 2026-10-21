@@ -5905,7 +5905,10 @@ async function handleLinks(
         const root = await fetchPublicText(`https://${domain}/`, { sameHostRedirects: true });
         const resolved = new URL(root.url);
         if (resolved.hostname === domain && resolved.pathname === "/" && !resolved.search && root.text.trim()) {
-          linkPages.push({ slug: "/", title: site.siteSummary ?? site.siteName ?? domain, summary: site.siteSummary,
+          // The link reads as the site's name, never a cut of its summary
+          // sentence (P145, Oct 21 2026: a new site's first article listed
+          // "Compost Notes is a small test publication run" under Related reading).
+          linkPages.push({ slug: "/", title: `${site.siteName?.trim() || domain} home page`, summary: site.siteSummary,
             keywords: (site.anchorKeywords ?? []).slice(0, 12) });
         }
       }
@@ -7711,6 +7714,13 @@ async function reviewExistingArticleHandler(
       sources,
     });
     const nextTitle = metadata.title.trim();
+    // The body's leading H1 was set to the draft title before the final
+    // metadata renamed it, and a stale one is published as a second headline
+    // (P145, Oct 21 2026: the Compost Notes test site's first article). Pentra's
+    // own new drafts follow the final title; edits and improvements keep their text.
+    if (contentProviderMayRepairDraft() && nextTitle !== article.title) {
+      finalReviewMarkdown = normalizeArticleHeadings(finalReviewMarkdown, nextTitle);
+    }
     const nextMetaTitle = clampMetaTitle(metadata.metaTitle);
     const nextMetaDescription = clampMetaDescription(metadata.metaDescription);
     const finalStats = calculateArticleStats(finalReviewMarkdown);
