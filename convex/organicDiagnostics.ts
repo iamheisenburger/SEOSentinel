@@ -5,7 +5,7 @@ import { articleMatchesCurrentDomain, gscConnectionMatchesCurrentDomain } from "
 import { takeCurrentGscPageRows, takeCurrentGscQueryRows } from "./lib/currentGscRows";
 import type { Doc } from "./_generated/dataModel";
 import { CONTENT_PAGE_COOLDOWN_MS, CONTENT_PAGE_REVIEW_MS, confirmedContentProfileHash, contentConnectionHash, refreshInsertTarget } from "./lib/contentSelection";
-import { REFRESH_COOLDOWN_MS, REFRESH_REVIEW_MS, refreshablePentraPage, refreshOpportunities, refreshSlotAvailable, refreshWindowStart } from "./lib/articleRefresh";
+import { REFRESH_COOLDOWN_MS, REFRESH_REVIEW_MS, pageSearchStats, refreshablePentraPage, refreshBaseline, refreshOpportunities, refreshSlotAvailable, refreshWindowStart } from "./lib/articleRefresh";
 import { evaluateTopicBusinessFit, tenantTopicBusinessSignals } from "./lib/autopilotBuffer";
 
 /** The page-improvement chooser reads at most this many Search Console rows (selectedPages.chooseImprovement). */
@@ -71,9 +71,21 @@ async function improvementGates(ctx: QueryCtx, site: Doc<"sites">, editablePages
       position: (seen[0] ?? all[0]) ? Math.round((seen[0] ?? all[0]).position * 10) / 10 : null,
       impressions: (seen[0] ?? all[0])?.impressions ?? null, blockedBy });
   }
+  // Delivered refreshes: the search each answered when it was chosen, and the
+  // same page and search over the newest 28 days (measured, never claimed as cause).
+  const pageUrls = new Map(editablePages.map(page => [String(page._id), page.url]));
+  const measured = recentJobs.filter(j => j.contentWork!.intent === "improve" && !j.contentWork!.ownerRequest && j.contentWork!.stage === "verified")
+    .flatMap(j => {
+      const before = refreshBaseline(j.contentWork!.opportunity), url = pageUrls.get(String(j.contentWork!.targetPageId));
+      if (!before || !url) return [];
+      const deliveredAt = j.contentWork!.verifiedAt ?? j.contentWork!.publishedAt ?? j.updatedAt;
+      const after = pageSearchStats(fullRows.rows, url, before.query);
+      return [{ url, query: before.query, deliveredAt, daysSince: Math.floor((now - deliveredAt) / 86_400_000), before: { position: before.position, impressions: before.impressions },
+        after: after ? { position: Math.round(after.position * 10) / 10, impressions: after.impressions } : null }];
+    });
   return { origins: originCount(editablePages), slotAvailable, gates, windowStart,
     chooserRows: chooserRows.rows.length, chooserRowsCapped: chooserRows.exhausted, fullWindowRows: fullRows.rows.length,
-    opportunities: opportunity, samples };
+    opportunities: opportunity, samples, measured };
 }
 function originCount(pages: Doc<"pages">[]) {
   return pages.reduce<Record<string, number>>((acc, p) => { const k = p.editable!.origin ?? "selected"; acc[k] = (acc[k] ?? 0) + 1; return acc; }, {});

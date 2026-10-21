@@ -7770,13 +7770,63 @@ test("P76 an article Autopilot wrote and enrolled at publication gets the page-2
   const job = refreshed()[0];
   assert.equal(job.contentWork.intent, "improve");
   assert.equal(job.contentWork.editTarget?.mode, "insert_section");
-  assert.match(job.contentWork.opportunity, /Refresh of a page-2 article: Search Console shows ".+" at average position 14 with 80 impressions/);
+  assert.match(job.contentWork.opportunity, /Refresh of a page Google shows: Search Console shows ".+" at average position 14 with 80 impressions/);
   const refreshedMarkdown = String(f.get(page._id)!.editable.markdown);
   const anchor = job.contentWork.editTarget.before, at = enrolledMarkdown.indexOf(anchor);
   assert.ok(at > 0 && refreshedMarkdown.startsWith(enrolledMarkdown.slice(0, at)), "text before the new section is unchanged");
   assert.ok(refreshedMarkdown.trimEnd().endsWith(enrolledMarkdown.slice(at).trimEnd()), "the closing block is unchanged");
   assert.equal(f.get(page._id)!.editable.origin, undefined, "the page stays Autopilot's own enrolled page");
   assert.ok(f.get(page._id)!.editable.lastImprovedAt, "the 60-day refresh cooldown starts");
+  f.assertOffline();
+});
+
+// --- P142 (Oct 21 2026): rule 2a covered new articles only, so every automatic page improvement still needed
+// editorial and fact scores of 85 on the whole page: LeadPilot's refreshes failed 7 of 7 (editorial 62, fact 67-83),
+// each after three paid reviews. And the refresh window was positions 8-30, which left out most pages Google showed.
+test("P142 a page Google shows at position 40 gets its refresh, and a low review score is a note, not a veto", async () => {
+  const refreshAudit = (request: Fields) => String(request.messages[0].content).includes("## A working method for");
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000,
+    auditResponse: (value: Fields, request: Fields) => refreshAudit(request)
+      ? { ...value, score: 62, materialDefects: ["Tighten the introduction so the answer comes first."] } : value });
+  const day = 86_400_000, site = await selectGrowth(f, 7 * day);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.stage === "verified")));
+  const created = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!, article = f.get(created.articleId)!;
+  const page = f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!;
+  const enrolledMarkdown = String(page.editable.markdown);
+  const query = String(f.get(article.topicId!)!.primaryKeyword).toLowerCase();
+  f.setTime(Math.max(f.now(), page.editable.selectedAt + 29 * day));
+  const date = new Date(f.now() - day).toISOString().slice(0, 10), syncEpoch = `refresh-${date}`;
+  f.get(site.id)!.gscDateEpochs = [...(f.get(site.id)!.gscDateEpochs ?? []), { date, syncEpoch }];
+  // Shown on page four: outside the old 8-30 window.
+  f.add("search_performance", { siteId: site.id, date, syncEpoch, page: article.publicUrl, query,
+    syncVersion: 2, syncedAt: f.now(), clicks: 0, impressions: 40, ctr: 0, position: 40, createdAt: f.now() });
+  f.get(site.id)!.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: f.get(site.id)! as never,
+    ownerAccountKey: accountDeletionKey(f.get(site.id)!.userId), verifiedAt: f.now() });
+  const gates = (await f.invoke("organicDiagnostics:snapshot", { siteId: site.id })).improvements.gates;
+  assert.deepEqual(gates.samples.map((sample: { blockedBy: string }) => sample.blockedBy), ["ready"], JSON.stringify(gates));
+  const refreshed = () => f.tables.jobs.filter(j => j.contentWork?.targetPageId === page._id && j.contentWork?.stage === "verified");
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_work", reason: "synthetic_refresh_evidence" });
+  await pumpUntil(f, () => refreshed().length === 1 || f.tables.jobs.some(j => j.contentWork?.targetPageId === page._id && j.contentWork?.stage === "failed"),
+    400, START + 120 * day);
+  const job = refreshed()[0];
+  assert.ok(job, diagnostic(f));
+  assert.equal(job.contentWork.intent, "improve");
+  assert.match(job.contentWork.opportunity, /Search Console shows ".+" at average position 40 with 40 impressions/);
+  assert.equal(job.contentWork.revisions, 0, "accepted at the first review: no paid rewrite chasing a score");
+  const reviewed = f.get(job.articleId)!;
+  assert.equal(reviewed.ownerQualityWaiver?.userId, "pentra-autopilot");
+  assert.ok(reviewed.ownerQualityWaiver.issues.some((issue: string) => /Editorial quality score is 62/.test(issue)), JSON.stringify(reviewed.ownerQualityWaiver));
+  // Only the new section was added; every existing byte is kept.
+  const refreshedMarkdown = String(f.get(page._id)!.editable.markdown), anchor = job.contentWork.editTarget.before, at = enrolledMarkdown.indexOf(anchor);
+  assert.ok(at > 0 && refreshedMarkdown.startsWith(enrolledMarkdown.slice(0, at)) && refreshedMarkdown.trimEnd().endsWith(enrolledMarkdown.slice(at).trimEnd()));
+  assert.match(refreshedMarkdown, /## A working method for /);
+  // V6: the operator snapshot measures the refresh on the same page and search.
+  const measured = (await f.invoke("organicDiagnostics:snapshot", { siteId: site.id })).improvements.gates.measured;
+  assert.equal(measured.length, 1, JSON.stringify(measured));
+  assert.equal(measured[0].query, query);
+  assert.deepEqual(measured[0].before, { position: 40, impressions: 40 });
+  assert.deepEqual(measured[0].after, { position: 40, impressions: 40 });
   f.assertOffline();
 });
 
@@ -7811,7 +7861,7 @@ test("P91 a page whose refresh the review rejected on every pass is not refreshe
   assert.ok(fresh.length >= 1, "the slot still gets work");
   assert.ok(fresh.every(j => j.contentWork.intent === "create" && j.contentWork.targetPageId !== page._id),
     JSON.stringify(fresh.map(j => ({ intent: j.contentWork.intent, opportunity: j.contentWork.opportunity }))));
-  assert.ok(!f.tables.topic_clusters.some(t => t.siteId === site.id && String(t.notes ?? "").startsWith("Refresh of a page-2 article: Search Console")),
+  assert.ok(!f.tables.topic_clusters.some(t => t.siteId === site.id && String(t.notes ?? "").startsWith("Refresh of a page Google shows: Search Console")),
     "no new refresh topic is minted for the retired page + search");
   f.assertOffline();
 });
@@ -7874,7 +7924,7 @@ test("Autopilot adopts its own older article on Google page 2 and refreshes it a
   const job = refreshed()[0];
   assert.equal(job.contentWork.intent, "improve");
   assert.equal(job.contentWork.editTarget?.mode, "insert_section");
-  assert.match(job.contentWork.opportunity, /Refresh of a page-2 article: Search Console shows ".+" at average position 14 with 40 impressions/);
+  assert.match(job.contentWork.opportunity, /Refresh of a page Google shows: Search Console shows ".+" at average position 14 with 40 impressions/);
   const refreshedMarkdown = String(f.get(page._id)!.editable.markdown);
   assert.notEqual(refreshedMarkdown, adoptedMarkdown);
   // One new section before the closing block; every existing byte kept.

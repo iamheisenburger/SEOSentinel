@@ -14,6 +14,17 @@ test("pages ranking on positions 4-20 are improved first, by impressions", () =>
   assert.deepEqual(moneyPagesFirst(pages, rows).map(p => p.url.split("/").pop()), ["money", "deep", "top", "none"]);
 });
 
+// P142 (Oct 21 2026): pages Google shows at 21-50 were never looked at first.
+test("pages Google shows at 21-50 follow, their impressions discounted by distance", () => {
+  const pages = [{ url: "https://a.example/faint" }, { url: "https://a.example/shown" }, { url: "https://a.example/deep" }];
+  const rows = [
+    { page: "https://a.example/faint", position: 10, impressions: 20 },
+    { page: "https://a.example/shown", position: 31, impressions: 300 }, // 300 × (20/31)² ≈ 125
+    { page: "https://a.example/deep", position: 60, impressions: 900 }, // past 50: not counted
+  ];
+  assert.deepEqual(moneyPagesFirst(pages, rows).map(p => p.url.split("/").pop()), ["shown", "faint", "deep"]);
+});
+
 test("without Search Console rows the original order is kept", () => {
   const pages = [{ url: "x" }, { url: "y" }];
   assert.deepEqual(moneyPagesFirst(pages, []), pages);

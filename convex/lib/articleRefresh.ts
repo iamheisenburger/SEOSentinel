@@ -1,19 +1,20 @@
-/** Autopilot refresh of Pentra's own older articles that sit on Google's
- * page 2 (the owner's decision, Sep 30 2026): a refresh counts as an article
- * slot, but
+/** Autopilot refresh of Pentra's own older articles that Google already shows
+ * (the owner's decision, Sep 30 2026): a refresh counts as an article slot, but
  * - at most one of every four automatic slots is a refresh, so paying
  *   customers keep getting mostly new articles;
  * - only an article live for at least 28 days qualifies;
  * - only when Search Console shows a real search it already appears for at
- *   average position 8–30 with at least 10 impressions in the last 28 days;
+ *   average position 4–50 with at least 10 impressions in the last 28 days
+ *   (8–30 until P142, Oct 21 2026: LeadPilot's best article sat at position 6
+ *   and its most-shown search, "lead scoring template", at 31, both out of reach);
  * - the same article is refreshed at most once every 60 days.
  * When nothing qualifies, the slot is an ordinary new article. Pure. */
 
 export const REFRESH_MIN_AGE_MS = 28 * 86_400_000;
 export const REFRESH_COOLDOWN_MS = 60 * 86_400_000;
 export const REFRESH_MIN_IMPRESSIONS = 10;
-export const REFRESH_MIN_POSITION = 8;
-export const REFRESH_MAX_POSITION = 30;
+export const REFRESH_MIN_POSITION = 4;
+export const REFRESH_MAX_POSITION = 50;
 /** One refresh in every REFRESH_SLOT_SPACING consecutive automatic slots. */
 export const REFRESH_SLOT_SPACING = 4;
 export const REFRESH_WINDOW_DAYS = 28;
@@ -33,7 +34,19 @@ export type RefreshOpportunity = {
   position: number;
 };
 
-/** Impression-weighted average position per search, for one page. */
+/** What one impression at this average position is worth lifting: all of it
+ * on positions 4-20, then falling with the square of the distance (clicks fall
+ * steeply with position: an impression at 45 counts a fifth of one at 20). */
+export function shownPositionWeight(position: number): number {
+  return position >= REFRESH_MIN_POSITION && position <= REFRESH_MAX_POSITION ? Math.min(1, (20 / position) ** 2) : 0;
+}
+
+/** What answering a search is worth: its impressions, weighted by position. */
+export function refreshOpportunityValue(opportunity: RefreshOpportunity): number {
+  return opportunity.impressions * shownPositionWeight(opportunity.position);
+}
+
+/** Impression-weighted average position per search, for one page, most valuable first. */
 export function refreshOpportunities(rows: RefreshQueryRow[], pageUrl: string): RefreshOpportunity[] {
   const byQuery = new Map<string, { impressions: number; weighted: number }>();
   for (const row of rows) {
@@ -49,7 +62,26 @@ export function refreshOpportunities(rows: RefreshQueryRow[], pageUrl: string): 
     .map(([query, entry]) => ({ query, impressions: entry.impressions, position: entry.weighted / entry.impressions }))
     .filter((entry) => entry.impressions >= REFRESH_MIN_IMPRESSIONS &&
       entry.position >= REFRESH_MIN_POSITION && entry.position <= REFRESH_MAX_POSITION)
-    .sort((a, b) => b.impressions - a.impressions || a.position - b.position || a.query.localeCompare(b.query));
+    .sort((a, b) => refreshOpportunityValue(b) - refreshOpportunityValue(a) || a.position - b.position || a.query.localeCompare(b.query));
+}
+
+/** One page's impressions and average position for one search, whatever its
+ * size: the before and after of a delivered refresh. */
+export function pageSearchStats(rows: RefreshQueryRow[], pageUrl: string, query: string): RefreshOpportunity | null {
+  const wanted = query.trim().toLowerCase();
+  let impressions = 0, weighted = 0;
+  for (const row of rows) {
+    if (row.page !== pageUrl || !(row.impressions > 0) || typeof row.position !== "number" || row.query.trim().toLowerCase() !== wanted) continue;
+    impressions += row.impressions; weighted += row.position * row.impressions;
+  }
+  return impressions > 0 ? { query: wanted, impressions, position: weighted / impressions } : null;
+}
+
+/** The search a delivered refresh answered, as Search Console showed it when
+ * the refresh was chosen (from the work's recorded opportunity). */
+export function refreshBaseline(opportunity: string | undefined): RefreshOpportunity | null {
+  const match = /^Refresh of a page[^:]*: Search Console shows "(.+)" at average position (\d+) with (\d+) impressions/.exec(opportunity ?? "");
+  return match ? { query: match[1], position: Number(match[2]), impressions: Number(match[3]) } : null;
 }
 
 export type RefreshSlotJob = {

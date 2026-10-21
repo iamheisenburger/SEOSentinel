@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  pageSearchStats,
   pentraOnlyFileHistory,
   pentraOwnedMarkdown,
   REFRESH_HISTORY_LIMIT,
   REFRESH_COOLDOWN_MS,
   refreshArticleOldEnough,
+  refreshBaseline,
   refreshOpportunities,
   refreshSlotAvailable,
   refreshWindowStart,
@@ -14,16 +16,39 @@ import {
 
 const page = "https://maple.example/blog/garden-visit";
 
-test("a refresh needs a real page-2 search: 10+ impressions at average position 8-30", () => {
+// P142 (Oct 21 2026): the window was 8-30, so LeadPilot's best article (position 6) and its
+// most-shown search ("lead scoring template", 63 impressions at 31) were never refreshed.
+test("a refresh needs a real search Google shows the page for: 10+ impressions at average position 4-50, most valuable first", () => {
   const rows = [
     { page, query: "garden visit checklist", impressions: 6, position: 14 },
     { page, query: "garden visit checklist", impressions: 6, position: 16 },
-    { page, query: "garden visit cost", impressions: 40, position: 4 }, // already top of page one
-    { page, query: "garden pruning notes", impressions: 30, position: 45 }, // too deep to lift
+    { page, query: "garden visit times", impressions: 20, position: 6 }, // bottom of page one
+    { page, query: "garden pruning notes", impressions: 30, position: 45 }, // shown on page five: worth less per impression
+    { page, query: "garden visit cost", impressions: 40, position: 2.5 }, // already in the top three
+    { page, query: "garden soil depth", impressions: 30, position: 60 }, // too deep to lift
     { page, query: "garden access form", impressions: 9, position: 12 }, // too little demand
     { page: "https://maple.example/blog/other", query: "garden visit checklist", impressions: 99, position: 12 },
   ];
-  assert.deepEqual(refreshOpportunities(rows, page), [{ query: "garden visit checklist", impressions: 12, position: 15 }]);
+  assert.deepEqual(refreshOpportunities(rows, page), [
+    { query: "garden visit times", impressions: 20, position: 6 },
+    { query: "garden visit checklist", impressions: 12, position: 15 },
+    { query: "garden pruning notes", impressions: 30, position: 45 },
+  ]);
+});
+
+test("a delivered refresh is measured on the same page and search: before from its recorded opportunity, after from Search Console", () => {
+  assert.deepEqual(refreshBaseline('Refresh of a page Google shows: Search Console shows "garden visit times" at average position 31 with 63 impressions in the last 28 days. No claim of causal growth.'),
+    { query: "garden visit times", position: 31, impressions: 63 });
+  assert.deepEqual(refreshBaseline('Refresh of a page-2 article: Search Console shows "lead scoring saas" at average position 17 with 23 impressions in the last 28 days.'),
+    { query: "lead scoring saas", position: 17, impressions: 23 }, "refreshes recorded before P142");
+  assert.equal(refreshBaseline("Owner-confirmed exact correction; not scheduled SEO delivery or growth"), null);
+  const rows = [
+    { page, query: "Garden visit times", impressions: 10, position: 8 },
+    { page, query: "garden visit times", impressions: 30, position: 4 },
+    { page: "https://maple.example/blog/other", query: "garden visit times", impressions: 50, position: 1 },
+  ];
+  assert.deepEqual(pageSearchStats(rows, page, "garden visit times"), { query: "garden visit times", impressions: 40, position: 5 });
+  assert.equal(pageSearchStats(rows, page, "garden visit cost"), null);
 });
 
 test("refreshes take at most one of every four automatic slots", () => {

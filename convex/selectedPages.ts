@@ -14,7 +14,7 @@ import { evaluateTopicBusinessFit, tenantTopicBusinessSignals } from "./lib/auto
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopicsByContentFeasibility } from "./lib/siteDomainBinding";
 import { stripLeadingDocumentTitle } from "./lib/markdownPublishing";
 import { publicationDeliveryConfig } from "./lib/publicationArtifact";
-import { REFRESH_COOLDOWN_MS, REFRESH_REVIEW_MS, refreshArticleOldEnough, refreshablePentraPage, refreshOpportunities, refreshSlotAvailable, refreshWindowStart } from "./lib/articleRefresh";
+import { REFRESH_COOLDOWN_MS, REFRESH_REVIEW_MS, refreshArticleOldEnough, refreshablePentraPage, refreshOpportunities, refreshOpportunityValue, refreshSlotAvailable, refreshWindowStart } from "./lib/articleRefresh";
 import { isBrandedSearchQuery } from "./lib/searchPerformance";
 
 async function owner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
@@ -171,7 +171,7 @@ export const workContext = internalQuery({ args: { siteId: v.id("sites"), jobId:
 
 const improvementText = (text: string | undefined) => (text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 /** The opportunity notes chooseImprovement gives the topic of a page improvement. */
-const IMPROVEMENT_TOPIC_NOTES = /^(?:Refresh of a page-2 article|Current Search Console query|Confirmed first-party reader question)\b/;
+const IMPROVEMENT_TOPIC_NOTES = /^(?:Refresh of a page-2 article|Refresh of a page Google shows|Current Search Console query|Confirmed first-party reader question)\b/;
 
 /** Pages whose Autopilot improvement the review rejected on every pass, within
  * the refresh cooldown (by page title, whatever search it answered). A failed
@@ -222,8 +222,8 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
     try { assertUnprotectedPage(page.slug, e.title, e.sourceContent); } catch { continue; }
     if (exhausted.has(improvementText(e.title))) continue;
     if (refreshDue(e)) {
-      // The page-2 search is usually the article's own keyword, so it is
-      // already in the text: the refresh answers it in a dedicated section.
+      // The search is usually the article's own keyword, so it is already in
+      // the text: the refresh answers it in a dedicated section.
       const eligible = refreshOpportunities(measurements.rows, page.url).filter(o => !isBrandedSearchQuery(o.query, site.domain) &&
         evaluateTopicBusinessFit({ keyword: o.query, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible);
       const best = eligible.find(o => !e.markdown.toLowerCase().includes(o.query)) ?? eligible[0];
@@ -231,7 +231,7 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
       const refreshTarget = best ? refreshInsertTarget(e, managed?.articleType) : undefined;
       if (best && refreshTarget) {
         return { page, question: best.query, editTarget: refreshTarget,
-          reason: `Refresh of a page-2 article: Search Console shows "${best.query}" at average position ${Math.round(best.position)} with ${best.impressions} impressions in the last 28 days. No claim of causal growth.` };
+          reason: `Refresh of a page Google shows: Search Console shows "${best.query}" at average position ${Math.round(best.position)} with ${best.impressions} impressions in the last 28 days. No claim of causal growth.` };
       }
     }
     // An adopted article is only ever refreshed; an article Autopilot wrote
@@ -256,7 +256,7 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
 
 /** Pentra's own older published articles that could be refreshed: live for
  * 28+ days on the current GitHub destination, not yet an editable page, and
- * showing a page-2 search in the last 28 days of Search Console data. */
+ * shown for a search at positions 4-50 in the last 28 days of Search Console data. */
 export const refreshAdoptionContext = internalQuery({ args: { siteId: v.id("sites"), limit: v.optional(v.number()) }, handler: async (ctx, args) => {
   const site = await ctx.db.get(args.siteId);
   if (!site || site.deletionStatus || site.accountDeletionRequestedAt || site.serviceMode !== "growth_first" ||
@@ -274,7 +274,7 @@ export const refreshAdoptionContext = internalQuery({ args: { siteId: v.id("site
     .filter(row => row.publicUrl && row.publicUrlStatus === "verified" && refreshArticleOldEnough(row.publishedAt, Date.now()) && !adopted.has(row.publicUrl));
   const scored = summaries.map(row => ({ row, best: refreshOpportunities(measurements.rows, row.publicUrl!)
     .find(o => !isBrandedSearchQuery(o.query, site.domain)) }))
-    .filter(entry => entry.best).sort((a, b) => b.best!.impressions - a.best!.impressions)
+    .filter(entry => entry.best).sort((a, b) => refreshOpportunityValue(b.best!) - refreshOpportunityValue(a.best!))
     .slice(0, Math.max(1, Math.min(args.limit ?? 3, 5)));
   const candidates = [];
   for (const { row } of scored) {

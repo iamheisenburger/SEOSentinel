@@ -2253,9 +2253,14 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">, r
   // A failed first review reports its issues here; when every one of them is a
   // note autopilot may accept, it is accepted now instead of after a paid
   // rewrite (Oct 14: 33 of 39 LeadPilot articles paid for at least one).
+  // Rule 2a covers Autopilot's own page improvements too (P142, Oct 21 2026):
+  // they still needed scores of 85 on the whole page, so LeadPilot's refreshes
+  // failed 7 of 7 on scores (editorial 62, fact 67-83), each after three paid
+  // reviews. Their objective checks still block, and the deterministic
+  // improvement check below still proves only the new section changed.
   const autopilotAcceptable = !rejectionIssues?.length ||
     rejectionIssues.every(issue => ownerWaivableIssue(issue, article!, "autopilot"));
-  if (stage === "review_failed" && !cw.ownerRequest && cw.intent === "create" && autopilotAcceptable) {
+  if (stage === "review_failed" && !cw.ownerRequest && (cw.intent === "create" || automaticImprovement(cw)) && autopilotAcceptable) {
     const site = await ctx.db.get(job.siteId!);
     const topic = article.topicId ? await ctx.db.get(article.topicId) : null;
     // The review's own target check: the measured keyword must still fit the
