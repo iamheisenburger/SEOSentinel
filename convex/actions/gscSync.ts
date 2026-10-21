@@ -31,6 +31,9 @@ import {
 const GSC_HTTP_TIMEOUT_MS = 20_000;
 /** An Autopilot site whose articles Google has not found gets its sitemap sent at most this often. */
 const AUTOPILOT_SITEMAP_RESUBMIT_MS = 14 * 24 * 60 * 60 * 1000;
+/** After new articles, the sitemap is sent again at most this often (Oct 21 2026:
+ * pentra.dev's had been sent once, Oct 14, while 20 of its 52 inspected pages were indexed). */
+const NEW_ARTICLES_SITEMAP_RESUBMIT_MS = 3 * 24 * 60 * 60 * 1000;
 const UNDISCOVERED_COVERAGE = new Set(["URL is unknown to Google", "Discovered - currently not indexed"]);
 
 type DomainBoundGscSite = Doc<"sites"> & {
@@ -303,10 +306,11 @@ async function discoverSitemapUrl(domain: string): Promise<string> {
 }
 
 /** Autopilot sites (the content engine) get the discovery help older sites got
- * from the growth controller: when Search Console reports that published
- * articles are unknown to Google, Pentra submits the site's sitemap. A refused
- * submission (for example a restricted Search Console user) is recorded and
- * never disconnects Search Console. */
+ * from the growth controller: Pentra submits the site's sitemap when Search
+ * Console reports published articles unknown to Google (at most every 14
+ * days), and after new articles are published (at most every 3 days). A
+ * refused submission (for example a restricted Search Console user) is
+ * recorded and never disconnects Search Console. */
 async function submitAutopilotSitemapIfNeeded(
   ctx: ActionCtx,
   site: Doc<"sites">,
@@ -315,9 +319,12 @@ async function submitAutopilotSitemapIfNeeded(
 ): Promise<{ status: string; sitemapUrl?: string } | null> {
   if (site.serviceMode !== "growth_first" || !site.contentSchedule) return null;
   if (!site.gscScopes?.split(/\s+/).includes("https://www.googleapis.com/auth/webmasters")) return null;
-  if (site.gscSitemapSubmittedAt && site.gscSitemapSubmittedAt > Date.now() - AUTOPILOT_SITEMAP_RESUBMIT_MS) return null;
-  const coverage: string[] = await ctx.runQuery(internal.searchPerformance.publishedCoverageStatesInternal, { siteId: site._id });
-  if (!coverage.some(state => UNDISCOVERED_COVERAGE.has(state))) return null;
+  const signals: { states: string[]; newestPublishedAt: number | null } =
+    await ctx.runQuery(internal.searchPerformance.publishedCoverageStatesInternal, { siteId: site._id });
+  const lastSent = site.gscSitemapSubmittedAt ?? 0;
+  const undiscovered = signals.states.some(state => UNDISCOVERED_COVERAGE.has(state)) && lastSent <= Date.now() - AUTOPILOT_SITEMAP_RESUBMIT_MS;
+  const newArticles = signals.newestPublishedAt !== null && signals.newestPublishedAt > lastSent && lastSent <= Date.now() - NEW_ARTICLES_SITEMAP_RESUBMIT_MS;
+  if (!undiscovered && !newArticles) return null;
   const binding = currentGscBinding(site);
   const sitemapUrl = await discoverSitemapUrl(site.domain);
   let status = "failed";

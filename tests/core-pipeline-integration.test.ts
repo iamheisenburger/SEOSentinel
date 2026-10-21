@@ -5087,11 +5087,25 @@ test("SLC69 Autopilot sends the sitemap to Search Console when Google has not fo
     assert.equal(outcome.sitemap?.status, "pending", JSON.stringify(outcome.status)); f.setIdentity(null);
     await f.invoke("actions/gscSync:syncSiteInternal", { siteId: site.id });
     assert.equal(gscSitemap.submitted.length, 1, "not resubmitted within two weeks");
+    // A newly published article is sent again, at most every three days (P141).
+    const stored = f.get(site.id)!;
+    f.add("article_summaries", { siteId: site.id, slug: "new-guide", title: "New guide", status: "published", publicUrlStatus: "verified",
+      publishedAt: f.now(), createdAt: f.now(), articleCreatedAt: f.now(), gscCoverageState: "Submitted and indexed", gscIndexVerdict: "PASS",
+      gscInspectedAt: f.now() - 3_600_000, gscInspectionProperty: stored.gscProperty,
+      gscInspectionConnectionRevision: Number.isSafeInteger(stored.gscConnectionRevision) ? stored.gscConnectionRevision : 0 });
+    stored.gscSitemapSubmittedAt = f.now() - 2 * 86_400_000;
+    await f.invoke("actions/gscSync:syncSiteInternal", { siteId: site.id });
+    assert.equal(gscSitemap.submitted.length, 1, "sent two days ago: not yet");
+    stored.gscSitemapSubmittedAt = f.now() - 4 * 86_400_000;
+    await f.invoke("actions/gscSync:syncSiteInternal", { siteId: site.id });
+    assert.equal(gscSitemap.submitted.length, 2, "a new article since the last sitemap: sent again");
     f.assertOffline();
   });
   await t.test("indexed_sites_are_left_alone_and_refusals_keep_the_connection", async () => {
     const quiet = { robots: "Sitemap: https://reservoir.example/sitemap.xml", submitted: [] as string[] };
     const indexed = await prepare(quiet, "Submitted and indexed");
+    // Its articles were already sent in a sitemap after they were published.
+    Object.assign(indexed.f.get(indexed.site.id)!, { gscSitemapSubmittedAt: START - 86_400_000 });
     assert.equal((await indexed.f.invoke("actions/gscSync:syncSiteInternal", { siteId: indexed.site.id })).sitemap, undefined);
     assert.equal(quiet.submitted.length, 0);
     const refused = { submitStatus: 403, submitted: [] as string[] };

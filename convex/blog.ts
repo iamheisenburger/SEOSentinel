@@ -190,12 +190,17 @@ export const listPublishedSlugs = query({
       ? await currentPublishedSummaries(ctx, site)
       : await currentPublishedArticles(ctx, site);
     const projected = await projectPublicArticleRows(ctx, site, published);
-    const articles = projected.map((a) => ({
-        slug: normalizeSlug(a.slug || ""),
-        updatedAt: "articleId" in a
-          ? Math.max(a.publishedAt ?? 0, a.articleUpdatedAt ?? 0, a.articleCreatedAt)
-          : Math.max(a.publishedAt ?? 0, a.updatedAt ?? 0, a.createdAt),
-      }));
+    // The sitemap's lastmod is when the public page last changed: a delivered
+    // correction or improvement (projected with its delivery time), else its
+    // publication. Maintenance writes (live checks, the daily 12:30Z Search
+    // Console inspections) bumped every article's lastmod every day (Oct 21
+    // 2026), which teaches Google to ignore it on a site it already crawls rarely.
+    const unchanged = new Set<unknown>(published);
+    const articles = projected.map((a) => {
+      const publishedAt = "articleId" in a ? a.publishedAt ?? a.articleCreatedAt : a.publishedAt ?? a.createdAt;
+      const deliveredAt = !unchanged.has(a) && "updatedAt" in a && typeof a.updatedAt === "number" ? a.updatedAt : 0;
+      return { slug: normalizeSlug(a.slug || ""), updatedAt: Math.max(deliveredAt, publishedAt ?? 0) };
+    });
     return { articles, urlStructure };
   },
 });

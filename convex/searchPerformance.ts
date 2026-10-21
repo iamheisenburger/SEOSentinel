@@ -1201,10 +1201,14 @@ export const publishedCoverageStatesInternal = internalQuery({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }) => {
     const site = await ctx.db.get(siteId);
-    if (!site || !siteExecutionActive(site)) return [];
-    const published = await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "published")).take(1001);
-    return published.filter(row => articleMatchesCurrentDomain(site, row) && row.gscCoverageState && gscInspectionMatchesCurrentConnection(site, row))
-      .map(row => row.gscCoverageState!);
+    if (!site || !siteExecutionActive(site)) return { states: [] as string[], newestPublishedAt: null };
+    const published = (await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "published")).take(1001))
+      .filter(row => articleMatchesCurrentDomain(site, row));
+    return {
+      states: published.filter(row => row.gscCoverageState && gscInspectionMatchesCurrentConnection(site, row)).map(row => row.gscCoverageState!),
+      // The newest publication: a sitemap sent before it doesn't tell Google about it.
+      newestPublishedAt: published.reduce<number | null>((newest, row) => typeof row.publishedAt === "number" && (newest === null || row.publishedAt > newest) ? row.publishedAt : newest, null),
+    };
   },
 });
 

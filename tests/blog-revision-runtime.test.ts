@@ -77,7 +77,7 @@ test("listing and sitemap use the same acknowledged projection with and without 
     assert.equal(list[0].title, f.next.title);
     assert.equal(list[0].metaDescription, f.next.metaDescription);
     assert.equal(list[0].createdAt, 1000);
-    assert.equal((await f.run("listPublishedSlugs")).articles[0].updatedAt, 2200);
+    assert.equal((await f.run("listPublishedSlugs")).articles[0].updatedAt, 2200, "a delivered correction is the page's last change");
   }
 });
 
@@ -207,4 +207,16 @@ test("an improvement whose receipt, hash, article or slug doesn't match is never
   const f = fixture();
   deliveredImprovement(f, { ambiguityDispositionAt: 6000 });
   assert.equal((await f.run("getPublishedBySlug")).markdown, f.next.markdown, "an improvement set aside by a disposition is not served");
+});
+
+// P141 (Oct 21 2026): the daily Search Console inspection and live checks
+// bumped every article's lastmod every day.
+test("the sitemap date is the page's publication, never a maintenance write", async () => {
+  for (const summaryMode of [false, true]) {
+    const f = fixture(summaryMode);
+    f.tables.published_article_revisions.length = 0;
+    Object.assign(f.tables.articles[0], { updatedAt: 9_999 });
+    Object.assign(f.tables.article_summaries[0], { updatedAt: 9_999, articleUpdatedAt: 9_999 });
+    assert.equal((await f.run("listPublishedSlugs")).articles[0].updatedAt, 1000, `summary mode: ${summaryMode}`);
+  }
 });
