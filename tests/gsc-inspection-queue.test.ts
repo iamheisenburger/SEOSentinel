@@ -6,6 +6,8 @@ import {
   GSC_INSPECTION_COOLDOWN_MS,
   isOpenIndexingIncident,
   selectGscInspectionQueue,
+  selectStaleInspections,
+  GSC_STALE_REINSPECT_PER_RUN,
   type GscInspectionQueueCandidate,
 } from "../convex/lib/searchPerformance.ts";
 
@@ -25,6 +27,24 @@ function candidate(
     ...overrides,
   };
 }
+
+// P148 (Oct 21 2026): verdicts outside the 56-day cohort were never refreshed, so pages Google showed in
+// search still read "URL is unknown to Google".
+test("older articles not confirmed indexed are inspected again every 28 days, a few a run", () => {
+  const selected = selectStaleInspections([
+    { ...candidate("indexed-old", 120, { gscInspectedAt: NOW - 60 * DAY }), gscIndexVerdict: "PASS" },
+    { ...candidate("unknown-stale", 120, { gscInspectedAt: NOW - 60 * DAY }), gscIndexVerdict: "NEUTRAL" },
+    { ...candidate("unknown-checked-lately", 120, { gscInspectedAt: NOW - 10 * DAY }), gscIndexVerdict: "NEUTRAL" },
+    { ...candidate("never-inspected", 200) },
+    { ...candidate("in-cohort", 30), gscIndexVerdict: "NEUTRAL" },
+    { ...candidate("other-site", 150), siteId: "site-b" },
+    ...Array.from({ length: 8 }, (_, i) => ({ ...candidate(`more-${i}`, 100, { gscInspectedAt: NOW - (40 + i) * DAY }), gscIndexVerdict: "NEUTRAL" })),
+  ], { siteId: "site-a", now: NOW, limit: 20 });
+  assert.equal(selected.length, GSC_STALE_REINSPECT_PER_RUN);
+  assert.deepEqual(selected.map((c) => c.articleId), ["never-inspected", "unknown-stale", "more-7", "more-6", "more-5"]);
+  assert.equal(selectStaleInspections([{ ...candidate("never-inspected", 200) }], { siteId: "site-a", now: NOW, limit: 0 }).length, 0,
+    "no room left in the run, none added");
+});
 
 test("the full 7/14/28/56-day cohort is eligible instead of the newest 20", () => {
   const newest = Array.from({ length: 24 }, (_, index) =>

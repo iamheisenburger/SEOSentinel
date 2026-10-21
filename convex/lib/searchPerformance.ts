@@ -178,6 +178,26 @@ export function selectGscInspectionQueue<
     .slice(0, limit);
 }
 
+/** Older articles outside the cohort kept their first inspection verdict
+ * forever (P147, Oct 21 2026: pentra.dev pages Google showed in search still
+ * read "URL is unknown to Google"). One not confirmed indexed is inspected
+ * again every 28 days, at most five a run: never inspected first, then the
+ * oldest receipt. Indexed ones are not re-inspected. */
+export const GSC_STALE_REINSPECT_MS = 28 * 24 * 60 * 60 * 1000;
+export const GSC_STALE_REINSPECT_PER_RUN = 5;
+export function selectStaleInspections<
+  Candidate extends GscInspectionQueueCandidate & { gscIndexVerdict?: string },
+>(candidates: readonly Candidate[], args: { siteId: string; now: number; limit: number }): Candidate[] {
+  const cohortStart = args.now - GSC_INSPECTION_COHORT_DAYS * 24 * 60 * 60 * 1000;
+  return candidates
+    .filter((candidate) => candidate.siteId === args.siteId && candidate.publishedAt < cohortStart &&
+      candidate.gscIndexVerdict !== "PASS" &&
+      (candidate.gscInspectedAt === undefined || candidate.gscInspectedAt <= args.now - GSC_STALE_REINSPECT_MS))
+    .sort((left, right) => (left.gscInspectedAt ?? -1) - (right.gscInspectedAt ?? -1) ||
+      left.publishedAt - right.publishedAt || String(left.articleId).localeCompare(String(right.articleId)))
+    .slice(0, Math.max(0, Math.min(args.limit, GSC_STALE_REINSPECT_PER_RUN)));
+}
+
 export type SearchPerformanceRow = {
   date: string;
   query: string;

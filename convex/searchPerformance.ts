@@ -12,6 +12,7 @@ import {
   publishedArticlePageUrl,
   searchConsoleDate,
   selectGscInspectionQueue,
+  selectStaleInspections,
   summarizeSearchPagePerformance,
   summarizeSearchPerformance,
 } from "./lib/searchPerformance";
@@ -1129,7 +1130,23 @@ export const listPublishedForInspection = internalQuery({
       })),
       { siteId, now, limit },
     );
-    return queue.map((article) => ({
+    // Room left in the run goes to older articles whose verdict may be stale
+    // (the oldest 300 published summaries, a few a run; P148).
+    const room = Math.max(1, Math.min(limit ?? 20, 50)) - queue.length;
+    const older = room <= 0 ? [] : selectStaleInspections(
+      (await ctx.db.query("article_summaries").withIndex("by_site_status", (q) =>
+        q.eq("siteId", siteId).eq("status", "published")).take(300))
+        .filter((row) => articleMatchesCurrentDomain(site, row))
+        .map((row) => {
+          const current = gscInspectionMatchesCurrentConnection(site, row);
+          return { articleId: row.articleId, siteId: row.siteId, slug: row.slug,
+            publishedAt: row.publishedAt ?? row.articleCreatedAt,
+            gscInspectedAt: current ? row.gscInspectedAt : undefined,
+            gscIndexVerdict: current ? row.gscIndexVerdict : undefined };
+        }),
+      { siteId, now, limit: room },
+    );
+    return [...queue, ...older].map((article) => ({
       articleId: article.articleId,
       slug: article.slug,
       publishedAt: article.publishedAt,

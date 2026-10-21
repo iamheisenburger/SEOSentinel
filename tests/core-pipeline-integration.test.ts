@@ -3487,6 +3487,9 @@ test("SLC29 Search Console requires complete current epochs and distinguishes ze
     gscInspectionProperty: stored.gscProperty, gscInspectionConnectionRevision: stored.gscConnectionRevision ?? 0 });
   assert.deepEqual((await f.invoke("searchPerformance:contentOutcome", { siteId: site.id })).index, { checked: 2, indexed: 1 },
     "shown in search proves indexed; a page Google never showed keeps its verdict");
+  // P148: the old page's stale verdict is queued for a fresh inspection.
+  const queued = await f.invoke("searchPerformance:listPublishedForInspection", { siteId: site.id, now: end, limit: 20 });
+  assert.ok(queued.some((row: { slug: string }) => row.slug === "old-page"), JSON.stringify(queued));
   assert.equal(r.daily.length, 56); assert.deepEqual(r.daily.at(-1), { date: "2026-09-07", clicks: 3 }); assert.deepEqual(r.daily[0], { date: "2026-07-14", clicks: 0 });
   stored.gscDateEpochs.pop(); r = await f.invoke("searchPerformance:contentOutcome", { siteId: site.id });
   assert.equal(r.current.clicks, 3); assert.equal(r.previous, null);
