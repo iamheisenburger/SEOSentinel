@@ -92,6 +92,18 @@ export function normalizeEvidenceUrl(value: string): string | null {
   }
 }
 
+/** A source's title as readers see it in the Sources list. Web search often
+ * titles a PDF with its file name ("C 1097 2" for a University of Georgia
+ * Extension circular on the Compost Notes test site, Oct 21 2026); a title
+ * without two real words becomes the site it comes from (P153). */
+export function readableSourceTitle(title: string | undefined, url: string): string {
+  const clean = (title ?? "").replace(/\s+/g, " ").trim();
+  if ((clean.match(/\p{L}{3,}/gu) ?? []).length >= 2) return clean;
+  let host: string;
+  try { host = new URL(url).hostname.replace(/^(?:www|secure)\d*\./i, ""); } catch { return clean || url; }
+  return `${host}${/\.pdf(?:$|[?#])/i.test(url) ? " (PDF)" : ""}`;
+}
+
 /** One line on a draft saying what its live research produced and why the
  * rest was dropped (kept in the review's notes). */
 export function researchOutcomeNote(counts: { searches: number; cited: number; competitor: number; secondary: number; unreadable: number; kept: number }): string {

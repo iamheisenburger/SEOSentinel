@@ -167,6 +167,7 @@ import {
   siteCanonicalDomainRevision,
 } from "../lib/siteDomainBinding";
 import {
+  readableSourceTitle,
   researchOutcomeNote,
   strictEvidenceSources,
 } from "../lib/sourceQuality";
@@ -4543,7 +4544,7 @@ async function handleArticle(
       const strict = strictEvidenceSources(candidates);
       const accepted = strict.accepted.map(source => {
         const excerpt = (source.excerpt ?? source.excerpts.join(" … ")).slice(0, 2500);
-        return { url: source.url, ...(source.title ? { title: source.title } : {}), excerpt, contentHash: sha256Hex(excerpt), capturedAt: contentProviderPromptTime() };
+        return { url: source.url, title: readableSourceTitle(source.title, source.url), excerpt, contentHash: sha256Hex(excerpt), capturedAt: contentProviderPromptTime() };
       });
       const readable = accepted.filter(source => source.excerpt.length >= 160);
       researchSources = readable.slice(0, 8);
