@@ -4,7 +4,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { plausibleEmail, sendCustomerEmail } from "./lib/customerEmail";
 import { firstArticleEmail, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth, type MissedSlotCause,
-  type MonthlySearch } from "./lib/customerNotices";
+  type MonthlyImprovement, type MonthlySearch } from "./lib/customerNotices";
 import { collectCurrentDomainPublishedSummariesSince, gscConnectionMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { publishedArticlePageUrl } from "./lib/searchPerformance";
 import { isCompleteGscDateRange } from "./lib/gscSearchAnalytics";
@@ -131,9 +131,18 @@ export const noticeContext = internalQuery({ args: { logId: v.id("customer_email
     const published = (await collectCurrentDomainPublishedSummariesSince(ctx, site, window.startMs))
       .filter(a => typeof a.publishedAt === "number" && a.publishedAt < window.endMs).sort((a, b) => a.publishedAt! - b.publishedAt!)
       .map(a => ({ title: a.title, url: a.publicUrl ?? publishedArticlePageUrl(site.domain, site.urlStructure, a.slug) }));
-    const improved = (await ctx.db.query("jobs").withIndex("by_site_content_stage", q => q.eq("siteId", site._id).eq("contentWork.stage", "verified"))
+    const improveJobs = (await ctx.db.query("jobs").withIndex("by_site_content_stage", q => q.eq("siteId", site._id).eq("contentWork.stage", "verified"))
       .order("desc").take(100)).filter(j => j.contentWork?.intent === "improve" && (j.contentWork.verifiedAt ?? 0) >= window.startMs &&
-        (j.contentWork.verifiedAt ?? 0) < window.endMs).length;
+        (j.contentWork.verifiedAt ?? 0) < window.endMs);
+    // Autopilot's own improvements by page; the owner's corrections, edits and rollbacks are counted apart.
+    const improved: MonthlyImprovement[] = [];
+    let corrected = 0;
+    for (const job of improveJobs) {
+      if (job.contentWork!.ownerRequest || job.contentWork!.operation) { corrected++; continue; }
+      const page = job.contentWork!.targetPageId ? await ctx.db.get(job.contentWork!.targetPageId) : null;
+      if (!page || page.siteId !== site._id) continue;
+      improved.push({ title: page.editable?.title ?? page.title ?? page.url, url: page.url, opportunity: job.contentWork!.opportunity });
+    }
     let search: MonthlySearch = "not_connected";
     if (gscConnectionMatchesCurrentDomain(site) && site.gscReceiptStatus !== "revoked") {
       if (!isCompleteGscDateRange(site.gscDateEpochs ?? [], window.startDate, window.endDate)) search = "incomplete";
@@ -148,7 +157,7 @@ export const noticeContext = internalQuery({ args: { logId: v.id("customer_email
         }
       }
     }
-    message = monthlyReportEmail({ domain, month: window, published, improved, search, intervalMs: site.contentSchedule?.paused ? null : site.contentSchedule?.intervalMs ?? null,
+    message = monthlyReportEmail({ domain, month: window, published, improved, corrected, search, intervalMs: site.contentSchedule?.paused ? null : site.contentSchedule?.intervalMs ?? null,
       // Only a slot still ahead is announced (an overdue one is reported by the late-article email).
       nextAt: site.contentSchedule && !site.contentSchedule.paused && site.contentSchedule.nextDeadlineAt > Date.now()
         ? site.contentSchedule.nextDeadlineAt : null, timeZone });

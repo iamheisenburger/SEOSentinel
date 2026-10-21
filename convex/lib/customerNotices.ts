@@ -4,6 +4,7 @@
  * owner's own site, each with the way to turn them off.
  */
 import { internalContentProcessingError } from "./contentAudit.ts";
+import { refreshBaseline } from "./articleRefresh.ts";
 
 const WEEK_MS = 7 * 86_400_000;
 /** A date in the site's own time zone (UTC when it has none or an invalid one). */
@@ -111,21 +112,40 @@ export function reportMonth(now: number) {
 
 export type MonthlySearch = { clicks: number; impressions: number; position: number | null; pagesSeen: number }
   | "not_connected" | "incomplete" | "see_dashboard";
+/** A page Autopilot improved last month, with the reason recorded when it chose it. */
+export type MonthlyImprovement = { title: string; url: string; opportunity?: string };
+
+/** One improved page, saying what changed and why only as far as the record shows. */
+function improvementLine(page: MonthlyImprovement): string {
+  const refresh = refreshBaseline(page.opportunity);
+  if (refresh) return `- "${page.title}" ${page.url}: a new section answers "${refresh.query}" (Google showed the page at position ${refresh.position}, ${refresh.impressions.toLocaleString("en-US")} impressions in the 28 days before)`;
+  const query = /^Current Search Console query: (.+?); impressions=/.exec(page.opportunity ?? "")?.[1];
+  if (query) return `- "${page.title}" ${page.url}: now answers "${query}", a search Google shows it for`;
+  return `- "${page.title}" ${page.url}`;
+}
 
 /** D4 (P127): what Pentra did for a site last month, and what Google showed.
  * Null when there is nothing to report (nothing published or improved and no
  * complete Search Console month). */
 export function monthlyReportEmail(input: { domain: string; month: { label: string }; published: Array<{ title: string; url: string }>;
-  improved: number; search: MonthlySearch; intervalMs: number | null; nextAt: number | null; timeZone?: string }): { subject: string; text: string } | null {
+  improved: MonthlyImprovement[]; corrected?: number; search: MonthlySearch; intervalMs: number | null; nextAt: number | null; timeZone?: string }): { subject: string; text: string } | null {
   const searchReady = typeof input.search === "object";
-  if (!input.published.length && !input.improved && !searchReady) return null;
+  if (!input.published.length && !input.improved.length && !input.corrected && !searchReady) return null;
   const count = (n: number) => n.toLocaleString("en-US");
   const month = input.month.label.split(" ")[0];
   const lines = [`Here's what Pentra did for ${input.domain} in ${input.month.label}.`, ""];
   lines.push(input.published.length ? `Published: ${input.published.length} new article${input.published.length === 1 ? "" : "s"}` : "Published: no new articles");
   for (const article of input.published.slice(0, 10)) lines.push(`- "${article.title}" ${article.url}`);
   if (input.published.length > 10) lines.push(`- and ${input.published.length - 10} more in your dashboard`);
-  if (input.improved) lines.push("", `Improved: ${input.improved} existing article${input.improved === 1 ? "" : "s"}, for searches Google already shows them for.`);
+  // Each improved page by name and the search it answered (P146, Oct 21 2026:
+  // the count alone said nothing, and it counted owner-requested corrections
+  // as "for searches Google already shows them for").
+  if (input.improved.length) {
+    lines.push("", `Improved: ${input.improved.length} existing article${input.improved.length === 1 ? "" : "s"}:`);
+    for (const page of input.improved.slice(0, 10)) lines.push(improvementLine(page));
+    if (input.improved.length > 10) lines.push(`- and ${input.improved.length - 10} more in your dashboard`);
+  }
+  if (input.corrected) lines.push("", `Updated at your request: ${input.corrected} published article${input.corrected === 1 ? "" : "s"}.`);
   lines.push("");
   if (typeof input.search === "object") {
     const s = input.search;
