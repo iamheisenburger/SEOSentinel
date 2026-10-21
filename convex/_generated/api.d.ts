@@ -158,6 +158,7 @@ import type * as lib_planProviderSettlement from "../lib/planProviderSettlement.
 import type * as lib_planSiteAllowance from "../lib/planSiteAllowance.js";
 import type * as lib_plannedTopicEvidenceRecovery from "../lib/plannedTopicEvidenceRecovery.js";
 import type * as lib_productEvidence from "../lib/productEvidence.js";
+import type * as lib_promptRates from "../lib/promptRates.js";
 import type * as lib_providerBudgetAuthorization from "../lib/providerBudgetAuthorization.js";
 import type * as lib_providerSpendReservation from "../lib/providerSpendReservation.js";
 import type * as lib_publicRevisionProjection from "../lib/publicRevisionProjection.js";
@@ -377,6 +378,7 @@ declare const fullApi: ApiFromModules<{
   "lib/planSiteAllowance": typeof lib_planSiteAllowance;
   "lib/plannedTopicEvidenceRecovery": typeof lib_plannedTopicEvidenceRecovery;
   "lib/productEvidence": typeof lib_productEvidence;
+  "lib/promptRates": typeof lib_promptRates;
   "lib/providerBudgetAuthorization": typeof lib_providerBudgetAuthorization;
   "lib/providerSpendReservation": typeof lib_providerSpendReservation;
   "lib/publicRevisionProjection": typeof lib_publicRevisionProjection;
