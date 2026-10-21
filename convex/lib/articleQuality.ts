@@ -2034,6 +2034,14 @@ const READER_VISIBLE_PIPELINE_TEXT: RegExp[] = [
   /\bclaim[- ]ledger\b|\bledger worksheet\b/i,
   /\bstrict evidence mode\b/i,
   /\bas an AI language model\b/i,
+  // P149 (Oct 21 2026): the Compost Notes test site's first article told
+  // readers which advice was "not figures from the sources", "a recommendation
+  // rather than a rule from the sources" and "not source-specified rules", and
+  // that "the sources do not give a hold time": what the sources do or do not
+  // say is the pipeline talking, not guidance for the reader.
+  /\b(?:not|rather than)\s+(?:an?\s+)?(?:figures?|numbers?|rules?|data|facts?|requirements?|guidance|thresholds?|values?)\s+(?:taken\s+)?(?:from|in|given by|stated in)\s+the\s+(?:cited\s+|listed\s+|extension\s+|above\s+)?sources?\b/i,
+  /\bsource-(?:specified|stated|backed|derived|given)\b/i,
+  /\bthe\s+(?:cited\s+|listed\s+|above\s+)?sources?\s+(?:do|does|did)\s*(?:not|n't)\s+(?:give|say|state|specify|provide|cover|offer|mention|include|list)\b/i,
 ];
 const COUNT_WORD_VALUES: Record<string, number> = { two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 const LIST_ITEM = /^(\s*)(?:[-*+]|(\d+)[.)])\s+\S/;
