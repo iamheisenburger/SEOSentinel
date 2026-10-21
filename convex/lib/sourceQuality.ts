@@ -92,6 +92,18 @@ export function normalizeEvidenceUrl(value: string): string | null {
   }
 }
 
+/** One line on a draft saying what its live research produced and why the
+ * rest was dropped (kept in the review's notes). */
+export function researchOutcomeNote(counts: { searches: number; cited: number; competitor: number; secondary: number; unreadable: number; kept: number }): string {
+  const dropped = [
+    counts.competitor ? `${counts.competitor} competitor` : "",
+    counts.secondary ? `${counts.secondary} secondary or vendor` : "",
+    counts.unreadable ? `${counts.unreadable} without a readable excerpt` : "",
+  ].filter(Boolean);
+  const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  return `Research: ${count(counts.searches, "search", "searches")}, ${count(counts.cited, "cited page", "cited pages")}; kept ${counts.kept}${dropped.length ? ` (${dropped.join(", ")})` : ""}.`;
+}
+
 export function classifyEvidenceSource(value: string): EvidenceSourceQuality {
   const normalized = normalizeEvidenceUrl(value);
   if (!normalized) {

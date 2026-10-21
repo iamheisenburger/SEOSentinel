@@ -1582,6 +1582,28 @@ test("SLC68 Autopilot researches on the live web inside the content receipt and 
   const article = f.get(ready.articleId)!;
   assert.deepEqual((article.sources ?? []).map((s: { url: string }) => s.url), ["https://records.example.gov/specification", "https://methods.example.edu/review"], "the article cites only the strict sources");
   assert.match(article.markdown, /\[1\]/, "the claim carries its numbered citation");
+  // P144: what the research produced stays on the draft after review.
+  assert.ok(article.editorialQualityNotes.includes("Research: 2 searches, 3 cited pages; kept 2 (1 secondary or vendor)."), JSON.stringify(article.editorialQualityNotes));
+  f.assertOffline();
+});
+
+// P144 (Oct 21 2026): about half of the owner sites' drafts since Oct 19 kept no source, and nothing recorded why.
+test("P144 a draft records what its research produced, including an official page that could not be read", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], webResearch: { searches: 1, citations: [
+    { url: "https://records.example.gov/specification", title: "Synthetic register specification", cited_text: "The synthetic field register contains an observation label and a review note." },
+    { url: "https://help.example.gov/unreadable", title: "Unreadable help page", cited_text: "Each observation keeps its label until a reviewer closes it." },
+  ] }, evidence: { failed: ["https://help.example.gov/unreadable"], sources: [
+    { url: "https://records.example.gov/specification", title: "Synthetic register specification", text: "Section 2. The synthetic field register contains an observation label and a review note. Each entry records who observed the item, when it was observed and which reviewer checked the note before the entry is closed. Entries without a reviewer remain open." },
+  ] } });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.siteId === site.id && ["ready", "failed"].includes(j.contentWork?.stage)), 200, START + 6 * 3_600_000);
+  const job = f.tables.jobs.find(j => j.siteId === site.id && j.articleId && ["ready", "failed"].includes(j.contentWork?.stage))!;
+  const notes: string[] = f.get(job.articleId)!.editorialQualityNotes ?? [];
+  assert.ok(notes.includes("Research: 1 search, 2 cited pages; kept 1 (1 without a readable excerpt)."), JSON.stringify(notes));
   f.assertOffline();
 });
 

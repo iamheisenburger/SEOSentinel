@@ -167,6 +167,7 @@ import {
   siteCanonicalDomainRevision,
 } from "../lib/siteDomainBinding";
 import {
+  researchOutcomeNote,
   strictEvidenceSources,
 } from "../lib/sourceQuality";
 import { anthropicResponseText, plainTextMaxTokens } from "../lib/anthropicText";
@@ -4540,11 +4541,18 @@ async function handleArticle(
       const competitorDomains = (site.competitors ?? []).map((c: string) => c.replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase());
       const candidates = found.sources.filter(source => !competitorDomains.some(d => source.url.toLowerCase().includes(d)));
       const strict = strictEvidenceSources(candidates);
-      researchSources = strict.accepted.map(source => {
+      const accepted = strict.accepted.map(source => {
         const excerpt = (source.excerpt ?? source.excerpts.join(" … ")).slice(0, 2500);
         return { url: source.url, ...(source.title ? { title: source.title } : {}), excerpt, contentHash: sha256Hex(excerpt), capturedAt: contentProviderPromptTime() };
-      }).filter(source => source.excerpt.length >= 160).slice(0, 8);
+      });
+      const readable = accepted.filter(source => source.excerpt.length >= 160);
+      researchSources = readable.slice(0, 8);
       if (strict.rejected.length) researchQualityNotes.push(`Excluded ${strict.rejected.length} secondary or vendor-authored source(s) from strict evidence.`);
+      // What the research produced, always (P144, Oct 21 2026: about half of
+      // the owner sites' drafts since Oct 19 kept no source, and nothing said why).
+      researchQualityNotes.push(researchOutcomeNote({ searches: found.searches, cited: found.sources.length,
+        competitor: found.sources.length - candidates.length, secondary: strict.rejected.length,
+        unreadable: accepted.length - readable.length, kept: researchSources.length }));
       researchContext = researchSources.length ? [
         "Strict evidence mode is active. Only the preserved source excerpts below may support external factual claims.",
         "PRESERVED SOURCE EXCERPTS (citation order):",
@@ -4985,6 +4993,9 @@ async function handleArticle(
         researchEvidenceSummary: preservedResearchEvidenceSnapshot(dedupedSources),
         productEvidenceSnapshot: productEvidence || undefined,
         productEvidenceHash,
+        // Autopilot drafts are reviewed from this checkpoint, so its research
+        // notes are stored here or never (P144: none ever reached a draft).
+        ...(researchQualityNotes.length ? { editorialQualityNotes: [...researchQualityNotes] } : {}),
         ...generatedStats,
       })
     : undefined;
@@ -7821,7 +7832,7 @@ async function reviewExistingArticleHandler(
         // Evidence-selection diagnostics describe this immutable source set,
         // not stale editorial defects; keep them visible after re-auditing.
         ...(article.editorialQualityNotes ?? []).filter(note =>
-          /^(?:Excluded \d+ .*source|Discarded the blended research brief)/.test(note)),
+          /^(?:Excluded \d+ .*source|Discarded the blended research brief|Research: |Web research unavailable)/.test(note)),
         // Persist the selected exact artifact's unresolved corrections, not
         // only the auditor's general observations or a rejected candidate's
         // notes. The next separately bounded attempt needs this feedback.
