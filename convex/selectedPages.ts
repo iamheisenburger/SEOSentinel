@@ -219,7 +219,10 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
   for (const page of moneyPagesFirst(candidates, measurements.rows)) {
     const e = page.editable!;
     await ctx.db.patch(page._id, { editable: { ...e, lastReviewedAt: Date.now() } });
-    try { assertUnprotectedPage(page.slug, e.title, e.sourceContent); } catch { continue; }
+    // Pentra's own article is not a protected legal or pricing page because its
+    // title names terms or pricing (P156: pentra.dev's "...Organize the Terms
+    // That Actually Drive Traffic" could never be refreshed or adopted).
+    try { assertUnprotectedPage(page.slug, e.title, e.sourceContent, { pentraCreated: Boolean(e.managedArticleId) }); } catch { continue; }
     if (exhausted.has(improvementText(e.title))) continue;
     if (refreshDue(e)) {
       // The search is usually the article's own keyword, so it is already in
@@ -302,7 +305,7 @@ export const recordRefreshAdoption = internalMutation({ args: { siteId: v.id("si
     selectionConnection(site);
     if (contentConnectionHash(site) !== args.connectionHash || confirmedContentProfileHash(site) !== args.profileHash ||
       !selectedUrlMatches(site, args.source.slug, args.source.url) || article.publicUrl !== args.source.url) return { adopted: false };
-    assertUnprotectedPage(args.source.slug, args.source.title, args.source.sourceContent);
+    assertUnprotectedPage(args.source.slug, args.source.title, args.source.sourceContent, { pentraCreated: true });
     const rows = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", site._id)).take(501);
     if (rows.length > 500) return { adopted: false };
     const matches = rows.filter(p => p.url === args.source.url);

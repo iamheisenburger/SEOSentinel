@@ -8012,6 +8012,31 @@ test("P142 a page Google shows at position 40 gets its refresh, and a low review
   f.assertOffline();
 });
 
+// P156 (Oct 22 2026): a title naming terms, pricing or privacy marked Pentra's own article as a protected legal or
+// pricing page, so it could never be refreshed or adopted (pentra.dev's "...Organize the Terms That Actually Drive Traffic").
+test("P156 Pentra's own article whose title names pricing still gets its page refresh", async () => {
+  const business = { ...slcBusinesses[0], keywords: slcBusinesses[0].keywords.map((keyword: string) => `${keyword} pricing`) };
+  const f = setup({ growthFirst: true, businesses: [business] });
+  const day = 86_400_000, site = await selectGrowth(f, 7 * day);
+  await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.stage === "verified")));
+  const created = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!, article = f.get(created.articleId)!;
+  assert.match(String(article.title), /pricing/i, "precondition: the article's title names pricing");
+  const page = f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!;
+  const query = String(f.get(article.topicId!)!.primaryKeyword).toLowerCase();
+  f.setTime(Math.max(f.now(), page.editable.selectedAt + 29 * day));
+  const date = new Date(f.now() - day).toISOString().slice(0, 10), syncEpoch = `refresh-${date}`;
+  f.get(site.id)!.gscDateEpochs = [...(f.get(site.id)!.gscDateEpochs ?? []), { date, syncEpoch }];
+  f.add("search_performance", { siteId: site.id, date, syncEpoch, page: article.publicUrl, query,
+    syncVersion: 2, syncedAt: f.now(), clicks: 0, impressions: 40, ctr: 0, position: 14, createdAt: f.now() });
+  f.get(site.id)!.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: f.get(site.id)! as never,
+    ownerAccountKey: accountDeletionKey(f.get(site.id)!.userId), verifiedAt: f.now() });
+  const refreshed = () => f.tables.jobs.filter(j => j.contentWork?.targetPageId === page._id && j.contentWork?.stage === "verified");
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_work", reason: "synthetic_refresh_evidence" });
+  await pumpUntil(f, () => refreshed().length === 1, 400, START + 120 * day);
+  assert.equal(refreshed()[0].contentWork.intent, "improve");
+  f.assertOffline();
+});
+
 // --- P91: a failed page improvement becomes a replacement article on the same job (its page link and intent are
 // rewritten), so nothing remembered it: LeadPilot re-bought the same "lead scoring saas" refresh every 4 h slot
 // (9 times Oct 16-17, three paid reviews each, never published). Its retired quality_exhausted topic now blocks the

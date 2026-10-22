@@ -33,7 +33,10 @@ async function renderedSnapshot(source: Awaited<ReturnType<typeof readSelectedSo
   const description = meta?.match(/\bcontent\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
   return { ...source, metaTitle: classicHtmlMarkdown(title), description: description ? classicHtmlMarkdown(description[1] ?? description[2]) : "" };
 }
-export async function readSelectedSource(site: Doc<"sites">, args: { path?: string; wordpressId?: number }) {
+/** `pentraCreated`: the caller reads Pentra's own article (adoption proves it
+ * from the file's delivery key and history right after), so a title that names
+ * terms, pricing or privacy is not a protected legal or pricing page (P156). */
+export async function readSelectedSource(site: Doc<"sites">, args: { path?: string; wordpressId?: number }, options?: { pentraCreated?: boolean }) {
   if (site.publishMethod === "github") {
     if (!args.path || args.wordpressId !== undefined) throw new Error("Select one exact Markdown/MDX path");
     const slug = selectedGitHubPath(site, args.path), url = selectedUrl(site, slug);
@@ -46,7 +49,7 @@ export async function readSelectedSource(site: Doc<"sites">, args: { path?: stri
     const data = await response.json();
     if (data.type !== "file" || data.path !== args.path || data.encoding !== "base64" || !/^[a-f0-9]{40,64}$/.test(data.sha) || data.size > 350000 || typeof data.content !== "string") throw new Error("Unsupported selected GitHub file");
     const content = Buffer.from(data.content.replace(/\s/g, ""), "base64").toString("utf8");
-    const parsed = parseSelectedMarkdown(content, url); assertUnprotectedPage(slug, parsed.title, content);
+    const parsed = parseSelectedMarkdown(content, url); assertUnprotectedPage(slug, parsed.title, content, options);
     return { kind: "github" as const, path: args.path, slug, url, sourceRevision: data.sha as string,
       sourceContent: content, markdown: parsed.markdown, title: parsed.title, metaTitle: parsed.metaTitle,
       description: parsed.description, header: parsed.header };
@@ -57,7 +60,7 @@ export async function readSelectedSource(site: Doc<"sites">, args: { path?: stri
   if (data.id !== args.wordpressId || !["post","page"].includes(data.type) || typeof data.slug !== "string" ||
     typeof data.title !== "string" || typeof data.content !== "string" || !/^[a-f0-9]{64}$/.test(data.revision) ||
     !selectedUrlMatches(site, data.slug, data.url)) throw new Error("WordPress source does not match the configured destination");
-  assertUnprotectedPage(data.slug, data.title, data.content);
+  assertUnprotectedPage(data.slug, data.title, data.content, options);
   return { kind: "wordpress" as const, resourceId: data.id as number, slug: data.slug as string, url: data.url as string,
     sourceRevision: data.revision as string, sourceContent: data.content as string, markdown: classicHtmlMarkdown(data.renderedContent ?? data.content),
     title: data.title as string, metaTitle: data.metadata?.title ?? data.title as string, description: data.metadata?.description ?? "" };
@@ -115,7 +118,7 @@ export const adoptPublishedForRefreshInternal = internalAction({ args: { siteId:
   }
   for (const candidate of context.candidates) {
     try {
-      const source = await renderedSnapshot(await readSelectedSource(context.site, { path: candidate.path }));
+      const source = await renderedSnapshot(await readSelectedSource(context.site, { path: candidate.path }, { pentraCreated: true }));
       if (source.kind !== "github" || source.url !== candidate.url || !pentraOwnedMarkdown(source.sourceContent, candidate.deliveryKey)) continue;
       // Customer edits are preserved: a file any non-Pentra commit touched is the owner's.
       if (!pentraOnlyFileHistory(await githubFileHistory(context.site, candidate.path))) continue;
