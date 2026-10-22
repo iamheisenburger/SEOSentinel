@@ -273,7 +273,7 @@ const sameWords = (a: string, b: string) => a.toLowerCase().replace(/[^a-z0-9]+/
 function UpcomingTopics({ siteId, autopilot }: { siteId: Id<"sites">; autopilot: boolean }) {
   const topics = useVisibleQuery(api.topics.listBySite, { siteId });
   // The owner's own searches (C4) come first, oldest first, as Autopilot writes them.
-  const next = (topics ?? []).filter(t => !["used", "queued", "cannibalizing", "disqualified"].includes(t.status ?? ""))
+  const next = (topics ?? []).filter(writableTopic)
     .sort((a, b) => Number(b.ownerChosenAt !== undefined) - Number(a.ownerChosenAt !== undefined) ||
       (a.ownerChosenAt ?? 0) - (b.ownerChosenAt ?? 0) || (b.priority ?? 0) - (a.priority ?? 0)).slice(0, 3);
   return <section className={CARD} aria-labelledby="upcoming-topics-heading">
@@ -289,6 +289,16 @@ function UpcomingTopics({ siteId, autopilot }: { siteId: Id<"sites">; autopilot:
     <Link className="text-[13px] text-[#0EA5E9] hover:underline" href="/plan">See or change all topics</Link>
   </section>;
 }
+
+/** Planned topics Autopilot will actually write: the owner's searches and the
+ * ones the buyer-fit check did not reject, never the topic of a page
+ * improvement (P165, Oct 22 2026: LeadPilot's card listed "streamlabs chat
+ * widget", "twitch chat widget" and "chat widget obs", all judged unfit for a
+ * B2B lead tool, and unused refresh topics would have followed). */
+const IMPROVEMENT_NOTES = /^(?:Refresh of a page|Current Search Console query:|Confirmed first-party reader question:)/;
+const writableTopic = (t: { status?: string; ownerChosenAt?: number; buyerFit?: { eligible: boolean }; notes?: string }) =>
+  ["planned", "pending"].includes(t.status ?? "planned") && !IMPROVEMENT_NOTES.test(t.notes ?? "") &&
+  (t.ownerChosenAt !== undefined || t.buyerFit?.eligible !== false);
 
 /** What Pentra measured for an owner's search: notes, never a reason to skip it. */
 function ownerSearchNote(t: { searchVolume?: number; searchDemandMeasuredAt?: number; keywordDifficulty?: number; keywordDifficultyMeasured?: boolean; buyerFit?: { eligible: boolean } }) {

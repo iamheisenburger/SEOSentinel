@@ -47,6 +47,10 @@ function render(component: string, queryState: unknown = state, outcome: unknown
           { _id: "t4", label: "Seobot alternatives", primaryKeyword: "seobot alternatives", status: "planned", priority: 100, ownerChosenAt: 1,
             searchVolume: 320, searchDemandMeasuredAt: 2, keywordDifficulty: 12, keywordDifficultyMeasured: true,
             buyerFit: { eligible: false, reason: "Synthetic verdict.", version: 1, checkedAt: 2 } },
+          { _id: "t5", label: "Twitch chat widget", primaryKeyword: "twitch chat widget", status: "planned", priority: 95,
+            buyerFit: { eligible: false, reason: "Synthetic verdict: streamers, not buyers.", version: 1, checkedAt: 2 } },
+          { _id: "t6", label: "Sales Detail: What to Capture", primaryKeyword: "sales detail", status: "planned", priority: 99,
+            notes: "Refresh of a page Google shows: Search Console shows \"sales detail\" at average position 8 with 11 impressions in the last 28 days." },
         ];
         assert.fail(`Unexpected query ${fn}`);
       } };
@@ -93,6 +97,10 @@ test("new customers see one clear Autopilot or Review-first choice, not delivery
   assert.ok(running.indexOf("Seobot alternatives") < running.indexOf("Irrigation valve inspection checklist"), "the owner's search is written first");
   assert.match(running, /Your search · about 320 searches a month · difficulty 12 of 100 · Pentra&#x27;s check doubts it fits what you sell; written anyway, as you chose/);
   assert.match(running, /Want a page for a particular search\? Add it here\./); assert.match(running, /placeholder="e.g. best invoicing app for freelancers"/);
+  // P165 (Oct 22 2026): LeadPilot's card listed topics judged unfit ("twitch chat widget"), which are never written,
+  // and would have listed unused page-refresh topics.
+  assert.doesNotMatch(running, /Twitch chat widget/, "a topic judged unfit is not coming up");
+  assert.doesNotMatch(running, /Sales Detail: What to Capture/, "a page refresh's topic is not a new article");
   const ahead = render("content-work-overview", { ...state, ready: 2, autopilot: { selectable: true, on: true },
     plan: { tier: "free", articlesPerMonth: 3, autopilotIntervalMs: 604_800_000 },
     schedule: { ...state.schedule, paused: false, autopilotSelected: true }, results: { live: 1, liveThisMonth: 1, planUsedThisMonth: 3 } }).html;
