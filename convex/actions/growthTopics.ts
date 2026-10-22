@@ -5,7 +5,8 @@ import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { v } from "convex/values";
-import { discoverKeywords, getDomainAuthority, meterDataForSeoCost, type DomainAuthorityEvidence } from "./seoData";
+import { discoverKeywords, getDomainAuthority, getExactKeywordDemandFromDataForSEO, getExactKeywordDifficultyFromDataForSEO,
+  meterDataForSeoCost, type DomainAuthorityEvidence } from "./seoData";
 import { dataForSeoLocationCode } from "../lib/dataForSeoLocale";
 import { contentIntentConflicts, evaluateTopicBusinessFit } from "../lib/autopilotBuffer";
 import { structuredToolChoice } from "../lib/toolChoice";
@@ -127,6 +128,46 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
         excludedIntent: seen.excluded.existing_intent } : {}) };
     const result: { added: number } = await ctx.runMutation(internal.contentWork.addResearchedTopics, { siteId, keywords, research });
     return result;
+  } });
+
+/** C4 (P158): measure a search the owner added: its monthly searches and
+ * difficulty (DataForSEO, measured values only) and the buyer-fit verdict for
+ * the business. They are notes for the owner; Autopilot writes the search
+ * either way. The spend was reserved when the search was added. */
+export const measureOwnerSearch = internalAction({ args: { siteId: v.id("sites"), topicId: v.id("topic_clusters"),
+  reservationId: v.id("provider_spend_reservations") },
+  handler: async (ctx, { siteId, topicId, reservationId }): Promise<{ measured: boolean }> => {
+    const context = await ctx.runQuery(internal.contentWork.ownerSearchContext, { siteId, topicId });
+    if (!context) {
+      await ctx.runMutation(internal.contentWork.recordOwnerSearchMeasurement, { siteId, topicId, reservationId,
+        sent: false, settle: false, actualMicroUsd: 0, measured: false });
+      return { measured: false };
+    }
+    const location = dataForSeoLocationCode(context.targetCountry ?? undefined);
+    const metered = await meterDataForSeoCost(async () => {
+      let searchVolume: number | undefined, keywordDifficulty: number | undefined;
+      // No row for the search means Google Ads reports no measurable demand.
+      try { searchVolume = Math.round((await getExactKeywordDemandFromDataForSEO([context.keyword], location, context.language))[0]?.searchVolume ?? 0); }
+      catch { /* not measured */ }
+      try { keywordDifficulty = (await getExactKeywordDifficultyFromDataForSEO([context.keyword], location, context.language)).get(context.keyword); }
+      catch { /* not measured */ }
+      return { searchVolume, keywordDifficulty };
+    });
+    let fit: BuyerFitVerdict | undefined, fitCostMicroUsd = 0, fitSent = false;
+    try {
+      const judged = await judgeBuyerFit(context.business, [context.keyword]);
+      fitSent = true; fitCostMicroUsd = judged.costMicroUsd; fit = judged.verdicts.get(normalizeFitKeyword(context.keyword));
+    } catch (error) {
+      // A call that was sent and lost counts at its ceiling.
+      if (!(error instanceof Error && error.message === "ANTHROPIC_API_KEY not set")) { fitSent = true; fitCostMicroUsd = BUYER_FIT_CEILING_MICRO_USD; }
+    }
+    const { searchVolume, keywordDifficulty } = metered.result;
+    await ctx.runMutation(internal.contentWork.recordOwnerSearchMeasurement, { siteId, topicId, reservationId,
+      sent: metered.usd > 0 || metered.uncertain || fitSent, settle: !metered.uncertain,
+      actualMicroUsd: Math.ceil(metered.usd * 1_000_000) + fitCostMicroUsd, measured: searchVolume !== undefined,
+      ...(searchVolume !== undefined ? { searchVolume } : {}), ...(keywordDifficulty !== undefined ? { keywordDifficulty } : {}),
+      ...(fit ? { fit: { keep: fit.keep, reason: fit.reason } } : {}) });
+    return { measured: searchVolume !== undefined };
   } });
 
 /** Judge the planned topics of one Autopilot site that have no buyer-fit

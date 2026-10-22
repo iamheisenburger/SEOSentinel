@@ -36,6 +36,8 @@ import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs"
 import { auditResultHash, clarifiableContentAudit, inconsistentAuditFeedback, internalContentProcessingError, retainedContradictoryContentAudit, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 import { contentJobUsesAllowance } from "./lib/contentUsage";
 import { BUYER_FIT_MAX_KEYWORDS, BUYER_FIT_RESERVATION_MICRO_USD, BUYER_FIT_VERSION, type BuyerFitBusiness } from "./lib/topicFit";
+import { OWNER_SEARCH_MAX_WAITING, OWNER_SEARCH_MEASURE_MICRO_USD, OWNER_SEARCH_NOTES, OWNER_SEARCH_PRIORITY,
+  ownerSearchArticleType, ownerSearchKeyword } from "./lib/ownerSearch";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
 
 export const CONTENT_DELIVERY_WINDOW_MS = 5 * 60_000;
@@ -1302,6 +1304,8 @@ export function storedTenantAuthority(site: Doc<"sites">): number | undefined {
   return measuredAuthorityIsFresh(authority) ? authority.domainRank : undefined;
 }
 
+/** A search the owner added to the plan (C4, P158). */
+const ownerChosen = (t: Doc<"topic_clusters">) => t.ownerChosenAt !== undefined;
 /** The planned topics Autopilot may still write, best first (read-only). The
  * health check uses the same list to report how many are left. */
 export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: Doc<"sites">,
@@ -1333,7 +1337,11 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
   // searches carry no difficulty: the site is already shown for them.
   const difficultyCeiling = siteDifficultyCeiling(site);
   const reachable = (t: Doc<"topic_clusters">) => !((t.searchVolume ?? 0) > 0 && (t.keywordDifficulty ?? 0) > difficultyCeiling);
-  const planned = topics.filter(t => ["planned", "pending"].includes(t.status ?? "planned") && fit(t) && t.buyerFit?.eligible !== false && reachable(t) &&
+  // A search the owner added (C4, P158) is written whatever Pentra's demand,
+  // reach and fit checks say (they are notes for the owner); a listed
+  // competitor and a page the site already has still exclude it.
+  const planned = topics.filter(t => ["planned", "pending"].includes(t.status ?? "planned") &&
+    (ownerChosen(t) || fit(t) && t.buyerFit?.eligible !== false && reachable(t)) &&
     !namesCompetitor(`${t.primaryKeyword} ${t.label}`, competitors) &&
     !planCheckpointTopicExecutionLocked(t) && !terminalContentFeasibility(t.contentFeasibilityStatus) &&
     ![...covered, ...pageCoverage, ...excludedIntents].some(c => contentIntentConflicts(t, c)));
@@ -1351,7 +1359,9 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
   const authority = storedTenantAuthority(site);
   const winnability = (t: Doc<"topic_clusters">) => authority === undefined ? 0 : preSerpWinnability({ tenantAuthority: authority,
     keywordDifficulty: t.keywordDifficulty, keywordDifficultyMeasured: t.keywordDifficultyMeasured, monthlySearches: t.searchVolume });
-  planned.sort((a, b) => Number(searched(b)) - Number(searched(a)) ||
+  // The owner's searches come first, oldest first.
+  planned.sort((a, b) => Number(ownerChosen(b)) - Number(ownerChosen(a)) || (a.ownerChosenAt ?? 0) - (b.ownerChosenAt ?? 0) ||
+    Number(searched(b)) - Number(searched(a)) ||
     (searched(a) && searched(b) ? winnability(b) - winnability(a) || opportunity(b) - opportunity(a) : 0) || (b.priority ?? 0) - (a.priority ?? 0));
   return { topics, pageCoverage, fit, competitors, planned, searched };
 }
@@ -1389,7 +1399,7 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
   const { planned, searched } = inventory;
   if (options.runway) Object.assign(options.runway, { planned: planned.length, searched: planned.filter(searched).length });
   if (preferredId) return planned.find(t => t._id === preferredId) ?? null;
-  if (options.demandOnly) return planned.find(searched) ?? null;
+  if (options.demandOnly) return planned.find(t => ownerChosen(t) || searched(t)) ?? null;
   if (planned[0]) return planned[0];
   const [proposal] = fallbackTopicProposals(site, inventory, excludedIntents);
   if (!proposal) return null;
@@ -1653,6 +1663,98 @@ export const recordBuyerFit = internalMutation({ args: { siteId: v.id("sites"), 
       recorded++;
     }
     return { recorded };
+  } });
+
+/** C4 (P158, Oct 22 2026): the owner adds a search they want a page for
+ * (convex/lib/ownerSearch.ts). It goes to the front of the plan, so Autopilot
+ * writes it next, and its demand, difficulty and buyer fit are measured as
+ * notes. A listed competitor (articles never name one) and a search that one
+ * of the site's pages or ready articles already answers are refused. */
+export const addOwnerSearch = mutation({ args: { siteId: v.id("sites"), search: v.string() },
+  handler: async (ctx, { siteId, search }) => {
+    const site = await requireOwner(ctx, siteId);
+    if (site.serviceMode !== "growth_first" || !site.contentSchedule || !siteCanonicalDomain(site)) {
+      throw new ConvexError("Set up Pentra's content service in Settings first.");
+    }
+    const keyword = ownerSearchKeyword(search);
+    if (!keyword) throw new ConvexError("Enter the search as people type it into Google: two to eight words, no links.");
+    if (namesCompetitor(keyword, competitorNamesFor(site))) {
+      throw new ConvexError("That search names a company on your competitor list, which Pentra's articles never mention. Remove it from the list in Settings first if you want this page.");
+    }
+    const { topics, pageCoverage } = await eligiblePlannedTopics(ctx, site);
+    const proposal = { primaryKeyword: keyword, label: keyword.replace(/^./, c => c.toUpperCase()) };
+    const page = pageCoverage.find(c => c.primaryKeyword && contentIntentConflicts(proposal, c));
+    if (page) throw new ConvexError(`Your site already has a page for “${page.primaryKeyword}”, published or ready to publish, and a second page would compete with it.`);
+    const same = topics.find(t => t.primaryKeyword === keyword) ?? topics.find(t => contentIntentConflicts(proposal, t));
+    if (same?.status === "used") throw new ConvexError("Pentra has already written an article for this search.");
+    if (same && (same.status === "queued" || planCheckpointTopicExecutionLocked(same))) throw new ConvexError("Pentra is already working on this search.");
+    const alreadyOwners = Boolean(same && ownerChosen(same));
+    if (!alreadyOwners && topics.filter(t => ownerChosen(t) && ["planned", "pending"].includes(t.status ?? "planned")).length >= OWNER_SEARCH_MAX_WAITING) {
+      throw new ConvexError(`You have ${OWNER_SEARCH_MAX_WAITING} searches waiting. Pentra writes them first; add more once some are written.`);
+    }
+    const now = Date.now(), shape = ownerSearchArticleType(keyword);
+    let topicId: Id<"topic_clusters">;
+    if (same) {
+      // A topic already in the plan for this search becomes the owner's.
+      topicId = same._id;
+      await ctx.db.patch(same._id, { status: "planned", ownerChosenAt: same.ownerChosenAt ?? now, priority: OWNER_SEARCH_PRIORITY,
+        ...(!same.articleType && shape.articleType ? { articleType: shape.articleType } : {}), updatedAt: now });
+    } else {
+      topicId = await ctx.db.insert("topic_clusters", { siteId, ...proposal, planningCanonicalDomain: siteCanonicalDomain(site)!,
+        planningDomainRevision: siteCanonicalDomainRevision(site), secondaryKeywords: [], intent: shape.intent,
+        ...(shape.articleType ? { articleType: shape.articleType } : {}), priority: OWNER_SEARCH_PRIORITY, status: "planned",
+        notes: OWNER_SEARCH_NOTES, ownerChosenAt: now, createdAt: now, updatedAt: now });
+    }
+    // Measured once, when the search becomes the owner's (a measured topic keeps its numbers).
+    if (site.userId && !alreadyOwners && same?.searchDemandMeasuredAt === undefined) {
+      const reserved = await reserveSharedProviderBudget(ctx, { siteId, userId: site.userId, purpose: "topic_plan",
+        trigger: `owner_search:${topicId}`, reservedMicroUsd: OWNER_SEARCH_MEASURE_MICRO_USD, timestamp: now });
+      // A refused reservation spends nothing: the search is still written, unmeasured.
+      if (reserved.ok) await ctx.scheduler.runAfter(0, internal.actions.growthTopics.measureOwnerSearch,
+        { siteId, topicId, reservationId: reserved.reservationId });
+    }
+    return { topicId, existing: Boolean(same), keyword: same?.primaryKeyword ?? keyword,
+      articleType: same?.articleType ?? shape.articleType ?? "standard" };
+  } });
+/** What measuring an owner's search needs: the search, the market and the business. */
+export const ownerSearchContext = internalQuery({ args: { siteId: v.id("sites"), topicId: v.id("topic_clusters") },
+  handler: async (ctx, { siteId, topicId }) => {
+    const [site, topic] = await Promise.all([ctx.db.get(siteId), ctx.db.get(topicId)]);
+    if (!site || site.serviceMode !== "growth_first" || !topic || topic.siteId !== siteId || !ownerChosen(topic) ||
+      !["planned", "pending"].includes(topic.status ?? "planned")) return null;
+    return { keyword: topic.primaryKeyword, language: site.language ?? "en", targetCountry: site.targetCountry ?? null,
+      business: buyerFitBusiness(site) };
+  } });
+/** Store an owner search's measurement as notes and close its reservation at
+ * the reported cost (an uncertain DataForSEO total keeps the hold). */
+export const recordOwnerSearchMeasurement = internalMutation({ args: { siteId: v.id("sites"), topicId: v.id("topic_clusters"),
+  reservationId: v.id("provider_spend_reservations"), sent: v.boolean(), settle: v.boolean(), actualMicroUsd: v.number(),
+  measured: v.boolean(), searchVolume: v.optional(v.number()), keywordDifficulty: v.optional(v.number()),
+  fit: v.optional(v.object({ keep: v.boolean(), reason: v.string() })) },
+  handler: async (ctx, args) => {
+    const reservation = await ctx.db.get(args.reservationId);
+    if (reservation && reservation.siteId === args.siteId && reservation.purpose === "topic_plan" && reservation.trigger === `owner_search:${args.topicId}` &&
+      reservation.settledAt === undefined && reservation.releasedAt === undefined) {
+      const actual = Math.max(0, Math.ceil(args.actualMicroUsd));
+      if (!args.sent) await releaseSharedProviderReservation(ctx, { reservationId: args.reservationId, siteId: args.siteId, purpose: "topic_plan",
+        reason: "plan_cancelled_before_execution", timestamp: Date.now() });
+      else if (args.settle && Number.isSafeInteger(actual) && actual <= reservation.reservedMicroUsd) {
+        await settleSharedProviderReservation(ctx, { reservationId: args.reservationId, siteId: args.siteId, purpose: "topic_plan",
+          actualMicroUsd: actual, reason: "verified_provider_receipt_actual_cost", timestamp: Date.now() });
+      }
+    }
+    const [site, topic] = await Promise.all([ctx.db.get(args.siteId), ctx.db.get(args.topicId)]);
+    if (!site || !topic || topic.siteId !== args.siteId || !ownerChosen(topic)) return { recorded: false };
+    const now = Date.now();
+    await ctx.db.patch(topic._id, {
+      ...(args.measured ? { searchVolume: Math.max(0, Math.round(args.searchVolume ?? 0)), searchDemandSource: "dataforseo:owner_search",
+        searchDemandMeasuredAt: now } : {}),
+      ...(args.keywordDifficulty !== undefined ? { keywordDifficulty: Math.max(0, Math.min(100, Math.round(args.keywordDifficulty))),
+        keywordDifficultyMeasured: true } : {}),
+      ...(args.fit ? { buyerFit: { eligible: args.fit.keep, reason: args.fit.reason.slice(0, 160), version: BUYER_FIT_VERSION,
+        checkedAt: now, profileHash: confirmedContentProfileHash(site) } } : {}),
+      updatedAt: now });
+    return { recorded: true };
   } });
 /** A topic stays "queued" only while work holds it. Code before the lifecycle
  * settlement left researched keywords queued after their job ended, so they

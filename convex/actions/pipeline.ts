@@ -483,6 +483,10 @@ function getArticleTypeStructure(articleType: ArticleType, productName: string):
         `Use a comparison table only for genuinely comparable, supported fields; never infer missing pricing, features, or performance.`,
         `Explain tradeoffs and scenario fit instead of forcing one universal winner.`,
         `Include ${productName} only when it is one of the reader's real options and first-party evidence supports the comparison.`,
+        // C4 (P158): the fairness bar for comparison and alternatives pages.
+        `State a fact about another product only when a cited page from that product's own website or documentation supports it, and give the month and year with any price or plan limit; otherwise tell the reader what to check on the vendor's current page.`,
+        `Include a section titled "Who each option fits" that says plainly who each option suits, including readers another option suits better than ${productName}.`,
+        `Never call ${productName} the best, only, leading or #1 option unless a cited source says exactly that.`,
       ].join("\n");
 
     case "roundup":

@@ -1,5 +1,6 @@
 "use client";
-import { useAction, useConvex, useQuery } from "convex/react";
+import { useAction, useConvex, useMutation, useQuery } from "convex/react";
+import { ConvexError } from "convex/values";
 import { useEffect, useState } from "react";
 import type { FunctionReturnType } from "convex/server";
 import Link from "next/link";
@@ -94,7 +95,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
           <ul className="space-y-1 text-[13px]">{heldBack.map(w => <li key={w.jobId}><Link className="text-[#0EA5E9] hover:underline" href={`/articles/${w.articleId}`}>{w.title ? topicTitle(w.title) : "Held-back draft"}</Link><span className="text-[#62666D]"> · see the reviewer&apos;s notes</span></li>)}</ul>
         </div>}
       </section>
-      {plain && <UpcomingTopics siteId={siteId} />}
+      {plain && <UpcomingTopics siteId={siteId} autopilot={simple} />}
       </div>
       <div className="space-y-4">
       <section className={CARD}><h2 className={H2}>{plain ? "Published articles" : "Verified changes"}</h2>
@@ -269,10 +270,12 @@ export { topicTitle };
 const sameWords = (a: string, b: string) => a.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === b.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 /** What Autopilot will write next, so a hands-off customer can see and steer it. */
-function UpcomingTopics({ siteId }: { siteId: Id<"sites"> }) {
+function UpcomingTopics({ siteId, autopilot }: { siteId: Id<"sites">; autopilot: boolean }) {
   const topics = useVisibleQuery(api.topics.listBySite, { siteId });
+  // The owner's own searches (C4) come first, oldest first, as Autopilot writes them.
   const next = (topics ?? []).filter(t => !["used", "queued", "cannibalizing", "disqualified"].includes(t.status ?? ""))
-    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0)).slice(0, 3);
+    .sort((a, b) => Number(b.ownerChosenAt !== undefined) - Number(a.ownerChosenAt !== undefined) ||
+      (a.ownerChosenAt ?? 0) - (b.ownerChosenAt ?? 0) || (b.priority ?? 0) - (a.priority ?? 0)).slice(0, 3);
   return <section className={CARD} aria-labelledby="upcoming-topics-heading">
     <h2 id="upcoming-topics-heading" className={H2}>Coming up next</h2>
     {topics === undefined ? <p className={BODY}>Loading…</p> : next.length === 0
@@ -280,9 +283,46 @@ function UpcomingTopics({ siteId }: { siteId: Id<"sites"> }) {
       : <ol className="space-y-2 text-[14px]">{next.map((t, n) => <li key={t._id} className="flex gap-3">
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#0EA5E9]/10 text-[12px] font-semibold text-[#0EA5E9]">{n + 1}</span>
           <span><span className="text-[#F7F8F8]">{topicTitle(t.label)}</span>{sameWords(topicTitle(t.label), t.primaryKeyword) ? null
-            : <> <span className="text-[12px] text-[#8A8F98]">“{t.primaryKeyword}”</span></>}</span></li>)}</ol>}
+            : <> <span className="text-[12px] text-[#8A8F98]">“{t.primaryKeyword}”</span></>}
+            {t.ownerChosenAt !== undefined && <span className="block text-[12px] text-[#8A8F98]">Your search{ownerSearchNote(t)}</span>}</span></li>)}</ol>}
+    <OwnerSearchForm siteId={siteId} autopilot={autopilot} />
     <Link className="text-[13px] text-[#0EA5E9] hover:underline" href="/plan">See or change all topics</Link>
   </section>;
+}
+
+/** What Pentra measured for an owner's search: notes, never a reason to skip it. */
+function ownerSearchNote(t: { searchVolume?: number; searchDemandMeasuredAt?: number; keywordDifficulty?: number; keywordDifficultyMeasured?: boolean; buyerFit?: { eligible: boolean } }) {
+  const demand = t.searchDemandMeasuredAt === undefined ? "" : t.searchVolume ? ` · about ${t.searchVolume.toLocaleString("en")} searches a month` : " · too few searches to measure";
+  const difficulty = t.keywordDifficultyMeasured && t.keywordDifficulty !== undefined ? ` · difficulty ${t.keywordDifficulty} of 100` : "";
+  const fit = t.buyerFit?.eligible === false ? " · Pentra's check doubts it fits what you sell; written anyway, as you chose" : "";
+  return `${demand}${difficulty}${fit}`;
+}
+
+/** C4: the owner adds a search they want a page for; Pentra writes it next. */
+function OwnerSearchForm({ siteId, autopilot }: { siteId: Id<"sites">; autopilot: boolean }) {
+  const add = useMutation(api.contentWork.addOwnerSearch);
+  const [search, setSearch] = useState(""), [busy, setBusy] = useState(false), [message, setMessage] = useState("");
+  const next = autopilot ? "Pentra writes it next." : "Request it from Articles when you want the draft.";
+  return <form className="flex flex-wrap items-center gap-2" onSubmit={async event => {
+    event.preventDefault();
+    if (!search.trim() || busy) return;
+    setBusy(true); setMessage("");
+    try {
+      const added = await add({ siteId, search });
+      setSearch("");
+      setMessage(added.existing ? `Already in your plan as “${added.keyword}”. ${next}` : `Added “${added.keyword}”. ${next}`);
+    } catch (error) {
+      setMessage(error instanceof ConvexError && typeof error.data === "string" ? error.data : "Couldn't add that search. Try again.");
+    } finally { setBusy(false); }
+  }}>
+    <label htmlFor={`owner-search-${siteId}`} className="w-full text-[13px] text-[#8A8F98]">Want a page for a particular search? Add it here.</label>
+    <input id={`owner-search-${siteId}`} value={search} maxLength={80} onChange={event => setSearch(event.target.value)}
+      placeholder="e.g. best invoicing app for freelancers" autoComplete="off"
+      className="min-w-0 flex-1 rounded-lg border border-white/10 bg-[#08090E] px-3 py-2 text-[14px] text-[#F7F8F8] placeholder:text-[#62666D] focus:border-[#0EA5E9] focus:outline-none" />
+    <button type="submit" disabled={busy || !search.trim()}
+      className="rounded-lg bg-[#0EA5E9] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-50">{busy ? "Adding…" : "Add"}</button>
+    {message && <p role="status" className="w-full text-[13px] text-[#8A8F98]">{message}</p>}
+  </form>;
 }
 
 function SiteHealth({ siteId }: { siteId: Id<"sites"> }) {

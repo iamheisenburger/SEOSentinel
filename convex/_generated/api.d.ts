@@ -150,6 +150,7 @@ import type * as lib_outreachSequence from "../lib/outreachSequence.js";
 import type * as lib_outreachSmtp from "../lib/outreachSmtp.js";
 import type * as lib_outreachSuppression from "../lib/outreachSuppression.js";
 import type * as lib_outreachTargetLive from "../lib/outreachTargetLive.js";
+import type * as lib_ownerSearch from "../lib/ownerSearch.js";
 import type * as lib_pastedPublication from "../lib/pastedPublication.js";
 import type * as lib_planCandidateCheckpoint from "../lib/planCandidateCheckpoint.js";
 import type * as lib_planProviderBudget from "../lib/planProviderBudget.js";
@@ -371,6 +372,7 @@ declare const fullApi: ApiFromModules<{
   "lib/outreachSmtp": typeof lib_outreachSmtp;
   "lib/outreachSuppression": typeof lib_outreachSuppression;
   "lib/outreachTargetLive": typeof lib_outreachTargetLive;
+  "lib/ownerSearch": typeof lib_ownerSearch;
   "lib/pastedPublication": typeof lib_pastedPublication;
   "lib/planCandidateCheckpoint": typeof lib_planCandidateCheckpoint;
   "lib/planProviderBudget": typeof lib_planProviderBudget;

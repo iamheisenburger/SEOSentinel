@@ -580,6 +580,52 @@ test("SLC29 synthetic empty owner journey starts preparation after explicit cons
   assert.equal(f.tables.pages.some(p => p.slug === "/"), false, "A link target is not an editable-page grant or a fabricated crawl record");
 });
 
+// C4 (P158, Oct 22 2026): an owner could not choose what Pentra writes ("Manual topic creation" was a TODO), and a
+// search Pentra's own checks would skip (judged unfit, no demand, past the site's reach) could never be written.
+test("C4 an owner's search is measured as notes and written next; competitors and existing pages are refused", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000,
+    topicFit: (keyword: string) => !keyword.includes("alternatives") });
+  const site = await selectGrowth(f);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const saved = f.get(site.id)!;
+  saved.competitors = ["rivalflow.com"];
+  f.add("article_summaries", { siteId: site.id, slug: "drip-emitter-cleaning", title: "Drip emitter cleaning", status: "published",
+    publicUrlStatus: "verified", publishedAt: f.now() - 86_400_000, createdAt: f.now() - 86_400_000, metaKeywords: ["drip emitter cleaning"] });
+  f.setIdentity(saved.userId);
+  const add = (search: string) => f.invoke("contentWork:addOwnerSearch", { siteId: site.id, search });
+  await assert.rejects(add("rivalflow alternatives"), /competitor list/);
+  await assert.rejects(add("valves"), /two to eight words/);
+  await assert.rejects(add("Drip emitter cleaning"), /already has a page for “drip emitter cleaning”/);
+  const added = await add("  AquaPlan ALTERNATIVES ");
+  assert.deepEqual({ ...added, topicId: undefined }, { topicId: undefined, existing: false, keyword: "aquaplan alternatives", articleType: "comparison" });
+  const topic = f.get(added.topicId)!;
+  assert.equal(topic.priority, 100); assert.equal(topic.status, "planned"); assert.equal(topic.intent, "commercial"); assert.ok(topic.ownerChosenAt);
+  assert.deepEqual(await add("aquaplan alternatives"), { ...added, existing: true }, "adding it again changes nothing");
+  f.setIdentity("synthetic-unrelated-owner");
+  await assert.rejects(add("aquaplan pricing review"), /Not authorized/);
+  f.setIdentity(null);
+  // Measured once, as notes: demand and difficulty from DataForSEO, the buyer-fit verdict for the business.
+  const measure = f.tables._scheduled_functions.filter(row => row.name === "actions/growthTopics:measureOwnerSearch");
+  assert.equal(measure.length, 1, "one measurement for the search");
+  measure[0].state = { kind: "success" };
+  assert.deepEqual(await f.invoke("actions/growthTopics:measureOwnerSearch", measure[0].args), { measured: true });
+  const measured = f.get(added.topicId)!;
+  assert.equal(measured.searchVolume, 100); assert.equal(measured.keywordDifficulty, 5); assert.equal(measured.keywordDifficultyMeasured, true);
+  assert.equal(measured.searchDemandSource, "dataforseo:owner_search");
+  assert.equal(measured.buyerFit.eligible, false, "the verdict is kept as a note");
+  const reservation = f.tables.provider_spend_reservations.find(r => r.trigger === `owner_search:${added.topicId}`)!;
+  assert.equal(reservation.reservedMicroUsd, 150_000, "reserved before the calls");
+  assert.equal(reservation.settledMicroUsd, 2_060, "settled at DataForSEO's reported cost (2 x $0.001) plus the fit call");
+  await f.invoke("topics:recordBusinessFitAuditsInternal", { siteId: site.id,
+    audits: [{ topicId: added.topicId, eligible: false, score: 0, version: 99, reasons: ["Synthetic off-business audit."] }] });
+  assert.equal(f.get(added.topicId)!.status, "planned", "the lexical audit never drops the owner's search");
+  // Judged unfit, so Autopilot alone would skip it; the owner chose it, so it is written next.
+  await f.invoke("contentWork:advance", { siteId: site.id });
+  const job = f.tables.jobs.find(j => j.contentWork && j.siteId === site.id)!;
+  assert.equal(job.payload.topicId, added.topicId, "the owner's search is written next");
+  f.assertOffline();
+});
+
 // P151 (Oct 21 2026): the Compost Notes test site showed "first check pending" 5.5 hours after setup: site health ran
 // only on Mondays.
 test("P151 a new Autopilot site's first site health check is scheduled within two hours, once", async () => {

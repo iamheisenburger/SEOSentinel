@@ -1090,6 +1090,8 @@ export const recordBusinessFitAuditsInternal = internalMutation({
       if (["used", "queued", "cannibalizing"].includes(topic.status ?? "")) {
         continue;
       }
+      // A search the owner added stands; the lexical audit never drops it (C4, P158).
+      if (topic.ownerChosenAt !== undefined) continue;
       const nextStatus = audit.eligible
         ? topic.status === "disqualified" ? "planned" : topic.status ?? "planned"
         : "disqualified";

@@ -871,6 +871,38 @@ async function getKeywordMetricsFromAPI(
 }
 
 /**
+ * Measured keyword difficulty for an exact keyword batch (DataForSEO Labs).
+ * No estimate: a keyword DataForSEO has no difficulty for is absent from the
+ * result (C4, P158: an owner's search is shown with measured numbers only).
+ */
+export async function getExactKeywordDifficultyFromDataForSEO(
+  keywords: string[],
+  locationCode: number = 2840,
+  languageCode: string = "en",
+): Promise<Map<string, number>> {
+  if (!getDataForSEOCredentials()) throw new Error("DataForSEO credentials not configured");
+  const exactKeywords = keywords.map((keyword) => keyword.trim().toLowerCase().replace(/\s+/g, " "));
+  if (exactKeywords.length === 0 || exactKeywords.length > 10 || exactKeywords.some((keyword) => !keyword || keyword.length > 700)) {
+    throw new Error("Exact keyword difficulty batch is outside its bounded contract");
+  }
+  const data = await dataForSEORequest(
+    "dataforseo_labs/google/bulk_keyword_difficulty/live",
+    [{ keywords: exactKeywords, location_code: locationCode, language_code: dataForSeoLanguageCode(languageCode) }],
+  );
+  const difficulty = new Map<string, number>();
+  for (const task of Array.isArray(data?.tasks) ? data.tasks : []) {
+    for (const group of Array.isArray(task?.result) ? task.result : []) {
+      for (const item of Array.isArray(group?.items) ? group.items : []) {
+        const keyword = typeof item?.keyword === "string" ? item.keyword.trim().toLowerCase().replace(/\s+/g, " ") : "";
+        const value = finiteBoundedNumber(item?.keyword_difficulty, 0, 100);
+        if (exactKeywords.includes(keyword) && value !== undefined) difficulty.set(keyword, Math.round(value));
+      }
+    }
+  }
+  return difficulty;
+}
+
+/**
  * Discover real keywords with volume using DataForSEO keyword suggestions.
  * Takes seed keywords and returns related keywords that people actually search for.
  * Returns up to `limit` keywords sorted by search volume descending.

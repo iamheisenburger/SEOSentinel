@@ -778,6 +778,9 @@ export default defineSchema({
     status: v.optional(v.string()), // pending | queued | planned | used
     articleType: v.optional(v.string()), // standard | listicle | how-to | checklist | comparison | roundup | ultimate-guide
     notes: v.optional(v.string()),
+    // C4 (P158): a search the owner added from the dashboard. Autopilot writes
+    // it next; its measured demand, difficulty and buyer fit are notes only.
+    ownerChosenAt: v.optional(v.number()),
 
     // ── SEO Metrics (populated by DataForSEO or AI estimation) ──
     searchVolume: v.optional(v.number()), // monthly search volume

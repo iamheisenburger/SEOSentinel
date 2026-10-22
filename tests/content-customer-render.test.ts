@@ -44,6 +44,9 @@ function render(component: string, queryState: unknown = state, outcome: unknown
           { _id: "t1", label: "Irrigation valve inspection checklist", primaryKeyword: "irrigation valve inspection", status: "planned", priority: 90 },
           { _id: "t2", label: "Already written topic", primaryKeyword: "written", status: "used", priority: 99 },
           { _id: "t3", label: "Green waste compost", primaryKeyword: "green waste compost", status: "planned", priority: 80 },
+          { _id: "t4", label: "Seobot alternatives", primaryKeyword: "seobot alternatives", status: "planned", priority: 100, ownerChosenAt: 1,
+            searchVolume: 320, searchDemandMeasuredAt: 2, keywordDifficulty: 12, keywordDifficultyMeasured: true,
+            buyerFit: { eligible: false, reason: "Synthetic verdict.", version: 1, checkedAt: 2 } },
         ];
         assert.fail(`Unexpected query ${fn}`);
       } };
@@ -86,6 +89,10 @@ test("new customers see one clear Autopilot or Review-first choice, not delivery
   // each topic twice ('Green waste compost "green waste compost"').
   assert.match(running, /Irrigation valve inspection checklist<\/span> <span[^>]*>“irrigation valve inspection”/, "a search that adds something is shown");
   assert.match(running, /Green waste compost<\/span><\/span>/); assert.doesNotMatch(running, /“green waste compost”/, "a search that repeats the title is not");
+  // C4 (P158, Oct 22 2026): the owner adds searches here; theirs come first, with what Pentra measured as notes.
+  assert.ok(running.indexOf("Seobot alternatives") < running.indexOf("Irrigation valve inspection checklist"), "the owner's search is written first");
+  assert.match(running, /Your search · about 320 searches a month · difficulty 12 of 100 · Pentra&#x27;s check doubts it fits what you sell; written anyway, as you chose/);
+  assert.match(running, /Want a page for a particular search\? Add it here\./); assert.match(running, /placeholder="e.g. best invoicing app for freelancers"/);
   const ahead = render("content-work-overview", { ...state, ready: 2, autopilot: { selectable: true, on: true },
     plan: { tier: "free", articlesPerMonth: 3, autopilotIntervalMs: 604_800_000 },
     schedule: { ...state.schedule, paused: false, autopilotSelected: true }, results: { live: 1, liveThisMonth: 1, planUsedThisMonth: 3 } }).html;
