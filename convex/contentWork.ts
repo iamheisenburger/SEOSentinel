@@ -2231,7 +2231,14 @@ export const advance = internalMutation({
     const pricing = await pricingConfiguration(ctx, site);
     if (!pricing) return { scheduled: 0, mode: "content_pricing_unavailable" };
     // A replacement slot is always a new article, never another improvement.
-    const improvement = replaceNextSlot ? null : await chooseImprovement(ctx, site, work);
+    // That includes a failed slot further ahead: choosing an improvement for it
+    // returned "content_failed_slot" on every pass, so the slot sat unprepared
+    // while each pass marked refresh candidates reviewed and left an unused
+    // topic (P163, Oct 22 2026: LeadPilot's Oct 24 slot after its refresh failed).
+    const nextOpenSlot = schedule.nextDeadlineAt + waiting.length * schedule.intervalMs;
+    const failedAtNextOpen = work.filter(j => j.contentWork!.deadlineAt === nextOpenSlot);
+    const replacementDue = Boolean(schedule.autopilotSelectedAt) && failedAtNextOpen.length === 1 && autopilotReplaceable(failedAtNextOpen[0]);
+    const improvement = replaceNextSlot || replacementDue ? null : await chooseImprovement(ctx, site, work);
     const runway = { planned: 0, searched: 0 };
     let topic = improvement ? await ctx.db.get(await ctx.db.insert("topic_clusters", {
       siteId, planningCanonicalDomain: siteCanonicalDomain(site)!, planningDomainRevision: siteCanonicalDomainRevision(site),

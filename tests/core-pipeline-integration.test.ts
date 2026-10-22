@@ -8164,6 +8164,45 @@ test("P161 a refresh draft that drifts outside its section is delivered as the p
   f.assertOffline();
 });
 
+// P163 (Oct 22 2026): after LeadPilot's refresh and its replacement failed, every pass chose a page refresh first and
+// then refused to replace the failed Oct 24 slot ("content_failed_slot"), so the slot sat unprepared while each pass
+// marked refresh candidates reviewed and left an unused topic behind.
+test("P163 a failed slot ahead is replaced by a new article even when a page refresh is available", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+  const day = 86_400_000, site = await selectGrowth(f, 7 * day);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const open = () => f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork && !j.contentWork.ownerRequest &&
+    !["verified", "failed"].includes(j.contentWork.stage));
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "verified") && open().length === 2 &&
+    open().every(j => !["pending", "running"].includes(j.status)), 400, START + 60 * day);
+  const created = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!, article = f.get(created.articleId)!;
+  const page = f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!;
+  // A month later the published article is shown on page four: a refresh is available.
+  f.setTime(Math.max(f.now(), page.editable.selectedAt + 29 * day));
+  const date = new Date(f.now() - day).toISOString().slice(0, 10), syncEpoch = `refresh-${date}`;
+  f.get(site.id)!.gscDateEpochs = [...(f.get(site.id)!.gscDateEpochs ?? []), { date, syncEpoch }];
+  f.add("search_performance", { siteId: site.id, date, syncEpoch, page: article.publicUrl, query: String(f.get(article.topicId!)!.primaryKeyword).toLowerCase(),
+    syncVersion: 2, syncedAt: f.now(), clicks: 0, impressions: 40, ctr: 0, position: 40, createdAt: f.now() });
+  f.get(site.id)!.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: f.get(site.id)! as never,
+    ownerAccountKey: accountDeletionKey(f.get(site.id)!.userId), verifiedAt: f.now() });
+  // The next slot is ready; the one after it failed (LeadPilot: Oct 23 ready, Oct 24 failed).
+  const schedule = f.get(site.id)!.contentSchedule, [ready, later] = open().sort((a, b) => a.contentWork.deadlineAt - b.contentWork.deadlineAt);
+  schedule.nextDeadlineAt = f.now() + 20 * 3_600_000;
+  Object.assign(ready.contentWork, { deadlineAt: schedule.nextDeadlineAt, windowStartAt: schedule.nextDeadlineAt - 300_000 });
+  const failedAt = schedule.nextDeadlineAt + schedule.intervalMs;
+  Object.assign(later, { status: "failed" });
+  later.contentWork = { ...later.contentWork, stage: "failed", failure: "bounded_content_quality_exhausted", deadlineAt: failedAt, windowStartAt: failedAt - 300_000 };
+  const topicsBefore = f.tables.topic_clusters.length;
+  const result = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(result.mode, "buffer_replacement", JSON.stringify(result));
+  const replacement = f.get(result.activeJobId)!;
+  assert.equal(replacement.contentWork.replacesJobId, later._id);
+  assert.equal(replacement.contentWork.intent, "create");
+  assert.equal(replacement.contentWork.deadlineAt, failedAt, "the replacement takes the failed slot");
+  assert.equal(f.tables.topic_clusters.length, topicsBefore, "no unused refresh topic is left behind");
+  f.assertOffline();
+});
+
 // P156 (Oct 22 2026): a title naming terms, pricing or privacy marked Pentra's own article as a protected legal or
 // pricing page, so it could never be refreshed or adopted (pentra.dev's "...Organize the Terms That Actually Drive Traffic").
 test("P156 Pentra's own article whose title names pricing still gets its page refresh", async () => {
