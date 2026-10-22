@@ -166,6 +166,7 @@ import {
   siteCanonicalDomain,
   siteCanonicalDomainRevision,
 } from "../lib/siteDomainBinding";
+import { spliceRefreshSection } from "../lib/contentSelection";
 import {
   productNamesInSearch,
   readableSourceTitle,
@@ -4989,6 +4990,13 @@ async function handleArticle(
   // The writer has already consumed paid work. Persist its exact prose and
   // hash-bound evidence before slower reviews/media can hit the action limit.
   // A replacement worker resumes this draft; it must not buy another article.
+  // A refresh is delivered as its section alone: store the page's exact source
+  // with that section, under the page's own title (P161).
+  const refreshEdit = selectedWork?.job.contentWork?.editTarget;
+  if (refreshEdit?.mode === "insert_section" && selectedWork?.page.editable) {
+    article.markdown = spliceRefreshSection(selectedWork.page.editable.markdown, article.markdown, refreshEdit) ?? article.markdown;
+    article.title = selectedWork.page.editable.title;
+  }
   const generatedStats = calculateArticleStats(article.markdown);
   const generatedSlug = selectedWork?.page.slug ?? (article.slug || buildSlug(article.title));
   const checkpointId = jobId && workerToken
@@ -7080,7 +7088,19 @@ async function reviewExistingArticleHandler(
       ),
     ].filter((name) => name.trim().toLowerCase() !== normalizedProductName);
 
-    let reviewMarkdown = article.markdown;
+    // A page refresh delivers only its new section, so every version of its
+    // draft is the page's exact source with that section at the anchor (P161).
+    let refreshSource: { markdown: string; target: NonNullable<NonNullable<Doc<"jobs">["contentWork"]>["editTarget"]> } | null = null;
+    if (article.contentWorkSourceJobId) {
+      try {
+        const selected = await ctx.runQuery(internal.selectedPages.workContext, { siteId, jobId: article.contentWorkSourceJobId, articleId });
+        const target = selected?.job.contentWork?.editTarget;
+        if (target?.mode === "insert_section" && selected?.page.editable) refreshSource = { markdown: selected.page.editable.markdown, target };
+      } catch { /* Not a page refresh: nothing to keep. */ }
+    }
+    const keepRefreshSection = (markdown: string) =>
+      refreshSource ? spliceRefreshSection(refreshSource.markdown, markdown, refreshSource.target) ?? markdown : markdown;
+    let reviewMarkdown = keepRefreshSection(article.markdown);
     const persistedStats = calculateArticleStats(reviewMarkdown);
     const persistedLengthIsValid =
       persistedStats.wordCount >= minimumWords &&
@@ -7176,7 +7196,7 @@ async function reviewExistingArticleHandler(
           return priority(left) - priority(right);
         }).slice(0, 20),
       });
-      reviewMarkdown = remediated.markdown;
+      reviewMarkdown = keepRefreshSection(remediated.markdown);
     }
 
     if (contentProviderMayRepairDraft()) {
@@ -7747,6 +7767,7 @@ async function reviewExistingArticleHandler(
     }
     const nextMetaTitle = clampMetaTitle(metadata.metaTitle);
     const nextMetaDescription = clampMetaDescription(metadata.metaDescription);
+    finalReviewMarkdown = keepRefreshSection(finalReviewMarkdown);
     const finalStats = calculateArticleStats(finalReviewMarkdown);
     let productEvidenceStatus = "not_applicable";
     if (productHeadingMatch?.index !== undefined) {

@@ -131,6 +131,29 @@ function assertSafeRefreshSection(base: { title: string; markdown: string }, nex
   return `${section}\n\n${target.before}`;
 }
 
+/** A refresh draft as it can be delivered: the page's exact source with the
+ * new section placed before the anchor. The model rewrites the whole page
+ * around its section, and any drift elsewhere failed the section-only check
+ * although only the section is ever delivered (P161, Oct 22 2026: LeadPilot's
+ * first refresh gained a renamed H1 and lost a stray line, was rejected three
+ * times and its slot went to a new article). The section is the first H2 the
+ * page does not already have, up to the next H1/H2 or the anchor. Null when
+ * the draft has no such section (the check then reports it). */
+export function spliceRefreshSection(baseMarkdown: string, proposed: string, target: SelectedEditTarget): string | null {
+  if (target.mode !== "insert_section") return null;
+  const original = baseMarkdown.trimEnd();
+  const at = original.indexOf(target.before);
+  if (at < 0 || original.indexOf(target.before, at + target.before.length) >= 0) return null;
+  const headingKey = (line: string) => line.replace(/^#+\s*/, "").trim().toLowerCase();
+  const existing = new Set(original.split("\n").filter(line => /^#{2,3} /.test(line)).map(headingKey));
+  const lines = proposed.split("\n");
+  const start = lines.findIndex(line => /^## /.test(line) && !existing.has(headingKey(line)));
+  if (start < 0) return null;
+  const next = lines.findIndex((line, index) => index > start && (/^#{1,2} /.test(line) || line.trim() === target.before.trim()));
+  const section = lines.slice(start, next < 0 ? lines.length : next).join("\n").trim();
+  return `${original.slice(0, at)}${section}\n\n${original.slice(at)}`;
+}
+
 function assertSafePublishableMarkdown(markdown: string) {
   if (containsExecutableMdx(markdown)) throw new Error("Executable/custom MDX is unsupported");
 }

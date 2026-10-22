@@ -8096,6 +8096,47 @@ test("P142 a page Google shows at position 40 gets its refresh, and a low review
   f.assertOffline();
 });
 
+// P161 (Oct 22 2026): LeadPilot's first automatic refresh came back with a renamed H1 and without a stray line of the
+// page; the section-only check rejected it three times although only the section is ever delivered.
+async function refreshSetup(draftResponse: (article: Fields, request: Fields) => Fields) {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000, draftResponse });
+  const day = 86_400_000, site = await selectGrowth(f, 7 * day);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.stage === "verified")));
+  const created = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!, article = f.get(created.articleId)!;
+  const page = f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!;
+  const enrolledMarkdown = String(page.editable.markdown);
+  const query = String(f.get(article.topicId!)!.primaryKeyword).toLowerCase();
+  f.setTime(Math.max(f.now(), page.editable.selectedAt + 29 * day));
+  const date = new Date(f.now() - day).toISOString().slice(0, 10), syncEpoch = `refresh-${date}`;
+  f.get(site.id)!.gscDateEpochs = [...(f.get(site.id)!.gscDateEpochs ?? []), { date, syncEpoch }];
+  f.add("search_performance", { siteId: site.id, date, syncEpoch, page: article.publicUrl, query,
+    syncVersion: 2, syncedAt: f.now(), clicks: 0, impressions: 40, ctr: 0, position: 40, createdAt: f.now() });
+  f.get(site.id)!.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: f.get(site.id)! as never,
+    ownerAccountKey: accountDeletionKey(f.get(site.id)!.userId), verifiedAt: f.now() });
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_work", reason: "synthetic_refresh_evidence" });
+  return { f, site, page, enrolledMarkdown, day };
+}
+const refreshDraftRequest = (request: Fields) => JSON.stringify(request).includes("<insert_section>");
+
+test("P161 a refresh draft that drifts outside its section is delivered as the page plus its section", async () => {
+  const { f, page, enrolledMarkdown, day } = await refreshSetup((article, request) => refreshDraftRequest(request)
+    ? { ...article, markdown: `# A renamed headline\n\n${String(article.markdown).replace(/\n\n[^\n]+\s*$/, "\n")}` } : article);
+  const refreshed = () => f.tables.jobs.filter(j => j.contentWork?.targetPageId === page._id && j.contentWork?.stage === "verified");
+  await pumpUntil(f, () => refreshed().length === 1 || f.tables.jobs.some(j => j.contentWork?.discardedArticleIds?.length),
+    400, START + 120 * day);
+  const job = refreshed()[0];
+  assert.ok(job, diagnostic(f));
+  assert.equal(job.contentWork.revisions, 0, "accepted at the first review");
+  const anchor = job.contentWork.editTarget.before, at = enrolledMarkdown.indexOf(anchor);
+  const delivered = String(f.get(page._id)!.editable.markdown);
+  assert.ok(at > 0 && delivered.startsWith(enrolledMarkdown.slice(0, at)) && delivered.trimEnd().endsWith(enrolledMarkdown.slice(at).trimEnd()),
+    "every existing byte is kept, the stray drift is not delivered");
+  assert.match(delivered, /## A working method for /);
+  assert.doesNotMatch(delivered, /A renamed headline/);
+  f.assertOffline();
+});
+
 // P156 (Oct 22 2026): a title naming terms, pricing or privacy marked Pentra's own article as a protected legal or
 // pricing page, so it could never be refreshed or adopted (pentra.dev's "...Organize the Terms That Actually Drive Traffic").
 test("P156 Pentra's own article whose title names pricing still gets its page refresh", async () => {
