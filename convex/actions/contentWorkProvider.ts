@@ -8,7 +8,7 @@ import { internal } from "../_generated/api";
 import { sha256Hex } from "../lib/publicationArtifact";
 import { isProviderCreditRefusal, isProviderRequestRefusal, validProviderRequestId } from "../lib/contentProviderRefusal";
 import { auditResultHash, clarifiableContentAudit, contradictoryContentAudit, semanticAuditPrompt, SEMANTIC_AUDIT_SUFFIX } from "../lib/contentAudit";
-import { classifyEvidenceSource } from "../lib/sourceQuality";
+import { classifyEvidenceSource, firstPartyProductPage } from "../lib/sourceQuality";
 import { safeFetchPublicText } from "../lib/safeOutbound";
 import { promptRates } from "../lib/promptRates";
 
@@ -145,7 +145,9 @@ export type ContentResearchResult = {
  * durable job, reservation and receipt as every other content call. The result
  * keeps only what the API attributes to a page (URL, title, cited text), so the
  * evidence is replayed from the receipt on retry instead of being refetched. */
-export async function contentResearchCall(args: { system: string; userMessage: string; maxUses: number; maxTokens?: number }): Promise<ContentResearchResult> {
+export async function contentResearchCall(args: { system: string; userMessage: string; maxUses: number; maxTokens?: number;
+  /** Products a comparison search names: their own pages are fetched as evidence too (P160). */
+  firstPartyProducts?: string[] }): Promise<ContentResearchResult> {
   const s = scope.getStore();
   if (!s?.job.contentWork) throw new Error("Missing content provider scope");
   const cw = s.job.contentWork, p = cw.pricing;
@@ -189,7 +191,7 @@ export async function contentResearchCall(args: { system: string; userMessage: s
     // The numbers go on the draft's research note, so a refusal says which bound it hit.
     throw new Error(`Provider usage receipt missing or over bound (input ${input}/${inputBound}, output ${output}/${request.max_tokens}, searches ${searches}/${maxUses})`);
   }
-  const result = await withPreservedExcerpts(researchFromResponse(response.content as unknown[], searches));
+  const result = await withPreservedExcerpts(researchFromResponse(response.content as unknown[], searches), undefined, args.firstPartyProducts);
   await s.ctx.runMutation(internal.contentWork.completeProviderCall, { jobId: s.job._id, workerToken: s.workerToken, key,
     actualMicroUsd: Math.ceil(input * promptRates(p, input).input + output * promptRates(p, input).output) + searches * WEB_SEARCH_MICRO_USD_PER_REQUEST, result });
   return result;
@@ -229,11 +231,13 @@ const plainPageText = (html: string) => html.replace(/<script[\s\S]*?<\/script>/
  * (fetched once, stored in the receipt so a retry replays identical evidence).
  * Only strict-eligible sources are fetched; others keep just their quotes. */
 export async function withPreservedExcerpts(result: ContentResearchResult,
-  fetchText: (url: string) => Promise<{ url: string; text: string }> = url => safeFetchPublicText(url, { sameHostRedirects: true })): Promise<ContentResearchResult> {
+  fetchText: (url: string) => Promise<{ url: string; text: string }> = url => safeFetchPublicText(url, { sameHostRedirects: true }),
+  firstPartyProducts: readonly string[] = []): Promise<ContentResearchResult> {
   const sources = [];
   for (const source of result.sources) {
     let excerpt = source.excerpts.join(" … ");
-    if (classifyEvidenceSource(source.url).strictEligible && sources.filter(s => s.excerpt !== s.excerpts.join(" … ")).length < 6) {
+    if ((classifyEvidenceSource(source.url).strictEligible || firstPartyProductPage(source.url, firstPartyProducts)) &&
+      sources.filter(s => s.excerpt !== s.excerpts.join(" … ")).length < 6) {
       try {
         const page = plainPageText((await fetchText(source.url)).text);
         const windows: string[] = [];

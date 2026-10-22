@@ -92,6 +92,44 @@ export function normalizeEvidenceUrl(value: string): string | null {
   }
 }
 
+/** The products a comparison search names, by the name their websites go by:
+ * "seobot alternatives" → seobot, "seobot vs outrank" → seobot and outrank,
+ * "compare surfer seo and frase" → surferseo and frase. A side of more than
+ * two words is a category, not a product ("keyword research tool
+ * alternatives" names none). P160, Oct 22 2026. */
+export function productNamesInSearch(search: string): string[] {
+  const text = search.toLowerCase().replace(/[^a-z0-9 .]+/g, " ").replace(/\s+/g, " ").trim();
+  const versus = text.split(/ (?:vs\.?|versus) /);
+  const compare = /^compare (.+)$/.exec(text);
+  const alternatives = /^(.+?) (?:alternatives?|competitors?)\b/.exec(text);
+  const sides = versus.length >= 2 ? versus : compare ? compare[1].split(/ (?:and|with|to|vs\.?) /) : alternatives ? [alternatives[1]] : [];
+  return [...new Set(sides
+    .map((side) => side.replace(/^(?:the )?(?:best |top |free |cheaper |cheap )*/, "").replace(/ (?:pricing|price|plans|review|reviews)$/, "").trim())
+    .filter((side) => side && side.split(" ").length <= 2)
+    .map((side) => side.replace(/[ .]/g, ""))
+    .filter((name) => name.length >= 3))];
+}
+
+/** The name a website goes by: its registrable label ("help.seobot.ai" →
+ * "seobot", "outrank.so" → "outrank", "example.co.uk" → "example"). */
+function websiteName(host: string): string {
+  const labels = host.replace(/^www\./, "").split(".");
+  const twoPartSuffix = /^(?:co|com|org|net|ac|gov)\.[a-z]{2}$/.test(labels.slice(-2).join("."));
+  return labels[labels.length - (twoPartSuffix ? 3 : 2)] ?? "";
+}
+
+/** A page from the website of a product the search names: the authoritative
+ * source for that product's own features, plans and prices (a comparison's
+ * fairness bar), never for general claims; outcome claims still need two
+ * primary or official sources (articleQuality). */
+export function firstPartyProductPage(url: string, products: readonly string[]): boolean {
+  if (products.length === 0) return false;
+  const normalized = normalizeEvidenceUrl(url);
+  if (!normalized) return false;
+  const host = new URL(normalized).hostname.toLowerCase();
+  return !matchesAnyHost(host, LOW_AUTHORITY_HOSTS) && products.includes(websiteName(host));
+}
+
 /** A source's title as readers see it in the Sources list. Web search often
  * titles a PDF with its file name ("C 1097 2" for a University of Georgia
  * Extension circular on the Compost Notes test site, Oct 21 2026); a title
@@ -183,7 +221,7 @@ export function classifyEvidenceSource(value: string): EvidenceSourceQuality {
   };
 }
 
-export function strictEvidenceSources<T extends { url: string }>(sources: T[]): {
+export function strictEvidenceSources<T extends { url: string }>(sources: T[], options: { firstPartyProducts?: readonly string[] } = {}): {
   accepted: T[];
   rejected: Array<{ source: T; reason: string }>;
 } {
@@ -193,6 +231,10 @@ export function strictEvidenceSources<T extends { url: string }>(sources: T[]): 
 
   for (const source of sources) {
     const quality = classifyEvidenceSource(source.url);
+    // A comparison may cite a named product's own website for that product (P160).
+    if (!quality.strictEligible && quality.url && firstPartyProductPage(source.url, options.firstPartyProducts ?? [])) {
+      quality.strictEligible = true;
+    }
     if (!quality.strictEligible || !quality.url) {
       rejected.push({ source, reason: quality.reason });
       continue;

@@ -167,6 +167,7 @@ import {
   siteCanonicalDomainRevision,
 } from "../lib/siteDomainBinding";
 import {
+  productNamesInSearch,
   readableSourceTitle,
   researchOutcomeNote,
   strictEvidenceSources,
@@ -4525,6 +4526,9 @@ async function handleArticle(
     // Autopilot research runs inside the audited content provider: one bounded
     // web search call on the same job, reservation and receipt. Only text the
     // API attributes to a page becomes evidence, and strict source rules apply.
+    // A comparison may cite the products its search names from their own
+    // websites, for facts about those products (P160).
+    const namedProducts = effectiveArticleType === "comparison" ? productNamesInSearch(topic.primaryKeyword) : [];
     try {
       const found = await contentResearchCall({
         system: [
@@ -4540,12 +4544,14 @@ async function handleArticle(
           topic.secondaryKeywords?.length ? `Related searches: ${topic.secondaryKeywords.slice(0, 6).join(", ")}` : "",
           site.targetCountry ? `Readers are in: ${site.targetCountry}` : "",
           `Do not research ${site.siteName ?? site.domain} itself or its competitors; research the subject for its readers.`,
+          namedProducts.length ? `This compares the products the search names (“${topic.primaryKeyword}”). For a fact about one of them, its own website (features, plans and pricing pages) and documentation are the authoritative sources: cite those pages, not third-party lists.` : "",
         ].filter(Boolean).join("\n"),
         maxUses: 3,
+        firstPartyProducts: namedProducts,
       });
       const competitorDomains = (site.competitors ?? []).map((c: string) => c.replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase());
       const candidates = found.sources.filter(source => !competitorDomains.some(d => source.url.toLowerCase().includes(d)));
-      const strict = strictEvidenceSources(candidates);
+      const strict = strictEvidenceSources(candidates, { firstPartyProducts: namedProducts });
       const accepted = strict.accepted.map(source => {
         const excerpt = (source.excerpt ?? source.excerpts.join(" … ")).slice(0, 2500);
         return { url: source.url, title: readableSourceTitle(source.title, source.url), excerpt, contentHash: sha256Hex(excerpt), capturedAt: contentProviderPromptTime() };
@@ -6008,10 +6014,21 @@ async function handleLinks(
     (fallback) =>
       Boolean(fallback.anchor),
   );
+  // A search the owner added (C4) can share no words with the site's other
+  // pages ("seobot alternatives" on an SEO tool's site); it still belongs to
+  // the business, so it links the home page instead of failing the link gate.
+  const homeDestination = destinations.find((destination) => destination.href === "/");
+  const ownerHomeLink = fallbackLinks.length === 0 && articleTopic?.ownerChosenAt !== undefined && homeDestination
+    ? validateInternalLinkSuggestions(
+        [{ anchor: `${site.siteName?.trim() || siteCanonicalDomain(site) || site.domain} home page`, href: homeDestination.href }],
+        destinations.map((destination) => destination.href),
+        publishedArticleInternalHref(site.urlStructure, article.slug),
+      )
+    : [];
   const cleanMarkdown = stripGeneratedInternalLinks(article.markdown);
   const appendedResult = appendRelatedInternalLinks(
     cleanMarkdown,
-    fallbackLinks.slice(0, 3),
+    [...fallbackLinks, ...ownerHomeLink].slice(0, 3),
   );
   const result = {
     markdown: appendedResult.markdown,
@@ -7784,7 +7801,8 @@ async function reviewExistingArticleHandler(
     };
     const quality = evaluatePublicationQuality(qualityCandidate, "strict");
     const reviewBusinessSignals = tenantTopicBusinessSignals(site);
-    const targetAlignment = topic
+    // The owner's own search (C4) is not re-judged against the business's words.
+    const targetAlignment = topic && topic.ownerChosenAt === undefined
       ? evaluateTopicBusinessFit({
           keyword: topic.primaryKeyword,
           label: nextTitle,
@@ -9195,7 +9213,7 @@ export const processNextJob = internalAction({
           label: checkpoint.title,
           ...tenantTopicBusinessSignals(site),
         });
-        if (fit.eligible) return null;
+        if (fit.eligible || topic.ownerChosenAt !== undefined) return null;
 
         const settlement = await ctx.runMutation(
           internal.topics.disqualifyQueuedTopicInternal,
@@ -9476,7 +9494,9 @@ export const processNextJob = internalAction({
           label: topic.label,
           ...tenantTopicBusinessSignals(site),
         });
-        if (!fit.eligible) {
+        // A search the owner added is written as chosen (C4): word-match fit
+        // is Pentra's guess about the business, and the owner decided.
+        if (!fit.eligible && topic.ownerChosenAt === undefined) {
           const settlement = await ctx.runMutation(
             internal.topics.disqualifyQueuedTopicInternal,
             {

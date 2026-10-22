@@ -1685,6 +1685,38 @@ test("SLC68 Autopilot researches on the live web inside the content receipt and 
   f.assertOffline();
 });
 
+// P160 (Oct 22 2026): a comparison's facts about a named product must come from that product's own pages, but strict
+// evidence rejected every vendor page as "secondary", so an owner's "x alternatives" page could only hedge.
+test("P160 a comparison keeps the named product's own page as evidence; another vendor's page stays out", async () => {
+  const pricing = "Plans and pricing. AquaPlan Standard costs 19 dollars a month for up to three irrigation zones and includes valve alerts. AquaPlan Pro costs 49 dollars a month for up to twenty zones and adds a shared maintenance calendar for crews.";
+  const features = "Features. OtherPlan schedules irrigation maintenance for unlimited zones, sends crew reminders by text message and keeps a log of every completed inspection for the season.";
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000, webResearch: { searches: 2, citations: [
+    { url: "https://aquaplan.example/pricing", title: "AquaPlan pricing", cited_text: "AquaPlan Standard costs 19 dollars a month for up to three irrigation zones and includes valve alerts." },
+    { url: "https://otherplan.example/features", title: "OtherPlan features", cited_text: "OtherPlan schedules irrigation maintenance for unlimited zones, sends crew reminders by text message." },
+  ] }, evidence: { sources: [
+    { url: "https://aquaplan.example/pricing", title: "AquaPlan pricing", text: pricing },
+    { url: "https://otherplan.example/features", title: "OtherPlan features", text: features },
+  ] }, draftResponse: (article: Fields) => ({ ...article,
+    markdown: String(article.markdown).replace("The synthetic field register contains an observation label and a review note [1].",
+      "AquaPlan Standard costs 19 dollars a month for up to three irrigation zones and includes valve alerts [1].")
+      .replace(/## Sources[\s\S]*$/, "## Sources\n\n[1] AquaPlan pricing — https://aquaplan.example/pricing"),
+    sources: [{ url: "https://aquaplan.example/pricing", title: "AquaPlan pricing" }] }) });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  const added = await f.invoke("contentWork:addOwnerSearch", { siteId: site.id, search: "aquaplan alternatives" });
+  f.setIdentity(null);
+  const owned = () => f.tables.jobs.find(j => j.siteId === site.id && j.payload?.topicId === added.topicId && ["ready", "failed"].includes(j.contentWork?.stage));
+  await pumpUntil(f, () => Boolean(owned()), 400, START + 12 * 3_600_000);
+  const job = owned()!;
+  assert.equal(job.contentWork.stage, "ready", JSON.stringify(job.contentWork.failure));
+  const article = f.get(job.articleId)!;
+  assert.deepEqual((article.sources ?? []).map((s: { url: string }) => s.url), ["https://aquaplan.example/pricing"],
+    "the named product's own page is kept; another vendor's is not");
+  f.assertOffline();
+});
+
 // P150 (Oct 21 2026): LeadPilot's 17:58Z draft recorded "Web research unavailable: Provider usage receipt missing or
 // over bound": three searches came back above the 40,000-tokens-a-search allowance, so the paid research was refused.
 test("P150 research whose search results run to 150,000 prompt tokens is kept and priced", async () => {
