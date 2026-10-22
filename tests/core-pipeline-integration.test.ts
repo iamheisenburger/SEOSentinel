@@ -3557,6 +3557,12 @@ test("SLC29 Search Console requires complete current epochs and distinguishes ze
   // P148: the old page's stale verdict is queued for a fresh inspection.
   const queued = await f.invoke("searchPerformance:listPublishedForInspection", { siteId: site.id, now: end, limit: 20 });
   assert.ok(queued.some((row: { slug: string }) => row.slug === "old-page"), JSON.stringify(queued));
+  // P157 (Oct 22 2026): it had only the room the 56-day cohort left; pentra.dev's cohort filled every run.
+  for (let i = 0; i < 20; i++) f.add("article_summaries", { siteId: site.id, slug: `cohort-page-${i}`, title: `Cohort page ${i}`,
+    status: "published", publicUrlStatus: "verified", publishedAt: end - (i + 2) * day, createdAt: end - (i + 2) * day });
+  const full = await f.invoke("searchPerformance:listPublishedForInspection", { siteId: site.id, now: end, limit: 20 });
+  assert.equal(full.filter((row: { slug: string }) => row.slug !== "old-page").length, 20, "the cohort fills the run");
+  assert.ok(full.some((row: { slug: string }) => row.slug === "old-page"), "an old page still gets its own slot");
   assert.equal(r.daily.length, 56); assert.deepEqual(r.daily.at(-1), { date: "2026-09-07", clicks: 3 }); assert.deepEqual(r.daily[0], { date: "2026-07-14", clicks: 0 });
   stored.gscDateEpochs.pop(); r = await f.invoke("searchPerformance:contentOutcome", { siteId: site.id });
   assert.equal(r.current.clicks, 3); assert.equal(r.previous, null);

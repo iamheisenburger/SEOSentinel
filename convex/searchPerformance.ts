@@ -13,6 +13,7 @@ import {
   searchConsoleDate,
   selectGscInspectionQueue,
   selectStaleInspections,
+  GSC_STALE_REINSPECT_PER_RUN,
   summarizeSearchPagePerformance,
   summarizeSearchPerformance,
 } from "./lib/searchPerformance";
@@ -1130,10 +1131,11 @@ export const listPublishedForInspection = internalQuery({
       })),
       { siteId, now, limit },
     );
-    // Room left in the run goes to older articles whose verdict may be stale
-    // (the oldest 300 published summaries, a few a run; P148).
-    const room = Math.max(1, Math.min(limit ?? 20, 50)) - queue.length;
-    const older = room <= 0 ? [] : selectStaleInspections(
+    // Older articles whose verdict may be stale get a few slots of their own
+    // each run (the oldest 300 published summaries; P148). They had only the
+    // room the 56-day cohort left, and pentra.dev's cohort filled every run,
+    // so none was ever re-inspected (P157, Oct 22 2026).
+    const older = selectStaleInspections(
       (await ctx.db.query("article_summaries").withIndex("by_site_status", (q) =>
         q.eq("siteId", siteId).eq("status", "published")).take(300))
         .filter((row) => articleMatchesCurrentDomain(site, row))
@@ -1144,7 +1146,7 @@ export const listPublishedForInspection = internalQuery({
             gscInspectedAt: current ? row.gscInspectedAt : undefined,
             gscIndexVerdict: current ? row.gscIndexVerdict : undefined };
         }),
-      { siteId, now, limit: room },
+      { siteId, now, limit: GSC_STALE_REINSPECT_PER_RUN },
     );
     return [...queue, ...older].map((article) => ({
       articleId: article.articleId,
