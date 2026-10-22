@@ -13,7 +13,8 @@ import { LandingNav } from "@/components/layout/landing-nav";
 import { convexHttp } from "@/lib/convexHttpClient";
 import "./article-content.css";
 import { articleFaq } from "@/lib/article-faq";
-import { consolidatedTarget } from "@/lib/pentra-consolidation";
+import { consolidatedTarget, servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
+import { relatedArticles } from "@/lib/related-articles";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +50,11 @@ const getRequestDomain = cache(async (): Promise<string> => {
 
 const getPublishedArticle = cache(async (domain: string, slug: string) =>
   convexHttp.query(api.blog.getPublishedBySlug, { domain, slug }),
+);
+
+// The same listing the /blog index reads (one cached query for every article page).
+const getPublishedList = cache(async (domain: string) =>
+  convexHttp.query(api.blog.listPublishedByDomain, { domain }),
 );
 
 type PublishedArticle = NonNullable<
@@ -229,6 +235,15 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
   const article = await getPublishedArticle(domain, slug);
   if (!article) notFound();
 
+  // Related guides (P159): each article links the ones on its subject and the
+  // newest, so none is reachable only from the blog index.
+  let related: Awaited<ReturnType<typeof getPublishedList>> = [];
+  try {
+    related = relatedArticles(article, (await getPublishedList(domain)).filter((item) => servedOnItsOwnUrl(domain, item.slug)));
+  } catch {
+    // The article still renders without them.
+  }
+
   const canonical = canonicalUrlFor(article);
   const origin = safeSiteOrigin(article.domain);
   const featuredImage = safeHttpsUrl(article.featuredImage);
@@ -382,6 +397,26 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
               })}
             </ul>
           </div>
+        )}
+
+        {related.length > 0 && (
+          <nav aria-labelledby="related-guides-heading" className="mt-12 pt-8 border-t border-white/[0.06]">
+            <h2 id="related-guides-heading" className="text-[14px] font-semibold text-[#F7F8F8] mb-4">
+              Related guides
+            </h2>
+            <ul className="flex flex-col gap-2">
+              {related.map((item) => (
+                <li key={item.slug}>
+                  <Link
+                    href={`/blog/${item.slug}`}
+                    className="text-[14px] text-[#0EA5E9] hover:text-[#38BDF8] underline underline-offset-2 transition"
+                  >
+                    {item.title}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </nav>
         )}
       </main>
     </div>

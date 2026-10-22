@@ -11,6 +11,9 @@ test("published blog posts render and emit per-article SEO data on the server", 
   assert.match(blogPostRoute, /export async function generateMetadata/);
   assert.match(blogPostRoute, /alternates: canonical \? \{ canonical \}/);
   assert.match(blogPostRoute, /openGraph:/);
+  // P159 (Oct 22 2026): most pentra.dev articles were linked only from /blog; each page now links related guides.
+  assert.match(blogPostRoute, /relatedArticles\(article, \(await getPublishedList\(domain\)\)\.filter\(\(item\) => servedOnItsOwnUrl\(domain, item\.slug\)\)\)/);
+  assert.match(blogPostRoute, /Related guides/);
 });
 
 test("published blog posts preserve safe Markdown and escaped server JSON-LD", () => {
