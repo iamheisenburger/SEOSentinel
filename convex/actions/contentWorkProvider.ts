@@ -161,7 +161,12 @@ export async function contentResearchCall(args: { system: string; userMessage: s
   const inputBound = RESEARCH_INPUT_TOKENS_BOUND;
   if (Buffer.byteLength(JSON.stringify(request), "utf8") + 8192 > inputBound) throw new Error("Content request exceeds priced input bound");
   const boundRates = promptRates(p, inputBound);
-  const ceilingMicroUsd = Math.ceil(inputBound * boundRates.input + request.max_tokens * boundRates.output) + maxUses * WEB_SEARCH_MICRO_USD_PER_REQUEST;
+  // With web search the model writes before and after each search, and the
+  // receipt totals every turn, each bounded by max_tokens: LeadPilot's Oct 24
+  // draft came back with 4,202 output tokens on a 4,000 max_tokens request
+  // (three searches) and its paid research was refused (P164, Oct 22 2026).
+  const outputBound = request.max_tokens * (maxUses + 1);
+  const ceilingMicroUsd = Math.ceil(inputBound * boundRates.input + outputBound * boundRates.output) + maxUses * WEB_SEARCH_MICRO_USD_PER_REQUEST;
   const admission = await s.ctx.runMutation(internal.contentWork.beginProviderCall, { jobId: s.job._id, workerToken: s.workerToken,
     key: logicalKey, requestHash: sha256Hex(JSON.stringify(request)), ceilingMicroUsd });
   if (admission.kind === "cached") return admission.result as ContentResearchResult;
@@ -187,9 +192,9 @@ export async function contentResearchCall(args: { system: string; userMessage: s
   }
   const usage = response.usage as { input_tokens: number; output_tokens: number; server_tool_use?: { web_search_requests?: number } | null };
   const input = usage.input_tokens, output = usage.output_tokens, searches = usage.server_tool_use?.web_search_requests ?? 0;
-  if (![input, output, searches].every(n => Number.isSafeInteger(n) && n >= 0) || input > inputBound || output > request.max_tokens || searches > maxUses) {
+  if (![input, output, searches].every(n => Number.isSafeInteger(n) && n >= 0) || input > inputBound || output > outputBound || searches > maxUses) {
     // The numbers go on the draft's research note, so a refusal says which bound it hit.
-    throw new Error(`Provider usage receipt missing or over bound (input ${input}/${inputBound}, output ${output}/${request.max_tokens}, searches ${searches}/${maxUses})`);
+    throw new Error(`Provider usage receipt missing or over bound (input ${input}/${inputBound}, output ${output}/${outputBound}, searches ${searches}/${maxUses})`);
   }
   const result = await withPreservedExcerpts(researchFromResponse(response.content as unknown[], searches), undefined, args.firstPartyProducts);
   await s.ctx.runMutation(internal.contentWork.completeProviderCall, { jobId: s.job._id, workerToken: s.workerToken, key,

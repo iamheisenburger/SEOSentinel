@@ -85,7 +85,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   hosted?: { method: "ghost"; secret: string; transport: (url: URL, init: RequestInit) => Promise<Response> };
   failedOptionalSource?: boolean; liveCorrupt?: "canonical" | "body" | "title";
   evidence?: { sources: Array<{ url: string; title: string; text: string }>; failed?: string[]; brief?: string; competitor?: string };
-  webResearch?: { citations: Array<{ url: string; title: string; cited_text: string }>; searches?: number; inputTokens?: number; error?: { status: number; type: string } };
+  webResearch?: { citations: Array<{ url: string; title: string; cited_text: string }>; searches?: number; inputTokens?: number; outputTokens?: number; error?: { status: number; type: string } };
   /** Keyword research answers: Google Ads keywords for a seed batch, Labs suggestions for one seed. */
   discovery?: { ads?: (seeds: string[]) => string[]; suggestions?: (seed: string) => string[] };
   /** P105: the buyer-fit model's verdict per keyword (default: keep). */
@@ -150,7 +150,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
         if (!research) throw new Error("Unexpected web research call");
         if (research.error) return json({ type: "error", error: { type: research.error.type, message: "Synthetic web research refusal" } }, research.error.status);
         return json({ id: `synthetic-message-${modelCalls.length}`, type: "message", role: "assistant", model: body.model, stop_reason: "end_turn", stop_sequence: null,
-          usage: { input_tokens: research.inputTokens ?? 1200, output_tokens: 150, server_tool_use: { web_search_requests: research.searches ?? 1 } },
+          usage: { input_tokens: research.inputTokens ?? 1200, output_tokens: research.outputTokens ?? 150, server_tool_use: { web_search_requests: research.searches ?? 1 } },
           content: [{ type: "server_tool_use", id: "srvtoolu_synthetic", name: "web_search", input: { query: "synthetic" } },
             { type: "web_search_tool_result", tool_use_id: "srvtoolu_synthetic", content: research.citations.map(c => ({ type: "web_search_result", url: c.url, title: c.title, encrypted_content: "synthetic", page_age: null })) },
             ...research.citations.map(c => ({ type: "text", text: `${c.cited_text} `, citations: [{ type: "web_search_result_location", url: c.url, title: c.title, encrypted_index: "synthetic", cited_text: c.cited_text }] }))] });
@@ -1784,6 +1784,29 @@ test("P155 research is never refused for its prompt size: 400,000 prompt tokens 
   const research = job.contentWork.providerCalls.find((c: { logicalKey: string }) => c.logicalKey.endsWith(":web_research"));
   assert.equal(research.state, "completed", JSON.stringify(research));
   assert.equal(research.actualMicroUsd, 400_000 + 150 + 3 * 10_000);
+  assert.ok(research.ceilingMicroUsd >= research.actualMicroUsd);
+  assert.equal((f.get(job.articleId)!.sources ?? []).length, 1, "the research is kept");
+  f.assertOffline();
+});
+
+// P164 (Oct 22 2026): LeadPilot's Oct 24 draft lost its paid research as "over bound (output 4202/4000, searches 3/3)":
+// with web search the receipt totals the model's writing across every search turn.
+test("P164 research whose turns write more than one max_tokens in total is kept and priced", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000, webResearch: { searches: 3, outputTokens: 4_202, citations: [
+    { url: "https://records.example.gov/specification", title: "Synthetic register specification", cited_text: "The synthetic field register contains an observation label and a review note." },
+  ] }, evidence: { sources: [
+    { url: "https://records.example.gov/specification", title: "Synthetic register specification", text: "Section 2. The synthetic field register contains an observation label and a review note. Each entry records who observed the item, when it was observed and which reviewer checked the note before the entry is closed. Entries without a reviewer remain open." },
+  ] } });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.siteId === site.id && ["ready", "failed"].includes(j.contentWork?.stage)), 200, START + 6 * 3_600_000);
+  const job = f.tables.jobs.find(j => j.siteId === site.id && j.contentWork?.providerCalls.length)!;
+  const research = job.contentWork.providerCalls.find((c: { logicalKey: string }) => c.logicalKey.endsWith(":web_research"));
+  assert.equal(research.state, "completed", JSON.stringify(research));
+  assert.equal(research.actualMicroUsd, 1200 + 4_202 + 3 * 10_000, "priced at the real total");
   assert.ok(research.ceilingMicroUsd >= research.actualMicroUsd);
   assert.equal((f.get(job.articleId)!.sources ?? []).length, 1, "the research is kept");
   f.assertOffline();
