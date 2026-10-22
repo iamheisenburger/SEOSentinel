@@ -118,6 +118,21 @@ function websiteName(host: string): string {
   return labels[labels.length - (twoPartSuffix ? 3 : 2)] ?? "";
 }
 
+/** The company behind a cited page that is neither primary research nor a
+ * curated official/standards source ("help.salesforce.com" → salesforce),
+ * for the rule that an article names another company only when its search
+ * does (V1; P162). Google, the search engine every article is written for,
+ * is never counted. */
+export function citedCompanyName(url: string): string | null {
+  const normalized = normalizeEvidenceUrl(url);
+  if (!normalized) return null;
+  const host = new URL(normalized).hostname.toLowerCase();
+  if (host.endsWith(".gov") || host.endsWith(".gov.uk") || host.endsWith(".edu") || host.endsWith(".ac.uk") ||
+    matchesAnyHost(host, PRIMARY_HOSTS) || matchesAnyHost(host, STANDARDS_AND_OFFICIAL_HOSTS)) return null;
+  const name = websiteName(host);
+  return name.length >= 3 && name !== "google" ? name : null;
+}
+
 /** A page from the website of a product the search names: the authoritative
  * source for that product's own features, plans and prices (a comparison's
  * fairness bar), never for general claims; outcome claims still need two

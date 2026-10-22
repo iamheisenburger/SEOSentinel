@@ -1685,6 +1685,33 @@ test("SLC68 Autopilot researches on the live web inside the content receipt and 
   f.assertOffline();
 });
 
+// P162 (Oct 22 2026): a LeadPilot draft on lead scoring for marketing teams kept one source, Salesforce's help page, and
+// named Salesforce three times with its edition list, though its search names no company (V1).
+test("P162 a draft naming the company behind its cited help page takes its edit pass without the name", async () => {
+  const guide = "Scoring guide. VendorCRM scores each lead from its lead fields and recent engagement, and shows the factors behind every score so a sales team can decide which leads to call first and which to keep nurturing.";
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000, webResearch: { searches: 1, citations: [
+    { url: "https://help.vendorcrm.example/scoring", title: "Scoring guide", cited_text: "VendorCRM scores each lead from its lead fields and recent engagement." },
+  ] }, evidence: { sources: [{ url: "https://help.vendorcrm.example/scoring", title: "Scoring guide", text: guide }] },
+  draftResponse: (article: Fields) => ({ ...article,
+    markdown: String(article.markdown).replace("The synthetic field register contains an observation label and a review note [1].",
+      "VendorCRM scores each lead from its lead fields and recent engagement [1].")
+      .replace(/## Sources[\s\S]*$/, "## Sources\n\n[1] Scoring guide — https://help.vendorcrm.example/scoring"),
+    sources: [{ url: "https://help.vendorcrm.example/scoring", title: "Scoring guide" }] }) });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  f.setIdentity(null);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.siteId === site.id && ["ready", "failed"].includes(j.contentWork?.stage)), 300, START + 12 * 3_600_000);
+  const rewrites = f.modelCalls.filter(c => c.tools?.[0]?.name === "remediate_final_article").map(c => JSON.stringify(c));
+  assert.ok(rewrites.some(call => call.includes("Rewrite without naming Vendorcrm, which the search does not name")), "the edit pass is told to drop the name");
+  const job = f.tables.jobs.find(j => j.siteId === site.id && j.contentWork?.providerCalls.length)!;
+  assert.equal(job.contentWork.stage, "ready", JSON.stringify(job.contentWork.failure));
+  assert.equal(job.contentWork.revisions, 1, "one bounded rewrite, then the draft is accepted");
+  f.assertOffline();
+});
+
 // P160 (Oct 22 2026): a comparison's facts about a named product must come from that product's own pages, but strict
 // evidence rejected every vendor page as "secondary", so an owner's "x alternatives" page could only hedge.
 test("P160 a comparison keeps the named product's own page as evidence; another vendor's page stays out", async () => {

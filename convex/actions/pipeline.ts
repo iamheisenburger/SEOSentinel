@@ -1,6 +1,7 @@
 "use node";
 import { contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
-import { autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote, checkableFactCheckFindings } from "../lib/autopilotEditor";
+import { autopilotCompanyNameIssue, autopilotCompanyNameNote, autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote,
+  checkableFactCheckFindings, unsearchedCompanyMentions } from "../lib/autopilotEditor";
 class ContentQualityRejection extends Error {}
 
 import { internal } from "../_generated/api";
@@ -168,6 +169,7 @@ import {
 } from "../lib/siteDomainBinding";
 import { spliceRefreshSection } from "../lib/contentSelection";
 import {
+  citedCompanyName,
   productNamesInSearch,
   readableSourceTitle,
   researchOutcomeNote,
@@ -4791,6 +4793,7 @@ async function handleArticle(
     `- HYPOTHETICALS: Label invented examples explicitly as hypothetical and never present their details or results as evidence.`,
     `- PRACTICAL VALUE: Give the reader a concrete answer and a useful next step: an evidence-grounded explanation, a decision framework with explicit trade-offs, or a reader-run check with inputs and observable results. Label proposed frameworks as recommendations, not established industry facts, once and in reader terms. Never write about your sources, research or drafting process in the article (no "no external sources were verified for this draft", "the documentation we can verify", "the excerpt is truncated" or "the supplied evidence"); when a limitation matters, tell the reader what to check (for example "check the vendor's current documentation for the full list"). Never contrast your advice with the sources or say which parts are or are not from them (no "not figures from the sources", "rather than a rule from the sources", "source-specified" or "the sources do not give"): cite a sourced fact with its number and state everything else as plain advice. Do not claim uniqueness, competitor inferiority, or guaranteed traffic.`,
     `- COMPARISONS: A documented capability does not establish that competing tools lack it or that it produces better results. Omit unsupported superlatives and comparative outcome claims. Where useful, propose a conditional test the reader can evaluate using their own data.`,
+    `- OTHER COMPANIES: Name another company or product only when the primary keyword names it. When a cited source is another company's documentation, state the fact with its citation and leave the company out; never describe another company's plans, editions or prices unless the primary keyword names that company.`,
     `- METADATA: The title and description must accurately describe the finished article. Do not promise templates, benchmarks, features, outcomes or coverage that the article does not actually provide. Never call the article evidence-based, data-driven, research-backed or proven unless it cites supplied sources.`,
     `- ORIGINAL VALUE IS NOT INVENTED EXPERIENCE: Never manufacture first-hand framing. Do not write that anyone analysed, measured, tested, tracked, or observed anything unless that measurement appears in the supplied evidence. Differentiation must come from verified mechanics and reasoning, never from fabricated experience.`,
     `- NO META-TALK: Output article content only. No explanations outside the JSON.`,
@@ -7078,6 +7081,9 @@ async function reviewExistingArticleHandler(
     // an unsupported claim even though the exact excerpt was still stored.
     const researchEvidence = preservedResearchEvidenceSnapshot(sources);
     const normalizedProductName = productName.trim().toLowerCase();
+    // Who the article may name (P162): the companies its search names, and the business itself.
+    const companyContext = { search: topic?.primaryKeyword ?? article.title, title: article.title,
+      business: [productName, site.domain.replace(/^www\./, "").split(".")[0]] };
     const bannedNames = [
       ...(site.competitors ?? []),
       ...(site.competitors ?? []).map((competitor: string) =>
@@ -7186,10 +7192,14 @@ async function reviewExistingArticleHandler(
           ...(autopilotEditor
             ? checkableFactCheckFindings(unverifiedClaimsFromFactCheckNotes(article.factCheckNotes), productName).map(autopilotVerificationNote)
             : []),
+          ...(autopilotEditor
+            ? unsearchedCompanyMentions(reviewMarkdown, sources.map((source) => citedCompanyName(source.url)), companyContext)
+              .map(({ company, sentence }) => autopilotCompanyNameNote(company, sentence))
+            : []),
           ...storedDefects,
         ])].sort((left, right) => {
           const priority = (note: string) =>
-            /^(?:Reader-visible defect|Verify against the preserved sources)\b/i.test(note) ? -1
+            /^(?:Reader-visible defect|Verify against the preserved sources|Rewrite without naming)\b/i.test(note) ? -1
               : /^(?:Remaining )?Material editorial defect\b/i.test(note) ? 0
               : /^(?:Remaining )?(?:Deterministic )?(?:Uncited evidence defect|Claim-ledger defect|Unsupported claim|Evidence defect)\b/i.test(note) ? 1
               : 2;
@@ -7843,10 +7853,16 @@ async function reviewExistingArticleHandler(
     const checkableFindings = autopilotEditor && !incrementRevision
       ? checkableFactCheckFindings(reviewed.unverifiedClaims ?? [], productName)
       : [];
+    // V1 (P162): a first review whose draft names the company behind a cited
+    // vendor page, when the search does not, takes the one bounded rewrite.
+    const companyMentions = autopilotEditor && !incrementRevision
+      ? unsearchedCompanyMentions(finalReviewMarkdown, sources.map((source) => citedCompanyName(source.url)), companyContext)
+      : [];
     const preLinkIssues = issuesBlockingPreLinkReview([
       ...quality.issues,
       ...readerVisibleIssues(qualityCandidate),
       ...(checkableFindings.length > 0 ? [autopilotEditPassIssue(checkableFindings.length)] : []),
+      ...(companyMentions.length > 0 ? [autopilotCompanyNameIssue(companyMentions.length)] : []),
     ]);
     const readyForPublication =
       preLinkIssues.length === 0 && targetAlignmentPassed;

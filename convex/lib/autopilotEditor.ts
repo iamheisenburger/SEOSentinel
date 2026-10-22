@@ -37,6 +37,42 @@ export function autopilotEditPassIssue(count: number): string {
   return `Autopilot edit pass: ${count} fact-check finding(s) to verify against the sources and the business profile.`;
 }
 
+/** Sentences that name the company behind a cited vendor page although the
+ * search does not name it (V1: another company is named only when the search
+ * names it). P162, Oct 22 2026: a LeadPilot draft on lead scoring for
+ * marketing teams kept one source, Salesforce's help page, and named
+ * Salesforce three times, with its edition list. Sources, Related reading
+ * and link targets are not prose. At most six sentences. */
+export function unsearchedCompanyMentions(markdown: string, companies: readonly (string | null)[],
+  context: { search: string; title?: string; business: readonly string[] }): Array<{ company: string; sentence: string }> {
+  const words = new Set(`${context.search} ${context.title ?? ""}`.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+  const own = new Set(context.business.map((name) => name.toLowerCase().replace(/[^a-z0-9]/g, "")).filter(Boolean));
+  const named = [...new Set(companies.filter((company): company is string => Boolean(company)))]
+    .filter((company) => !words.has(company) && !own.has(company));
+  if (named.length === 0) return [];
+  const prose = markdown.split(/^#{2,3}\s+(?:Sources|References|Related reading)\s*$/im)[0]
+    .replace(/\]\([^)]*\)/g, "]").replace(/https?:\/\/\S+/g, " ");
+  const mentions: Array<{ company: string; sentence: string }> = [];
+  for (const sentence of prose.split(/(?<=[.!?])\s+|\n+/)) {
+    const company = named.find((name) => new RegExp(`\\b${name}\\b`, "i").test(sentence));
+    if (company && sentence.trim()) mentions.push({ company, sentence: sentence.trim() });
+  }
+  return mentions.slice(0, 6);
+}
+
+/** Gate message that sends a first review naming such companies through the
+ * one bounded rewrite. Never waivable; only raised on a first review. */
+export function autopilotCompanyNameIssue(count: number): string {
+  return `Autopilot edit pass: ${count} sentence(s) name a company the search does not name.`;
+}
+
+/** The rewrite instruction for one such sentence. */
+export function autopilotCompanyNameNote(company: string, sentence: string): string {
+  const name = company.replace(/^./, (c) => c.toUpperCase());
+  return `Rewrite without naming ${name}, which the search does not name: «${sentence.replace(/[«»]/g, "")}». ` +
+    "Keep the fact and its citation, leave the company and its plans, editions and prices out, and keep the paragraph complete.";
+}
+
 /** The rewrite instruction for one checkable finding. */
 export function autopilotVerificationNote(sentence: string): string {
   return `Verify against the preserved sources and the business profile: «${sentence.replace(/[«»]/g, "")}». ` +
