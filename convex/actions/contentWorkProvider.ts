@@ -127,12 +127,13 @@ export async function contentStructuredCall(args: { system: string; userMessage:
 export const contentWebResearchEnabled = () => process.env.PENTRA_CONTENT_WEB_RESEARCH === "on";
 /** Anthropic's published server web search fee: $10 per 1,000 searches. */
 export const WEB_SEARCH_MICRO_USD_PER_REQUEST = 10_000;
-/** Per-search allowance for result content counted as input tokens. It was
- * 40,000: about half of the owner sites' drafts since Oct 19 came back over
- * it (Claude Haiku 5.5's tokenizer counts ~30% more tokens), so the research
- * was paid for, refused as "over bound" and the article written without a
- * source (P150, Oct 21 2026). Haiku 5.5's context is 1M tokens. */
-const WEB_SEARCH_INPUT_TOKENS_BOUND = 100_000;
+/** The research prompt's input bound is the model's whole context window:
+ * a response the API returned can never exceed it. A per-search allowance
+ * refused paid research twice: at 40,000 a search about half of the owner
+ * sites' drafts lost their sources (P150), and at 100,000 one of pentra.dev's
+ * three drafts on Oct 22 still did (P155). At Claude Haiku 5.5's long-prompt
+ * rate the ceiling is about $0.54 of the $2.50 article budget. */
+const RESEARCH_INPUT_TOKENS_BOUND = 1_000_000;
 
 export type ContentResearchResult = {
   summary: string;
@@ -155,8 +156,8 @@ export async function contentResearchCall(args: { system: string; userMessage: s
   const request = { model: p.model, max_tokens: Math.min(args.maxTokens ?? 4000, 8000), system: args.system,
     messages: [{ role: "user" as const, content: args.userMessage }],
     tools: [{ type: "web_search_20250305" as const, name: "web_search" as const, max_uses: maxUses }] };
-  const inputBound = Buffer.byteLength(JSON.stringify(request), "utf8") + 8192 + maxUses * WEB_SEARCH_INPUT_TOKENS_BOUND;
-  if (inputBound > 600_000) throw new Error("Content request exceeds priced input bound");
+  const inputBound = RESEARCH_INPUT_TOKENS_BOUND;
+  if (Buffer.byteLength(JSON.stringify(request), "utf8") + 8192 > inputBound) throw new Error("Content request exceeds priced input bound");
   const boundRates = promptRates(p, inputBound);
   const ceilingMicroUsd = Math.ceil(inputBound * boundRates.input + request.max_tokens * boundRates.output) + maxUses * WEB_SEARCH_MICRO_USD_PER_REQUEST;
   const admission = await s.ctx.runMutation(internal.contentWork.beginProviderCall, { jobId: s.job._id, workerToken: s.workerToken,
@@ -185,7 +186,8 @@ export async function contentResearchCall(args: { system: string; userMessage: s
   const usage = response.usage as { input_tokens: number; output_tokens: number; server_tool_use?: { web_search_requests?: number } | null };
   const input = usage.input_tokens, output = usage.output_tokens, searches = usage.server_tool_use?.web_search_requests ?? 0;
   if (![input, output, searches].every(n => Number.isSafeInteger(n) && n >= 0) || input > inputBound || output > request.max_tokens || searches > maxUses) {
-    throw new Error("Provider usage receipt missing or over bound");
+    // The numbers go on the draft's research note, so a refusal says which bound it hit.
+    throw new Error(`Provider usage receipt missing or over bound (input ${input}/${inputBound}, output ${output}/${request.max_tokens}, searches ${searches}/${maxUses})`);
   }
   const result = await withPreservedExcerpts(researchFromResponse(response.content as unknown[], searches));
   await s.ctx.runMutation(internal.contentWork.completeProviderCall, { jobId: s.job._id, workerToken: s.workerToken, key,

@@ -1601,7 +1601,7 @@ test("SLC67 the owner edits business facts: saving re-confirms, old prepared wor
 });
 
 test("SLC68 Autopilot researches on the live web inside the content receipt and cites only strict, API-attributed sources", async () => {
-  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], webResearch: { searches: 2, citations: [
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000, webResearch: { searches: 2, citations: [
     { url: "https://records.example.gov/specification", title: "Synthetic register specification", cited_text: "The synthetic field register contains an observation label and a review note." },
     { url: "https://methods.example.edu/review", title: "Synthetic review methods", cited_text: "Review methods describe how an observation label and a review note are checked." },
     { url: "https://someblog.example.com/opinion", title: "A blog opinion", cited_text: "Blogs are not strict evidence for this article's claims." },
@@ -1662,6 +1662,28 @@ test("P150 research whose search results run to 150,000 prompt tokens is kept an
   f.assertOffline();
 });
 
+// P155 (Oct 22 2026): at 100,000 tokens a search, one of pentra.dev's three drafts still lost its research ("over bound").
+test("P155 research is never refused for its prompt size: 400,000 prompt tokens are kept and priced", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000, webResearch: { searches: 3, inputTokens: 400_000, citations: [
+    { url: "https://records.example.gov/specification", title: "Synthetic register specification", cited_text: "The synthetic field register contains an observation label and a review note." },
+  ] }, evidence: { sources: [
+    { url: "https://records.example.gov/specification", title: "Synthetic register specification", text: "Section 2. The synthetic field register contains an observation label and a review note. Each entry records who observed the item, when it was observed and which reviewer checked the note before the entry is closed. Entries without a reviewer remain open." },
+  ] } });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.siteId === site.id && ["ready", "failed"].includes(j.contentWork?.stage)), 200, START + 6 * 3_600_000);
+  const job = f.tables.jobs.find(j => j.siteId === site.id && j.contentWork?.providerCalls.length)!;
+  const research = job.contentWork.providerCalls.find((c: { logicalKey: string }) => c.logicalKey.endsWith(":web_research"));
+  assert.equal(research.state, "completed", JSON.stringify(research));
+  assert.equal(research.actualMicroUsd, 400_000 + 150 + 3 * 10_000);
+  assert.ok(research.ceilingMicroUsd >= research.actualMicroUsd);
+  assert.equal((f.get(job.articleId)!.sources ?? []).length, 1, "the research is kept");
+  f.assertOffline();
+});
+
 test("Claude Haiku 5.5 prompts above 100K tokens are priced at its long-prompt rates; other models are flat", async () => {
   const { promptRates } = await import("../convex/lib/promptRates.ts");
   const haiku = { model: "claude-haiku-5-5", inputMicroUsdPerToken: 0.1, outputMicroUsdPerToken: 0.5 };
@@ -1672,7 +1694,7 @@ test("Claude Haiku 5.5 prompts above 100K tokens are priced at its long-prompt r
 
 // P144 (Oct 21 2026): about half of the owner sites' drafts since Oct 19 kept no source, and nothing recorded why.
 test("P144 a draft records what its research produced, including an official page that could not be read", async () => {
-  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], webResearch: { searches: 1, citations: [
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000, webResearch: { searches: 1, citations: [
     { url: "https://records.example.gov/specification", title: "Synthetic register specification", cited_text: "The synthetic field register contains an observation label and a review note." },
     { url: "https://help.example.gov/unreadable", title: "Unreadable help page", cited_text: "Each observation keeps its label until a reviewer closes it." },
   ] }, evidence: { failed: ["https://help.example.gov/unreadable"], sources: [
@@ -1691,7 +1713,7 @@ test("P144 a draft records what its research produced, including an official pag
 });
 
 test("SLC68b a web research refusal never blocks the article; it is written from confirmed facts", async () => {
-  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], webResearch: { citations: [], error: { status: 400, type: "invalid_request_error" } } });
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000, webResearch: { citations: [], error: { status: 400, type: "invalid_request_error" } } });
   const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
   f.setIdentity(saved.userId);
   const r = await f.invoke("contentWork:readiness", { siteId: site.id });
