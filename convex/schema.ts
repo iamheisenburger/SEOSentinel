@@ -3033,6 +3033,8 @@ export default defineSchema({
     .index("by_delivery_owner", ["deliveryOwnerAccountKey"])
     .index("by_inbox", ["inboxId"])
     .index("by_inbox_status", ["inboxId", "status"])
+    // P170: reply monitoring reads only the messages it can still match.
+    .index("by_inbox_status_sent", ["inboxId", "status", "sentAt"])
     .index("by_site_domain", ["siteId", "toDomain"])
     .index("by_site_domain_status_sent", [
       "siteId",

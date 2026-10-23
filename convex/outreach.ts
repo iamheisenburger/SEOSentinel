@@ -11590,14 +11590,18 @@ export const claimImapPollInternal = internalMutation({
     if (inbox.imapLeaseToken && (inbox.imapLeaseExpiresAt ?? 0) > now) {
       return { claimed: false as const, reason: "IMAP monitoring is already running." };
     }
+    // Only the last 90 days' delivered messages can be matched (the filter
+    // below), so a poll reads those instead of the newest 100 of each status
+    // whatever their age: a flat 256 KB every 15 minutes before (P170, Oct 24 2026).
+    const sentSince = now - 90 * 24 * 60 * 60 * 1000;
     const candidateRows = (await Promise.all([
       "sent", "delivery_reviewed_sent", "replied", "bounced",
     ].map((status) => ctx.db.query("outreach_messages")
-      .withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", status))
+      .withIndex("by_inbox_status_sent", (q) => q.eq("inboxId", inbox._id).eq("status", status).gte("sentAt", sentSince))
       .order("desc").take(100)))).flat();
     const candidates = candidateRows
       .filter((message) =>
-        message.inboxId === inbox._id && message.deliveryTransport === "smtp" &&
+        message.siteId === siteId && message.inboxId === inbox._id && message.deliveryTransport === "smtp" &&
         message.sentAt && message.inboundRelayOutboundMessageIdHash &&
         message.deliveryOwnerAccountKey === inbox.credentialOwnerAccountKey &&
         message.sentAt >= now - 90 * 24 * 60 * 60 * 1000
