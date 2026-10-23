@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { notFound, permanentRedirect } from "next/navigation";
 import Link from "next/link";
 import { cache } from "react";
+import { unstable_cache } from "next/cache";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ArrowLeft, Calendar, CheckCircle2, Clock } from "lucide-react";
@@ -52,9 +53,14 @@ const getPublishedArticle = cache(async (domain: string, slug: string) =>
   convexHttp.query(api.blog.getPublishedBySlug, { domain, slug }),
 );
 
-// The same listing the /blog index reads (one cached query for every article page).
-const getPublishedList = cache(async (domain: string) =>
-  convexHttp.query(api.blog.listPublishedByDomain, { domain }),
+// The listing behind "Related guides" changes only when an article is
+// published: it is kept for an hour per domain instead of being read on every
+// article view (P167, Oct 23 2026: about 45 MB of Convex reads a day after
+// P159; a new article joins the related links within the hour).
+const getPublishedList = unstable_cache(
+  async (domain: string) => convexHttp.query(api.blog.listPublishedByDomain, { domain }),
+  ["blog-related-listing"],
+  { revalidate: 3600 },
 );
 
 type PublishedArticle = NonNullable<

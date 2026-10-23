@@ -14,6 +14,8 @@ test("published blog posts render and emit per-article SEO data on the server", 
   // P159 (Oct 22 2026): most pentra.dev articles were linked only from /blog; each page now links related guides.
   assert.match(blogPostRoute, /relatedArticles\(article, \(await getPublishedList\(domain\)\)\.filter\(\(item\) => servedOnItsOwnUrl\(domain, item\.slug\)\)\)/);
   assert.match(blogPostRoute, /Related guides/);
+  // P167 (Oct 23 2026): the listing is read at most hourly per domain, not on every article view.
+  assert.match(blogPostRoute, /const getPublishedList = unstable_cache\(\s*async \(domain: string\) => convexHttp\.query\(api\.blog\.listPublishedByDomain, \{ domain \}\),\s*\["blog-related-listing"\],\s*\{ revalidate: 3600 \},\s*\);/);
 });
 
 test("published blog posts preserve safe Markdown and escaped server JSON-LD", () => {
