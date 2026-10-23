@@ -7,6 +7,7 @@ import { api } from "../../../convex/_generated/api";
 import { LandingNav } from "@/components/layout/landing-nav";
 import { convexHttp } from "@/lib/convexHttpClient";
 import { servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
+import { cachedPublishedListing } from "@/lib/published-listing";
 
 // Server-rendered so search engines see every article link in the HTML.
 export const dynamic = "force-dynamic";
@@ -36,7 +37,8 @@ async function requestDomain(): Promise<string> {
 export default async function BlogIndex() {
   const domain = await requestDomain();
   let articles: Awaited<ReturnType<typeof convexHttp.query<typeof api.blog.listPublishedByDomain>>> | null = null;
-  try { articles = (await convexHttp.query(api.blog.listPublishedByDomain, { domain })).filter(article => servedOnItsOwnUrl(domain, article.slug)); }
+  // Read at most hourly per domain, not on every view (P169, V9).
+  try { articles = (await cachedPublishedListing(domain)).filter(article => servedOnItsOwnUrl(domain, article.slug)); }
   catch { articles = null; }
   // Structured data so Google and AI answer engines understand the index and its posts.
   const blogSchema = {
