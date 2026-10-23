@@ -8190,7 +8190,7 @@ test("P161 a refresh draft that drifts outside its section is delivered as the p
 // P163 (Oct 22 2026): after LeadPilot's refresh and its replacement failed, every pass chose a page refresh first and
 // then refused to replace the failed Oct 24 slot ("content_failed_slot"), so the slot sat unprepared while each pass
 // marked refresh candidates reviewed and left an unused topic behind.
-test("P163 a failed slot ahead is replaced by a new article even when a page refresh is available", async () => {
+async function improvementReadySite() {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
   const day = 86_400_000, site = await selectGrowth(f, 7 * day);
   Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
@@ -8208,10 +8208,16 @@ test("P163 a failed slot ahead is replaced by a new article even when a page ref
     syncVersion: 2, syncedAt: f.now(), clicks: 0, impressions: 40, ctr: 0, position: 40, createdAt: f.now() });
   f.get(site.id)!.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: f.get(site.id)! as never,
     ownerAccountKey: accountDeletionKey(f.get(site.id)!.userId), verifiedAt: f.now() });
-  // The next slot is ready; the one after it failed (LeadPilot: Oct 23 ready, Oct 24 failed).
+  // The next slot is ready; the slot after it is left to the test.
   const schedule = f.get(site.id)!.contentSchedule, [ready, later] = open().sort((a, b) => a.contentWork.deadlineAt - b.contentWork.deadlineAt);
   schedule.nextDeadlineAt = f.now() + 20 * 3_600_000;
   Object.assign(ready.contentWork, { deadlineAt: schedule.nextDeadlineAt, windowStartAt: schedule.nextDeadlineAt - 300_000 });
+  return { f, site, schedule, later };
+}
+
+test("P163 a failed slot ahead is replaced by a new article even when a page refresh is available", async () => {
+  const { f, site, schedule, later } = await improvementReadySite();
+  // LeadPilot: Oct 23 ready, Oct 24 failed.
   const failedAt = schedule.nextDeadlineAt + schedule.intervalMs;
   Object.assign(later, { status: "failed" });
   later.contentWork = { ...later.contentWork, stage: "failed", failure: "bounded_content_quality_exhausted", deadlineAt: failedAt, windowStartAt: failedAt - 300_000 };
@@ -8222,6 +8228,20 @@ test("P163 a failed slot ahead is replaced by a new article even when a page ref
   assert.equal(replacement.contentWork.replacesJobId, later._id);
   assert.equal(replacement.contentWork.intent, "create");
   assert.equal(replacement.contentWork.deadlineAt, failedAt, "the replacement takes the failed slot");
+  assert.equal(f.tables.topic_clusters.length, topicsBefore, "no unused refresh topic is left behind");
+  f.assertOffline();
+});
+
+// P166 (Oct 23 2026): an improvement's topic was written before the slot and budget checks, so every pass that stopped
+// at them (an account at its provider limit, a failed slot ahead) left an unused topic in the plan.
+test("P166 a page refresh that cannot start leaves no topic in the plan", async () => {
+  const { f, site, later } = await improvementReadySite();
+  later.contentWork = { ...later.contentWork, retiredAt: f.now() };
+  f.add("provider_spend_reservations", { siteId: site.id, userId: f.get(site.id)!.userId, purpose: "topic_plan",
+    trigger: "synthetic-account-limit", reservedMicroUsd: 1_000_000_000, createdAt: f.now() });
+  const topicsBefore = f.tables.topic_clusters.length;
+  const result = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(result.mode, "content_budget_exhausted", JSON.stringify(result));
   assert.equal(f.tables.topic_clusters.length, topicsBefore, "no unused refresh topic is left behind");
   f.assertOffline();
 });

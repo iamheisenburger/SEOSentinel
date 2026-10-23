@@ -2240,11 +2240,7 @@ export const advance = internalMutation({
     const replacementDue = Boolean(schedule.autopilotSelectedAt) && failedAtNextOpen.length === 1 && autopilotReplaceable(failedAtNextOpen[0]);
     const improvement = replaceNextSlot || replacementDue ? null : await chooseImprovement(ctx, site, work);
     const runway = { planned: 0, searched: 0 };
-    let topic = improvement ? await ctx.db.get(await ctx.db.insert("topic_clusters", {
-      siteId, planningCanonicalDomain: siteCanonicalDomain(site)!, planningDomainRevision: siteCanonicalDomainRevision(site),
-      primaryKeyword: improvement.question, label: improvement.page.editable!.title, secondaryKeywords: [], intent: "informational",
-      priority: 1, status: "planned", notes: improvement.reason, createdAt: Date.now(), updatedAt: Date.now(),
-    })) : await chooseTopic(ctx, site, undefined, [], { demandOnly: Boolean(schedule.autopilotSelectedAt), runway });
+    let topic = improvement ? null : await chooseTopic(ctx, site, undefined, [], { demandOnly: Boolean(schedule.autopilotSelectedAt), runway });
     if (!improvement && !topic && schedule.autopilotSelectedAt) {
       // No searched keyword is left: research new ones for the confirmed
       // business (within the ordinary spend limits). When the slot allows, the
@@ -2257,7 +2253,7 @@ export const advance = internalMutation({
       }
       topic = await chooseTopic(ctx, site);
     }
-    if (!topic) {
+    if (!topic && !improvement) {
       // Wake exactly when keyword research may run again, instead of waiting
       // up to three hours for the next scheduled check.
       const researchAt = schedule.autopilotSelectedAt ? topicResearchDueAt(schedule) : 0;
@@ -2314,6 +2310,15 @@ export const advance = internalMutation({
     // pull-forward can never create a missed deadline.
     if (slot !== schedule) await ctx.db.patch(siteId, { contentSchedule: slot, updatedAt: Date.now() });
     const { budgetMicroUsd, ...price } = pricing;
+    // An improvement's topic is written only now that its job is admitted:
+    // written before the slot and budget checks, every pass that stopped at
+    // them left an unused topic in the plan (P166, Oct 23 2026).
+    if (improvement) topic = await ctx.db.get(await ctx.db.insert("topic_clusters", {
+      siteId, planningCanonicalDomain: siteCanonicalDomain(site)!, planningDomainRevision: siteCanonicalDomainRevision(site),
+      primaryKeyword: improvement.question, label: improvement.page.editable!.title, secondaryKeywords: [], intent: "informational",
+      priority: 1, status: "planned", notes: improvement.reason, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    if (!topic) throw new Error("Content work topic unavailable");
     const jobId = await ctx.db.insert("jobs", { siteId, canonicalDomain: siteCanonicalDomain(site)!, domainRevision: siteCanonicalDomainRevision(site),
       rolloutEpoch: site.autopilotRolloutEpoch ?? 0, type: "article", status: "pending", workerAttempts: 0, publicationAttempts: 0,
       payload: { topicId: topic._id, bufferFill: true, options: { includeImages: false, includeYouTube: false } },
