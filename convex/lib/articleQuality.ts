@@ -2042,6 +2042,13 @@ const READER_VISIBLE_PIPELINE_TEXT: RegExp[] = [
   /\b(?:not|rather than)\s+(?:an?\s+)?(?:figures?|numbers?|rules?|data|facts?|requirements?|guidance|thresholds?|values?)\s+(?:taken\s+)?(?:from|in|given by|stated in)\s+the\s+(?:cited\s+|listed\s+|extension\s+|above\s+)?sources?\b/i,
   /\bsource-(?:specified|stated|backed|derived|given)\b/i,
   /\bthe\s+(?:cited\s+|listed\s+|above\s+)?sources?\s+(?:do|does|did)\s*(?:not|n't)\s+(?:give|say|state|specify|provide|cover|offer|mention|include|list)\b/i,
+  // P168 (Oct 23 2026): told to leave out the company behind a cited help page
+  // (P162), a LeadPilot draft wrote "That documentation says a lead is ..." and
+  // "The same documentation says ...": readers never learn which documentation.
+  // P169: a named vendor's documentation ("the Keap documentation states") and
+  // a bare "the documentation" after the vendor is named (LeadPilot's live Keap
+  // article) are followable; an acronym ("the CRM documentation") is not a name.
+  /\b(?<!what )(?:(?:[Tt]hat|[Tt]his|[Tt]hese|[Tt]hose|[Oo]ne|[Aa]nother|[Aa]n?)\s+(?:(?:[a-z][a-z-]*|[A-Z]{2,})\s+)?|[Tt]he\s+(?:same\s+|(?:[a-z][a-z-]*|[A-Z]{2,})\s+))(?:documentation|docs|help (?:page|article|cent(?:er|re))|vendor(?:'s)? (?:guide|documentation|docs))\s+(?:says?|states?|lists?|describes?|notes?|explains?|shows?|recommends?|suggests?|calls?)\b/,
 ];
 const COUNT_WORD_VALUES: Record<string, number> = { two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 const LIST_ITEM = /^(\s*)(?:[-*+]|(\d+)[.)])\s+\S/;
