@@ -37,6 +37,8 @@ export default defineSchema({
         seedSource: v.optional(v.union(v.literal("model"), v.literal("site"))), judged: v.optional(v.number()), kept: v.optional(v.number()),
         // P172: the research method that ran (TOPIC_RESEARCH_METHOD); an older one is redone once.
         method: v.optional(v.number()),
+        // P179: searches merged into another wording's article, and searches an existing article or topic answers.
+        grouped: v.optional(v.number()), coveredByExisting: v.optional(v.number()),
       })),
     })),
     userId: v.optional(v.string()), // Clerk user ID

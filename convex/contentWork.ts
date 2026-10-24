@@ -1634,11 +1634,21 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
     const inventory = await eligiblePlannedTopics(ctx, site, [], topics);
     coverage = [...new Set([...known, ...inventory.pageCoverage.map(c => normalizeResearchKeyword(c.primaryKeyword ?? ""))].filter(Boolean))];
   } catch { /* an incomplete inventory keeps the topic list only */ }
+  // P179: what research must not repeat, as the grouping call reads it: articles
+  // waiting or live (newest first), then the topics planned or being written.
+  const existing: string[] = [];
+  for (const [status, take] of [["ready", 10], ["published", 120]] as const) {
+    const rows = await ctx.db.query("article_summaries").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", status))
+      .order("desc").take(take);
+    existing.push(...rows.filter(row => articleMatchesCurrentDomain(site, row)).map(row => row.title));
+  }
+  existing.push(...topics.filter(t => ["planned", "pending", "queued"].includes(t.status ?? "planned")).map(t => t.primaryKeyword));
   // P172: searches the buyer-fit model already dropped for this profile are not judged again.
   const profileHash = confirmedContentProfileHash(site);
   const dropped = [...new Set((await ctx.db.query("topic_research_drops").withIndex("by_site_dropped", q => q.eq("siteId", siteId)).order("desc")
     .take(TOPIC_RESEARCH_DROPS_READ)).filter(d => d.profileHash === profileHash).map(d => d.keyword))];
   return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds, known, coverage, dropped,
+    existing: existing.slice(0, 150),
     signals, searchConsole: searchConsoleTopicCandidatesFrom(site, searches),
     tenantAuthority: storedTenantAuthority(site) ?? null,
     canonicalDomain: siteCanonicalDomain(site) ?? site.domain, domainRevision: siteCanonicalDomainRevision(site),
@@ -1941,7 +1951,7 @@ export const closeTopicResearchReservation = internalMutation({ args: { siteId: 
 /** Add researched keywords as planned topics: business-fit only, never a
  * duplicate of an existing topic, page or article intent. */
 type CandidateKeyword = { keyword: string; searchVolume: number; difficulty: number; difficultyMeasured: boolean;
-  source?: "search_console"; position?: number; fit?: { keep: boolean; reason: string } };
+  source?: "search_console"; position?: number; fit?: { keep: boolean; reason: string }; secondary?: string[] };
 /** Add measured keywords as planned topics through Autopilot's topic gates:
  * search shape, the site's reach ceiling, no competitor names, a buyer-fit
  * drop, business fit and no repeat of an existing topic, article or page.
@@ -1972,7 +1982,7 @@ async function insertCandidateTopics(ctx: MutationCtx, site: Doc<"sites">, keywo
     if (taken.some(t => contentIntentConflicts(proposal, t))) { skipped.intent++; continue; }
     await ctx.db.insert("topic_clusters", { siteId, ...proposal, planningCanonicalDomain: siteCanonicalDomain(site)!,
       ...(k.fit ? { buyerFit: { eligible: true, reason: k.fit.reason.slice(0, 160), version: BUYER_FIT_VERSION, checkedAt: Date.now(), profileHash } } : {}),
-      planningDomainRevision: siteCanonicalDomainRevision(site), secondaryKeywords: [], intent: "informational",
+      planningDomainRevision: siteCanonicalDomainRevision(site), secondaryKeywords: (k.secondary ?? []).slice(0, 5), intent: "informational",
       priority: Math.max(1, Math.min(90, Math.round(Math.log10(1 + k.searchVolume) * 20 - k.difficulty / 5))), status: "planned",
       searchVolume: k.searchVolume, keywordDifficulty: k.difficulty, keywordDifficultyMeasured: k.difficultyMeasured,
       notes: noteFor(k), createdAt: Date.now(), updatedAt: Date.now() });
@@ -2004,13 +2014,15 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
     // Search Console: the site already appears for this search (volume = impressions in 28 days).
     source: v.optional(v.literal("search_console")), position: v.optional(v.number()),
     // P105: the buyer-fit verdict for this business, when the batch call gave one.
-    fit: v.optional(v.object({ keep: v.boolean(), reason: v.string() })) })),
+    fit: v.optional(v.object({ keep: v.boolean(), reason: v.string() })),
+    // P179: the other wordings of the same search, written into the same article.
+    secondary: v.optional(v.array(v.string())) })),
     // What the research run saw (seeds and discovery counts), kept with its outcome.
     research: v.optional(v.object({ seeds: v.array(v.string()), searchConsole: v.number(), discovered: v.optional(v.number()),
       excludedKnown: v.optional(v.number()), excludedFit: v.optional(v.number()), excludedIntent: v.optional(v.number()),
       // P171: where the seeds came from ("model": read from the confirmed profile) and the buyer-fit call's verdicts.
       seedSource: v.optional(v.union(v.literal("model"), v.literal("site"))), judged: v.optional(v.number()), kept: v.optional(v.number()),
-      method: v.optional(v.number()) })) },
+      method: v.optional(v.number()), grouped: v.optional(v.number()), coveredByExisting: v.optional(v.number()) })) },
   handler: async (ctx, { siteId, keywords, research }) => {
     const site = await ctx.db.get(siteId);
     if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return { added: 0 };
@@ -2030,6 +2042,7 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
       ...(research?.seedSource ? { seedSource: research.seedSource } : {}),
       ...(research?.judged !== undefined ? { judged: research.judged, kept: research.kept ?? 0 } : {}),
       ...(research?.method !== undefined ? { method: research.method } : {}),
+      ...(research?.grouped !== undefined ? { grouped: research.grouped, coveredByExisting: research.coveredByExisting ?? 0 } : {}),
       offered: keywords.length, added, skippedShape: skipped.shape, skippedDifficulty: skipped.difficulty,
       skippedCompetitor: skipped.competitor, skippedFit: skipped.fit, skippedIntent: skipped.intent, skippedBuyerFit: skipped.buyerFit };
     if (site.contentSchedule) await ctx.db.patch(siteId, { contentSchedule: { ...site.contentSchedule, topicsReplenishAdded: added,

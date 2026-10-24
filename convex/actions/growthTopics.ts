@@ -15,9 +15,10 @@ import { BUYER_FIT_CEILING_MICRO_USD, BUYER_FIT_MAX_KEYWORDS, BUYER_FIT_MAX_TOKE
 import { asksForFree, brandTerms, isBrandedKeyword, localSeeds, namesPlace, parseSearchSeeds, profileSeedRequest, SEARCH_SEEDS_MAX_TOKENS,
   SEARCH_SEEDS_TOOL, type SeedRead } from "../lib/missedSearches";
 import { TOPIC_RESEARCH_METHOD } from "../lib/researchSeeds";
+import { groupSearches, parseResearchGroups, RESEARCH_GROUPS_MAX_TOKENS, RESEARCH_GROUPS_TOOL, researchGroupingRequest } from "../lib/researchGrouping";
 
 type ResearchContext = { domain: string; language: string; targetCountry: string | null; seeds: string[]; known: string[];
-  coverage: string[]; dropped: string[]; signals: { coreBusinessSignals: string[]; productAnchorSignals: string[]; businessModelSignals: string[] };
+  coverage: string[]; dropped: string[]; existing: string[]; signals: { coreBusinessSignals: string[]; productAnchorSignals: string[]; businessModelSignals: string[] };
   searchConsole: Array<{ keyword: string; impressions: number; position: number }>; tenantAuthority: number | null;
   canonicalDomain: string; domainRevision: number; business: BuyerFitBusiness; maximumDifficulty?: number };
 
@@ -37,6 +38,26 @@ async function proposeProfileSeeds(business: BuyerFitBusiness, brands: string[],
   });
   const tool = response.content.find(block => block.type === "tool_use" && block.name === SEARCH_SEEDS_TOOL);
   return { read: parseSearchSeeds(tool && tool.type === "tool_use" ? tool.input : null, brands), costMicroUsd: buyerFitCostMicroUsd(response.usage) };
+}
+
+/** P179: one call groups the kept searches by the article that would answer
+ * them (convex/lib/researchGrouping.ts). Throws when no answer came back; the
+ * caller then counts the call's ceiling and keeps every search on its own. */
+async function groupResearchSearches(business: BuyerFitBusiness, searches: string[], existing: string[]) {
+  const request = researchGroupingRequest(business, searches, existing);
+  if (request.searches.length < 2) return { groups: new Map(), costMicroUsd: 0 };
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+  const model = process.env.TOPIC_FIT_MODEL ?? BUYER_FIT_MODEL;
+  const response = await new Anthropic({ apiKey, maxRetries: 1, timeout: 60_000, fetch }).messages.create({
+    model, max_tokens: RESEARCH_GROUPS_MAX_TOKENS, system: request.system,
+    messages: [{ role: "user", content: request.userMessage }],
+    tools: [{ name: RESEARCH_GROUPS_TOOL, description: "Record the article group of every search.", input_schema: request.inputSchema, strict: true }],
+    tool_choice: structuredToolChoice(model, RESEARCH_GROUPS_TOOL),
+  });
+  const tool = response.content.find((block) => block.type === "tool_use" && block.name === RESEARCH_GROUPS_TOOL);
+  return { groups: parseResearchGroups(request.searches, request.existing, tool && tool.type === "tool_use" ? tool.input : null),
+    costMicroUsd: buyerFitCostMicroUsd(response.usage) };
 }
 
 /** One buyer-fit call for a batch of keywords (convex/lib/topicFit.ts). It
@@ -179,15 +200,34 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
       try { ({ verdicts: fit, costMicroUsd: fitCostMicroUsd } = await judgeBuyerFit(context.business, candidates.map(k => k.keyword))); }
       catch { fitCostMicroUsd = BUYER_FIT_CEILING_MICRO_USD; }
     }
-    const keywords = candidates.map(k => {
+    const judged: Array<(typeof candidates)[number] & { fit?: { keep: boolean; reason: string } }> = candidates.map(k => {
       const verdict = fit.get(normalizeFitKeyword(k.keyword));
       return verdict ? { ...k, fit: { keep: verdict.keep, reason: verdict.reason } } : k;
     });
+    // P179: one article per search topic. The kept searches are grouped by the
+    // article that would answer them: the most searched wording is the topic,
+    // the others its secondary keywords, and a search an existing article or
+    // planned topic already answers is dropped. Without an answer, every
+    // search stays on its own (word matching still applies).
+    let keywords: Array<(typeof judged)[number] & { secondary?: string[] }> = judged, groupCostMicroUsd = 0;
+    const grouping = { merged: 0, covered: 0 };
+    const kept = judged.filter(k => k.fit?.keep);
+    if (kept.length >= 2) {
+      try {
+        const answer = await groupResearchSearches(context.business, kept.map(k => k.keyword), context.existing);
+        groupCostMicroUsd = answer.costMicroUsd;
+        const result = groupSearches(kept, answer.groups);
+        Object.assign(grouping, { merged: result.merged, covered: result.covered });
+        keywords = [...judged.filter(k => !k.fit?.keep), ...result.kept];
+      } catch (error) {
+        if (!(error instanceof Error && error.message === "ANTHROPIC_API_KEY not set")) groupCostMicroUsd = BUYER_FIT_CEILING_MICRO_USD;
+      }
+    }
     // Settle at DataForSEO's reported cost plus the model calls (their list
     // price, or their ceiling when an answer was lost). An uncertain DataForSEO
     // total (a request that failed after it was sent) keeps the whole reservation.
     if (!metered.uncertain) {
-      const modelMicroUsd = seedCostMicroUsd + fitCostMicroUsd;
+      const modelMicroUsd = seedCostMicroUsd + fitCostMicroUsd + groupCostMicroUsd;
       await ctx.runMutation(internal.contentWork.closeTopicResearchReservation, { siteId, reservationId,
         sent: metered.usd > 0 || modelMicroUsd > 0, actualMicroUsd: Math.ceil(metered.usd * 1_000_000) + modelMicroUsd });
     }
@@ -196,7 +236,7 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
     const research = { seeds: seeds.slice(0, 15), searchConsole: searchConsole.length, discovered: discovery.unique,
       excludedKnown: discovery.excluded.already_known, excludedFit: discovery.excluded.product_fit, excludedIntent: discovery.excluded.existing_intent,
       seedSource: read ? "model" as const : "site" as const, judged: fit.size, kept: [...fit.values()].filter(verdict => verdict.keep).length,
-      method: TOPIC_RESEARCH_METHOD };
+      method: TOPIC_RESEARCH_METHOD, grouped: grouping.merged, coveredByExisting: grouping.covered };
     const result: { added: number } = await ctx.runMutation(internal.contentWork.addResearchedTopics, { siteId, keywords, research });
     return result;
   } });

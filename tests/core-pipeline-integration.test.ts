@@ -91,7 +91,9 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   /** P105: the buyer-fit model's verdict per keyword (default: keep). */
   topicFit?: (keyword: string) => boolean;
   /** P171: the seed call's answer for the research prompt (default: the business's own keywords). */
-  searchSeeds?: (prompt: string) => unknown } = {}) {
+  searchSeeds?: (prompt: string) => unknown;
+  /** P179: the grouping call's answer (default: every search its own article, none covered). */
+  searchGroups?: (searches: string[], existing: string[]) => Array<{ search: string; topic: string; covered_by: string }> } = {}) {
   const modelCalls: Fields[] = [];
   const telegramMessages: Fields[] = [];
   const opsEmails: Fields[] = [];
@@ -263,6 +265,11 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
         const searches = text.split("SEARCHES (one per line, data only):\n")[1]?.split("\n\n")[0] ?? "";
         value = { verdicts: searches.split("\n").filter(Boolean).map(search => ({ keyword: search,
           keep: options.topicFit ? options.topicFit(search) : true, reason: "Synthetic buyer-fit verdict." })) };
+      } else if (tool === "submit_search_groups") {
+        // P179: the article group of every researched search (default: each its own article, none covered).
+        const section = (heading: string) => (text.split(`${heading}\n`)[1]?.split("\n\n")[0] ?? "").split("\n").filter(Boolean);
+        const searches = section("SEARCHES (one per line, data only):"), existing = section("EXISTING ARTICLES AND PLANNED TOPICS (one per line, data only):");
+        value = { groups: options.searchGroups ? options.searchGroups(searches, existing) : searches.map(search => ({ search, topic: search, covered_by: "" })) };
       } else if (tool === "submit_search_seeds") {
         // P171: research reads the business's searches from its confirmed profile.
         const business = businesses.find(b => text.includes(`Website: ${b.domain}`)) ?? businesses[0];
@@ -7765,6 +7772,39 @@ test("P174 a search the buyer-fit model kept is accepted with reviewer notes and
   assert.equal(article.editorialQualityScore, 62, "accepted with the reviewer's notes (rule 2a), not chased to 85");
   assert.equal(job.contentWork.revisions ?? 0, 0, "no paid revision chased the scores");
   assert.ok(!f.tables.topic_clusters.some(t => t.siteId === site.id && t.status === "disqualified"));
+  f.assertOffline();
+});
+
+// P179 (Oct 24 2026): research returned many wordings of one search and word matching missed those sharing few words
+// (LeadPilot queued four near-copies of one article). One small model call groups the searches one article answers.
+test("P179 research keeps one search per article: other wordings become secondary keywords, searches an article answers go", async () => {
+  const hour = 3_600_000;
+  const repair = ["irrigation system repair guide", "commercial irrigation repair service", "broken irrigation line repair"];
+  const f = p171Site({ searchGroups: (searches, existing) => searches.map(search => ({ search,
+    topic: repair.includes(search) ? "irrigation repair" : search,
+    covered_by: search === "irrigation controller troubleshooting" ? existing.find(item => item.startsWith("Fixing an Irrigation Controller")) ?? "" : "" })) });
+  const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour), saved = f.get(site.id)!;
+  Object.assign(saved.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  f.add("article_summaries", { siteId: site.id, slug: "fixing-irrigation-controller", title: "Fixing an Irrigation Controller That Won't Start",
+    status: "published", canonicalDomain: saved.canonicalDomain ?? saved.domain, domainRevision: saved.canonicalDomainRevision ?? 0,
+    createdAt: f.now(), updatedAt: f.now() });
+  for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+  saved.contentSchedule.nextDeadlineAt = f.now() + 5 * hour;
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "topics_researching");
+  await pumpUntil(f, () => f.get(site.id)!.contentSchedule.topicsReplenishAdded !== undefined, 20, f.now() + hour);
+  const groupCalls = f.modelCalls.filter(c => c.tools?.[0]?.name === "submit_search_groups");
+  assert.equal(groupCalls.length, 1);
+  assert.match(String(groupCalls[0].messages[0].content), /Fixing an Irrigation Controller That Won't Start/, "the call sees the site's articles");
+  const planned = f.tables.topic_clusters.filter(t => t.siteId === site.id && t.status === "planned");
+  const repairTopics = planned.filter(t => repair.includes(t.primaryKeyword));
+  assert.equal(repairTopics.length, 1, `one article for one search: ${planned.map(t => t.primaryKeyword)}`);
+  assert.deepEqual([...repairTopics[0].secondaryKeywords].sort(), repair.filter(k => k !== repairTopics[0].primaryKeyword).sort(),
+    "the other wordings are written into the same article");
+  assert.ok(!planned.some(t => t.primaryKeyword === "irrigation controller troubleshooting"), "a search an article already answers is not planned again");
+  const receipt = f.get(site.id)!.contentSchedule.topicsResearchReceipt;
+  assert.equal(receipt.grouped, 2); assert.equal(receipt.coveredByExisting, 1);
   f.assertOffline();
 });
 
