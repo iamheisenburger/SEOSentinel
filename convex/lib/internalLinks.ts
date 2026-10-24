@@ -142,14 +142,21 @@ export function preferredInternalLinkAnchorCandidates(
   // A title's own headline (before its colon) reads as a complete anchor; a
   // word-count cut must never leave "…for SEO: A" or end on a dangling word.
   const headline = title.includes(":") ? title.slice(0, title.indexOf(":")).trim() : "";
+  // P173 (Oct 24 2026): nor cut into a bracketed aside. "Best Free SEO Tools for
+  // Small Teams (No Budget Required)" became the link "Best Free SEO Tools for
+  // Small Teams No" on a pentra.dev draft. The title without its aside comes first.
+  const withoutAside = (text: string) => text.replace(/\s*[([{][^)\]}]*[)\]}]/g, "").replace(/\s+/g, " ").trim();
+  const touchesAside = (words: string[]) => words.some(word => /[()[\]{}]/.test(word));
   const complete = (phrase: string) => {
     const last = phrase.split(" ").at(-1)?.replace(/[^\p{L}\p{N}]+$/gu, "").toLowerCase() ?? "";
     return !/:\s*\S*$/.test(phrase) && !DANGLING_ANCHOR_END.has(last);
   };
-  for (const seed of [...(headline ? [headline] : []), title, ...keywords]) {
+  const seeds = [...(headline ? [withoutAside(headline), headline] : []), withoutAside(title), title, ...keywords].filter(Boolean);
+  for (const seed of [...new Set(seeds)]) {
     const words = seed.trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
     for (let length = Math.min(8, words.length); length >= 2; length -= 1) {
       for (let start = 0; start + length <= words.length; start += 1) {
+        if (touchesAside(words.slice(start, start + length))) continue;
         for (const phrase of [
           words.slice(start, start + length).join(" "),
           words

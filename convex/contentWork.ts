@@ -158,10 +158,18 @@ function contentSlotTriggerMatches(trigger: string, cw: { deadlineAt: number; re
  * something systematic is wrong: stop spending on replacements (slots still
  * park) so the owner and support see it instead of paying for repeats. */
 function replacementsHealthy(work: Doc<"jobs">[]) {
-  const finished = work.filter(j => j.contentWork!.intent === "create" && ["verified", "failed"].includes(j.contentWork!.stage))
+  const finished = work.filter(j => j.contentWork!.intent === "create" && ["verified", "failed"].includes(j.contentWork!.stage) &&
+    !HELD_BACK_FAILURES.has(j.contentWork!.failure ?? ""))
     .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 3);
   return finished.filter(j => j.contentWork!.stage === "failed").length < 2;
 }
+/** Articles the nightly sweep held back after they were sealed (a repeat of a
+ * live page, or a reader check added later): the write itself succeeded, so
+ * they never count as a failing streak (P173, Oct 24 2026: LeadPilot's held
+ * Oct 25 article plus an earlier rejected draft read as one, so the held slot
+ * got no replacement and the scheduler returned "content_failed_slot" on
+ * every pass until the slot would have been parked). */
+const HELD_BACK_FAILURES = new Set(["duplicate_intent", "reader_visible_defect"]);
 const TOPIC_REPLENISH_INTERVAL_MS = 3 * 86_400_000, TOPIC_REPLENISH_BUDGET_MICRO_USD = 1_000_000;
 /** A keyword naming one of the site's listed competitors can't be written: the writer
  * must never name them, so the draft is blocked. Such topics are never chosen. */
@@ -2076,15 +2084,20 @@ export async function rebindStrandedReadyWork(ctx: MutationCtx, site: Doc<"sites
     .filter(j => j.contentWork!.deadlineAt < next).sort((a, b) => b.contentWork!.deadlineAt - a.contentWork!.deadlineAt);
   const stranded: Doc<"jobs">[] = [];
   for (const j of below) if (await eligible(j)) stranded.push(j);
-  const offGrid: Doc<"jobs">[] = [];
+  const offGrid: Doc<"jobs">[] = [], behind: Doc<"jobs">[] = [];
   for (const j of waiting) {
     const d = j.contentWork!.deadlineAt;
     if (d !== next && d !== next + interval && await eligible(j)) offGrid.push(j);
+    // P173: an empty due slot with the next slot's article waiting means the due
+    // article failed or was held back (slots are prepared in order). That article
+    // moves up instead of the due slot being parked as missed; its own slot is
+    // then prepared like any open slot.
+    else if (d === next + interval && !occupied.has(next) && await eligible(j)) behind.push(j);
   }
   let target: number | null = null, candidate: Doc<"jobs"> | undefined;
   if (!occupied.has(next)) {
     // The due slot is empty: the oldest approved article takes it.
-    candidate = [...stranded, ...offGrid].sort((a, b) => a.contentWork!.deadlineAt - b.contentWork!.deadlineAt)[0];
+    candidate = [...stranded, ...offGrid, ...behind].sort((a, b) => a.contentWork!.deadlineAt - b.contentWork!.deadlineAt)[0];
     target = next;
   } else if (!occupied.has(next + interval) && waiting.length < 2) {
     // The due slot is covered: a stranded article fills the second slot
@@ -2096,7 +2109,8 @@ export async function rebindStrandedReadyWork(ctx: MutationCtx, site: Doc<"sites
   const cw = candidate.contentWork!;
   await ctx.db.patch(candidate._id, { contentWork: { ...cw, deadlineAt: target, windowStartAt: target - CONTENT_DELIVERY_WINDOW_MS,
     windowWakeId: undefined, slotRebinds: [...(cw.slotRebinds ?? []), { fromDeadlineAt: cw.deadlineAt, toDeadlineAt: target, at: now,
-      reason: cw.deadlineAt < next ? "stranded_behind_schedule" : "off_cadence_grid" }].slice(-10) }, updatedAt: now });
+      reason: cw.deadlineAt < next ? "stranded_behind_schedule" : cw.deadlineAt === next + interval ? "moved_up_into_empty_slot" : "off_cadence_grid" }].slice(-10) },
+    updatedAt: now });
   return { jobId: candidate._id, fromDeadlineAt: cw.deadlineAt, toDeadlineAt: target };
 }
 

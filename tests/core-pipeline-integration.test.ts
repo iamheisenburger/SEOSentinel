@@ -4841,6 +4841,53 @@ test("P152 a waiting article that fails a reader check added since it was sealed
   f.assertOffline();
 });
 
+// P173 (Oct 24 2026): after the 02:40Z sweep held back LeadPilot's waiting article, its scheduler returned
+// "content_failed_slot" on every pass: the hold-back and an earlier rejected draft read as a failing streak (2 of the
+// last 3 finished articles failed), so the held slot got no replacement and would have been parked (missed). And a
+// held-back first article cost its slot even with the next article sealed and waiting.
+async function p173TwoWaiting() {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+  const site = await selectGrowth(f, 8 * 3_600_000);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const waiting = () => f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "ready" && j.contentWork.retiredAt === undefined)
+    .sort((a, b) => a.contentWork.deadlineAt - b.contentWork.deadlineAt);
+  await pumpUntil(f, () => waiting().length === 2);
+  // Both slots well ahead, so either can still be written again in time.
+  const shift = 12 * 3_600_000;
+  f.get(site.id)!.contentSchedule.nextDeadlineAt += shift;
+  for (const job of waiting()) Object.assign(job.contentWork, { deadlineAt: job.contentWork.deadlineAt + shift,
+    windowStartAt: job.contentWork.windowStartAt + shift, windowWakeId: undefined });
+  // A reader check added since the article was sealed (P152's source talk).
+  const failCheck = (job: Fields) => { const article = f.get(job.articleId)!;
+    article.markdown = String(article.markdown).replace(/\n\n## /, "\n\nThese are practical suggestions, not figures from the sources.\n\n## "); };
+  return { f, site, waiting, failCheck };
+}
+test("P173 articles the nightly sweep holds back never read as a failing streak: both slots get new articles, none is parked", async () => {
+  const { f, site, waiting, failCheck } = await p173TwoWaiting();
+  const held = waiting(), slots = held.map(j => j.contentWork.deadlineAt), next = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  for (const job of held) failCheck(job);
+  assert.deepEqual(await f.invoke("contentWork:retireDuplicateReadyWork", { siteId: site.id }), { retired: 2 });
+  await pumpUntil(f, () => waiting().length === 2, 200, f.now() + 11 * 3_600_000);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, next, "no slot was parked (missed)");
+  assert.deepEqual(waiting().map(j => j.contentWork.deadlineAt), slots, "both slots got a new article");
+  assert.ok(waiting().every(j => held.some(h => h._id === j.contentWork.replacesJobId)), "each replaces a held-back article");
+  f.assertOffline();
+});
+test("P173 a held-back first article costs no slot: the next article moves up and its own slot gets a new one", async () => {
+  const { f, site, waiting, failCheck } = await p173TwoWaiting();
+  const [first, second] = waiting(), next = f.get(site.id)!.contentSchedule.nextDeadlineAt, after = second.contentWork.deadlineAt;
+  failCheck(first);
+  assert.deepEqual(await f.invoke("contentWork:retireDuplicateReadyWork", { siteId: site.id }), { retired: 1 });
+  await pumpUntil(f, () => waiting().length === 2, 200, f.now() + 11 * 3_600_000);
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, next, "the due slot was not parked");
+  const moved = f.get(second._id)!;
+  assert.equal(moved.contentWork.deadlineAt, next, "the waiting article moved up into the empty slot");
+  assert.deepEqual(moved.contentWork.slotRebinds.at(-1), { fromDeadlineAt: after, toDeadlineAt: next, at: moved.contentWork.slotRebinds.at(-1).at,
+    reason: "moved_up_into_empty_slot" });
+  assert.deepEqual(waiting().map(j => j.contentWork.deadlineAt), [next, after], "its own slot got a new article");
+  f.assertOffline();
+});
+
 test("P140 near-identical questions are one intent, and a waiting article that repeats a live page is replaced before its slot", async () => {
   const { contentIntentConflicts } = await import("../convex/lib/autopilotBuffer.ts");
   assert.ok(contentIntentConflicts({ primaryKeyword: "how often small business publish blog" },
