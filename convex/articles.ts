@@ -2770,6 +2770,7 @@ async function deterministicInternalLinkRepair(
     selected,
     destinations.map((destination) => destination.href),
     selfHref,
+    { relatedReading: true },
   );
   const appended = appendRelatedInternalLinks(article.markdown, links);
   return {

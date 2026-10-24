@@ -27,6 +27,7 @@ import {
   appendRelatedInternalLinks,
   preferredInternalLinkAnchorCandidates,
   publishedArticleInternalHref,
+  relatedReadingTitle,
   selectRelatedInternalLinks,
   stripGeneratedInternalLinks,
   validateInternalLinkSuggestions,
@@ -102,6 +103,7 @@ import {
   TOPIC_BUSINESS_FIT_VERSION,
   topicDiscoverySeedBatches,
   topicDiscoverySeedWindow,
+  topicFitSettled,
 } from "../lib/autopilotBuffer";
 import { describeAutopilotBlockers } from "../lib/autopilotReadiness";
 import {
@@ -5984,7 +5986,7 @@ async function handleLinks(
   );
   const preferredFallback = preferredDestination
     ? {
-        anchor: preferredInternalLinkAnchorCandidates(
+        anchor: relatedReadingTitle(preferredDestination.title) ?? preferredInternalLinkAnchorCandidates(
           preferredDestination.title,
           preferredDestination.keywords,
         )[0],
@@ -6021,6 +6023,7 @@ async function handleLinks(
     ],
     destinations.map((destination) => destination.href),
     publishedArticleInternalHref(site.urlStructure, article.slug),
+    { relatedReading: true },
   ).filter(
     (fallback) =>
       Boolean(fallback.anchor),
@@ -6028,8 +6031,9 @@ async function handleLinks(
   // A search the owner added (C4) can share no words with the site's other
   // pages ("seobot alternatives" on an SEO tool's site); it still belongs to
   // the business, so it links the home page instead of failing the link gate.
+  // So can a search the buyer-fit model kept (P175).
   const homeDestination = destinations.find((destination) => destination.href === "/");
-  const ownerHomeLink = fallbackLinks.length === 0 && articleTopic?.ownerChosenAt !== undefined && homeDestination
+  const ownerHomeLink = fallbackLinks.length === 0 && topicFitSettled(articleTopic) && homeDestination
     ? validateInternalLinkSuggestions(
         [{ anchor: `${site.siteName?.trim() || siteCanonicalDomain(site) || site.domain} home page`, href: homeDestination.href }],
         destinations.map((destination) => destination.href),

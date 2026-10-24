@@ -115,14 +115,37 @@ export function publishedArticleInternalHref(
   return href;
 }
 
-function normalizeAnchor(value: string): string | null {
+/** In-prose anchors stay short; a Related reading entry may be a whole title (P175). */
+const ANCHOR_LIMITS = { maxWords: 8, maxChars: 80 };
+const RELATED_TITLE_LIMITS = { maxWords: 16, maxChars: 120 };
+function normalizeAnchor(value: string, limits = ANCHOR_LIMITS): string | null {
   const anchor = value.trim().replace(/\s+/g, " ");
   const words = anchor.split(" ").filter(Boolean);
-  if (anchor.length < 5 || anchor.length > 80) return null;
-  if (words.length < 2 || words.length > 8) return null;
+  if (anchor.length < 5 || anchor.length > limits.maxChars) return null;
+  if (words.length < 2 || words.length > limits.maxWords) return null;
   if (GENERIC_ANCHORS.has(anchor.toLowerCase())) return null;
   if (/[\[\](){}<>\n\r]/.test(anchor)) return null;
   return anchor;
+}
+
+const withoutAside = (text: string) => text.replace(/\s*[([{][^)\]}]*[)\]}]/g, "").replace(/\s+/g, " ").trim();
+
+/**
+ * P175 (Oct 24 2026): a Related reading entry names the article it links by
+ * its whole title (a bracketed aside left out), not a cut at the 8-word anchor
+ * cap: 34 live entries on the owner sites read like "What Is an AI Sales
+ * Agent? How It" and "B2B SaaS Content Strategy for Ranking and Lead".
+ * A title too long for an entry falls back to its headline (before a colon),
+ * then to the in-prose anchor candidates.
+ */
+export function relatedReadingTitle(title: string): string | null {
+  const whole = withoutAside(title);
+  const headline = whole.includes(":") ? whole.slice(0, whole.indexOf(":")).trim() : "";
+  for (const text of [whole, headline]) {
+    const entry = text ? normalizeAnchor(text, RELATED_TITLE_LIMITS) : null;
+    if (entry) return entry;
+  }
+  return null;
 }
 
 const DANGLING_ANCHOR_END = new Set(["a", "an", "the", "and", "or", "but", "for", "to", "of", "in", "on", "at", "by",
@@ -145,7 +168,6 @@ export function preferredInternalLinkAnchorCandidates(
   // P173 (Oct 24 2026): nor cut into a bracketed aside. "Best Free SEO Tools for
   // Small Teams (No Budget Required)" became the link "Best Free SEO Tools for
   // Small Teams No" on a pentra.dev draft. The title without its aside comes first.
-  const withoutAside = (text: string) => text.replace(/\s*[([{][^)\]}]*[)\]}]/g, "").replace(/\s+/g, " ").trim();
   const touchesAside = (words: string[]) => words.some(word => /[()[\]{}]/.test(word));
   const complete = (phrase: string) => {
     const last = phrase.split(" ").at(-1)?.replace(/[^\p{L}\p{N}]+$/gu, "").toLowerCase() ?? "";
@@ -225,7 +247,7 @@ export function selectRelatedInternalLinks(args: {
       for (const token of wanted) {
         if (allTokens.has(token)) score += titleTokens.has(token) ? 2 : 1;
       }
-      const anchor = preferredInternalLinkAnchorCandidates(
+      const anchor = relatedReadingTitle(destination.title) ?? preferredInternalLinkAnchorCandidates(
         destination.title,
         destination.keywords,
       )[0];
@@ -250,6 +272,8 @@ export function validateInternalLinkSuggestions(
   suggestions: InternalLink[],
   allowedHrefs: string[],
   selfHref: string,
+  // Links for a Related reading list may carry a whole title (P175).
+  options: { relatedReading?: boolean } = {},
 ): InternalLink[] {
   const allowed = new Set(
     allowedHrefs
@@ -262,7 +286,7 @@ export function validateInternalLinkSuggestions(
   const validated: InternalLink[] = [];
 
   for (const suggestion of suggestions) {
-    const anchor = normalizeAnchor(suggestion.anchor);
+    const anchor = normalizeAnchor(suggestion.anchor, options.relatedReading ? RELATED_TITLE_LIMITS : ANCHOR_LIMITS);
     const href = normalizeInternalHref(suggestion.href);
     if (!anchor || !href || !allowed.has(href) || href === normalizedSelf) continue;
 

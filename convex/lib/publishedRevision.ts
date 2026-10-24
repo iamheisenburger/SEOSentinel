@@ -259,6 +259,7 @@ export function deterministicInternalLinkRevision(args: {
     selected,
     args.liveDestinations.map((destination) => destination.href),
     selfHref,
+    { relatedReading: true },
   );
   if (links.length !== 1) return null;
 
