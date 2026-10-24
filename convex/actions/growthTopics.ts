@@ -6,17 +6,37 @@ import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { v } from "convex/values";
 import { discoverKeywords, getDomainAuthority, getExactKeywordDemandFromDataForSEO, getExactKeywordDifficultyFromDataForSEO,
-  meterDataForSeoCost, type DomainAuthorityEvidence } from "./seoData";
+  meterDataForSeoCost, type DomainAuthorityEvidence, type KeywordDiscoveryDiagnostics } from "./seoData";
 import { dataForSeoLocationCode } from "../lib/dataForSeoLocale";
-import { contentIntentConflicts, evaluateTopicBusinessFit } from "../lib/autopilotBuffer";
+import { contentIntentConflicts, sharesBusinessSubject } from "../lib/autopilotBuffer";
 import { structuredToolChoice } from "../lib/toolChoice";
-import { BUYER_FIT_CEILING_MICRO_USD, BUYER_FIT_MAX_TOKENS, BUYER_FIT_MODEL, BUYER_FIT_TOOL, buyerFitCostMicroUsd,
+import { BUYER_FIT_CEILING_MICRO_USD, BUYER_FIT_MAX_KEYWORDS, BUYER_FIT_MAX_TOKENS, BUYER_FIT_MODEL, BUYER_FIT_TOOL, buyerFitCostMicroUsd,
   buyerFitRequest, normalizeFitKeyword, parseBuyerFit, type BuyerFitBusiness, type BuyerFitVerdict } from "../lib/topicFit";
+import { asksForFree, brandTerms, isBrandedKeyword, localSeeds, namesPlace, parseSearchSeeds, profileSeedRequest, SEARCH_SEEDS_MAX_TOKENS,
+  SEARCH_SEEDS_TOOL, type SeedRead } from "../lib/missedSearches";
 
 type ResearchContext = { domain: string; language: string; targetCountry: string | null; seeds: string[]; known: string[];
-  coverage: string[]; signals: { coreBusinessSignals: string[]; productAnchorSignals: string[]; businessModelSignals: string[] };
+  coverage: string[]; round: number; signals: { coreBusinessSignals: string[]; productAnchorSignals: string[]; businessModelSignals: string[] };
   searchConsole: Array<{ keyword: string; impressions: number; position: number }>; tenantAuthority: number | null;
   canonicalDomain: string; domainRevision: number; business: BuyerFitBusiness; maximumDifficulty?: number };
+
+/** P171: the free check's seed call (convex/lib/missedSearches.ts), read from
+ * the business profile the owner confirmed. Throws when no usable answer came
+ * back; the caller then counts the call's ceiling. */
+async function proposeProfileSeeds(business: BuyerFitBusiness, brands: string[], covered: string[]) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+  const model = process.env.TOPIC_FIT_MODEL ?? BUYER_FIT_MODEL;
+  const request = profileSeedRequest(business, covered);
+  const response = await new Anthropic({ apiKey, maxRetries: 1, timeout: 45_000, fetch }).messages.create({
+    model, max_tokens: SEARCH_SEEDS_MAX_TOKENS, system: request.system,
+    messages: [{ role: "user", content: request.userMessage }],
+    tools: [{ name: SEARCH_SEEDS_TOOL, description: "Record the searches and the business summary.", input_schema: request.inputSchema, strict: true }],
+    tool_choice: structuredToolChoice(model, SEARCH_SEEDS_TOOL),
+  });
+  const tool = response.content.find(block => block.type === "tool_use" && block.name === SEARCH_SEEDS_TOOL);
+  return { read: parseSearchSeeds(tool && tool.type === "tool_use" ? tool.input : null, brands), costMicroUsd: buyerFitCostMicroUsd(response.usage) };
+}
 
 /** One buyer-fit call for a batch of keywords (convex/lib/topicFit.ts). It
  * throws when no verdict came back; the caller then counts the call's ceiling.
@@ -40,52 +60,92 @@ export async function judgeBuyerFit(business: BuyerFitBusiness, keywords: string
 
 /** Keyword research for an Autopilot site whose topics ran out. The spend is
  * reserved (and bounded) by contentWork.advance before this runs; any failure
- * simply adds no topics and the site retries after the replenish interval. */
+ * simply adds no topics and the site retries after the replenish interval.
+ *
+ * P171 (Oct 24 2026): research works the way the free check does. The
+ * business's searches are read from its confirmed profile (one small model
+ * call), phrase-match suggestions and Google's related searches are asked for
+ * them within the site's reach, and the buyer-fit model decides; only a loose
+ * relevance floor stands in front of it. Google Ads (the earlier first source)
+ * is asked only when that finds almost nothing. pentra.dev's last run under
+ * the earlier method found 353 searches and kept 5: word matching dropped 292
+ * before the model judged any, and its seeds were its own drifted topics. */
 export const replenish = internalAction({ args: { siteId: v.id("sites"), reservationId: v.id("provider_spend_reservations") },
   handler: async (ctx, { siteId, reservationId }): Promise<{ added: number }> => {
     const context: ResearchContext | null = await ctx.runQuery(internal.contentWork.growthTopicContext, { siteId });
-    if (!context || context.seeds.length === 0) {
+    if (!context) {
       // Nothing was sent: the reservation is returned instead of held forever.
       await ctx.runMutation(internal.contentWork.closeTopicResearchReservation, { siteId, reservationId, sent: false, actualMicroUsd: 0 });
       return { added: 0 };
     }
+    const brands = brandTerms(context.canonicalDomain, context.business.name);
+    let read: SeedRead | null = null, seedCostMicroUsd = 0;
+    try {
+      // The newest searches it already has articles for, so the call reaches beyond them.
+      const proposed = await proposeProfileSeeds(context.business, brands, context.known.slice(-30));
+      read = proposed.read; seedCostMicroUsd = proposed.costMicroUsd;
+    } catch (error) {
+      // A call that was sent and lost counts at its ceiling.
+      if (!(error instanceof Error && error.message === "ANTHROPIC_API_KEY not set")) seedCostMicroUsd = BUYER_FIT_CEILING_MICRO_USD;
+    }
+    // A business that serves particular places searches with them ("deli ann arbor").
+    const places = read?.places ?? [], local = places.length > 0;
+    const modelSeeds = !read ? [] : local ? localSeeds(read.topics.length ? read.topics : read.searches, places) : [...read.topics, ...read.searches];
+    // Each run starts further along the list, so later runs reach searches earlier ones did not.
+    const start = modelSeeds.length ? (Math.max(0, context.round - 1) * 6) % modelSeeds.length : 0;
+    const seeds = [...new Set([...modelSeeds.slice(start), ...modelSeeds.slice(0, start), ...context.seeds])];
     const known = new Set(context.known);
     const coverage = context.coverage.map(primaryKeyword => ({ primaryKeyword }));
-    // Only keywords Autopilot could actually write count as found, so discovery
-    // keeps going to its next source when the first returns covered or
-    // off-business keywords (the same checks the topic is added with).
+    // Only searches Autopilot could actually write count as found: not one it
+    // has, not its own name, sharing a subject word with the business (the
+    // buyer-fit model judges the rest), and no repeat of a page it has.
     const exclusion = (raw: string) => {
       const keyword = raw.trim().toLowerCase().replace(/\s+/g, " ");
       if (known.has(keyword)) return "already_known" as const;
-      if (keyword.split(" ").length < 2 || keyword.length > 80 ||
-        !evaluateTopicBusinessFit({ keyword, label: keyword.replace(/^./, c => c.toUpperCase()), ...context.signals }).eligible) return "product_fit" as const;
+      if (keyword.split(" ").length < 2 || keyword.length > 80 || isBrandedKeyword(keyword, brands) ||
+        !sharesBusinessSubject(keyword, context.signals)) return "product_fit" as const;
       if (coverage.some(c => contentIntentConflicts({ primaryKeyword: keyword }, c))) return "existing_intent" as const;
       return undefined;
     };
-    let found: Awaited<ReturnType<typeof discoverKeywords>> = [];
-    type DiscoverySeen = { unique: number; excluded: { already_known: number; product_fit: number; existing_intent: number } };
-    let discovery = null as DiscoverySeen | null;
+    const discovery = { unique: 0, excluded: { already_known: 0, product_fit: 0, existing_intent: 0 } };
+    const seen = (d: KeywordDiscoveryDiagnostics) => {
+      discovery.unique += d.unique;
+      for (const reason of ["already_known", "product_fit", "existing_intent"] as const) discovery.excluded[reason] += d.excluded[reason];
+    };
+    // The site's own reach ceiling (siteDifficultyCeiling), at most 45.
+    const ceiling = Math.min(45, context.maximumDifficulty ?? 45);
+    const location = dataForSeoLocationCode(context.targetCountry ?? undefined);
     // A site without fresh authority evidence is measured once within this
     // research run (one backlinks summary, inside the same reservation), so
     // discovery and topic order keep what it can actually win.
     let tenantAuthority = context.tenantAuthority;
     let measured: DomainAuthorityEvidence | null = null;
     const metered = await meterDataForSeoCost(async () => {
-      try {
-        if (tenantAuthority === null) {
-          measured = await getDomainAuthority(context.domain);
-          if (measured) tenantAuthority = measured.domainRank;
-        }
-        return await discoverKeywords(context.seeds, dataForSeoLocationCode(context.targetCountry ?? undefined), context.language, 80,
-          { targetDomain: context.domain, minimumResults: 10, maxLabsSeeds: 5, maxRelatedSeeds: 3,
-            // The site's own reach ceiling (siteDifficultyCeiling), at most 45.
-            maximumDifficulty: Math.min(45, context.maximumDifficulty ?? 45),
-            // Keep what this site can win when discovery truncates (its measured authority, if any).
-            ...(tenantAuthority !== null ? { tenantAuthority } : {}),
-            excludeKeyword: exclusion, onDiagnostics: d => { discovery = d; } });
-      } catch { return []; }
+      if (tenantAuthority === null) {
+        try { measured = await getDomainAuthority(context.domain); if (measured) tenantAuthority = measured.domainRank; } catch { /* discovery still runs */ }
+      }
+      const found = new Map<string, Awaited<ReturnType<typeof discoverKeywords>>[number]>();
+      const take = async (run: () => ReturnType<typeof discoverKeywords>) => {
+        try { for (const k of await run()) { const key = normalizeFitKeyword(k.keyword); if (!found.has(key)) found.set(key, k); } }
+        catch { /* the next source still runs */ }
+      };
+      // Keep what this site can win when discovery truncates (its measured authority, if any).
+      const shared = { maximumDifficulty: ceiling, excludeKeyword: exclusion, onDiagnostics: seen,
+        ...(tenantAuthority !== null ? { tenantAuthority } : {}) };
+      if (seeds.length > 0) {
+        // Phrase-match suggestions for the business's topics and Google's related searches for the first two.
+        await take(() => discoverKeywords(seeds, location, context.language, 80, { ...shared, maxGoogleAdsBatches: 0, maxLabsSeeds: 6,
+          maxRelatedSeeds: 2, useKeywordIdeas: false, minimumResults: 30, expandProductAnchors: true }));
+        // Category ideas range wider: asked only when the topics found too few.
+        if (found.size < 15) await take(() => discoverKeywords(seeds, location, context.language, 40, { ...shared, maxGoogleAdsBatches: 0,
+          maxLabsSeeds: 0, maxRelatedSeeds: 0, useKeywordIdeas: true, minimumResults: 30, expandProductAnchors: true }));
+      }
+      // The earlier method (Google Ads first) for a market the topic data barely covers.
+      if (found.size < 10 && context.seeds.length > 0) await take(() => discoverKeywords(context.seeds, location, context.language, 80,
+        { ...shared, targetDomain: context.domain, minimumResults: 10, maxLabsSeeds: 5, maxRelatedSeeds: 3 }));
+      return [...found.values()];
     });
-    found = metered.result;
+    const found = metered.result;
     const evidence = measured as DomainAuthorityEvidence | null;
     if (evidence) {
       try {
@@ -99,11 +159,18 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
     const searchConsole = context.searchConsole.filter(q => exclusion(q.keyword) === undefined).map(q => ({ keyword: q.keyword,
       searchVolume: Math.max(1, Math.round(q.impressions)), difficulty: 0, difficultyMeasured: false,
       source: "search_console" as const, position: q.position }));
-    const candidates = [...searchConsole, ...found.slice(0, 60).map(k => ({ keyword: k.keyword, searchVolume: Math.max(0, Math.round(k.searchVolume || 0)),
-      difficulty: Math.max(0, Math.min(100, Math.round(k.difficulty || 0))), difficultyMeasured: Boolean(k.difficultyMeasured) }))];
+    // Researched searches the site can win: measured difficulty within its
+    // reach, at least 10 searches a month, naming its places when it serves
+    // particular places, and no "free" searches when it has no free plan.
+    const offered = (keyword: string) => (!local || namesPlace(keyword, places)) && (read?.freePlan !== "no" || !asksForFree(keyword));
+    const researched = found.filter(k => k.difficultyMeasured && k.difficulty <= ceiling && k.searchVolume >= 10 && offered(k.keyword))
+      .sort((a, b) => b.searchVolume - a.searchVolume);
+    const candidates = [...searchConsole, ...researched.map(k => ({ keyword: k.keyword, searchVolume: Math.max(0, Math.round(k.searchVolume || 0)),
+      difficulty: Math.max(0, Math.min(100, Math.round(k.difficulty || 0))), difficultyMeasured: Boolean(k.difficultyMeasured) }))]
+      .slice(0, BUYER_FIT_MAX_KEYWORDS);
     // Buyer fit (P105): one cheap call judges every candidate for this
-    // business. A candidate it could not judge is still added; the daily
-    // sweep judges it before Autopilot is likely to reach it.
+    // business. A candidate it could not judge is still added only if word
+    // matching admits it; the daily sweep judges it before Autopilot reaches it.
     let fit = new Map<string, BuyerFitVerdict>(), fitCostMicroUsd = 0;
     if (candidates.length > 0) {
       try { ({ verdicts: fit, costMicroUsd: fitCostMicroUsd } = await judgeBuyerFit(context.business, candidates.map(k => k.keyword))); }
@@ -113,19 +180,19 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
       const verdict = fit.get(normalizeFitKeyword(k.keyword));
       return verdict ? { ...k, fit: { keep: verdict.keep, reason: verdict.reason } } : k;
     });
-    // Settle at DataForSEO's reported cost plus the fit call (its list price,
-    // or its ceiling when its answer was lost). An uncertain DataForSEO total
-    // (a request that failed after it was sent) keeps the whole reservation.
+    // Settle at DataForSEO's reported cost plus the model calls (their list
+    // price, or their ceiling when an answer was lost). An uncertain DataForSEO
+    // total (a request that failed after it was sent) keeps the whole reservation.
     if (!metered.uncertain) {
-      await ctx.runMutation(internal.contentWork.closeTopicResearchReservation, { siteId, reservationId, sent: true,
-        actualMicroUsd: Math.ceil(metered.usd * 1_000_000) + fitCostMicroUsd });
+      const modelMicroUsd = seedCostMicroUsd + fitCostMicroUsd;
+      await ctx.runMutation(internal.contentWork.closeTopicResearchReservation, { siteId, reservationId,
+        sent: metered.usd > 0 || modelMicroUsd > 0, actualMicroUsd: Math.ceil(metered.usd * 1_000_000) + modelMicroUsd });
     }
     // Always report back (even empty) so a waiting Autopilot slot continues.
     // What this run saw is kept with the outcome, so a thin run can be explained.
-    const seen = discovery;
-    const research = { seeds: context.seeds.slice(0, 15), searchConsole: searchConsole.length,
-      ...(seen ? { discovered: seen.unique, excludedKnown: seen.excluded.already_known, excludedFit: seen.excluded.product_fit,
-        excludedIntent: seen.excluded.existing_intent } : {}) };
+    const research = { seeds: seeds.slice(0, 15), searchConsole: searchConsole.length, discovered: discovery.unique,
+      excludedKnown: discovery.excluded.already_known, excludedFit: discovery.excluded.product_fit, excludedIntent: discovery.excluded.existing_intent,
+      seedSource: read ? "model" as const : "site" as const, judged: fit.size, kept: [...fit.values()].filter(verdict => verdict.keep).length };
     const result: { added: number } = await ctx.runMutation(internal.contentWork.addResearchedTopics, { siteId, keywords, research });
     return result;
   } });

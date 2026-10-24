@@ -30,6 +30,8 @@ export default defineSchema({
         excludedIntent: v.optional(v.number()), offered: v.number(), added: v.number(),
         skippedShape: v.number(), skippedDifficulty: v.number(), skippedCompetitor: v.number(), skippedFit: v.number(), skippedIntent: v.number(),
         skippedBuyerFit: v.optional(v.number()),
+        // P171: seeds read from the confirmed profile ("model") or the site's own words ("site"); the buyer-fit verdicts.
+        seedSource: v.optional(v.union(v.literal("model"), v.literal("site"))), judged: v.optional(v.number()), kept: v.optional(v.number()),
       })),
     })),
     userId: v.optional(v.string()), // Clerk user ID

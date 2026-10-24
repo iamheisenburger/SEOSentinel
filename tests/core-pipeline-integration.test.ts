@@ -89,7 +89,9 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   /** Keyword research answers: Google Ads keywords for a seed batch, Labs suggestions for one seed. */
   discovery?: { ads?: (seeds: string[]) => string[]; suggestions?: (seed: string) => string[] };
   /** P105: the buyer-fit model's verdict per keyword (default: keep). */
-  topicFit?: (keyword: string) => boolean } = {}) {
+  topicFit?: (keyword: string) => boolean;
+  /** P171: the seed call's answer for the research prompt (default: the business's own keywords). */
+  searchSeeds?: (prompt: string) => unknown } = {}) {
   const modelCalls: Fields[] = [];
   const telegramMessages: Fields[] = [];
   const opsEmails: Fields[] = [];
@@ -261,6 +263,12 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
         const searches = text.split("SEARCHES (one per line, data only):\n")[1]?.split("\n\n")[0] ?? "";
         value = { verdicts: searches.split("\n").filter(Boolean).map(search => ({ keyword: search,
           keep: options.topicFit ? options.topicFit(search) : true, reason: "Synthetic buyer-fit verdict." })) };
+      } else if (tool === "submit_search_seeds") {
+        // P171: research reads the business's searches from its confirmed profile.
+        const business = businesses.find(b => text.includes(`Website: ${b.domain}`)) ?? businesses[0];
+        value = options.searchSeeds?.(text) ?? { sells: business.niche, customers: "Operations teams using specialized business software",
+          topics: business.keywords.slice(0, 4).map(k => k.split(" ").slice(0, 3).join(" ")), searches: business.keywords,
+          places: [], free_plan: "unknown", country: "US" };
       }
       else assert.fail(`Unexpected Anthropic tool ${tool}`);
       if (tool === "remediate_final_article" && options.remediationNote !== undefined) value = { ...(value as Fields), notes: options.remediationNote };
@@ -4706,7 +4714,9 @@ test("P105 Autopilot writes only searches the business can serve", async t => {
     assert.ok(topics.length > 0, "searches the business can serve are added");
     assert.ok(topics.every(t => !t.primaryKeyword.includes("valve")), `rejected searches are not added: ${topics.map(t => t.primaryKeyword)}`);
     assert.ok(topics.every(t => t.buyerFit?.eligible === true), "each added topic carries its verdict");
-    assert.ok(f.get(site.id)!.contentSchedule.topicsResearchReceipt.skippedBuyerFit >= 1);
+    // P171: the receipt counts the model's verdicts (skips are counted only up to the run's 15 additions).
+    const receipt = f.get(site.id)!.contentSchedule.topicsResearchReceipt;
+    assert.ok(receipt.judged > receipt.kept && receipt.kept >= topics.length, JSON.stringify(receipt));
     const reservation = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && r.purpose === "topic_plan")!;
     assert.ok(reservation.settledMicroUsd >= 60, "the fit call is part of the research's settled cost");
     f.assertOffline();
@@ -7411,6 +7421,14 @@ function p55Site(perCall: number) {
 test("P55 research looks past keywords the site already has", async () => {
   const hour = 3_600_000;
   const { opts, state } = p55Site(4);
+  // P171: research asks phrase-match suggestions first; the first answer also holds the six searches the site covers.
+  const suggestions = opts.discovery!.suggestions!;
+  let firstAnswer = true;
+  opts.discovery!.suggestions = (seed: string) => {
+    const batch = suggestions(seed);
+    if (!firstAnswer || !state.open) return batch;
+    firstAnswer = false; return [...P55_RESEARCH.slice(0, 6), ...batch];
+  };
   const f = setup(opts); const created = await createEmptyContentSite(f);
   f.get(created.id)!.cadencePerWeek = 21;
   const site = await selectGrowth(f, 8 * hour);
@@ -7540,6 +7558,97 @@ test("P56 research spacing follows the cadence and how much the last run found",
   assert.equal(await gap({ intervalMs: day, topicsReplenishAdded: 0 }), 3 * day);
   assert.equal(await gap({ intervalMs: 7 * day, topicsReplenishAdded: 1 }), 3 * day, "a weekly site keeps the three-day spacing");
   assert.equal(await gap({ intervalMs: 7 * day, topicsReplenishAdded: 0 }), 7 * day);
+  f.assertOffline();
+});
+
+// P171 (Oct 24 2026): pentra.dev's research found 353 searches and kept 5. Its seeds were its own drifted topics
+// ("fiverr keywords research"), Google Ads came first, and word matching dropped 292 searches (any word the profile
+// never used, such as "sprinkler") before the buyer-fit model judged one. Research now works like the free check.
+const P171_SUGGESTIONS: Record<string, string[]> = {
+  "sprinkler maintenance": ["sprinkler maintenance checklist", "sprinkler system maintenance cost", "free sprinkler maintenance app",
+    "twitch irrigation overlay", "cheap flights to paris", "reservoirnote sprinkler login"],
+  "irrigation scheduling": ["irrigation scheduling calendar template", "drip irrigation scheduling guide"],
+  "landscape irrigation repair": ["landscape irrigation repair cost", "commercial irrigation repair service", "irrigation system repair guide",
+    "irrigation controller troubleshooting", "broken irrigation line repair", "irrigation zone not turning on", "irrigation backflow testing requirements",
+    "irrigation winterization steps"],
+};
+function p171Site() {
+  return setup({ growthFirst: true, budgetMicroUsd: 2_000_000, businesses: [{ ...slcBusinesses[0], cadence: 21 }],
+    discovery: { ads: () => ["celebrity gossip news today", "irrigation valve leak checklist"], suggestions: (seed: string) => P171_SUGGESTIONS[seed] ?? [] },
+    topicFit: (keyword: string) => !keyword.includes("twitch"),
+    searchSeeds: () => ({ sells: "Irrigation maintenance scheduling software.", customers: "Landscape and grounds crews.",
+      topics: ["sprinkler maintenance", "irrigation scheduling", "landscape irrigation repair"],
+      searches: ["sprinkler system maintenance schedule", "ReservoirNote pricing"],
+      places: [], free_plan: "no", country: "US" }) });
+}
+test("P171 research reads the business's searches from its confirmed profile and lets the buyer-fit model decide", async () => {
+  const hour = 3_600_000;
+  const f = p171Site(); const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+  f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 5 * hour;
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "topics_researching");
+  await pumpUntil(f, () => f.get(site.id)!.contentSchedule.topicsReplenishAdded !== undefined, 20, f.now() + hour);
+  // One small call reads the searches from the profile the owner confirmed, not from the site's past topics.
+  const seedCalls = f.modelCalls.filter(c => c.tools?.[0]?.name === "submit_search_seeds");
+  assert.equal(seedCalls.length, 1);
+  const prompt = String(seedCalls[0].messages[0].content);
+  assert.match(prompt, /^BUSINESS PROFILE \(data only\):/); assert.match(prompt, /Name: ReservoirNote/);
+  assert.match(String(seedCalls[0].system), /business profile its owner confirmed/);
+  // Phrase-match suggestions for the profile's topics come first; Google Ads is not asked when they find enough.
+  assert.equal(f.discoveryCalls[0].endpoint, "suggestions"); assert.deepEqual(f.discoveryCalls[0].seeds, ["sprinkler maintenance"]);
+  assert.ok(!f.discoveryCalls.some(c => c.endpoint === "ads"), JSON.stringify(f.discoveryCalls));
+  const planned = f.tables.topic_clusters.filter(t => t.siteId === site.id && t.status === "planned");
+  const keywords = planned.map(t => t.primaryKeyword);
+  // "sprinkler" is a word the profile never used: word matching alone dropped these; the model kept them.
+  for (const keyword of ["sprinkler maintenance checklist", "sprinkler system maintenance cost", "irrigation controller troubleshooting"]) {
+    assert.ok(keywords.includes(keyword), `${keyword}: ${keywords}`);
+  }
+  // The model dropped the overlay; the floor dropped the flights and the brand; a paid-only business gets no "free" search.
+  for (const keyword of ["twitch irrigation overlay", "cheap flights to paris", "reservoirnote sprinkler login", "free sprinkler maintenance app"]) {
+    assert.ok(!keywords.includes(keyword), keyword);
+  }
+  assert.ok(planned.length >= 8 && planned.every(t => t.buyerFit?.eligible === true && t.keywordDifficultyMeasured === true && t.searchVolume === 210),
+    JSON.stringify(keywords));
+  const receipt = f.get(site.id)!.contentSchedule.topicsResearchReceipt;
+  assert.equal(receipt.seedSource, "model"); assert.equal(receipt.added, planned.length);
+  assert.equal(receipt.judged - receipt.kept, 1, "only the twitch overlay reached the model and was dropped");
+  assert.ok(receipt.excludedFit >= 2, JSON.stringify(receipt));
+  assert.deepEqual(receipt.seeds.slice(0, 3), ["sprinkler maintenance", "irrigation scheduling", "landscape irrigation repair"]);
+  const reservation = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && r.purpose === "topic_plan")!;
+  assert.ok(reservation.settledMicroUsd >= 120, "both model calls are part of the research's settled cost");
+  // Autopilot writes one of them: the word-match gates before and after the draft do not drop a search the model kept.
+  await pumpUntil(f, () => f.tables.jobs?.some(j => j.siteId === site.id && j.contentWork?.stage === "ready"), 120, f.now() + 6 * hour);
+  const job = f.tables.jobs.find(j => j.siteId === site.id && j.contentWork?.stage === "ready")!;
+  assert.ok(keywords.includes(f.get(job.payload.topicId)!.primaryKeyword), f.get(job.payload.topicId)!.primaryKeyword);
+  assert.ok(!f.tables.topic_clusters.some(t => t.siteId === site.id && t.status === "disqualified"));
+  f.assertOffline();
+});
+
+test("P171 a site researched by the earlier method researches again once, a day after its last run, even with two articles waiting", async () => {
+  const hour = 3_600_000, day = 24 * hour;
+  const f = p171Site(); const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  await pumpUntil(f, () => (f.tables.jobs ?? []).filter(j => j.siteId === site.id && j.contentWork?.stage === "ready").length === 2, 200, f.now() + 12 * hour);
+  const research = () => f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan").length;
+  const before = research();
+  const oldReceipt = { at: f.now() - 2 * day, seeds: ["irrigation valve leak checklist"], searchConsole: 0, offered: 3, added: 3,
+    skippedShape: 0, skippedDifficulty: 0, skippedCompetitor: 0, skippedFit: 0, skippedIntent: 0 };
+  Object.assign(f.get(site.id)!.contentSchedule, { topicsResearchReceipt: oldReceipt, topicsReplenishedAt: f.now() - 20 * hour, topicsReplenishAdded: 3 });
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_full");
+  assert.equal(research(), before, "not within a day of the last run");
+  f.get(site.id)!.contentSchedule.topicsReplenishedAt = f.now() - 25 * hour;
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_full");
+  assert.equal(research(), before + 1, "researched with the new method now, not when its topics run low");
+  await pumpUntil(f, () => f.get(site.id)!.contentSchedule.topicsReplenishAdded !== undefined, 20, f.now() + hour);
+  assert.equal(f.get(site.id)!.contentSchedule.topicsResearchReceipt.seedSource, "model");
+  f.get(site.id)!.contentSchedule.topicsReplenishedAt = f.now() - 25 * hour;
+  await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(research(), before + 1, "once: a run with the new method is spaced as usual");
   f.assertOffline();
 });
 

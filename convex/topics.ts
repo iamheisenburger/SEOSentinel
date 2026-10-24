@@ -1091,7 +1091,8 @@ export const recordBusinessFitAuditsInternal = internalMutation({
         continue;
       }
       // A search the owner added stands; the lexical audit never drops it (C4, P158).
-      if (topic.ownerChosenAt !== undefined) continue;
+      // Nor one the buyer-fit model kept (P171): a changed profile has the daily sweep judge it again.
+      if (topic.ownerChosenAt !== undefined || topic.buyerFit?.eligible === true) continue;
       const nextStatus = audit.eligible
         ? topic.status === "disqualified" ? "planned" : topic.status ?? "planned"
         : "disqualified";

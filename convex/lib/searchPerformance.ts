@@ -289,8 +289,37 @@ export function isBrandedSearchQuery(queryText: string, domain: string): boolean
   return !!brand && (
     normalized.includes(brand) ||
     normalized.includes(normalizedDomain) ||
-    (!!compactBrand && compactQuery.includes(compactBrand))
+    (!!compactBrand && compactQuery.includes(compactBrand)) ||
+    brandTypedApart(normalized, compactBrand)
   );
+}
+
+/** P171 (Oct 24 2026): a compound brand typed as two or three words with one
+ * letter off is still the brand: leadpilot.chat is shown for "leads pilot" and
+ * "try leads pilot". Only brands of 8+ letters, and only across words, so a
+ * single word one letter from a short or dictionary brand never counts. */
+function brandTypedApart(normalized: string, compactBrand: string): boolean {
+  if (compactBrand.length < 8) return false;
+  const words = normalized.split(" ").filter(Boolean);
+  for (let i = 0; i < words.length; i++) {
+    for (let n = 2; n <= 3 && i + n <= words.length; n++) {
+      if (withinOneEdit(words.slice(i, i + n).join(""), compactBrand)) return true;
+    }
+  }
+  return false;
+}
+
+function withinOneEdit(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0, j = 0, edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++edits > 1) return false;
+    if (a.length > b.length) i++;
+    else if (a.length < b.length) j++;
+    else { i++; j++; }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
 }
 
 /**

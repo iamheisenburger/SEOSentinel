@@ -1529,6 +1529,27 @@ export function hasPractitionerIntent(keyword: string): boolean {
 type TopicBusinessFitArgs = Parameters<typeof evaluateTopicBusinessFitWith>[0];
 
 /**
+ * P171 (Oct 24 2026): the loose relevance floor in front of the buyer-fit
+ * model for researched searches. The full gate below rejects a search with
+ * any subject word the profile never used ("sprinkler", "calendar"), which
+ * dropped 292 of the 353 searches pentra.dev's research found before the
+ * model judged any. Research now lets the model decide (convex/lib/topicFit.ts)
+ * and keeps only this floor: the search shares at least one of the business's
+ * own subject words, so "cheap flights to paris" never reaches the model.
+ */
+export function sharesBusinessSubject(keyword: string, signals: { coreBusinessSignals: string[]; productAnchorSignals?: string[] }): boolean {
+  const promoted = tenantCoreVocabulary(signals.productAnchorSignals ?? []);
+  const keywordWords = relevanceTokens(keyword);
+  const signalWords = [...signals.coreBusinessSignals, ...(signals.productAnchorSignals ?? [])].flatMap(relevanceTokens);
+  if (keywordWords.length === 0 || signalWords.length === 0) return false;
+  const keywordRoots = distinctiveRelevanceRoots(keywordWords, promoted);
+  // Only generic words ("marketing software"): a shared offering and a second shared word, as in the full gate.
+  if (keywordRoots.size === 0) return genericOfferingAlignment(keywordWords, signalWords);
+  const signalRoots = distinctiveRelevanceRoots(signalWords, promoted);
+  return [...keywordRoots].some(root => signalRoots.has(root));
+}
+
+/**
  * The deterministic business-fit gate. A keyword passes on the strict rules,
  * or — only if it fails them — on the same rules with the tenant's own
  * recurring subject words counted as distinctive (see tenantCoreVocabulary).

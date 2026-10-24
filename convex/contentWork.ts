@@ -213,8 +213,15 @@ export function topicResearchGapMs(schedule: { intervalMs: number; topicsRepleni
 export function topicRunwayTarget(intervalMs: number) {
   return Math.max(3, Math.min(12, Math.ceil(4 * 86_400_000 / Math.max(intervalMs, 3_600_000))));
 }
-export function topicResearchDueAt(schedule: { intervalMs: number; topicsReplenishAdded?: number; topicsReplenishedAt?: number }) {
+export function topicResearchDueAt(schedule: { intervalMs: number; topicsReplenishAdded?: number; topicsReplenishedAt?: number;
+  topicsResearchReceipt?: { seedSource?: string } }) {
+  // A site whose last research ran before P171 researches again a day after it, without waiting for its topics to run low.
+  if (researchMethodOutdated(schedule)) return (schedule.topicsReplenishedAt ?? 0) + TOPIC_REPLENISH_MIN_GAP_MS;
   return (schedule.topicsReplenishedAt ?? 0) + topicResearchGapMs(schedule);
+}
+/** P171 (Oct 24 2026): research reads the business's searches from its confirmed profile (receipts say seedSource). */
+export function researchMethodOutdated(schedule: { topicsResearchReceipt?: { seedSource?: string } }) {
+  return Boolean(schedule.topicsResearchReceipt) && schedule.topicsResearchReceipt!.seedSource === undefined;
 }
 /** An Autopilot article waits for fresh keyword research only while its slot is at least this far away. */
 const TOPIC_RESEARCH_WAIT_MARGIN_MS = 90 * 60_000;
@@ -1306,6 +1313,7 @@ export function storedTenantAuthority(site: Doc<"sites">): number | undefined {
 
 /** A search the owner added to the plan (C4, P158). */
 const ownerChosen = (t: Doc<"topic_clusters">) => t.ownerChosenAt !== undefined;
+const keptByBuyerFit = (t: Doc<"topic_clusters">) => t.buyerFit?.eligible === true;
 /** The planned topics Autopilot may still write, best first (read-only). The
  * health check uses the same list to report how many are left. */
 export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: Doc<"sites">,
@@ -1340,8 +1348,10 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
   // A search the owner added (C4, P158) is written whatever Pentra's demand,
   // reach and fit checks say (they are notes for the owner); a listed
   // competitor and a page the site already has still exclude it.
+  // A search the buyer-fit model kept for this business (P171) is not judged
+  // again by word match; a changed profile has it judged again by the daily sweep.
   const planned = topics.filter(t => ["planned", "pending"].includes(t.status ?? "planned") &&
-    (ownerChosen(t) || fit(t) && t.buyerFit?.eligible !== false && reachable(t)) &&
+    (ownerChosen(t) || (fit(t) || keptByBuyerFit(t)) && t.buyerFit?.eligible !== false && reachable(t)) &&
     !namesCompetitor(`${t.primaryKeyword} ${t.label}`, competitors) &&
     !planCheckpointTopicExecutionLocked(t) && !terminalContentFeasibility(t.contentFeasibilityStatus) &&
     ![...covered, ...pageCoverage, ...excludedIntents].some(c => contentIntentConflicts(t, c)));
@@ -1608,7 +1618,7 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
     coverage = [...new Set([...known, ...inventory.pageCoverage.map(c => normalizeResearchKeyword(c.primaryKeyword ?? ""))].filter(Boolean))];
   } catch { /* an incomplete inventory keeps the topic list only */ }
   return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds, known, coverage,
-    signals, searchConsole: searchConsoleTopicCandidatesFrom(site, searches),
+    round: site.contentSchedule.topicsResearchRound ?? 1, signals, searchConsole: searchConsoleTopicCandidatesFrom(site, searches),
     tenantAuthority: storedTenantAuthority(site) ?? null,
     canonicalDomain: siteCanonicalDomain(site) ?? site.domain, domainRevision: siteCanonicalDomainRevision(site),
     business: buyerFitBusiness(site), maximumDifficulty: siteDifficultyCeiling(site) };
@@ -1907,8 +1917,10 @@ export const closeTopicResearchReservation = internalMutation({ args: { siteId: 
 type CandidateKeyword = { keyword: string; searchVolume: number; difficulty: number; difficultyMeasured: boolean;
   source?: "search_console"; position?: number; fit?: { keep: boolean; reason: string } };
 /** Add measured keywords as planned topics through Autopilot's topic gates:
- * search shape, the site's reach ceiling, no competitor names, business fit,
- * a buyer-fit drop and no repeat of an existing topic, article or page.
+ * search shape, the site's reach ceiling, no competitor names, a buyer-fit
+ * drop, business fit and no repeat of an existing topic, article or page.
+ * A search the buyer-fit model kept for this business is not judged again by
+ * word match (P171): that check rejected most searches research found.
  * At most 15 per call; Search Console searches first, then by demand. */
 async function insertCandidateTopics(ctx: MutationCtx, site: Doc<"sites">, keywords: CandidateKeyword[], noteFor: (k: CandidateKeyword) => string) {
   let inventory;
@@ -1929,8 +1941,8 @@ async function insertCandidateTopics(ctx: MutationCtx, site: Doc<"sites">, keywo
     if (k.difficulty > siteDifficultyCeiling(site)) { skipped.difficulty++; continue; }
     if (namesCompetitor(keyword, competitorNamesFor(site))) { skipped.competitor++; continue; }
     const proposal = { primaryKeyword: keyword, label: keyword.replace(/^./, c => c.toUpperCase()) };
-    if (!evaluateTopicBusinessFit({ keyword, label: proposal.label, ...signals }).eligible) { skipped.fit++; continue; }
     if (k.fit && !k.fit.keep) { skipped.buyerFit++; continue; }
+    if (!k.fit?.keep && !evaluateTopicBusinessFit({ keyword, label: proposal.label, ...signals }).eligible) { skipped.fit++; continue; }
     if (taken.some(t => contentIntentConflicts(proposal, t))) { skipped.intent++; continue; }
     await ctx.db.insert("topic_clusters", { siteId, ...proposal, planningCanonicalDomain: siteCanonicalDomain(site)!,
       ...(k.fit ? { buyerFit: { eligible: true, reason: k.fit.reason.slice(0, 160), version: BUYER_FIT_VERSION, checkedAt: Date.now(), profileHash } } : {}),
@@ -1969,7 +1981,9 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
     fit: v.optional(v.object({ keep: v.boolean(), reason: v.string() })) })),
     // What the research run saw (seeds and discovery counts), kept with its outcome.
     research: v.optional(v.object({ seeds: v.array(v.string()), searchConsole: v.number(), discovered: v.optional(v.number()),
-      excludedKnown: v.optional(v.number()), excludedFit: v.optional(v.number()), excludedIntent: v.optional(v.number()) })) },
+      excludedKnown: v.optional(v.number()), excludedFit: v.optional(v.number()), excludedIntent: v.optional(v.number()),
+      // P171: where the seeds came from ("model": read from the confirmed profile) and the buyer-fit call's verdicts.
+      seedSource: v.optional(v.union(v.literal("model"), v.literal("site"))), judged: v.optional(v.number()), kept: v.optional(v.number()) })) },
   handler: async (ctx, { siteId, keywords, research }) => {
     const site = await ctx.db.get(siteId);
     if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return { added: 0 };
@@ -1982,6 +1996,8 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
     const receipt = { at: Date.now(), seeds: research?.seeds ?? [], searchConsole: research?.searchConsole ?? 0,
       ...(research?.discovered !== undefined ? { discovered: research.discovered, excludedKnown: research.excludedKnown ?? 0,
         excludedFit: research.excludedFit ?? 0, excludedIntent: research.excludedIntent ?? 0 } : {}),
+      ...(research?.seedSource ? { seedSource: research.seedSource } : {}),
+      ...(research?.judged !== undefined ? { judged: research.judged, kept: research.kept ?? 0 } : {}),
       offered: keywords.length, added, skippedShape: skipped.shape, skippedDifficulty: skipped.difficulty,
       skippedCompetitor: skipped.competitor, skippedFit: skipped.fit, skippedIntent: skipped.intent, skippedBuyerFit: skipped.buyerFit };
     if (site.contentSchedule) await ctx.db.patch(siteId, { contentSchedule: { ...site.contentSchedule, topicsReplenishAdded: added,
@@ -2212,7 +2228,15 @@ export const advance = internalMutation({
       return { scheduled: 0, mode: "content_slot_parked", blockers: [improvementFailed ? "automatic_improvement_failed" : "owner_review_needed"] };
     }
     if (failedSlot && !replaceNextSlot) return { scheduled: 0, mode: "content_failed_slot", blockers: [failedSlot.contentWork!.failure ?? "content_work_failed"] };
-    if (waiting.length >= 2) return { scheduled: 0, mode: "buffer_full" };
+    if (waiting.length >= 2) {
+      // P171: a site whose topics came from the old research method researches
+      // once with the new one now, instead of when its topics run low.
+      if (schedule.autopilotSelectedAt && researchMethodOutdated(schedule) && Date.now() >= topicResearchDueAt(schedule)) {
+        const [fresh, pricing] = [await ctx.db.get(siteId), await pricingConfiguration(ctx, site)];
+        if (fresh && pricing) await startTopicResearchIfDue(ctx, fresh, pricing.budgetMicroUsd);
+      }
+      return { scheduled: 0, mode: "buffer_full" };
+    }
     if (schedule.autopilotSelectedAt) {
       const backoffUntil = await autopilotFailureBackoffUntil(ctx, siteId, schedule.intervalMs);
       // Deadline first: the next open slot gets its first attempt once it is
@@ -2340,8 +2364,8 @@ export const advance = internalMutation({
     // Research the next keywords before the searched ones run out, instead of
     // waiting for an empty inventory (which costs slots at a fast cadence).
     // It never takes the room the next article needs.
-    if (schedule.autopilotSelectedAt && !improvement &&
-      runway.searched - ((topic.searchVolume ?? 0) > 0 ? 1 : 0) < topicRunwayTarget(slot.intervalMs)) {
+    if (schedule.autopilotSelectedAt && !improvement && (researchMethodOutdated(schedule) ||
+      runway.searched - ((topic.searchVolume ?? 0) > 0 ? 1 : 0) < topicRunwayTarget(slot.intervalMs))) {
       const fresh = await ctx.db.get(siteId);
       if (fresh) await startTopicResearchIfDue(ctx, fresh, pricing.budgetMicroUsd);
     }

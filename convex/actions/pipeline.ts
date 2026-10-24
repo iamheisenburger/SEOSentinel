@@ -7832,8 +7832,9 @@ async function reviewExistingArticleHandler(
     };
     const quality = evaluatePublicationQuality(qualityCandidate, "strict");
     const reviewBusinessSignals = tenantTopicBusinessSignals(site);
-    // The owner's own search (C4) is not re-judged against the business's words.
-    const targetAlignment = topic && topic.ownerChosenAt === undefined
+    // The owner's own search (C4), or one the buyer-fit model kept for this
+    // business (P171), is not re-judged against the business's words.
+    const targetAlignment = topic && topic.ownerChosenAt === undefined && topic.buyerFit?.eligible !== true
       ? evaluateTopicBusinessFit({
           keyword: topic.primaryKeyword,
           label: nextTitle,
@@ -9250,7 +9251,7 @@ export const processNextJob = internalAction({
           label: checkpoint.title,
           ...tenantTopicBusinessSignals(site),
         });
-        if (fit.eligible || topic.ownerChosenAt !== undefined) return null;
+        if (fit.eligible || topic.ownerChosenAt !== undefined || topic.buyerFit?.eligible === true) return null;
 
         const settlement = await ctx.runMutation(
           internal.topics.disqualifyQueuedTopicInternal,
@@ -9532,8 +9533,9 @@ export const processNextJob = internalAction({
           ...tenantTopicBusinessSignals(site),
         });
         // A search the owner added is written as chosen (C4): word-match fit
-        // is Pentra's guess about the business, and the owner decided.
-        if (!fit.eligible && topic.ownerChosenAt === undefined) {
+        // is Pentra's guess about the business, and the owner decided. So is
+        // one the buyer-fit model kept for this business (P171).
+        if (!fit.eligible && topic.ownerChosenAt === undefined && topic.buyerFit?.eligible !== true) {
           const settlement = await ctx.runMutation(
             internal.topics.disqualifyQueuedTopicInternal,
             {
