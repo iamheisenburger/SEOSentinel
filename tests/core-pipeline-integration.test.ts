@@ -5,7 +5,7 @@ import test, { type TestContext } from "node:test";
 import { createHash } from "node:crypto";
 import { corePipelineFixture, START, type Fields } from "./helpers/core-pipeline-fixture.ts";
 import { publicationArtifactHash, publicationDeliveryKey, sha256Hex } from "../convex/lib/publicationArtifact.ts";
-import { approvedBufferPolicy, contentIntentConflicts } from "../convex/lib/autopilotBuffer.ts";
+import { approvedBufferPolicy, contentIntentConflicts, evaluateTopicBusinessFit, tenantTopicBusinessSignals } from "../convex/lib/autopilotBuffer.ts";
 import { PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD } from "../convex/lib/providerSpendReservation.ts";
 import { articleGenerationAttemptAllowance } from "../convex/lib/articleGenerationAttempt.ts";
 import { renderSafePublicationHtml } from "../convex/lib/safeMarkdownHtml.ts";
@@ -7619,8 +7619,8 @@ const P171_SUGGESTIONS: Record<string, string[]> = {
     "irrigation controller troubleshooting", "broken irrigation line repair", "irrigation zone not turning on", "irrigation backflow testing requirements",
     "irrigation winterization steps"],
 };
-function p171Site() {
-  return setup({ growthFirst: true, budgetMicroUsd: 2_000_000, businesses: [{ ...slcBusinesses[0], cadence: 21 }],
+function p171Site(extra: Parameters<typeof setup>[0] = {}) {
+  return setup({ ...extra, growthFirst: true, budgetMicroUsd: 2_000_000, businesses: [{ ...slcBusinesses[0], cadence: 21 }],
     discovery: { ads: () => ["celebrity gossip news today", "irrigation valve leak checklist"], suggestions: (seed: string) => P171_SUGGESTIONS[seed] ?? [] },
     topicFit: (keyword: string) => !keyword.includes("twitch"),
     searchSeeds: () => ({ sells: "Irrigation maintenance scheduling software.", customers: "Landscape and grounds crews.",
@@ -7734,6 +7734,37 @@ test("P172 research asks the short topics first on any run and never judges a dr
   assert.ok(!second.includes("twitch irrigation overlay"), `the dropped search is not judged again: ${second}`);
   assert.ok(f.get(site.id)!.contentSchedule.topicsResearchReceipt.excludedKnown >= 1);
   assert.equal(f.tables.topic_research_drops.length, 1, "nothing new was dropped, nothing is stored twice");
+  f.assertOffline();
+});
+
+// P174 (Oct 24 2026): P171 let a search the buyer-fit model kept skip word matching at four gates, but Autopilot's
+// acceptance of reviewer notes (rule 2a) and the publication gates still judged it by word match: pentra.dev's
+// "local seo tools" (1,300 searches a month) was written, reviewed twice and quarantined. Every gate now takes the
+// model's verdict, or the owner's (C4).
+test("P174 a search the buyer-fit model kept is accepted with reviewer notes and published like any other", async () => {
+  const hour = 3_600_000;
+  // As on pentra.dev's draft: fact check 64 and editorial 62 with a style defect listed (notes under rule 2a).
+  const f = p171Site({ reviewResponse: review => ({ ...review, confidenceScore: 64 }),
+    auditResponse: audit => ({ ...audit, score: 62, materialDefects: ["Consolidate the repeated principle so the article states it once."] }) });
+  const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+  f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 5 * hour;
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "topics_researching");
+  const researched = () => (f.tables.jobs ?? []).filter(j => j.siteId === site.id && j.contentWork?.intent === "create" &&
+    f.get(j.payload?.topicId)?.buyerFit?.eligible === true);
+  await pumpUntil(f, () => researched().some(j => j.contentWork.stage === "verified"), 400, f.now() + 30 * hour);
+  const job = researched().find(j => j.contentWork.stage === "verified")!;
+  const topic = f.get(job.payload.topicId)!;
+  assert.equal(evaluateTopicBusinessFit({ keyword: topic.primaryKeyword, label: topic.label, ...tenantTopicBusinessSignals(f.get(site.id)! as Parameters<typeof tenantTopicBusinessSignals>[0]) }).eligible,
+    false, `word matching alone rejects "${topic.primaryKeyword}"`);
+  const article = f.get(job.articleId)!;
+  assert.equal(article.status, "published"); assert.equal(article.publicUrlStatus, "verified");
+  assert.equal(article.editorialQualityScore, 62, "accepted with the reviewer's notes (rule 2a), not chased to 85");
+  assert.equal(job.contentWork.revisions ?? 0, 0, "no paid revision chased the scores");
+  assert.ok(!f.tables.topic_clusters.some(t => t.siteId === site.id && t.status === "disqualified"));
   f.assertOffline();
 });
 

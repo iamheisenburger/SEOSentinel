@@ -1529,6 +1529,19 @@ export function hasPractitionerIntent(keyword: string): boolean {
 type TopicBusinessFitArgs = Parameters<typeof evaluateTopicBusinessFitWith>[0];
 
 /**
+ * P174 (Oct 24 2026): a search the owner chose (C4) or the buyer-fit model kept
+ * for this business (P171) is never judged again by word match, at any gate:
+ * choosing, drafting, reviewing, accepting reviewer notes, sealing or
+ * publishing. Word match is Pentra's guess about the business; those verdicts
+ * are stronger. P171 exempted four gates and missed Autopilot's acceptance and
+ * the publication gates, so pentra.dev's "local seo tools" (1,300 searches a
+ * month) was written, reviewed twice and quarantined.
+ */
+export function topicFitSettled(topic: { ownerChosenAt?: number; buyerFit?: { eligible: boolean } } | null | undefined): boolean {
+  return Boolean(topic && (topic.ownerChosenAt !== undefined || topic.buyerFit?.eligible === true));
+}
+
+/**
  * P171 (Oct 24 2026): the loose relevance floor in front of the buyer-fit
  * model for researched searches. The full gate below rejects a search with
  * any subject word the profile never used ("sprinkler", "calendar"), which

@@ -34,6 +34,7 @@ import {
   reviewedAmbiguityDispositionAllowed,
 } from "./lib/publicationLease";
 import {
+  topicFitSettled,
   DETERMINISTIC_INTERNAL_LINK_REPAIR_VERSION,
   autopilotCandidateBudget,
   effectivePublishedAt,
@@ -1636,11 +1637,12 @@ async function assertInitialPublicationMutationAuthorized(
     !topic ||
     topic.siteId !== site._id ||
     !topicMatchesCurrentDomain(site, topic) ||
-    !evaluateTopicBusinessFit({
+    // P174: the owner's own search (C4) or one the buyer-fit model kept is not judged again by word match.
+    !(topicFitSettled(topic) || evaluateTopicBusinessFit({
       keyword: topic.primaryKeyword,
       label: article.title,
       ...tenantTopicBusinessSignals(site),
-    }).eligible
+    }).eligible)
   ) {
     throw new Error("Current tenant topic policy no longer authorizes publication");
   }
@@ -2814,15 +2816,16 @@ export const refreshPublicationAudit = internalMutation({
     // changes, forcing every unpublished ready artifact through this exact
     // database fence before it can re-enter the buffer.
     const topic = article.topicId ? await ctx.db.get(article.topicId) : null;
-    const topicFit = topic && topic.siteId === article.siteId &&
-        topicMatchesCurrentDomain(site, topic)
+    const topicInScope = Boolean(topic && topic.siteId === article.siteId && topicMatchesCurrentDomain(site, topic));
+    const topicFit = topic && topicInScope
       ? evaluateTopicBusinessFit({
           keyword: topic.primaryKeyword,
           label: article.title,
           ...tenantTopicBusinessSignals(site),
         })
       : null;
-    if (!topicFit?.eligible) {
+    // P174: the owner's own search (C4) or one the buyer-fit model kept is not judged again by word match.
+    if (!(topicInScope && topicFitSettled(topic)) && !topicFit?.eligible) {
       const issue = topic
         ? `Measured topic "${topic.primaryKeyword}" failed the current tenant product-fit gate: ${topicFit?.reasons.join("; ") ?? "topic scope changed"}`
         : "Autonomous publication requires a current tenant-scoped measured topic.";

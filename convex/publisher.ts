@@ -68,6 +68,7 @@ import {
   verifyLivePublicationPage,
 } from "./lib/publicationLive";
 import {
+  topicFitSettled,
   evaluateTopicBusinessFit,
   tenantTopicBusinessSignals,
 } from "./lib/autopilotBuffer";
@@ -2739,7 +2740,8 @@ async function publishArticleHandler(
         label: article.title,
         ...tenantTopicBusinessSignals(site),
       });
-      if (!topicFit.eligible) {
+      // P174: the owner's own search (C4) or one the buyer-fit model kept is not judged again by word match.
+      if (!topicFit.eligible && !topicFitSettled(topic)) {
         const issue =
           `Measured topic "${topic.primaryKeyword}" failed the current tenant product-fit gate: ${topicFit.reasons.join("; ")}`;
         await ctx.runMutation(internal.articles.recordPublicationCheck, {
@@ -2767,11 +2769,11 @@ async function publishArticleHandler(
           currentTopic &&
           currentTopic.siteId === args.siteId &&
           topicMatchesCurrentDomain(site, currentTopic) &&
-          evaluateTopicBusinessFit({
+          (topicFitSettled(currentTopic) || evaluateTopicBusinessFit({
             keyword: currentTopic.primaryKeyword,
             label: article.title,
             ...tenantTopicBusinessSignals(site),
-          }).eligible,
+          }).eligible),
         );
       }
     }

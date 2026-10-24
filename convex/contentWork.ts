@@ -3,7 +3,7 @@ import { internalMutation, internalQuery, mutation, query, type MutationCtx, typ
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ConvexError, v } from "convex/values";
-import { contentIntentConflicts, evaluateTopicBusinessFit, tenantDiscoveryAnchors, tenantTopicBusinessSignals, isSealedReady } from "./lib/autopilotBuffer";
+import { contentIntentConflicts, evaluateTopicBusinessFit, tenantDiscoveryAnchors, tenantTopicBusinessSignals, isSealedReady, topicFitSettled } from "./lib/autopilotBuffer";
 import { normalizeResearchKeyword, researchSeedsForRound, searchLikePhrase, searchSeedLength, TOPIC_RESEARCH_METHOD } from "./lib/researchSeeds";
 import { publicationArtifactHash, publicationDeliveryConfig, sha256Hex } from "./lib/publicationArtifact";
 import { isProviderRequestRefusal, legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
@@ -2446,8 +2446,10 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">, r
     const site = await ctx.db.get(job.siteId!);
     const topic = article.topicId ? await ctx.db.get(article.topicId) : null;
     // The review's own target check: the measured keyword must still fit the
-    // business and the final title. Accepted notes never bypass it.
-    const aligned = !site || !topic || evaluateTopicBusinessFit({ keyword: topic.primaryKeyword, label: article.title,
+    // business and the final title. Accepted notes never bypass it. A search
+    // the owner chose or the buyer-fit model kept is not judged by word match
+    // here either (P174: pentra.dev's "local seo tools" was quarantined on it).
+    const aligned = !site || !topic || topicFitSettled(topic) || evaluateTopicBusinessFit({ keyword: topic.primaryKeyword, label: article.title,
       ...tenantTopicBusinessSignals(site) }).eligible;
     if (site && aligned && site.serviceMode === "growth_first" && site.autopilotEnabled && !site.approvalRequired &&
       site.contentSchedule && !site.contentSchedule.ownerReviewedOnly && site.contentSchedule.autopilotSelectedAt &&

@@ -92,6 +92,7 @@ import {
   type ArticleProviderAttemptStatus,
 } from "./lib/articleGenerationAttempt";
 import {
+  topicFitSettled,
   MIN_VERIFIED_TOPIC_HORIZON,
   TARGET_APPROVED_BUFFER,
   approvedBufferPolicy,
@@ -5262,7 +5263,8 @@ export const markPublishFailed = internalMutation({
           ...tenantTopicBusinessSignals(site),
         })
       : undefined;
-    if (topic && topicFit && !topicFit.eligible) {
+    // P174: the owner's own search (C4) or one the buyer-fit model kept is not judged again by word match.
+    if (topic && topicFit && !topicFit.eligible && !topicFitSettled(topic)) {
       await ctx.db.patch(topic._id, {
         status: "disqualified",
         businessFitEligible: false,
