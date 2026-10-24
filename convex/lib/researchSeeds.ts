@@ -4,6 +4,14 @@
 
 export const normalizeResearchKeyword = (keyword: string) => keyword.trim().toLowerCase().replace(/\s+/g, " ");
 
+/** How Autopilot research finds searches; each research receipt records it,
+ * and a site whose last research used an earlier method researches again
+ * soon after (convex/contentWork.ts researchMethodOutdated).
+ * 1 (P171, Oct 24 2026): seeds read from the confirmed profile, the buyer-fit model decides.
+ * 2 (P172): the short category topics always get the phrase-match calls, and
+ *   searches the model dropped are remembered, not judged again. */
+export const TOPIC_RESEARCH_METHOD = 2;
+
 /** Words a search phrase does not start or end with. Profile sentences split
  * into clauses leave such edges ("to engage visitors 24", "lost leads visitors
  * who don t"); they are fragments, not searches. */

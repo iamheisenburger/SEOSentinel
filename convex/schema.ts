@@ -32,6 +32,8 @@ export default defineSchema({
         skippedBuyerFit: v.optional(v.number()),
         // P171: seeds read from the confirmed profile ("model") or the site's own words ("site"); the buyer-fit verdicts.
         seedSource: v.optional(v.union(v.literal("model"), v.literal("site"))), judged: v.optional(v.number()), kept: v.optional(v.number()),
+        // P172: the research method that ran (TOPIC_RESEARCH_METHOD); an older one is redone once.
+        method: v.optional(v.number()),
       })),
     })),
     userId: v.optional(v.string()), // Clerk user ID
@@ -767,6 +769,18 @@ export default defineSchema({
       "domainRevision",
       "slug",
     ]),
+
+  // P172 (Oct 24 2026): searches the buyer-fit model dropped in keyword
+  // research, for the profile it judged them against, so the next run reaches
+  // new searches instead of judging the same ones again (and an operator can
+  // read why). A changed profile judges them afresh.
+  topic_research_drops: defineTable({
+    siteId: v.id("sites"),
+    keyword: v.string(),
+    profileHash: v.string(),
+    reason: v.string(),
+    droppedAt: v.number(),
+  }).index("by_site_dropped", ["siteId", "droppedAt"]),
 
   topic_clusters: defineTable({
     siteId: v.id("sites"),

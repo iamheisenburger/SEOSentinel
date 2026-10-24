@@ -14,9 +14,10 @@ import { BUYER_FIT_CEILING_MICRO_USD, BUYER_FIT_MAX_KEYWORDS, BUYER_FIT_MAX_TOKE
   buyerFitRequest, normalizeFitKeyword, parseBuyerFit, type BuyerFitBusiness, type BuyerFitVerdict } from "../lib/topicFit";
 import { asksForFree, brandTerms, isBrandedKeyword, localSeeds, namesPlace, parseSearchSeeds, profileSeedRequest, SEARCH_SEEDS_MAX_TOKENS,
   SEARCH_SEEDS_TOOL, type SeedRead } from "../lib/missedSearches";
+import { TOPIC_RESEARCH_METHOD } from "../lib/researchSeeds";
 
 type ResearchContext = { domain: string; language: string; targetCountry: string | null; seeds: string[]; known: string[];
-  coverage: string[]; round: number; signals: { coreBusinessSignals: string[]; productAnchorSignals: string[]; businessModelSignals: string[] };
+  coverage: string[]; dropped: string[]; signals: { coreBusinessSignals: string[]; productAnchorSignals: string[]; businessModelSignals: string[] };
   searchConsole: Array<{ keyword: string; impressions: number; position: number }>; tenantAuthority: number | null;
   canonicalDomain: string; domainRevision: number; business: BuyerFitBusiness; maximumDifficulty?: number };
 
@@ -90,11 +91,13 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
     }
     // A business that serves particular places searches with them ("deli ann arbor").
     const places = read?.places ?? [], local = places.length > 0;
-    const modelSeeds = !read ? [] : local ? localSeeds(read.topics.length ? read.topics : read.searches, places) : [...read.topics, ...read.searches];
-    // Each run starts further along the list, so later runs reach searches earlier ones did not.
-    const start = modelSeeds.length ? (Math.max(0, context.round - 1) * 6) % modelSeeds.length : 0;
-    const seeds = [...new Set([...modelSeeds.slice(start), ...modelSeeds.slice(0, start), ...context.seeds])];
-    const known = new Set(context.known);
+    // The short category topics first: phrase-match suggestions extend them into many searches, and a 4-5 word
+    // search into almost none (P172: P171 rotated by run, so long-running sites asked the long searches first and
+    // pentra.dev found 44 searches). Later runs reach new searches because covered and dropped ones are excluded.
+    const topics = !read ? [] : local ? localSeeds(read.topics.length ? read.topics : read.searches, places) : read.topics;
+    const seeds = [...new Set([...topics, ...(read && !local ? read.searches : []), ...context.seeds])];
+    // Topics it has and searches the buyer-fit model already dropped for this profile (P172) are not asked again.
+    const known = new Set([...context.known, ...context.dropped]);
     const coverage = context.coverage.map(primaryKeyword => ({ primaryKeyword }));
     // Only searches Autopilot could actually write count as found: not one it
     // has, not its own name, sharing a subject word with the business (the
@@ -133,8 +136,8 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
       const shared = { maximumDifficulty: ceiling, excludeKeyword: exclusion, onDiagnostics: seen,
         ...(tenantAuthority !== null ? { tenantAuthority } : {}) };
       if (seeds.length > 0) {
-        // Phrase-match suggestions for the business's topics and Google's related searches for the first two.
-        await take(() => discoverKeywords(seeds, location, context.language, 80, { ...shared, maxGoogleAdsBatches: 0, maxLabsSeeds: 6,
+        // Phrase-match suggestions for the business's topics (then its searches) and Google's related searches for the first two.
+        await take(() => discoverKeywords(seeds, location, context.language, 80, { ...shared, maxGoogleAdsBatches: 0, maxLabsSeeds: 8,
           maxRelatedSeeds: 2, useKeywordIdeas: false, minimumResults: 30, expandProductAnchors: true }));
         // Category ideas range wider: asked only when the topics found too few.
         if (found.size < 15) await take(() => discoverKeywords(seeds, location, context.language, 40, { ...shared, maxGoogleAdsBatches: 0,
@@ -192,7 +195,8 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
     // What this run saw is kept with the outcome, so a thin run can be explained.
     const research = { seeds: seeds.slice(0, 15), searchConsole: searchConsole.length, discovered: discovery.unique,
       excludedKnown: discovery.excluded.already_known, excludedFit: discovery.excluded.product_fit, excludedIntent: discovery.excluded.existing_intent,
-      seedSource: read ? "model" as const : "site" as const, judged: fit.size, kept: [...fit.values()].filter(verdict => verdict.keep).length };
+      seedSource: read ? "model" as const : "site" as const, judged: fit.size, kept: [...fit.values()].filter(verdict => verdict.keep).length,
+      method: TOPIC_RESEARCH_METHOD };
     const result: { added: number } = await ctx.runMutation(internal.contentWork.addResearchedTopics, { siteId, keywords, research });
     return result;
   } });

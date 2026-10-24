@@ -4,7 +4,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ConvexError, v } from "convex/values";
 import { contentIntentConflicts, evaluateTopicBusinessFit, tenantDiscoveryAnchors, tenantTopicBusinessSignals, isSealedReady } from "./lib/autopilotBuffer";
-import { normalizeResearchKeyword, researchSeedsForRound, searchLikePhrase, searchSeedLength } from "./lib/researchSeeds";
+import { normalizeResearchKeyword, researchSeedsForRound, searchLikePhrase, searchSeedLength, TOPIC_RESEARCH_METHOD } from "./lib/researchSeeds";
 import { publicationArtifactHash, publicationDeliveryConfig, sha256Hex } from "./lib/publicationArtifact";
 import { isProviderRequestRefusal, legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain, gscConnectionMatchesCurrentDomain } from "./lib/siteDomainBinding";
@@ -214,15 +214,20 @@ export function topicRunwayTarget(intervalMs: number) {
   return Math.max(3, Math.min(12, Math.ceil(4 * 86_400_000 / Math.max(intervalMs, 3_600_000))));
 }
 export function topicResearchDueAt(schedule: { intervalMs: number; topicsReplenishAdded?: number; topicsReplenishedAt?: number;
-  topicsResearchReceipt?: { seedSource?: string } }) {
-  // A site whose last research ran before P171 researches again a day after it, without waiting for its topics to run low.
-  if (researchMethodOutdated(schedule)) return (schedule.topicsReplenishedAt ?? 0) + TOPIC_REPLENISH_MIN_GAP_MS;
+  topicsResearchReceipt?: { seedSource?: string; method?: number } }) {
+  // A site whose last research used an earlier method researches again an hour after it, without waiting for its topics to run low.
+  if (researchMethodOutdated(schedule)) return (schedule.topicsReplenishedAt ?? 0) + TOPIC_RESEARCH_METHOD_CHANGE_GAP_MS;
   return (schedule.topicsReplenishedAt ?? 0) + topicResearchGapMs(schedule);
 }
-/** P171 (Oct 24 2026): research reads the business's searches from its confirmed profile (receipts say seedSource). */
-export function researchMethodOutdated(schedule: { topicsResearchReceipt?: { seedSource?: string } }) {
-  return Boolean(schedule.topicsResearchReceipt) && schedule.topicsResearchReceipt!.seedSource === undefined;
+/** A research run with an earlier method than TOPIC_RESEARCH_METHOD (convex/lib/researchSeeds.ts) is redone, once. */
+const TOPIC_RESEARCH_METHOD_CHANGE_GAP_MS = 60 * 60_000;
+export function researchMethodOutdated(schedule: { topicsResearchReceipt?: { seedSource?: string; method?: number } }) {
+  const receipt = schedule.topicsResearchReceipt;
+  // Receipts before P172 carry no method: P171's carry a seed source (method 1), older ones neither (0).
+  return Boolean(receipt) && (receipt!.method ?? (receipt!.seedSource ? 1 : 0)) < TOPIC_RESEARCH_METHOD;
 }
+/** P172: the newest searches the buyer-fit model dropped that research reads back (about seven runs' worth). */
+const TOPIC_RESEARCH_DROPS_READ = 600;
 /** An Autopilot article waits for fresh keyword research only while its slot is at least this far away. */
 const TOPIC_RESEARCH_WAIT_MARGIN_MS = 90 * 60_000;
 /** Autopilot writes for searched keywords: when none is left, research new
@@ -1617,12 +1622,21 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
     const inventory = await eligiblePlannedTopics(ctx, site);
     coverage = [...new Set([...known, ...inventory.pageCoverage.map(c => normalizeResearchKeyword(c.primaryKeyword ?? ""))].filter(Boolean))];
   } catch { /* an incomplete inventory keeps the topic list only */ }
-  return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds, known, coverage,
-    round: site.contentSchedule.topicsResearchRound ?? 1, signals, searchConsole: searchConsoleTopicCandidatesFrom(site, searches),
+  // P172: searches the buyer-fit model already dropped for this profile are not judged again.
+  const profileHash = confirmedContentProfileHash(site);
+  const dropped = [...new Set((await ctx.db.query("topic_research_drops").withIndex("by_site_dropped", q => q.eq("siteId", siteId)).order("desc")
+    .take(TOPIC_RESEARCH_DROPS_READ)).filter(d => d.profileHash === profileHash).map(d => d.keyword))];
+  return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds, known, coverage, dropped,
+    signals, searchConsole: searchConsoleTopicCandidatesFrom(site, searches),
     tenantAuthority: storedTenantAuthority(site) ?? null,
     canonicalDomain: siteCanonicalDomain(site) ?? site.domain, domainRevision: siteCanonicalDomainRevision(site),
     business: buyerFitBusiness(site), maximumDifficulty: siteDifficultyCeiling(site) };
 } });
+
+/** Operator read (P172): the newest searches keyword research's buyer-fit call dropped for a site, and why. */
+export const researchDropsInternal = internalQuery({ args: { siteId: v.id("sites"), limit: v.optional(v.number()) }, handler: async (ctx, { siteId, limit }) =>
+  (await ctx.db.query("topic_research_drops").withIndex("by_site_dropped", q => q.eq("siteId", siteId)).order("desc")
+    .take(Math.max(1, Math.min(200, Math.floor(limit ?? 50))))).map(d => ({ keyword: d.keyword, reason: d.reason, droppedAt: d.droppedAt })) });
 
 /** P105: the business as the buyer-fit check sees it (the owner's confirmed profile). */
 function buyerFitBusiness(site: Doc<"sites">): BuyerFitBusiness {
@@ -1983,10 +1997,15 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
     research: v.optional(v.object({ seeds: v.array(v.string()), searchConsole: v.number(), discovered: v.optional(v.number()),
       excludedKnown: v.optional(v.number()), excludedFit: v.optional(v.number()), excludedIntent: v.optional(v.number()),
       // P171: where the seeds came from ("model": read from the confirmed profile) and the buyer-fit call's verdicts.
-      seedSource: v.optional(v.union(v.literal("model"), v.literal("site"))), judged: v.optional(v.number()), kept: v.optional(v.number()) })) },
+      seedSource: v.optional(v.union(v.literal("model"), v.literal("site"))), judged: v.optional(v.number()), kept: v.optional(v.number()),
+      method: v.optional(v.number()) })) },
   handler: async (ctx, { siteId, keywords, research }) => {
     const site = await ctx.db.get(siteId);
     if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return { added: 0 };
+    // P172: what the buyer-fit model dropped is remembered for this profile, so the next run reaches new searches.
+    const profileHash = confirmedContentProfileHash(site), droppedAt = Date.now();
+    for (const k of keywords) if (k.fit && !k.fit.keep) await ctx.db.insert("topic_research_drops", { siteId,
+      keyword: normalizeResearchKeyword(k.keyword), profileHash, reason: k.fit.reason.slice(0, 160), droppedAt });
     const result = await insertCandidateTopics(ctx, site, keywords, k => k.source === "search_console"
       ? `Search Console: this site was shown ${k.searchVolume} times in 28 days for this search${typeof k.position === "number" ? ` at average position ${k.position}` : ""}, with no article of its own. Use only supported business facts.`
       : "Researched keyword (search demand from DataForSEO) for the confirmed business. Use only supported business facts.");
@@ -1998,6 +2017,7 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
         excludedFit: research.excludedFit ?? 0, excludedIntent: research.excludedIntent ?? 0 } : {}),
       ...(research?.seedSource ? { seedSource: research.seedSource } : {}),
       ...(research?.judged !== undefined ? { judged: research.judged, kept: research.kept ?? 0 } : {}),
+      ...(research?.method !== undefined ? { method: research.method } : {}),
       offered: keywords.length, added, skippedShape: skipped.shape, skippedDifficulty: skipped.difficulty,
       skippedCompetitor: skipped.competitor, skippedFit: skipped.fit, skippedIntent: skipped.intent, skippedBuyerFit: skipped.buyerFit };
     if (site.contentSchedule) await ctx.db.patch(siteId, { contentSchedule: { ...site.contentSchedule, topicsReplenishAdded: added,

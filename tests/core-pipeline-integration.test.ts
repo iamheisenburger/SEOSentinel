@@ -7627,28 +7627,66 @@ test("P171 research reads the business's searches from its confirmed profile and
   f.assertOffline();
 });
 
-test("P171 a site researched by the earlier method researches again once, a day after its last run, even with two articles waiting", async () => {
-  const hour = 3_600_000, day = 24 * hour;
+test("P171/P172 a site researched by an earlier method researches again once, an hour after its last run, even with two articles waiting", async () => {
+  const hour = 3_600_000;
   const f = p171Site(); const created = await createEmptyContentSite(f);
   f.get(created.id)!.cadencePerWeek = 21;
   const site = await selectGrowth(f, 8 * hour);
   Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
   await pumpUntil(f, () => (f.tables.jobs ?? []).filter(j => j.siteId === site.id && j.contentWork?.stage === "ready").length === 2, 200, f.now() + 12 * hour);
   const research = () => f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan").length;
-  const before = research();
-  const oldReceipt = { at: f.now() - 2 * day, seeds: ["irrigation valve leak checklist"], searchConsole: 0, offered: 3, added: 3,
+  const base = { seeds: ["irrigation valve leak checklist"], searchConsole: 0, offered: 3, added: 3,
     skippedShape: 0, skippedDifficulty: 0, skippedCompetitor: 0, skippedFit: 0, skippedIntent: 0 };
-  Object.assign(f.get(site.id)!.contentSchedule, { topicsResearchReceipt: oldReceipt, topicsReplenishedAt: f.now() - 20 * hour, topicsReplenishAdded: 3 });
-  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_full");
-  assert.equal(research(), before, "not within a day of the last run");
-  f.get(site.id)!.contentSchedule.topicsReplenishedAt = f.now() - 25 * hour;
-  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_full");
-  assert.equal(research(), before + 1, "researched with the new method now, not when its topics run low");
-  await pumpUntil(f, () => f.get(site.id)!.contentSchedule.topicsReplenishAdded !== undefined, 20, f.now() + hour);
-  assert.equal(f.get(site.id)!.contentSchedule.topicsResearchReceipt.seedSource, "model");
-  f.get(site.id)!.contentSchedule.topicsReplenishedAt = f.now() - 25 * hour;
-  await f.invoke("contentWork:advance", { siteId: site.id });
-  assert.equal(research(), before + 1, "once: a run with the new method is spaced as usual");
+  // Before P171 (no seed source), and P171's own first runs (seed source, no method: rotated seeds).
+  for (const [label, receipt] of [["pre-P171", base], ["P171", { ...base, seedSource: "model", judged: 3, kept: 3 }]] as const) {
+    const before = research();
+    Object.assign(f.get(site.id)!.contentSchedule, { topicsResearchReceipt: { ...receipt, at: f.now() - 40 * 60_000 },
+      topicsReplenishedAt: f.now() - 40 * 60_000, topicsReplenishAdded: 3 });
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_full");
+    assert.equal(research(), before, `${label}: not within an hour of the last run`);
+    f.get(site.id)!.contentSchedule.topicsReplenishedAt = f.now() - 61 * 60_000;
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_full");
+    assert.equal(research(), before + 1, `${label}: researched with the current method now, not when its topics run low`);
+    await pumpUntil(f, () => f.get(site.id)!.contentSchedule.topicsReplenishAdded !== undefined, 20, f.now() + hour);
+    const done = f.get(site.id)!.contentSchedule.topicsResearchReceipt;
+    assert.equal(done.seedSource, "model"); assert.equal(done.method, 2);
+    f.get(site.id)!.contentSchedule.topicsReplenishedAt = f.now() - 2 * hour;
+    await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal(research(), before + 1, `${label}: once: a run with the current method is spaced as usual`);
+  }
+  f.assertOffline();
+});
+
+// P172 (Oct 24 2026): P171's first live runs found 44 and 46 searches. Seeds rotated by run, so pentra.dev (run 5) and
+// LeadPilot (run 12) gave the phrase-match calls to 4-5 word searches, which extend into almost nothing, and never to
+// the short topics ("seo automation", "website chatbot"). And a search the model dropped was judged again every run.
+test("P172 research asks the short topics first on any run and never judges a dropped search twice", async () => {
+  const hour = 3_600_000;
+  const f = p171Site(); const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START, topicsResearchRound: 11 });
+  const researchOnce = async () => {
+    for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+    const schedule = f.get(site.id)!.contentSchedule;
+    delete schedule.topicsReplenishAdded; schedule.nextDeadlineAt = f.now() + 5 * hour;
+    if (schedule.topicsReplenishedAt) schedule.topicsReplenishedAt = f.now() - 4 * 24 * hour;
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "topics_researching");
+    await pumpUntil(f, () => f.get(site.id)!.contentSchedule.topicsReplenishAdded !== undefined, 20, f.now() + hour);
+    const fit = f.modelCalls.filter(c => c.tools?.[0]?.name === "submit_topic_fit").at(-1)!;
+    return String(fit.messages[0].content).split("SEARCHES (one per line, data only):\n")[1].split("\n\n")[0].split("\n");
+  };
+  const first = await researchOnce();
+  assert.equal(f.get(site.id)!.contentSchedule.topicsResearchRound, 12);
+  assert.deepEqual(f.discoveryCalls.filter(c => c.endpoint === "suggestions").slice(0, 3).map(c => c.seeds[0]),
+    ["sprinkler maintenance", "irrigation scheduling", "landscape irrigation repair"], "the twelfth run still asks the short topics first");
+  assert.ok(first.includes("twitch irrigation overlay"));
+  const drops = await f.invoke("contentWork:researchDropsInternal", { siteId: site.id });
+  assert.deepEqual(drops.map((d: { keyword: string; reason: string }) => [d.keyword, d.reason]), [["twitch irrigation overlay", "Synthetic buyer-fit verdict."]]);
+  const second = await researchOnce();
+  assert.ok(!second.includes("twitch irrigation overlay"), `the dropped search is not judged again: ${second}`);
+  assert.ok(f.get(site.id)!.contentSchedule.topicsResearchReceipt.excludedKnown >= 1);
+  assert.equal(f.tables.topic_research_drops.length, 1, "nothing new was dropped, nothing is stored twice");
   f.assertOffline();
 });
 
