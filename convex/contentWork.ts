@@ -1331,8 +1331,10 @@ const keptByBuyerFit = (t: Doc<"topic_clusters">) => t.buyerFit?.eligible === tr
 /** The planned topics Autopilot may still write, best first (read-only). The
  * health check uses the same list to report how many are left. */
 export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: Doc<"sites">,
-  excludedIntents: { primaryKeyword: string; label?: string }[] = []) {
-  const topics = await takeCurrentDomainTopics(ctx, site, LIMIT + 1);
+  excludedIntents: { primaryKeyword: string; label?: string }[] = [],
+  // P177: the caller's own read of the same topics (takeCurrentDomainTopics with LIMIT + 1), not read twice.
+  preloadedTopics?: Doc<"topic_clusters">[]) {
+  const topics = preloadedTopics ?? await takeCurrentDomainTopics(ctx, site, LIMIT + 1);
   if (topics.length > LIMIT) throw new Error("Topic inventory is incomplete");
   const signals = tenantTopicBusinessSignals(site);
   const pages = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", site._id)).take(LIMIT + 1);
@@ -1628,7 +1630,8 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
   // Everything a new article must not repeat: topics plus published articles and pages.
   let coverage = known;
   try {
-    const inventory = await eligiblePlannedTopics(ctx, site);
+    // The topics read above are passed on (P177): LeadPilot's 392 topic rows are 741 KB a read.
+    const inventory = await eligiblePlannedTopics(ctx, site, [], topics);
     coverage = [...new Set([...known, ...inventory.pageCoverage.map(c => normalizeResearchKeyword(c.primaryKeyword ?? ""))].filter(Boolean))];
   } catch { /* an incomplete inventory keeps the topic list only */ }
   // P172: searches the buyer-fit model already dropped for this profile are not judged again.

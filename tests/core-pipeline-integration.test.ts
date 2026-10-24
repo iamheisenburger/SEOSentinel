@@ -5,7 +5,7 @@ import test, { type TestContext } from "node:test";
 import { createHash } from "node:crypto";
 import { corePipelineFixture, START, type Fields } from "./helpers/core-pipeline-fixture.ts";
 import { publicationArtifactHash, publicationDeliveryKey, sha256Hex } from "../convex/lib/publicationArtifact.ts";
-import { approvedBufferPolicy, contentIntentConflicts, evaluateTopicBusinessFit, tenantTopicBusinessSignals } from "../convex/lib/autopilotBuffer.ts";
+import { approvedBufferPolicy, contentIntentConflicts, evaluateTopicBusinessFit, reliableSerpFingerprint, tenantTopicBusinessSignals } from "../convex/lib/autopilotBuffer.ts";
 import { PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD } from "../convex/lib/providerSpendReservation.ts";
 import { articleGenerationAttemptAllowance } from "../convex/lib/articleGenerationAttempt.ts";
 import { renderSafePublicationHtml } from "../convex/lib/safeMarkdownHtml.ts";
@@ -7765,6 +7765,32 @@ test("P174 a search the buyer-fit model kept is accepted with reviewer notes and
   assert.equal(article.editorialQualityScore, 62, "accepted with the reviewer's notes (rule 2a), not chased to 85");
   assert.equal(job.contentWork.revisions ?? 0, 0, "no paid revision chased the scores");
   assert.ok(!f.tables.topic_clusters.some(t => t.siteId === site.id && t.status === "disqualified"));
+  f.assertOffline();
+});
+
+// P177 (Oct 24 2026): LeadPilot's research context took 857 ms of Convex's 1-second query limit: it read the site's
+// 392 topic rows (741 KB) twice and re-tokenized ~78,000 keyword texts and SERP URL lists from scratch.
+test("P177 the research context reads the topic list once, and keyword work is cached", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await selectGrowth(f);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const saved = f.get(site.id)!;
+  for (const [keyword, status] of [["irrigation valve leak checklist", "used"], ["irrigation pump inspection workflow", "planned"],
+    ["seasonal irrigation pump maintenance", "disqualified"]] as const) f.add("topic_clusters", { siteId: site.id, primaryKeyword: keyword, label: keyword,
+    planningCanonicalDomain: saved.canonicalDomain ?? saved.domain, planningDomainRevision: saved.canonicalDomainRevision ?? 0,
+    secondaryKeywords: [], intent: "informational", priority: 50, status, searchVolume: 100, keywordDifficulty: 5,
+    keywordDifficultyMeasured: true, createdAt: f.now(), updatedAt: f.now() });
+  const before = f.queryReads.length;
+  const context = await f.invoke("contentWork:growthTopicContext", { siteId: site.id });
+  assert.ok(context && context.known.length > 0);
+  const topicReads = f.queryReads.slice(before).filter(read => read.table === "topic_clusters");
+  assert.equal(topicReads.length, 1, `topic rows are read once: ${JSON.stringify(topicReads.map(read => read.index))}`);
+  const urls = Array.from({ length: 10 }, (_, i) => `https://guide${i}.example/irrigation-checklist`);
+  const fingerprint = reliableSerpFingerprint(urls);
+  assert.equal(fingerprint.length, 10); assert.ok(Object.isFrozen(fingerprint), "a cached fingerprint cannot be changed by a caller");
+  assert.equal(reliableSerpFingerprint([...urls]), fingerprint, "the same URL list is parsed once");
+  assert.ok(contentIntentConflicts({ primaryKeyword: "irrigation valve leak checklist" }, { primaryKeyword: "Irrigation valve leak checklists" }));
+  assert.ok(!contentIntentConflicts({ primaryKeyword: "irrigation valve leak checklist" }, { primaryKeyword: "pump shutdown planning" }));
   f.assertOffline();
 });
 

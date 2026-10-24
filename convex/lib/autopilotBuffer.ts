@@ -513,16 +513,15 @@ export function currentHealthOutcome(args: {
   return args.lastOutcome;
 }
 
-function keywordTokens(value: string): string[] {
-  const stopWords = new Set([
+const KEYWORD_STOP_WORDS = new Set([
     "the", "and", "for", "with", "how", "what", "why", "are", "can",
     "your", "that", "this", "from", "have", "will", "when", "use", "using",
     "guide", "tips",
     // Question filler: "how often should a small business publish blog posts"
     // asks what "how often small business publish blog" asks (Oct 21 2026).
     "should", "does", "you", "need", "much", "many",
-  ]);
-  const aliases = new Map([
+]);
+const KEYWORD_ALIASES = new Map([
     ["automated", "automate"],
     ["automation", "automate"],
     ["automating", "automate"],
@@ -543,15 +542,31 @@ function keywordTokens(value: string): string[] {
     ["prospects", "prospect"],
     ["visitors", "visitor"],
     ["websites", "website"],
-  ]);
+]);
+/**
+ * P177 (Oct 24 2026): keyword tokens are a pure function of the text. One
+ * topic inventory compares ~40,000 pairs of ~1,500 distinct texts (LeadPilot:
+ * 34 writable topics against every covered topic, page and article), and
+ * tokenizing both sides of every pair from scratch, word lists included, took
+ * a large share of the research query's 1-second limit (857 ms on Oct 24).
+ * Results are cached (frozen, so no caller can change a shared one).
+ */
+const KEYWORD_TOKEN_CACHE = new Map<string, readonly string[]>();
+const KEYWORD_TOKEN_CACHE_MAX = 20_000;
+function keywordTokens(value: string): string[] {
+  const cached = KEYWORD_TOKEN_CACHE.get(value);
+  if (cached) return cached as string[];
   const normalized = value
     .toLowerCase()
     .replace(/\b(?:conversational[ -]+ai|artificial[ -]+intelligence[ -]+chatbots?|ai[ -]+chatbots?|chat[ -]+bots?)\b/g, "chatbot")
     .replace(/\bvirtual[ -]+assistants?\b/g, "chatbot");
-  return normalized
+  const tokens = normalized
     .split(/[^a-z0-9]+/)
-    .filter((word) => word.length >= 3 && !stopWords.has(word))
-    .map((word) => aliases.get(word) ?? singularWord(word));
+    .filter((word) => word.length >= 3 && !KEYWORD_STOP_WORDS.has(word))
+    .map((word) => KEYWORD_ALIASES.get(word) ?? singularWord(word));
+  if (KEYWORD_TOKEN_CACHE.size >= KEYWORD_TOKEN_CACHE_MAX) KEYWORD_TOKEN_CACHE.clear();
+  KEYWORD_TOKEN_CACHE.set(value, Object.freeze(tokens));
+  return tokens;
 }
 
 /** "posts" is "post": a plural never makes a second intent ("business", "status" and "analysis" stay). */
@@ -671,12 +686,22 @@ function normalizeSerpUrl(value: string): string | undefined {
   }
 }
 
+/** Normalized top-10 URLs, cached by the exact URL list (P177): an inventory
+ * compares each topic's SERP with every covered topic's, and parsed the same
+ * URLs again for every pair. */
+const SERP_FINGERPRINT_CACHE = new Map<string, readonly string[]>();
 export function reliableSerpFingerprint(urls: string[] | undefined): string[] {
-  return [...new Set(
-    (urls ?? [])
+  if (!urls?.length) return [];
+  const key = urls.join("\n"), cached = SERP_FINGERPRINT_CACHE.get(key);
+  if (cached) return cached as string[];
+  const fingerprint = [...new Set(
+    urls
       .map(normalizeSerpUrl)
       .filter((url): url is string => Boolean(url)),
   )].slice(0, 10);
+  if (SERP_FINGERPRINT_CACHE.size >= KEYWORD_TOKEN_CACHE_MAX) SERP_FINGERPRINT_CACHE.clear();
+  SERP_FINGERPRINT_CACHE.set(key, Object.freeze(fingerprint));
+  return fingerprint;
 }
 
 export function hasReliableSerpFingerprint(
@@ -747,10 +772,19 @@ export function filterNonCannibalizingSerpTopics<
 }
 
 /** Positive wording evidence for growth-first topics without reliable SERPs. */
+const INTENT_FRAMING_WORDS = new Set(["best", "top", "practical", "automate", "model", "b2b", "b2c", "ai", "saas", "tool", "tools", "software"]);
+const INTENT_TOKEN_CACHE = new Map<string, readonly string[]>();
+/** The distinct tokens of a keyword without framing words (cached, P177). */
+function intentTokens(value: string): string[] {
+  const cached = INTENT_TOKEN_CACHE.get(value);
+  if (cached) return cached as string[];
+  const tokens = [...new Set(keywordTokens(value).filter(token => !INTENT_FRAMING_WORDS.has(token)))];
+  if (INTENT_TOKEN_CACHE.size >= KEYWORD_TOKEN_CACHE_MAX) INTENT_TOKEN_CACHE.clear();
+  INTENT_TOKEN_CACHE.set(value, Object.freeze(tokens));
+  return tokens;
+}
 function positiveKeywordIntentOverlap(left: string, right: string, minimumOverlap = 0.35): boolean {
-  const framing = new Set(["best", "top", "practical", "automate", "model", "b2b", "b2c", "ai", "saas", "tool", "tools", "software"]);
-  const tokens = (value: string) => [...new Set(keywordTokens(value).filter(token => !framing.has(token)))];
-  const a = tokens(left), b = tokens(right);
+  const a = intentTokens(left), b = intentTokens(right);
   if (a.length === 0 || b.length === 0) return left.trim().toLowerCase() === right.trim().toLowerCase();
   const shared = new Set(a.filter(token => b.includes(token)));
   if (shared.size === a.length && shared.size === b.length) return true;
