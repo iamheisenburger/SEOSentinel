@@ -9344,6 +9344,54 @@ test("C1b the operator repairs pipeline wording on a live page: provider-free, e
   f.assertOffline();
 });
 
+// P176 (Oct 24 2026): a live scan found 34 Related reading entries cut at the old 8-word anchor cap ("What Is an
+// AI Sales Agent? How It" on 9 LeadPilot pages). Autopilot completes them on its own enrolled pages through the
+// exact correction path: provider-free, live-verified, reversible, and never while a slot is near.
+test("P176 Autopilot completes a cut Related reading title on its own page: exact, live-verified, reversible, never near a slot", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const cut = "- [What Is an AI Sales Agent? How It](/blog/ai-sales-agent)";
+  const whole = "- [What Is an AI Sales Agent? How It Works and Why Websites Need One](/blog/ai-sales-agent)";
+  const selected = await selectExistingPage(f, "md", `${correctionSurvivor}\n\n## Related reading\n\n${cut}`);
+  const site = await selectGrowth(f, 8 * 3_600_000), saved = f.get(site.id)!;
+  Object.assign(saved.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  saved.gscDateEpochs = [];
+  f.add("article_summaries", { siteId: site.id, slug: "ai-sales-agent", title: "What Is an AI Sales Agent? How It Works and Why Websites Need One",
+    status: "published", canonicalDomain: saved.canonicalDomain ?? saved.domain, domainRevision: saved.canonicalDomainRevision ?? 0,
+    createdAt: f.now(), updatedAt: f.now() });
+  const ready = () => (f.tables.jobs ?? []).filter(j => j.contentWork?.stage === "ready");
+  await pumpUntil(f, () => ready().length === 2);
+  const repairs = () => (f.tables.jobs ?? []).filter(j => j.contentWork?.operation === "related_reading_titles");
+  assert.equal(repairs().length, 0, "nothing is asked while a slot is near");
+  // Both slots well ahead: the repair may run in the gap.
+  const shift = 12 * 3_600_000;
+  f.get(site.id)!.contentSchedule.nextDeadlineAt += shift;
+  for (const job of ready()) Object.assign(job.contentWork, { deadlineAt: job.contentWork.deadlineAt + shift,
+    windowStartAt: job.contentWork.windowStartAt + shift, windowWakeId: undefined });
+  const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt, calls = f.modelCalls.length, original = f.get(selected.pageId)!.editable.sourceContent;
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_full");
+  await pumpUntil(f, () => repairs().some(j => j.contentWork.stage === "verified"), 100, deadline - 5 * 60_000);
+  const page = f.get(selected.pageId)!;
+  assert.ok(page.editable.markdown.includes(whole) && !page.editable.markdown.includes(cut), page.editable.markdown);
+  assert.ok(page.editable.markdown.includes(correctionSurvivor), "the rest of the page is unchanged");
+  assert.ok(f.repositories.get(site.name.toLowerCase())!.files.get(selected.path)!.includes(whole), "the GitHub source has the whole title");
+  assert.equal(f.modelCalls.length, calls, "no model runs");
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, deadline, "the cadence is untouched");
+  const revision = f.get(repairs()[0].contentWork.revisionId)!;
+  assert.equal(revision.kind, "editorial_correction"); assert.equal(revision.status, "verified");
+  // Nothing is left to repair: a later pass asks nothing and rests.
+  f.setTime(f.now() + 3_600_000);
+  await f.invoke("contentWork:advance", { siteId: site.id });
+  await pumpUntil(f, () => f.get(site.id)!.contentSchedule.relatedRepairCleanAt !== undefined, 120, deadline - 5 * 60_000);
+  assert.equal(repairs().length, 1, "one repair for one cut page");
+  // Reversible, like every correction.
+  f.setIdentity(`synthetic-owner-${site.domain}`);
+  const rollback = await f.invoke("contentImprovements:requestRollback", { siteId: site.id, revisionId: revision._id, confirm: true });
+  f.setIdentity(null);
+  await pumpUntil(f, () => f.get(rollback)!.contentWork.stage === "verified", 100, deadline - 5 * 60_000);
+  assert.equal(f.get(selected.pageId)!.editable.sourceContent, original, "the repair is reversible");
+  f.assertOffline();
+});
+
 // C1b (Oct 19 2026): live checks run five times in about five minutes. The
 // first wording repair on leadpilot.chat was live, yet every check failed and
 // nothing looked again: the owner saw a failure and the page kept its old source.

@@ -5,6 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { ConvexError, v } from "convex/values";
 import { contentIntentConflicts, evaluateTopicBusinessFit, tenantDiscoveryAnchors, tenantTopicBusinessSignals, isSealedReady, topicFitSettled } from "./lib/autopilotBuffer";
 import { normalizeResearchKeyword, researchSeedsForRound, searchLikePhrase, searchSeedLength, TOPIC_RESEARCH_METHOD } from "./lib/researchSeeds";
+import { relatedRepairAllowed } from "./lib/contentCorrection";
 import { publicationArtifactHash, publicationDeliveryConfig, sha256Hex } from "./lib/publicationArtifact";
 import { isProviderRequestRefusal, legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain, gscConnectionMatchesCurrentDomain } from "./lib/siteDomainBinding";
@@ -2269,6 +2270,8 @@ export const advance = internalMutation({
         const [fresh, pricing] = [await ctx.db.get(siteId), await pricingConfiguration(ctx, site)];
         if (fresh && pricing) await startTopicResearchIfDue(ctx, fresh, pricing.budgetMicroUsd);
       }
+      // P176: Autopilot completes Related reading titles it once cut, one page at a time, only while the next slot is far.
+      if (relatedRepairAllowed(site, Date.now())) await ctx.scheduler.runAfter(0, internal.contentImprovements.requestRelatedReadingRepair, { siteId });
       return { scheduled: 0, mode: "buffer_full" };
     }
     if (schedule.autopilotSelectedAt) {

@@ -5,11 +5,12 @@ import { renderSafePublicationHtml } from "./safeMarkdownHtml.ts";
 import { isApiCmsMethod } from "./cmsDestinations.ts";
 
 export type CorrectiveInput = {
-  kind: "factual_correction" | "technical_repair" | "reader_text_repair";
+  kind: "factual_correction" | "technical_repair" | "reader_text_repair" | "related_reading_titles";
   before: string; reason: string; field?: "siteSummary" | "productUsage";
   targetUrl?: string;
-  /** reader_text_repair only: the exact paragraph written in place of the
-   * process wording ("" removes the paragraph). Stored as the patch's `after`. */
+  /** reader_text_repair: the exact paragraph written in place of the process
+   * wording ("" removes the paragraph); related_reading_titles: the exact
+   * repaired list. Stored as the patch's `after`. */
   replacement?: string;
 };
 export type CorrectivePatch = Omit<CorrectiveInput, "replacement"> & {
@@ -41,6 +42,59 @@ function readerTextRepair(markdown: string, before: string, replacement: string)
   if (otherDefects(next).some((defect) => !previous.has(defect))) throw new Error("The repair would leave another reader-visible defect on the page");
   return replacement;
 }
+/** P176 (Oct 24 2026): Pentra's Related reading list used to cut a linked
+ * article's title at the 8-word anchor cap ("What Is an AI Sales Agent? How
+ * It", on 9 LeadPilot pages). This repair only completes those titles: the
+ * same links in the same order, each changed link text extending its cut
+ * words into the whole title, and nothing else on the page. No model runs. */
+const RELATED_ENTRY = /^- \[([^\]\n]+)\]\(([^)\s]+)\)$/;
+const titleWords = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, " ").split(/\s+/).filter(Boolean);
+/** A link text cut from a title: its words are the title's first words, and fewer. */
+export function cutOfTitle(text: string, title: string): boolean {
+  const a = titleWords(text), t = titleWords(title);
+  return a.length > 0 && a.length < t.length && a.every((word, i) => t[i] === word);
+}
+function relatedTitlesRepair(markdown: string, before: string, replacement: string): string {
+  const blocks = markdown.split(/\n\s*\n/).map(block => block.trim()), at = blocks.indexOf(before);
+  if (at < 1 || !/^##\s+Related reading$/i.test(blocks[at - 1])) throw new Error("Only Pentra's Related reading list is repaired this way");
+  const was = before.split("\n").map(line => RELATED_ENTRY.exec(line)), now = replacement.split("\n").map(line => RELATED_ENTRY.exec(line));
+  if (was.some(entry => !entry) || now.length !== was.length || now.some(entry => !entry)) throw new Error("A Related reading repair keeps the exact list of links");
+  let changed = 0;
+  for (const [index, entry] of was.entries()) {
+    const [, oldText, href] = entry!, [, newText, newHref] = now[index]!;
+    if (newHref !== href) throw new Error("A Related reading repair cannot change a link");
+    if (newText === oldText) continue;
+    if (!cutOfTitle(oldText, newText) || titleWords(newText).length > 16 || newText.length > 120 || /[\[\](){}<>]/.test(newText)) {
+      throw new Error("A Related reading repair only completes a cut title");
+    }
+    changed++;
+  }
+  if (changed === 0) throw new Error("This Related reading list has no cut title to complete");
+  const next = exactReplacement(markdown, before, replacement);
+  const previous = new Set(readerVisibleDefects(markdown));
+  if (readerVisibleDefects(next).some((defect) => !previous.has(defect))) throw new Error("The repair would leave another reader-visible defect on the page");
+  return replacement;
+}
+/** The repair of a page's Related reading list from the live titles of the
+ * articles it links (href to title): each entry cut from its linked title gets
+ * the whole title (`wholeTitle`, relatedReadingTitle). Null when none is cut. */
+export function relatedReadingRepairProposal(markdown: string, titleByHref: Map<string, string>, wholeTitle: (title: string) => string | null) {
+  const blocks = markdown.split(/\n\s*\n/).map(block => block.trim());
+  const at = blocks.findIndex(block => /^##\s+Related reading$/i.test(block));
+  const before = at >= 0 ? blocks[at + 1] : undefined;
+  if (!before) return null;
+  const lines = before.split("\n");
+  if (lines.some(line => !RELATED_ENTRY.test(line))) return null;
+  let changed = false;
+  const repaired = lines.map(line => {
+    const [, text, href] = RELATED_ENTRY.exec(line)!;
+    const title = titleByHref.get(href), whole = title ? wholeTitle(title) : null;
+    if (!whole || whole === text || !cutOfTitle(text, whole)) return line;
+    changed = true;
+    return `- [${whole}](${href})`;
+  });
+  return changed ? { before, replacement: repaired.join("\n") } : null;
+}
 const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const plain = (s: string) => !/[\n\[\]`#*<>|{}]|https?:/i.test(s);
 
@@ -66,6 +120,10 @@ export function planCorrectiveChange(site: Doc<"sites">, page: Doc<"pages">, inp
   } else if (input.kind === "reader_text_repair") {
     if (input.field || input.targetUrl || input.replacement === undefined) throw new Error("A wording repair takes only the exact replacement paragraph");
     after = readerTextRepair(e.markdown, before, input.replacement);
+  } else if (input.kind === "related_reading_titles") {
+    if (input.field || input.targetUrl || input.replacement === undefined) throw new Error("A Related reading repair takes only the exact repaired list");
+    if (e.kind !== "github") throw new Error("A Related reading repair maps only to a GitHub Markdown source");
+    after = relatedTitlesRepair(e.markdown, before, input.replacement);
   } else {
     if (input.field || !input.targetUrl) throw new Error("Technical correction requires a verified same-site destination");
     const links = [...before.matchAll(/\[([^\]\n]+)\]\((https:\/\/[^\s)]+)\)/g)];
@@ -92,10 +150,25 @@ export function planCorrectiveChange(site: Doc<"sites">, page: Doc<"pages">, inp
   return { ...stored, after, sourceBefore: pair[0], sourceAfter: pair[1], ...(brokenUrl ? { brokenUrl } : {}) };
 }
 
+/** When Autopilot may request its next Related reading repair (P176): an
+ * Autopilot site publishing to GitHub, nothing paused or under owner review,
+ * the next slot at least six hours away (a repair never delays an article),
+ * 30 minutes after its last request, and a week after a pass found nothing. */
+export const RELATED_REPAIR_SLOT_LEAD_MS = 6 * 3_600_000, RELATED_REPAIR_SPACING_MS = 30 * 60_000, RELATED_REPAIR_REST_MS = 7 * 86_400_000;
+export function relatedRepairAllowed(site: Doc<"sites">, now: number): boolean {
+  const s = site.contentSchedule;
+  return Boolean(s && site.serviceMode === "growth_first" && site.autopilotEnabled && s.autopilotSelectedAt && s.autopublishConsentAt &&
+    !s.paused && !s.ownerReviewedOnly && !site.approvalRequired && (site.publishMethod ?? "github") === "github" &&
+    !site.deletionStatus && !site.accountDeletionRequestedAt && !site.publicationLeaseOwner &&
+    s.nextDeadlineAt - now >= RELATED_REPAIR_SLOT_LEAD_MS &&
+    (s.relatedRepairAt === undefined || now - s.relatedRepairAt >= RELATED_REPAIR_SPACING_MS) &&
+    (s.relatedRepairCleanAt === undefined || now - s.relatedRepairCleanAt >= RELATED_REPAIR_REST_MS));
+}
+
 export function verifyCorrectivePatch(site: Doc<"sites">, page: Doc<"pages">, patch: CorrectivePatch) {
   const expected = planCorrectiveChange(site, page, { kind: patch.kind, before: patch.before, reason: patch.reason,
     ...(patch.field ? { field: patch.field } : {}), ...(patch.targetUrl ? { targetUrl: patch.targetUrl } : {}),
-    ...(patch.kind === "reader_text_repair" ? { replacement: patch.after } : {}) });
+    ...(patch.kind === "reader_text_repair" || patch.kind === "related_reading_titles" ? { replacement: patch.after } : {}) });
   for (const key of ["after", "sourceBefore", "sourceAfter", "brokenUrl"] as const) if (expected[key] !== patch[key]) throw new Error("Correction lost its exact owner/source evidence");
   return exactReplacement(page.editable!.markdown, patch.before, patch.after);
 }

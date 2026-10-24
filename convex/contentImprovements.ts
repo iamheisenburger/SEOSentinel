@@ -1,6 +1,6 @@
 import { internalMutation, internalQuery, mutation, type QueryCtx, type MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { v } from "convex/values";
+import { v, type Infer } from "convex/values";
 import { authorizedWorkPage } from "./selectedPages";
 import { assertSafeImprovement, contentConnectionHash, confirmedContentProfileHash } from "./lib/contentSelection";
 import { isSealedReady } from "./lib/autopilotBuffer";
@@ -12,7 +12,9 @@ import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
 import { archiveConsumedImprovementArtifact } from "./articles";
 import type { Doc, Id } from "./_generated/dataModel";
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDomainBinding";
-import { verifyCorrectivePatch } from "./lib/contentCorrection";
+import { planCorrectiveChange, relatedReadingRepairProposal, relatedRepairAllowed, verifyCorrectivePatch } from "./lib/contentCorrection";
+import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
+import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { closeVerifiedContentWake } from "./jobs";
 
 /** `operator`: the deploy key acting on the owner's instruction (internal
@@ -57,7 +59,8 @@ export const correctionContext = internalQuery({ args: { siteId: v.id("sites"), 
     return { site, page, target: args.targetPageId ? await verifiedDestination(ctx, site, args.targetPageId) : null };
   } });
 export const priorCorrection = internalQuery({ args: { siteId: v.id("sites"), pageId: v.id("pages"), baseRevision: v.string(),
-  kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair")), before: v.string(), reason: v.string(),
+  kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"), v.literal("related_reading_titles")),
+  before: v.string(), reason: v.string(),
   field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))), targetPageId: v.optional(v.id("pages")),
   replacement: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -65,9 +68,11 @@ export const priorCorrection = internalQuery({ args: { siteId: v.id("sites"), pa
     const jobs = await pageWork(ctx, args.siteId, args.pageId);
     return jobs.find(j => { const cw = j.contentWork, c = cw?.correction; return cw?.targetPageId === args.pageId &&
       cw.baseRevision === args.baseRevision && c?.kind === args.kind && c.before === args.before && c.reason === args.reason &&
-      c.field === args.field && c.targetPageId === args.targetPageId && (args.kind !== "reader_text_repair" || c.after === args.replacement); })?._id ?? null;
+      c.field === args.field && c.targetPageId === args.targetPageId &&
+      (!["reader_text_repair", "related_reading_titles"].includes(args.kind) || c.after === args.replacement); })?._id ?? null;
   } });
-const correctivePatch = v.object({ kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair")),
+const correctivePatch = v.object({ kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"),
+  v.literal("related_reading_titles")),
   before: v.string(), after: v.string(), sourceBefore: v.string(), sourceAfter: v.string(), reason: v.string(),
   field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))),
   targetUrl: v.optional(v.string()), brokenUrl: v.optional(v.string()) });
@@ -76,7 +81,17 @@ export const requestCorrection = internalMutation({ args: { siteId: v.id("sites"
   operator: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<Id<"jobs">> => {
     if (args.operator && args.patch.kind !== "reader_text_repair") throw new Error("The operator path only repairs pipeline wording");
+    if (args.patch.kind === "related_reading_titles") throw new Error("Related reading title repairs are Autopilot's own");
     const site = await correctionOwner(ctx, args.siteId, args.operator === true);
+    return insertCorrectionJob(ctx, site, args, { opportunity: "Owner-confirmed exact correction; not scheduled SEO delivery or growth",
+      wake: "owner_confirmed_correction" });
+  } });
+
+/** One provider-free correction job for an exact patch to an enrolled page: every
+ * check runs before anything is written. */
+async function insertCorrectionJob(ctx: MutationCtx, site: Doc<"sites">, args: { pageId: Id<"pages">; baseRevision: string;
+  permissionVersion: number; patch: Infer<typeof correctivePatch>; targetPageId?: Id<"pages">; observedAt: number },
+  labels: { opportunity: string; wake: string }): Promise<Id<"jobs">> {
     const key = sha256Hex(JSON.stringify([site._id, args.pageId, args.baseRevision, args.permissionVersion, args.patch, args.targetPageId]));
     const jobs = await pageWork(ctx, site._id, args.pageId);
     const prior = jobs.find(j => j.contentWork?.correction?.key === key);
@@ -107,12 +122,56 @@ export const requestCorrection = internalMutation({ args: { siteId: v.id("sites"
         profileHash: e.profileHash, connectionHash: e.connectionHash, deadlineAt: Date.now(), windowStartAt: Date.now(),
         revisions: 0, replacements: 0, discardedArticleIds: [], budgetMicroUsd: 0, providerCalls: [],
         pricing: { model: "provider-free-owner-correction", inputMicroUsdPerToken: 0, outputMicroUsdPerToken: 0 },
-        opportunity: "Owner-confirmed exact correction; not scheduled SEO delivery or growth" }, createdAt: Date.now(), updatedAt: Date.now() });
+        opportunity: labels.opportunity }, createdAt: Date.now(), updatedAt: Date.now() });
     await ctx.db.patch(articleId, { contentWorkSourceJobId: jobId, contentWorkConsumedByJobId: jobId });
     await ctx.db.patch(page._id, { editable: { ...e, lastWorkJobId: jobId } });
-    await ctx.scheduler.runAfter(0, internal.autopilot.dispatchSiteFollowup, { siteId: site._id, trigger: "content_work", reason: "owner_confirmed_correction" });
+    await ctx.scheduler.runAfter(0, internal.autopilot.dispatchSiteFollowup, { siteId: site._id, trigger: "content_work", reason: labels.wake });
     return jobId;
-  } });
+}
+
+/** P176 (Oct 24 2026): Autopilot completes the Related reading link titles it
+ * once cut at its 8-word anchor cap (a live scan of the owner sites found 34,
+ * e.g. "What Is an AI Sales Agent? How It" on 9 LeadPilot pages), on its own
+ * enrolled GitHub pages: the exact correction path (provider-free, receipts,
+ * live check, rollback), one page at a time, never while a slot is near
+ * (relatedRepairAllowed). Pages are read RELATED_REPAIR_SCAN at a time from a
+ * cursor; a pass that finds nothing rests for a week. Consent is the site's
+ * Autopilot setup, which covers Pentra's own published pages. */
+const RELATED_REPAIR_SCAN = 20;
+const RELATED_REPAIR_REASON = "Autopilot completes Related reading link titles it cut at its old 8-word limit.";
+export const requestRelatedReadingRepair = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId), now = Date.now(), schedule = site?.contentSchedule;
+  if (!site || !schedule || !relatedRepairAllowed(site, now) || await siteHasActiveWork(ctx, siteId)) return { requested: false };
+  const summaries = (await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "published")).take(2001))
+    .filter(row => articleMatchesCurrentDomain(site, row));
+  const titles = new Map(summaries.map(row => [publishedArticleInternalHref(site.urlStructure, row.slug), row.title] as const));
+  const pages = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId).gt("_creationTime", schedule.relatedRepairCursor ?? 0))
+    .take(RELATED_REPAIR_SCAN);
+  for (const page of pages) {
+    const e = page.editable;
+    if (!e?.active || e.kind !== "github" || e.profileHash !== confirmedContentProfileHash(site) || e.connectionHash !== contentConnectionHash(site) ||
+      schedule.profileHash !== e.profileHash || schedule.connectionHash !== e.connectionHash) continue;
+    const proposal = relatedReadingRepairProposal(e.markdown, titles, relatedReadingTitle);
+    if (!proposal) continue;
+    // A page whose own work is unfinished (a refresh waiting for its slot) keeps
+    // its source: the repair would make that work's exact base stale.
+    const last = e.lastWorkJobId ? await ctx.db.get(e.lastWorkJobId) : null;
+    if (last && !["verified", "failed"].includes(last.contentWork?.stage ?? "")) continue;
+    let jobId: Id<"jobs">;
+    try {
+      const patch = planCorrectiveChange(site, page, { kind: "related_reading_titles", before: proposal.before,
+        replacement: proposal.replacement, reason: RELATED_REPAIR_REASON });
+      jobId = await insertCorrectionJob(ctx, site, { pageId: page._id, baseRevision: e.sourceRevision, permissionVersion: e.version, patch, observedAt: now },
+        { opportunity: "Autopilot completes its own cut Related reading titles; not scheduled SEO delivery or growth", wake: "related_reading_repair" });
+    } catch { continue; } // a layout the exact path cannot map: the page keeps its titles
+    await ctx.db.patch(siteId, { contentSchedule: { ...schedule, relatedRepairCursor: page._creationTime, relatedRepairAt: now }, updatedAt: now });
+    return { requested: true, jobId };
+  }
+  const passDone = pages.length < RELATED_REPAIR_SCAN;
+  await ctx.db.patch(siteId, { contentSchedule: { ...schedule, relatedRepairCursor: passDone ? 0 : pages.at(-1)!._creationTime, relatedRepairAt: now,
+    ...(passDone ? { relatedRepairCleanAt: now } : {}) }, updatedAt: now });
+  return { requested: false };
+} });
 
 async function assertCorrection(ctx: QueryCtx | MutationCtx, site: Doc<"sites">, page: Doc<"pages">, job: Doc<"jobs">, article: Doc<"articles">) {
   const cw = job.contentWork!, correction = cw.correction;
@@ -192,7 +251,7 @@ export const claim = internalMutation({ args: claimArgs, handler: async (ctx, ar
     const id = await ctx.db.insert("published_article_revisions", {
       siteId: site._id, articleId: article._id, contentWorkJobId: job._id, selectedPageId: page._id,
       ...(page.editable.managedArticleId ? { servedArticleId: page.editable.managedArticleId } : {}),
-      selectedSource: page.editable, actionFingerprint: cw.opportunity ?? "selected_page_improvement", kind: rollback ? "rollback" : correction?.kind === "factual_correction" || correction?.kind === "reader_text_repair" ? "editorial_correction" : correction ? "renderer_repair" : "content_improvement",
+      selectedSource: page.editable, actionFingerprint: cw.opportunity ?? "selected_page_improvement", kind: rollback ? "rollback" : correction?.kind === "factual_correction" || correction?.kind === "reader_text_repair" || correction?.kind === "related_reading_titles" ? "editorial_correction" : correction ? "renderer_repair" : "content_improvement",
       ...(rollback ? { rollbackOfRevisionId: rollback._id } : {}),
       revisionKey, status: "prepared", rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
       publicationConfigHash: article.publicationConfigHash!, publicationDate: 0, expectedPublicUrl: page.url,

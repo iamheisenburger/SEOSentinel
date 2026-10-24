@@ -22,6 +22,9 @@ export default defineSchema({
       topicsReplenishAdded: v.optional(v.number()),
       // Research runs so far; rotates which business anchors seed the next one.
       topicsResearchRound: v.optional(v.number()),
+      // P176: Autopilot's repair of Related reading titles cut at the old 8-word cap:
+      // the page scan's cursor, the last request, and when a full pass found nothing.
+      relatedRepairCursor: v.optional(v.number()), relatedRepairAt: v.optional(v.number()), relatedRepairCleanAt: v.optional(v.number()),
       // What the last research run saw: its seeds, what discovery found and
       // why candidates were not added (counts only).
       topicsResearchReceipt: v.optional(v.object({
@@ -1314,8 +1317,10 @@ export default defineSchema({
         sourceArticleId: v.optional(v.id("articles")), sourceArtifactHash: v.optional(v.string()) })),
       validationAuthorizationId: v.optional(v.id("provider_budget_authorizations")),
       intent: v.union(v.literal("create"), v.literal("improve")),
-      operation: v.optional(v.union(v.literal("rollback"), v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"))), rollbackOfRevisionId: v.optional(v.id("published_article_revisions")),
-      correction: v.optional(v.object({ key: v.string(), kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair")),
+      operation: v.optional(v.union(v.literal("rollback"), v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"),
+        v.literal("related_reading_titles"))), rollbackOfRevisionId: v.optional(v.id("published_article_revisions")),
+      correction: v.optional(v.object({ key: v.string(), kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"),
+        v.literal("related_reading_titles")),
         before: v.string(), after: v.string(), sourceBefore: v.string(), sourceAfter: v.string(), reason: v.string(),
         field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))),
         targetPageId: v.optional(v.id("pages")), targetUrl: v.optional(v.string()), brokenUrl: v.optional(v.string()), observedAt: v.number() })),
