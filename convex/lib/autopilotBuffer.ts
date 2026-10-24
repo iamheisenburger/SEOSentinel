@@ -542,6 +542,24 @@ const KEYWORD_ALIASES = new Map([
     ["prospects", "prospect"],
     ["visitors", "visitor"],
     ["websites", "website"],
+    // P178 (Oct 24 2026): "increase", "improving" and "optimization" ask the same
+    // thing of a metric. LeadPilot's research queued "how to increase conversion on
+    // website", "website conversion rate optimization", "improving website
+    // conversion rates" and "website conversion improvement" behind its article
+    // "how to increase conversion rate of website": four near-copies of one page.
+    ["increase", "improve"],
+    ["increasing", "improve"],
+    ["improving", "improve"],
+    ["improvement", "improve"],
+    ["improvements", "improve"],
+    ["boost", "improve"],
+    ["boosting", "improve"],
+    ["optimize", "improve"],
+    ["optimizing", "improve"],
+    ["optimization", "improve"],
+    ["optimise", "improve"],
+    ["optimising", "improve"],
+    ["optimisation", "improve"],
 ]);
 /**
  * P177 (Oct 24 2026): keyword tokens are a pure function of the text. One
@@ -559,11 +577,14 @@ function keywordTokens(value: string): string[] {
   const normalized = value
     .toLowerCase()
     .replace(/\b(?:conversational[ -]+ai|artificial[ -]+intelligence[ -]+chatbots?|ai[ -]+chatbots?|chat[ -]+bots?)\b/g, "chatbot")
-    .replace(/\bvirtual[ -]+assistants?\b/g, "chatbot");
+    .replace(/\bvirtual[ -]+assistants?\b/g, "chatbot")
+    // "conversion rate" is the conversion a search asks about (P178).
+    .replace(/\bconversion[ -]+rates?\b/g, "conversion");
   const tokens = normalized
     .split(/[^a-z0-9]+/)
     .filter((word) => word.length >= 3 && !KEYWORD_STOP_WORDS.has(word))
-    .map((word) => KEYWORD_ALIASES.get(word) ?? singularWord(word));
+    // An alias applies to the singular too ("conversions" is "conversion" is "convert").
+    .map((word) => { const singular = singularWord(word); return KEYWORD_ALIASES.get(word) ?? KEYWORD_ALIASES.get(singular) ?? singular; });
   if (KEYWORD_TOKEN_CACHE.size >= KEYWORD_TOKEN_CACHE_MAX) KEYWORD_TOKEN_CACHE.clear();
   KEYWORD_TOKEN_CACHE.set(value, Object.freeze(tokens));
   return tokens;
