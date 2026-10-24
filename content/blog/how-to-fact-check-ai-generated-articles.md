@@ -125,6 +125,6 @@ Confusing a smooth, confident writing style with accuracy. The two are unrelated
 
 ## Related reading
 
-- [Fact-Checking in AI Content](/blog/fact-check-ai-generated-content)
-- [AI SEO Content Writing](/blog/ai-seo-content-writing-autonomous-tools)
-- [AI Content Automation](/blog/ai-content-automation-governance-workflow)
+- [Fact-Checking in AI Content: How to Verify Accuracy and Build Trust](/blog/fact-check-ai-generated-content)
+- [AI SEO Content Writing: How Autonomous Tools Generate Ranking Articles](/blog/ai-seo-content-writing-autonomous-tools)
+- [AI Content Automation: How to Build a Governed Publishing System](/blog/ai-content-automation-governance-workflow)
