@@ -4,6 +4,11 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { getLimitsFromFeatures } from "./planLimits";
 import { autopilotPublicationConsented } from "./lib/autopilotEditor";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
+import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
+import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
+import { relatedReadingRepairProposal } from "./lib/contentCorrection";
+import { confirmedContentProfileHash, contentConnectionHash } from "./lib/contentSelection";
+import { publicRevisionProjection } from "./lib/publicRevisionProjection";
 
 /** Operator reads for V9 (Oct 24 2026): how large the documents are that the
  * product reads most often, as byte counts, stage labels and field names only
@@ -108,4 +113,39 @@ export const signupFunnel = internalQuery({ args: { since: v.number() }, handler
     else if (await has(site._id, "ready") || await has(site._id, "review")) counts.articleWaiting++;
   }
   return { since, ...counts, publishMethods, verifiedDestinations };
+} });
+
+/** P191 (Oct 25 2026): why Autopilot's Related reading repair (P176/P180) left a
+ * published article with cut link titles. pentra.dev's pass ended with 4 cut
+ * titles on 3 pages untouched. Owner sites only: slugs, counts and reasons,
+ * never content. The live text is the article with its delivered revisions. */
+export const relatedRepairBlockers = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site) return null;
+  const summaries = (await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "published")).take(2001))
+    .filter(row => articleMatchesCurrentDomain(site, row));
+  const titles = new Map<string, string>();
+  for (const row of summaries) {
+    try { titles.set(publishedArticleInternalHref(site.urlStructure, row.slug), row.title); } catch { /* an unsafe slug links nowhere */ }
+  }
+  const pages = new Map((await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId)).take(1001))
+    .map(page => [page.slug.replace(/^\/+|\/+$/g, ""), page] as const));
+  const cutCount = (proposal: { before: string; replacement: string }) => {
+    const before = proposal.before.split("\n"), after = proposal.replacement.split("\n");
+    return before.filter((line, i) => line !== after[i]).length;
+  };
+  const blocked: Array<{ slug: string; cuts: number; reason: string }> = [];
+  for (const row of summaries) {
+    const article = await ctx.db.get(row.articleId);
+    const live = article ? await publicRevisionProjection(ctx, site, article) : null;
+    if (!live?.markdown) continue;
+    const proposal = relatedReadingRepairProposal(live.markdown, titles, relatedReadingTitle);
+    if (!proposal) continue;
+    const page = pages.get(row.slug.replace(/^\/+|\/+$/g, "")), e = page?.editable;
+    const reason = !page ? "no_page" : !e ? "not_enrolled" : !e.active ? "enrollment_inactive" : e.kind !== "github" ? `not_github_${e.kind}`
+      : e.profileHash !== confirmedContentProfileHash(site) || e.connectionHash !== contentConnectionHash(site) ? "enrollment_stale"
+      : !relatedReadingRepairProposal(e.markdown, titles, relatedReadingTitle) ? "enrolled_source_differs" : "repairable";
+    blocked.push({ slug: row.slug, cuts: cutCount(proposal), reason });
+  }
+  return { published: summaries.length, blocked };
 } });

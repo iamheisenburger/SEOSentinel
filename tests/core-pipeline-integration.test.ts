@@ -9575,6 +9575,30 @@ test("P181 quality failures judged by older checks are no failing streak; curren
   }
 });
 
+// P191 (Oct 25 2026): pentra.dev's link-title repair pass ended with 4 cut titles on 3 pages untouched. The operator's
+// probe names why each was left (owner sites only; slugs and reasons, never content).
+test("P191 the repair-blocker probe says why a cut Related reading title was left", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const cut = "- [What Is an AI Sales Agent? How It](/blog/ai-sales-agent)";
+  const selected = await selectExistingPage(f, "md", `${correctionSurvivor}\n\n## Related reading\n\n${cut}`);
+  const site = await selectGrowth(f, 8 * 3_600_000), saved = f.get(site.id)!;
+  const domain = saved.canonicalDomain ?? saved.domain, revision = saved.canonicalDomainRevision ?? 0;
+  const publish = (slug: string, title: string, markdown: string) => {
+    const articleId = f.add("articles", { siteId: site.id, status: "published", title, slug, markdown, canonicalDomain: domain, domainRevision: revision,
+      createdAt: f.now(), updatedAt: f.now() });
+    f.add("article_summaries", { articleId, siteId: site.id, canonicalDomain: domain, domainRevision: revision, status: "published", title, slug,
+      createdAt: f.now(), updatedAt: f.now() });
+  };
+  publish("ai-sales-agent", "What Is an AI Sales Agent? How It Works and Why Websites Need One", "An article.");
+  const enrolledSlug = String(f.get(selected.pageId)!.slug).replace(/^\/+|\/+$/g, "");
+  publish(enrolledSlug, "Enrolled guide", `${correctionSurvivor}\n\n## Related reading\n\n${cut}`);
+  publish("older-guide", "Older guide", `${correctionSurvivor}\n\n## Related reading\n\n${cut}`);
+  const probe = await f.invoke("opsProbes:relatedRepairBlockers", { siteId: site.id });
+  assert.deepEqual(probe.blocked, [{ slug: enrolledSlug, cuts: 1, reason: "repairable" }, { slug: "older-guide", cuts: 1, reason: "no_page" }]);
+  assert.ok(!JSON.stringify(probe).includes("AI Sales Agent"), "slugs and reasons only");
+  f.assertOffline();
+});
+
 // P182 (Oct 25 2026): real users arrived from distribution (two free signups) and none reached Autopilot within the day;
 // the operator sees how far new sites got through setup, fleet-wide, as counts only.
 test("P182 the signup funnel counts how far new sites got, never naming a site or an account", async () => {
