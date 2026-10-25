@@ -142,6 +142,6 @@ If a page already appears in results for a broad marketing phrase but sits far f
 
 ## Related reading
 
-- [Keyword Clustering Strategy: How to Organize Keywords by](/blog/keyword-clustering-strategy-organize-by-intent)
-- [How to Plan Keywords for Content at Scale:](/blog/keyword-planning-for-content-scale)
-- [How to Detect Content Decay and Ranking Drops:](/blog/detect-content-decay-ranking-drops-guide)
+- [Keyword Clustering Strategy: How to Organize Keywords by Search Intent](/blog/keyword-clustering-strategy-organize-by-intent)
+- [How to Plan Keywords for Content at Scale: A Strategic Framework](/blog/keyword-planning-for-content-scale)
+- [How to Detect Content Decay and Ranking Drops: A Complete Monitoring Guide](/blog/detect-content-decay-ranking-drops-guide)
