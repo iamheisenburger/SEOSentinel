@@ -7811,6 +7811,96 @@ test("P179 research keeps one search per article: other wordings become secondar
   f.assertOffline();
 });
 
+// P194 (Oct 25 2026): topics queued before P179 were never grouped, and word matching misses a search a live article answers
+// in other words: pentra.dev published "Auto Posting on WordPress" beside its live "Publish Blog Posts to WordPress or Next.js
+// Automatically" and Google left the copy undiscovered, as it did 5 of pentra.dev's 6 unindexed recent articles.
+test("P194 the daily sweep drops copies of live pages, merges same-article searches and holds back a waiting copy", async () => {
+  const hour = 3_600_000, liveTitle = "Valve Maintenance Schedules for Small Farms";
+  let covered = "";
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000,
+    searchGroups: (searches, existing) => searches.map(search => ({ search,
+      topic: search.startsWith("irrigation pressure alert") ? "irrigation pressure alerts" : search,
+      covered_by: search === covered ? existing.find(item => item === liveTitle) ?? "" : "" })) });
+  const site = await selectGrowth(f, 8 * hour), saved = f.get(site.id)!;
+  Object.assign(saved.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const waiting = () => f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "ready" && j.contentWork.retiredAt === undefined)
+    .sort((a, b) => a.contentWork.deadlineAt - b.contentWork.deadlineAt);
+  await pumpUntil(f, () => waiting().length === 2);
+  // Both slots well ahead, so a held-back article can be written again in time.
+  const shift = 12 * hour;
+  saved.contentSchedule.nextDeadlineAt += shift;
+  for (const job of waiting()) Object.assign(job.contentWork, { deadlineAt: job.contentWork.deadlineAt + shift,
+    windowStartAt: job.contentWork.windowStartAt + shift, windowWakeId: undefined });
+  const [copy, sound] = waiting(), copyTopic = f.get(copy.payload.topicId)!;
+  covered = copyTopic.primaryKeyword;
+  f.add("article_summaries", { siteId: site.id, slug: "valve-maintenance-schedules", title: liveTitle, status: "published",
+    canonicalDomain: saved.canonicalDomain ?? saved.domain, domainRevision: saved.canonicalDomainRevision ?? 0,
+    publishedAt: f.now() - 24 * hour, createdAt: f.now() - 24 * hour, updatedAt: f.now() - 24 * hour });
+  for (const topic of f.tables.topic_clusters) if (topic.siteId === site.id && topic.status === "planned") topic.status = "used";
+  const topic = (primaryKeyword: string, searchVolume: number, extra: Fields = {}) => f.add("topic_clusters", { siteId: site.id, primaryKeyword,
+    label: primaryKeyword.replace(/^./, c => c.toUpperCase()), planningCanonicalDomain: saved.canonicalDomain ?? saved.domain,
+    planningDomainRevision: saved.canonicalDomainRevision ?? 0, secondaryKeywords: [], intent: "informational", status: "planned",
+    priority: 50, searchVolume, keywordDifficulty: 5, keywordDifficultyMeasured: true, createdAt: f.now(), updatedAt: f.now(), ...extra });
+  const main = topic("irrigation pressure alert planning", 90), wording = topic("irrigation pressure alert plan", 30);
+  const owner = topic("irrigation pressure alert checklist", 10, { ownerChosenAt: f.now() });
+  const before = f.modelCalls.length;
+  await f.invoke("actions/growthTopics:sweepBuyerFit", { siteId: site.id });
+  const calls = f.modelCalls.slice(before).filter(c => c.tools?.[0]?.name === "submit_search_groups");
+  assert.equal(calls.length, 1, "one grouping call for the site");
+  const sent = String(calls[0].messages[0].content);
+  assert.ok(sent.includes(liveTitle), "the call reads the live articles");
+  assert.ok(sent.includes(covered) && sent.includes("irrigation pressure alert plan\n"), "and the work not yet published");
+  assert.ok(!sent.includes("irrigation pressure alert checklist"), "an owner-chosen search is never audited");
+  // The waiting copy of the live page is held back; its slot gets a new topic.
+  const held = f.get(copy._id)!;
+  assert.equal(held.status, "failed"); assert.equal(held.contentWork.failure, "duplicate_intent");
+  assert.equal(f.get(copy.articleId)!.status, "review", "held back for the owner, never published");
+  assert.ok(String(f.get(copy.articleId)!.publicationGateIssues[0]).startsWith(`Repeats a page this site already has (“${liveTitle}”)`));
+  assert.equal(f.get(copyTopic._id)!.status, "disqualified");
+  assert.equal(f.get(sound._id)!.contentWork.stage, "ready", "a waiting article that repeats nothing stays");
+  // Two planned wordings of one article: the most searched stays, the other is written into it.
+  assert.equal(f.get(main)!.status, "planned");
+  assert.deepEqual(f.get(main)!.secondaryKeywords, ["irrigation pressure alert plan"]);
+  assert.equal(f.get(wording)!.status, "disqualified");
+  assert.equal(f.get(wording)!.disqualifiedReason, "Same article as the planned topic “irrigation pressure alert planning”.");
+  assert.equal(f.get(owner)!.status, "planned"); assert.equal(f.get(owner)!.planAudit, undefined);
+  const reservation = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && String(r.trigger).startsWith("plan_audit:"));
+  assert.ok(reservation && reservation.settledMicroUsd > 0, "the call is reserved before it is sent and settled at its cost");
+  // An unchanged plan costs nothing on the next sweep.
+  const after = f.modelCalls.length;
+  await f.invoke("actions/growthTopics:sweepBuyerFit", { siteId: site.id });
+  assert.equal(f.modelCalls.slice(after).filter(c => c.tools?.[0]?.name === "submit_search_groups").length, 0);
+  // The held-back slot is written again from the plan.
+  await pumpUntil(f, () => waiting().length === 2, 200, f.now() + 11 * hour);
+  assert.ok(waiting().every(j => j.payload.topicId !== copyTopic._id));
+  f.assertOffline();
+});
+
+test("P194 the plan audit never holds back a waiting article too close to its slot to be written again", async () => {
+  const hour = 3_600_000, liveTitle = "Valve Maintenance Schedules for Small Farms";
+  let covered = "";
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000,
+    searchGroups: (searches, existing) => searches.map(search => ({ search, topic: search,
+      covered_by: search === covered ? existing.find(item => item === liveTitle) ?? "" : "" })) });
+  const site = await selectGrowth(f, 8 * hour), saved = f.get(site.id)!;
+  Object.assign(saved.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const waiting = () => f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "ready" && j.contentWork.retiredAt === undefined)
+    .sort((a, b) => a.contentWork.deadlineAt - b.contentWork.deadlineAt);
+  await pumpUntil(f, () => waiting().length >= 1);
+  const [soon] = waiting();
+  soon.contentWork.deadlineAt = f.now() + 2 * hour;
+  covered = f.get(soon.payload.topicId)!.primaryKeyword;
+  f.add("article_summaries", { siteId: site.id, slug: "valve-maintenance-schedules", title: liveTitle, status: "published",
+    canonicalDomain: saved.canonicalDomain ?? saved.domain, domainRevision: saved.canonicalDomainRevision ?? 0,
+    publishedAt: f.now() - 24 * hour, createdAt: f.now() - 24 * hour, updatedAt: f.now() - 24 * hour });
+  const before = f.modelCalls.length;
+  await f.invoke("actions/growthTopics:sweepBuyerFit", { siteId: site.id });
+  assert.equal(f.modelCalls.slice(before).filter(c => c.tools?.[0]?.name === "submit_search_groups").length, 1, "the audit judged it a copy");
+  assert.equal(f.get(soon._id)!.contentWork.stage, "ready", "two hours before its slot it publishes; the slot is kept");
+  assert.equal(f.get(soon.payload.topicId)!.planAudit?.version, 1, "audited, not held back");
+  f.assertOffline();
+});
+
 // P177 (Oct 24 2026): LeadPilot's research context took 857 ms of Convex's 1-second query limit: it read the site's
 // 392 topic rows (741 KB) twice and re-tokenized ~78,000 keyword texts and SERP URL lists from scratch.
 test("P177 the research context reads the topic list once, and keyword work is cached", async () => {

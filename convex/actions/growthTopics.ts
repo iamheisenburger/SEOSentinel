@@ -1,7 +1,7 @@
 "use node";
 
 import Anthropic from "@anthropic-ai/sdk";
-import { internalAction } from "../_generated/server";
+import { internalAction, type ActionCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { v } from "convex/values";
@@ -15,7 +15,8 @@ import { BUYER_FIT_CEILING_MICRO_USD, BUYER_FIT_MAX_KEYWORDS, BUYER_FIT_MAX_TOKE
 import { asksForFree, brandTerms, isBrandedKeyword, localSeeds, namesPlace, parseSearchSeeds, profileSeedRequest, SEARCH_SEEDS_MAX_TOKENS,
   SEARCH_SEEDS_TOOL, type SeedRead } from "../lib/missedSearches";
 import { TOPIC_RESEARCH_METHOD } from "../lib/researchSeeds";
-import { groupSearches, parseResearchGroups, RESEARCH_GROUPS_MAX_TOKENS, RESEARCH_GROUPS_TOOL, researchGroupingRequest } from "../lib/researchGrouping";
+import { auditPlannedWork, groupSearches, parseResearchGroups, RESEARCH_GROUPS_MAX_TOKENS, RESEARCH_GROUPS_TOOL, researchGroupingRequest,
+  type PlanAuditItem, type ResearchGroup } from "../lib/researchGrouping";
 
 type ResearchContext = { domain: string; language: string; targetCountry: string | null; seeds: string[]; known: string[];
   coverage: string[]; dropped: string[]; existing: string[]; signals: { coreBusinessSignals: string[]; productAnchorSignals: string[]; businessModelSignals: string[] };
@@ -43,9 +44,9 @@ async function proposeProfileSeeds(business: BuyerFitBusiness, brands: string[],
 /** P179: one call groups the kept searches by the article that would answer
  * them (convex/lib/researchGrouping.ts). Throws when no answer came back; the
  * caller then counts the call's ceiling and keeps every search on its own. */
-async function groupResearchSearches(business: BuyerFitBusiness, searches: string[], existing: string[]) {
+async function groupResearchSearches(business: BuyerFitBusiness, searches: string[], existing: string[], minimumSearches = 2) {
   const request = researchGroupingRequest(business, searches, existing);
-  if (request.searches.length < 2) return { groups: new Map(), costMicroUsd: 0 };
+  if (request.searches.length < minimumSearches) return { groups: new Map<string, ResearchGroup>(), costMicroUsd: 0 };
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
   const model = process.env.TOPIC_FIT_MODEL ?? BUYER_FIT_MODEL;
@@ -291,21 +292,55 @@ export const sweepBuyerFit = internalAction({ args: { siteId: v.id("sites") },
     // waiting articles that repeat a live page are replaced before their slot.
     await ctx.runMutation(internal.contentWork.releaseStaleTopicLocks, { siteId });
     await ctx.runMutation(internal.contentWork.retireDuplicateReadyWork, { siteId });
-    const context: { business: BuyerFitBusiness; topics: Array<{ topicId: Id<"topic_clusters">; keyword: string }> } | null =
-      await ctx.runQuery(internal.contentWork.buyerFitSweepContext, { siteId });
-    if (!context || context.topics.length === 0) return { judged: 0, rejected: 0 };
-    const reservationId: Id<"provider_spend_reservations"> | null = await ctx.runMutation(internal.contentWork.reserveBuyerFitSweep, { siteId });
-    if (!reservationId) return { judged: 0, rejected: 0 };
-    let verdicts = new Map<string, BuyerFitVerdict>(), costMicroUsd = BUYER_FIT_CEILING_MICRO_USD;
-    try { ({ verdicts, costMicroUsd } = await judgeBuyerFit(context.business, context.topics.map(t => t.keyword))); }
-    catch { /* the call's ceiling is settled; the topics are judged on the next sweep */ }
-    const judged = context.topics.flatMap(t => {
-      const verdict = verdicts.get(normalizeFitKeyword(t.keyword));
-      return verdict ? [{ topicId: t.topicId, eligible: verdict.keep, reason: verdict.reason }] : [];
-    });
-    await ctx.runMutation(internal.contentWork.recordBuyerFit, { siteId, reservationId, actualMicroUsd: costMicroUsd, verdicts: judged });
-    return { judged: judged.length, rejected: judged.filter(j => !j.eligible).length };
+    const fit = await judgeUnjudgedTopics(ctx, siteId);
+    // P194: then the plan audit, on the verdicts just recorded. A failure there
+    // never loses them; the plan is audited again on the next sweep.
+    try {
+      const audit = await auditPlan(ctx, siteId);
+      if (audit && audit.dropped + audit.merged + audit.heldBack > 0) console.log(`Plan audit ${siteId}: ${JSON.stringify(audit)}`);
+    } catch (error) { console.warn(`Plan audit skipped ${siteId}: ${error instanceof Error ? error.message : "unknown"}`); }
+    return fit;
   } });
+
+/** The sweep's buyer-fit step: one call for the planned topics without a verdict. */
+async function judgeUnjudgedTopics(ctx: ActionCtx, siteId: Id<"sites">): Promise<{ judged: number; rejected: number }> {
+  const context: { business: BuyerFitBusiness; topics: Array<{ topicId: Id<"topic_clusters">; keyword: string }> } | null =
+    await ctx.runQuery(internal.contentWork.buyerFitSweepContext, { siteId });
+  if (!context || context.topics.length === 0) return { judged: 0, rejected: 0 };
+  const reservationId: Id<"provider_spend_reservations"> | null = await ctx.runMutation(internal.contentWork.reserveBuyerFitSweep, { siteId });
+  if (!reservationId) return { judged: 0, rejected: 0 };
+  let verdicts = new Map<string, BuyerFitVerdict>(), costMicroUsd = BUYER_FIT_CEILING_MICRO_USD;
+  try { ({ verdicts, costMicroUsd } = await judgeBuyerFit(context.business, context.topics.map(t => t.keyword))); }
+  catch { /* the call's ceiling is settled; the topics are judged on the next sweep */ }
+  const judged = context.topics.flatMap(t => {
+    const verdict = verdicts.get(normalizeFitKeyword(t.keyword));
+    return verdict ? [{ topicId: t.topicId, eligible: verdict.keep, reason: verdict.reason }] : [];
+  });
+  await ctx.runMutation(internal.contentWork.recordBuyerFit, { siteId, reservationId, actualMicroUsd: costMicroUsd, verdicts: judged });
+  return { judged: judged.length, rejected: judged.filter(j => !j.eligible).length };
+}
+
+/** P194: the plan audit (convex/lib/researchGrouping.ts auditPlannedWork). One
+ * grouping call, its spend reserved before it is sent, only when the plan or
+ * the live articles changed since the last audit. */
+async function auditPlan(ctx: ActionCtx, siteId: Id<"sites">): Promise<{ dropped: number; merged: number; heldBack: number } | null> {
+  const context: { business: BuyerFitBusiness; items: PlanAuditItem[]; existing: string[]; due: boolean } | null =
+    await ctx.runQuery(internal.contentWork.planAuditContext, { siteId });
+  if (!context || !context.due || context.items.length === 0) return null;
+  const reservationId: Id<"provider_spend_reservations"> | null = await ctx.runMutation(internal.contentWork.reservePlanAudit, { siteId });
+  if (!reservationId) return null;
+  let groups = new Map<string, ResearchGroup>(), costMicroUsd = BUYER_FIT_CEILING_MICRO_USD, answered = false;
+  try {
+    // One search is enough here: it can repeat a live article.
+    ({ groups, costMicroUsd } = await groupResearchSearches(context.business, context.items.map(item => item.keyword), context.existing, 1));
+    answered = true;
+  } catch (error) {
+    // A call that was sent and lost counts at its ceiling; nothing was sent without a key.
+    if (error instanceof Error && error.message === "ANTHROPIC_API_KEY not set") costMicroUsd = 0;
+  }
+  return await ctx.runMutation(internal.contentWork.recordPlanAudit, { siteId, reservationId, actualMicroUsd: costMicroUsd, answered,
+    auditedIds: context.items.map(item => item.id), decisions: answered ? auditPlannedWork(context.items, groups) : [] });
+}
 
 /** Daily: every Autopilot site's unjudged planned topics get a verdict. */
 export const sweepBuyerFitFleet = internalAction({ args: {},

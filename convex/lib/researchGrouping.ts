@@ -87,3 +87,47 @@ export function groupSearches<T extends { keyword: string; searchVolume: number 
     ({ ...primary, secondary: rest.map(k => normalizeFitKeyword(k.keyword)).slice(0, MAX_SECONDARY) }));
   return { kept, covered, merged: [...byTopic.values()].reduce((sum, group) => sum + group.length - 1, 0) };
 }
+
+/**
+ * P194 (Oct 25 2026): the daily plan audit. Topics planned before P179 never had
+ * their wordings grouped (LeadPilot queued "lead scoring template" six times and
+ * five wordings of "website conversion"; pentra.dev six of "AI writing"), and
+ * word matching misses a search a live article already answers in other words
+ * (pentra.dev's "auto posting wordpress" beside its live "Publish Blog Posts to
+ * WordPress or Next.js Automatically"; Google left 5 of pentra.dev's 6 unindexed
+ * recent articles as such copies, "Discovered - currently not indexed"). One
+ * grouping call reads the work not yet published against the live articles. A
+ * search a live article answers is dropped (a waiting article on it is held
+ * back and its slot gets a new topic). Of the searches one article would
+ * answer, a waiting article stays, else the most searched, with the others'
+ * wordings as its secondary keywords. A search without a verdict is left as it
+ * is. Pure: the action calls the model.
+ */
+export const PLAN_AUDIT_VERSION = 1;
+export type PlanAuditItem = { id: string; keyword: string; searchVolume: number; waiting: boolean };
+export type PlanAuditDecision =
+  | { id: string; action: "keep"; secondary: string[] }
+  | { id: string; action: "covered"; by: string }
+  | { id: string; action: "merged"; into: string };
+
+export function auditPlannedWork(items: PlanAuditItem[], groups: Map<string, ResearchGroup>): PlanAuditDecision[] {
+  const decisions: PlanAuditDecision[] = [];
+  const byTopic = new Map<string, PlanAuditItem[]>();
+  // Written articles first, then the most searched; the plan's own order breaks ties.
+  const ordered = items.map((item, index) => ({ item, index }))
+    .sort((a, b) => Number(b.item.waiting) - Number(a.item.waiting) || b.item.searchVolume - a.item.searchVolume || a.index - b.index);
+  for (const { item } of ordered) {
+    const verdict = groups.get(normalizeFitKeyword(item.keyword));
+    if (!verdict) continue;
+    if (verdict.coveredBy) { decisions.push({ id: item.id, action: "covered", by: verdict.coveredBy }); continue; }
+    byTopic.set(verdict.topic, [...(byTopic.get(verdict.topic) ?? []), item]);
+  }
+  for (const [keeper, ...rest] of byTopic.values()) {
+    const own = normalizeFitKeyword(keeper.keyword);
+    decisions.push({ id: keeper.id, action: "keep", secondary: [...new Set(rest.filter(other => !other.waiting)
+      .map(other => normalizeFitKeyword(other.keyword)))].filter(keyword => keyword !== own).slice(0, MAX_SECONDARY) });
+    for (const other of rest) decisions.push(other.waiting ? { id: other.id, action: "covered", by: keeper.keyword }
+      : { id: other.id, action: "merged", into: keeper.keyword });
+  }
+  return decisions;
+}

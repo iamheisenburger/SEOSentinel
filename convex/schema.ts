@@ -882,6 +882,9 @@ export default defineSchema({
     // and the lexical audit above cannot overturn that verdict.
     buyerFit: v.optional(v.object({ eligible: v.boolean(), reason: v.string(), version: v.number(),
       checkedAt: v.number(), profileHash: v.optional(v.string()) })),
+    // P194: when the daily plan audit last read this topic against the site's
+    // live articles (convex/lib/researchGrouping.ts auditPlannedWork).
+    planAudit: v.optional(v.object({ version: v.number(), checkedAt: v.number() })),
 
     // A topic that exhausts the bounded article-quality recovery contract is
     // terminal for this exact evidence generation. Without this receipt the

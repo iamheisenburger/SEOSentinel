@@ -37,6 +37,7 @@ import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs"
 import { auditResultHash, clarifiableContentAudit, inconsistentAuditFeedback, internalContentProcessingError, retainedContradictoryContentAudit, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 import { contentJobUsesAllowance } from "./lib/contentUsage";
 import { BUYER_FIT_MAX_KEYWORDS, BUYER_FIT_RESERVATION_MICRO_USD, BUYER_FIT_VERSION, type BuyerFitBusiness } from "./lib/topicFit";
+import { PLAN_AUDIT_VERSION } from "./lib/researchGrouping";
 import { OWNER_SEARCH_MAX_WAITING, OWNER_SEARCH_MEASURE_MICRO_USD, OWNER_SEARCH_NOTES, OWNER_SEARCH_PRIORITY,
   ownerSearchArticleType, ownerSearchKeyword } from "./lib/ownerSearch";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
@@ -1863,9 +1864,7 @@ export const releaseStaleTopicLocks = internalMutation({ args: { siteId: v.id("s
 export const retireDuplicateReadyWork = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await ctx.db.get(siteId);
   if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule || site.deletionStatus || site.accountDeletionRequestedAt) return { retired: 0 };
-  const ready = (await ctx.db.query("jobs").withIndex("by_site_content_stage", q => q.eq("siteId", siteId).eq("contentWork.stage", "ready")).take(20))
-    .filter(job => job.status === "done" && job.contentWork?.intent === "create" && !job.contentWork.ownerRequest &&
-      job.contentWork.retiredAt === undefined && !job.contentWork.operation);
+  const ready = await waitingCreateWork(ctx, siteId);
   if (ready.length === 0) return { retired: 0 };
   const live = await ctx.db.query("article_summaries").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published")).take(500);
   const liveIntents = live.flatMap(page => [page.title, ...(page.metaKeywords ?? []).slice(0, 1)]).filter(Boolean).map(primaryKeyword => ({ primaryKeyword }));
@@ -1880,24 +1879,137 @@ export const retireDuplicateReadyWork = internalMutation({ args: { siteId: v.id(
     // talk, found on the Compost Notes test site) is held back before its slot.
     const defects = !duplicate && article && article.siteId === siteId ? readerVisibleIssues(article) : [];
     if (!duplicate && defects.length === 0) continue;
-    if (article && article.status !== "published" && !article.publicationLeaseOwner && !article.publicationAttemptedAt) {
-      await quarantineUnpublishedArticle(ctx, article._id, duplicate ? ["Repeats a page this site already has, so it was held back and the slot got a new topic."]
-        : ["It fails a reader check added after it was written, so it was held back and the slot got a new article.", ...defects.slice(0, 3)]);
-    } else if (article) continue;
-    await ctx.db.patch(job._id, { status: "failed", nextAttemptAt: undefined, workerToken: undefined, heartbeatAt: undefined, leaseExpiresAt: undefined,
-      contentWork: { ...job.contentWork!, stage: "failed", failure: duplicate ? "duplicate_intent" : "reader_visible_defect" }, updatedAt: Date.now() });
-    // Never published, so it uses none of the month's allowance (an exact recount follows).
-    if (countsTowardMonthlyUsage(job, usageMonthBounds().monthStart)) await refreshAccountUsage(ctx, site, -1);
-    if (topic && topic.siteId === siteId && !planCheckpointTopicExecutionLocked(topic)) {
-      // A repeated search is covered; a sound topic goes back to the plan to be written again.
-      await ctx.db.patch(topic._id, duplicate ? { status: "disqualified", disqualifiedReason: "Repeats a page the site already has.", updatedAt: Date.now() }
-        : { status: "planned", updatedAt: Date.now() });
-    }
-    retired++;
+    if (await holdBackReadyWork(ctx, site, job, topic, article, duplicate,
+      duplicate ? ["Repeats a page this site already has, so it was held back and the slot got a new topic."]
+        : ["It fails a reader check added after it was written, so it was held back and the slot got a new article.", ...defects.slice(0, 3)])) retired++;
   }
   if (retired > 0) await wake(ctx, siteId);
   return { retired };
 } });
+/** Autopilot's waiting articles (sealed, before their slot): its own new
+ * articles only, never an owner's request or an operation. */
+async function waitingCreateWork(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
+  return (await ctx.db.query("jobs").withIndex("by_site_content_stage", q => q.eq("siteId", siteId).eq("contentWork.stage", "ready")).take(20))
+    .filter(waitingCreateJob);
+}
+const waitingCreateJob = (job: Doc<"jobs">) => job.status === "done" && job.contentWork?.stage === "ready" && job.contentWork.intent === "create" &&
+  !job.contentWork.ownerRequest && job.contentWork.retiredAt === undefined && !job.contentWork.operation;
+/** Hold one waiting article back (P140/P152/P194): it is never published, its
+ * slot fails with a skippable failure (so the slot gets a new article), it uses
+ * none of the month's allowance, and a repeated search is marked covered while
+ * a sound topic returns to the plan. False when the article is past holding
+ * back (published, or a publication was attempted). */
+async function holdBackReadyWork(ctx: MutationCtx, site: Doc<"sites">, job: Doc<"jobs">, topic: Doc<"topic_clusters"> | null,
+  article: Doc<"articles"> | null, duplicate: boolean, notes: string[]) {
+  if (article && article.status !== "published" && !article.publicationLeaseOwner && !article.publicationAttemptedAt) {
+    await quarantineUnpublishedArticle(ctx, article._id, notes);
+  } else if (article) return false;
+  await ctx.db.patch(job._id, { status: "failed", nextAttemptAt: undefined, workerToken: undefined, heartbeatAt: undefined, leaseExpiresAt: undefined,
+    contentWork: { ...job.contentWork!, stage: "failed", failure: duplicate ? "duplicate_intent" : "reader_visible_defect" }, updatedAt: Date.now() });
+  // Never published, so it uses none of the month's allowance (an exact recount follows).
+  if (countsTowardMonthlyUsage(job, usageMonthBounds().monthStart)) await refreshAccountUsage(ctx, site, -1);
+  if (topic && topic.siteId === site._id && !planCheckpointTopicExecutionLocked(topic)) {
+    // A repeated search is covered; a sound topic goes back to the plan to be written again.
+    await ctx.db.patch(topic._id, duplicate ? { status: "disqualified", disqualifiedReason: "Repeats a page the site already has.", updatedAt: Date.now() }
+      : { status: "planned", updatedAt: Date.now() });
+  }
+  return true;
+}
+
+/** P194 (convex/lib/researchGrouping.ts auditPlannedWork): what the daily plan
+ * audit reads. The waiting articles and the planned topics Autopilot would
+ * write (owner-chosen searches never), against the live articles. Due only when
+ * one of them has no current audit or an article went live after its audit, so
+ * an unchanged plan costs nothing. */
+const PLAN_AUDIT_SEARCHES = 80, PLAN_AUDIT_LIVE = 150;
+export const planAuditContext = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt || site.deletionStatus || site.accountDeletionRequestedAt) return null;
+  let planned: Doc<"topic_clusters">[];
+  try { planned = (await eligiblePlannedTopics(ctx, site)).planned.filter(t => !ownerChosen(t)); } catch { return null; }
+  const live = (await ctx.db.query("article_summaries").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published"))
+    .order("desc").take(PLAN_AUDIT_LIVE)).filter(row => articleMatchesCurrentDomain(site, row));
+  const waiting: { job: Doc<"jobs">; topic: Doc<"topic_clusters"> }[] = [];
+  for (const job of await waitingCreateWork(ctx, siteId)) {
+    const topicId = (job.payload as { topicId?: Id<"topic_clusters"> } | undefined)?.topicId;
+    const topic = topicId ? await ctx.db.get(topicId) : null;
+    if (topic && topic.siteId === siteId && !ownerChosen(topic)) waiting.push({ job, topic });
+  }
+  const audited = [...waiting.map(w => w.topic), ...planned].slice(0, PLAN_AUDIT_SEARCHES);
+  const items = audited.map((topic, index) => index < waiting.length
+    ? { id: `job:${waiting[index].job._id}`, keyword: topic.primaryKeyword, searchVolume: topic.searchVolume ?? 0, waiting: true }
+    : { id: `topic:${topic._id}`, keyword: topic.primaryKeyword, searchVolume: topic.searchVolume ?? 0, waiting: false });
+  const newestLiveAt = live.reduce((newest, row) => Math.max(newest, row.publishedAt ?? row.articleCreatedAt ?? 0), 0);
+  const due = audited.some(topic => topic.planAudit?.version !== PLAN_AUDIT_VERSION || topic.planAudit.checkedAt < newestLiveAt);
+  return { business: buyerFitBusiness(site), items, existing: live.map(row => row.title), due };
+} });
+/** The audit's one call is held before it is sent, like the buyer-fit sweep's. */
+export const reservePlanAudit = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site?.userId || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return null;
+  const reserved = await reserveSharedProviderBudget(ctx, { siteId, userId: site.userId, purpose: "topic_plan",
+    trigger: `plan_audit:${Math.floor(Date.now() / 86_400_000)}`, reservedMicroUsd: BUYER_FIT_RESERVATION_MICRO_USD, timestamp: Date.now() });
+  return reserved.ok ? reserved.reservationId : null;
+} });
+/** At most one waiting article a day is held back by the audit, and only with
+ * 6 hours left before its slot for the new article to be written. */
+const PLAN_AUDIT_MAX_HELD_BACK = 1, PLAN_AUDIT_REPLACEMENT_LEAD_MS = 6 * 3_600_000;
+const clipQuote = (value: string | undefined, max: number) => (value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+/** Settle the audit's call and apply its verdicts to work that is still unpublished and Autopilot's own. */
+export const recordPlanAudit = internalMutation({ args: { siteId: v.id("sites"), reservationId: v.id("provider_spend_reservations"),
+  actualMicroUsd: v.number(), answered: v.boolean(), auditedIds: v.array(v.string()),
+  decisions: v.array(v.object({ id: v.string(), action: v.union(v.literal("keep"), v.literal("covered"), v.literal("merged")),
+    by: v.optional(v.string()), into: v.optional(v.string()), secondary: v.optional(v.array(v.string())) })) },
+  handler: async (ctx, { siteId, reservationId, actualMicroUsd, answered, auditedIds, decisions }) => {
+    const reservation = await ctx.db.get(reservationId);
+    const actual = Math.max(0, Math.ceil(actualMicroUsd));
+    if (reservation && reservation.siteId === siteId && reservation.purpose === "topic_plan" && reservation.settledAt === undefined &&
+      reservation.releasedAt === undefined && Number.isSafeInteger(actual) && actual <= reservation.reservedMicroUsd) {
+      await settleSharedProviderReservation(ctx, { reservationId, siteId, purpose: "topic_plan",
+        actualMicroUsd: actual, reason: "verified_provider_receipt_actual_cost", timestamp: Date.now() });
+    }
+    const site = await ctx.db.get(siteId);
+    const outcome = { dropped: 0, merged: 0, heldBack: 0 };
+    // A lost answer changes nothing: the plan is audited again on the next sweep.
+    if (!site || !answered) return outcome;
+    const now = Date.now(), stamp = { version: PLAN_AUDIT_VERSION, checkedAt: now };
+    const verdicts = new Map(decisions.map(decision => [decision.id, decision]));
+    for (const id of auditedIds) {
+      const decision = verdicts.get(id);
+      if (id.startsWith("topic:")) {
+        const topicId = ctx.db.normalizeId("topic_clusters", id.slice("topic:".length));
+        const topic = topicId ? await ctx.db.get(topicId) : null;
+        if (!topic || topic.siteId !== siteId || !["planned", "pending"].includes(topic.status ?? "planned") || ownerChosen(topic) ||
+          planCheckpointTopicExecutionLocked(topic)) continue;
+        if (decision?.action === "covered" || decision?.action === "merged") {
+          await ctx.db.patch(topic._id, { status: "disqualified", planAudit: stamp, updatedAt: now,
+            disqualifiedReason: decision.action === "covered" ? `Repeats a page the site already has: “${clipQuote(decision.by, 120)}”.`
+              : `Same article as the planned topic “${clipQuote(decision.into, 100)}”.` });
+          outcome[decision.action === "covered" ? "dropped" : "merged"]++;
+        } else {
+          // Its other wordings are written into the same article.
+          const secondary = decision?.action === "keep" ? decision.secondary ?? [] : [];
+          await ctx.db.patch(topic._id, { planAudit: stamp, updatedAt: now, ...(secondary.length > 0
+            ? { secondaryKeywords: [...new Set([...(topic.secondaryKeywords ?? []), ...secondary])].slice(0, 10) } : {}) });
+        }
+      } else if (id.startsWith("job:")) {
+        const jobId = ctx.db.normalizeId("jobs", id.slice("job:".length));
+        const job = jobId ? await ctx.db.get(jobId) : null;
+        if (!job || job.siteId !== siteId) continue;
+        const topicId = (job.payload as { topicId?: Id<"topic_clusters"> } | undefined)?.topicId;
+        const topic = topicId ? await ctx.db.get(topicId) : null;
+        const article = job.articleId ? await ctx.db.get(job.articleId) : null;
+        if (decision?.action === "covered" && outcome.heldBack < PLAN_AUDIT_MAX_HELD_BACK && waitingCreateJob(job) &&
+          job.contentWork!.deadlineAt - now >= PLAN_AUDIT_REPLACEMENT_LEAD_MS && (!topic || !ownerChosen(topic)) &&
+          await holdBackReadyWork(ctx, site, job, topic, article, true,
+            [`Repeats a page this site already has (“${clipQuote(decision.by, 120)}”), so it was held back and the slot got a new topic.`])) {
+          outcome.heldBack++;
+        } else if (topic && topic.siteId === siteId) await ctx.db.patch(topic._id, { planAudit: stamp });
+      }
+    }
+    if (outcome.heldBack > 0) await wake(ctx, siteId);
+    return outcome;
+  } });
 /** Autopilot sites for the daily buyer-fit sweep, a page at a time. */
 export const buyerFitSweepSites = internalQuery({ args: { cursor: v.union(v.string(), v.null()) }, handler: async (ctx, { cursor }) => {
   const page = await ctx.db.query("sites").paginate({ cursor, numItems: 20 });
