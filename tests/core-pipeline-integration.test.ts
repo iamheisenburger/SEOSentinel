@@ -8284,6 +8284,35 @@ test("Ghost verification refuses a key for a different site and a wrong key, and
 
 // ── P64: Autopilot refreshes Pentra's own older articles on Google page 2 ──
 
+// P192 (Oct 25 2026): the link-title repair only edits adopted pages, and 9 of pentra.dev's and 21 of LeadPilot's
+// articles with cut Related reading titles had no page record. Such an article is adopted (the same ownership checks
+// on its file), and the repair pass, resting after its last sweep, reopens for it.
+test("P192 an article whose live Related reading has a cut title is adopted for the repair, which reopens", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const day = 86_400_000, site = await selectGrowth(f, 7 * day);
+  await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.stage === "verified")));
+  const created = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!, article = f.get(created.articleId)!;
+  delete f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!.editable; // as an older article, never adopted
+  const saved = f.get(site.id)!;
+  f.add("article_summaries", { siteId: site.id, slug: "ai-sales-agent", title: "What Is an AI Sales Agent? How It Works and Why Websites Need One",
+    status: "published", canonicalDomain: saved.canonicalDomain ?? saved.domain, domainRevision: saved.canonicalDomainRevision ?? 0,
+    createdAt: f.now(), updatedAt: f.now() });
+  // Its live Related reading list still carries a title cut at the old 8-word cap.
+  article.markdown = String(article.markdown).replace(/## Related reading\n\n[^\n]+(?:\n- [^\n]+)*/, "## Related reading\n\n- [What Is an AI Sales Agent? How It](/blog/ai-sales-agent)");
+  assert.match(article.markdown, /## Related reading\n\n- \[What Is an AI Sales Agent\? How It\]/);
+  saved.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: saved as never,
+    ownerAccountKey: accountDeletionKey(saved.userId), verifiedAt: f.now() });
+  Object.assign(saved.contentSchedule, { relatedRepairCursor: 0, relatedRepairCleanAt: f.now() }); // the last sweep is resting
+  const result = await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id });
+  assert.equal(result.adopted, 1, JSON.stringify(result)); assert.equal(result.repairAdopted, 1);
+  const page = f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!;
+  assert.equal(page.editable.active, true); assert.equal(page.editable.kind, "github");
+  assert.ok(f.get(site.id)!.contentSchedule.relatedRepairRetryAt >= f.now() - 60_000, "the repair pass reopens");
+  assert.deepEqual(await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id }), { adopted: 0, checked: 0 },
+    "an adopted article is not picked again");
+  f.assertOffline();
+});
+
 test("A refresh adoption of a file the owner later edits is retired before any work starts", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const day = 86_400_000, site = await selectGrowth(f, 7 * day);

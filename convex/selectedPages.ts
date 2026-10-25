@@ -11,11 +11,14 @@ import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning
 import { accountDeletionKey } from "./lib/accountDeletion";
 import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
 import { evaluateTopicBusinessFit, tenantTopicBusinessSignals } from "./lib/autopilotBuffer";
-import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopicsByContentFeasibility } from "./lib/siteDomainBinding";
+import { articleMatchesCurrentDomain, siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopicsByContentFeasibility } from "./lib/siteDomainBinding";
 import { stripLeadingDocumentTitle } from "./lib/markdownPublishing";
 import { publicationDeliveryConfig } from "./lib/publicationArtifact";
 import { REFRESH_COOLDOWN_MS, REFRESH_REVIEW_MS, refreshArticleOldEnough, refreshablePentraPage, refreshOpportunities, refreshOpportunityValue, refreshSlotAvailable, refreshWindowStart } from "./lib/articleRefresh";
 import { isBrandedSearchQuery } from "./lib/searchPerformance";
+import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
+import { relatedReadingRepairProposal } from "./lib/contentCorrection";
+import { publicRevisionProjection } from "./lib/publicRevisionProjection";
 
 async function owner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
   const site = await ctx.db.get(siteId), identity = await ctx.auth.getUserIdentity();
@@ -269,30 +272,60 @@ export const refreshAdoptionContext = internalQuery({ args: { siteId: v.id("site
   try { selectionConnection(site); } catch { return null; }
   let connectionHash: string;
   try { connectionHash = contentConnectionHash(site); } catch { return null; }
-  const windowStart = refreshWindowStart((site.gscDateEpochs ?? []).map(receipt => receipt.date));
-  if (!windowStart) return { site, connectionHash, profileHash: confirmedContentProfileHash(site), candidates: [] };
-  const measurements = await takeCurrentGscQueryRows(ctx, site, 6000, { startDate: windowStart });
   const pages = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", site._id)).take(501);
   if (pages.length > 500) return null;
   const adopted = new Set(pages.filter(p => p.editable).map(p => p.url));
-  const summaries = (await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", site._id).eq("status", "published")).take(2001))
-    .filter(row => row.publicUrl && row.publicUrlStatus === "verified" && refreshArticleOldEnough(row.publishedAt, Date.now()) && !adopted.has(row.publicUrl));
-  const scored = summaries.map(row => ({ row, best: refreshOpportunities(measurements.rows, row.publicUrl!)
-    .find(o => !isBrandedSearchQuery(o.query, site.domain)) }))
-    .filter(entry => entry.best).sort((a, b) => refreshOpportunityValue(b.best!) - refreshOpportunityValue(a.best!))
-    .slice(0, Math.max(1, Math.min(args.limit ?? 3, 5)));
+  const published = await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", site._id).eq("status", "published")).take(2001);
+  const unadopted = published.filter(row => row.publicUrl && row.publicUrlStatus === "verified" && !adopted.has(row.publicUrl));
+  const contentDir = publicationDeliveryConfig(site).contentDir;
+  const candidateFor = (article: Doc<"articles"> | null, url: string, forRepair: boolean) =>
+    !article || !contentDir || article.siteId !== site._id || article.status !== "published" || article.publicationReceipt?.method !== "github" ||
+      !article.publicationDeliveryHash || (!forRepair && article.contentWorkSourceJobId) ? null
+      : { articleId: article._id, path: `${contentDir}/${article.slug.replace(/^\//, "")}.md`, url,
+        deliveryKey: `pentra:${article.publicationDeliveryHash}`, forRepair };
   const candidates = [];
-  for (const { row } of scored) {
-    const article = await ctx.db.get(row.articleId);
-    if (!article || article.siteId !== site._id || article.status !== "published" || article.publicationReceipt?.method !== "github" ||
-      !article.publicationDeliveryHash || article.contentWorkSourceJobId) continue;
-    const slug = article.slug.replace(/^\//, "");
-    const contentDir = publicationDeliveryConfig(site).contentDir;
-    if (!contentDir) continue;
-    candidates.push({ articleId: article._id, path: `${contentDir}/${slug}.md`, url: row.publicUrl!,
-      deliveryKey: `pentra:${article.publicationDeliveryHash}` });
+  const windowStart = refreshWindowStart((site.gscDateEpochs ?? []).map(receipt => receipt.date));
+  if (windowStart) {
+    const measurements = await takeCurrentGscQueryRows(ctx, site, 6000, { startDate: windowStart });
+    const scored = unadopted.filter(row => refreshArticleOldEnough(row.publishedAt, Date.now()))
+      .map(row => ({ row, best: refreshOpportunities(measurements.rows, row.publicUrl!).find(o => !isBrandedSearchQuery(o.query, site.domain)) }))
+      .filter(entry => entry.best).sort((a, b) => refreshOpportunityValue(b.best!) - refreshOpportunityValue(a.best!))
+      .slice(0, Math.max(1, Math.min(args.limit ?? 3, 5)));
+    for (const { row } of scored) {
+      const candidate = candidateFor(await ctx.db.get(row.articleId), row.publicUrl!, false);
+      if (candidate) candidates.push(candidate);
+    }
+  }
+  // P192 (Oct 25 2026): an article whose live Related reading list still has a
+  // title cut at the old 8-word cap is adopted too (the same ownership checks
+  // run on its file), so Autopilot's link-title repair (P176/P180) can complete
+  // it: the repair only edits adopted pages, and 9 of pentra.dev's and 21 of
+  // LeadPilot's cut articles had none. At most RELATED_REPAIR_ADOPTIONS a run.
+  const titles = new Map<string, string>();
+  for (const row of published) {
+    if (!articleMatchesCurrentDomain(site, row)) continue;
+    try { titles.set(publishedArticleInternalHref(site.urlStructure, row.slug), row.title); } catch { /* an unsafe slug links nowhere */ }
+  }
+  const taken = new Set(candidates.map(candidate => candidate.url));
+  let repairs = 0;
+  for (const row of [...unadopted].sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0)).slice(0, RELATED_REPAIR_SCAN_ARTICLES)) {
+    if (repairs >= RELATED_REPAIR_ADOPTIONS || taken.has(row.publicUrl!)) continue;
+    const article = await ctx.db.get(row.articleId), live = article ? await publicRevisionProjection(ctx, site, article) : null;
+    if (!live?.markdown || !relatedReadingRepairProposal(live.markdown, titles, relatedReadingTitle)) continue;
+    const candidate = candidateFor(article, row.publicUrl!, true);
+    if (candidate) { candidates.push(candidate); repairs += 1; }
   }
   return { site, connectionHash, profileHash: confirmedContentProfileHash(site), candidates };
+} });
+const RELATED_REPAIR_SCAN_ARTICLES = 60, RELATED_REPAIR_ADOPTIONS = 10;
+
+/** P192: an adoption made for the link-title repair opens a new repair pass at
+ * the next scheduler pass (the last pass may be resting for a week). */
+export const reopenRelatedRepair = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId), schedule = site?.contentSchedule;
+  if (!site || !schedule || schedule.relatedRepairCursor) return { reopened: false };
+  await ctx.db.patch(siteId, { contentSchedule: { ...schedule, relatedRepairRetryAt: Date.now() }, updatedAt: Date.now() });
+  return { reopened: true };
 } });
 
 /** Adopt one verified Pentra-owned article as a refreshable page. Consent is
