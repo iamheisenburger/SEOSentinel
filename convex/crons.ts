@@ -183,5 +183,7 @@ crons.interval("site-health-first-check", { hours: 2 }, internal.siteHealth.sche
 // D4 (P127): each content-service site's owner gets last month's report on the
 // 3rd, once Google's data for the month is complete.
 crons.monthly("customer-monthly-report", { day: 3, hourUTC: 15, minuteUTC: 0 }, internal.customerEmails.monthlyReports, {});
+// P196: a site added 20-72 hours ago that Pentra hasn't started for gets one email naming what's left.
+crons.interval("customer-setup-reminders", { hours: 3 }, internal.customerEmails.noteSetupReminders, {});
 
 export default crons;

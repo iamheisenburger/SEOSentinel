@@ -45,6 +45,35 @@ export function firstArticleEmail(input: { domain: string; title: string; url: s
   return { subject: `Your first article is live on ${input.domain}`, text: lines.join("\n") };
 }
 
+/** P196: what a new site still needs before Pentra can start, in the order the setup panel asks for it. */
+export type SetupStep = "website" | "plan" | "start";
+const SETUP_STEP: Record<SetupStep, string> = {
+  website: "connect your website so Pentra can publish to it (WordPress, GitHub, Webflow, Shopify or Ghost). If your site runs on something else, choose “Paste the articles yourself” in setup instead.",
+  plan: "check your plan in Plans & billing (https://pentra.dev/upgrade).",
+  start: "check your business details, tick “My business details are accurate” and press Start Pentra.",
+};
+
+/** P196 (Oct 25 2026): the one email a site's owner gets when, a day after adding the site, Pentra hasn't started for it.
+ * The first two real signups never started (one never pressed Start, one never connected a website) and nothing told them what was left. */
+export function setupReminderEmail(input: { domain: string; step: SetupStep }): { subject: string; text: string } {
+  const lines = [
+    `You added ${input.domain} to Pentra, but Pentra hasn't started writing for it yet.`,
+    "",
+    `What's left: ${SETUP_STEP[input.step].replace(/^./, c => c.toUpperCase())}`,
+    "",
+    "Finish setup in your dashboard: https://pentra.dev/dashboard",
+    "",
+    "Once you start, Pentra writes your first article from the business details you confirmed and checks it against its sources.",
+    "",
+    "If something in setup didn't work, reply to this email and tell us where it stopped.",
+    "",
+    "Pentra",
+    "",
+    `You get this email because you added ${input.domain} to Pentra. You can turn these emails off in Settings: https://pentra.dev/settings`,
+  ];
+  return { subject: `One step left to start Pentra on ${input.domain}`, text: lines.join("\n") };
+}
+
 /** Why a scheduled article is late, as the owner can act on it. */
 export type MissedSlotCause = "connection" | "plan" | "writing_service" | "internal" | "checks" | "no_topics" | "preparing";
 const WRITING_SERVICE_FAILURES = new Set(["content_provider_unavailable", "content_provider_credit_unavailable",

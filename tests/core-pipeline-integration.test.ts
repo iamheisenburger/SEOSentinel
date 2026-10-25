@@ -9331,6 +9331,55 @@ test("D4 no first-article email when the owner turned emails off, or the site al
   off.assertOffline(); older.assertOffline();
 });
 
+// P196 (Oct 25 2026): the first two real signups never started Pentra (one never pressed Start, one never connected a
+// website) and nothing told them what was left. A site added 20-72 hours ago that Pentra hasn't started for gets one email.
+test("P196 a site Pentra hasn't started for a day after it was added gets one email naming what's left", async () => {
+  const hour = 3_600_000;
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = f.sites[0], owner = f.get(site.id)!.userId;
+  await f.invoke("customerEmails:recordContact", { userId: owner, email: "owner@reservoirnote.example" });
+  f.restartRuntime({ RESEND_API_KEY: "re_synthetic" });
+  assert.deepEqual(await f.invoke("customerEmails:noteSetupReminders", {}), { noted: 0 }, "not in its first 20 hours");
+  f.setTime(f.now() + 21 * hour);
+  // Its website is not connected yet.
+  const saved = f.get(site.id)!, receipt = saved.publisherDestinationReceipt;
+  saved.publisherDestinationReceipt = undefined;
+  assert.deepEqual(await f.invoke("customerEmails:noteSetupReminders", {}), { noted: 1 });
+  const log = f.tables.customer_emails.find(e => e.kind === "setup_reminder")!;
+  assert.deepEqual(await f.invoke("customerEmails:send", { logId: log._id }), { status: "sent" });
+  const email = f.opsEmails.at(-1)!;
+  assert.deepEqual(email.to, ["owner@reservoirnote.example"]); assert.equal(email.reply_to, "pentrahelp@gmail.com");
+  assert.equal(email.subject, `One step left to start Pentra on ${site.domain}`);
+  assert.match(String(email.text), /What's left: Connect your website so Pentra can publish to it/);
+  assert.deepEqual(await f.invoke("customerEmails:noteSetupReminders", {}), { noted: 0 }, "once per site");
+  assert.equal(f.tables.customer_emails.filter(e => e.kind === "setup_reminder").length, 1);
+  // A connected site that only needs Start is told to press it; one that started meanwhile is told nothing.
+  saved.publisherDestinationReceipt = receipt;
+  const second = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const ready = second.sites[0];
+  await second.invoke("customerEmails:recordContact", { userId: second.get(ready.id)!.userId, email: "owner@reservoirnote.example" });
+  second.restartRuntime({ RESEND_API_KEY: "re_synthetic" });
+  second.setTime(second.now() + 30 * hour);
+  assert.deepEqual(await second.invoke("customerEmails:noteSetupReminders", {}), { noted: 1 });
+  const readyLog = second.tables.customer_emails.find(e => e.kind === "setup_reminder")!;
+  const preview = await second.invoke("customerEmails:noticeContext", { logId: readyLog._id });
+  assert.match(preview.message.text, /What's left: Check your business details, tick “My business details are accurate” and press Start Pentra\./);
+  second.add("articles", { siteId: ready.id, status: "draft", title: "A first draft", slug: "first-draft", markdown: "Draft.", createdAt: second.now() });
+  assert.deepEqual(await second.invoke("customerEmails:send", { logId: readyLog._id }), { status: "skipped" });
+  assert.equal(second.get(readyLog._id)!.reason, "no_longer_true");
+  assert.equal(second.opsEmails.length, 0);
+  // A site already on Autopilot is never reminded.
+  const started = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  await selectGrowth(started);
+  started.setTime(started.now() + 30 * hour);
+  assert.deepEqual(await started.invoke("customerEmails:noteSetupReminders", {}), { noted: 0 });
+  // Three days on, a site that never started is no longer emailed.
+  const late = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  late.setTime(late.now() + 73 * hour);
+  assert.deepEqual(await late.invoke("customerEmails:noteSetupReminders", {}), { noted: 0 });
+  f.assertOffline(); second.assertOffline(); started.assertOffline(); late.assertOffline();
+});
+
 // D4 (P126, Oct 20 2026): when an Autopilot article is 6h+ late, the owner
 // hears it and why, once per slot and at most daily; never when they paused it.
 test("D4 the owner hears once when an Autopilot article is 6 hours late, and why", async () => {

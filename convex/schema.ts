@@ -1772,7 +1772,7 @@ export default defineSchema({
   // removes them.
   customer_emails: defineTable({
     siteId: v.id("sites"),
-    kind: v.union(v.literal("first_article"), v.literal("missed_slot"), v.literal("monthly_report")),
+    kind: v.union(v.literal("first_article"), v.literal("missed_slot"), v.literal("monthly_report"), v.literal("setup_reminder")),
     key: v.string(),
     status: v.union(v.literal("pending"), v.literal("sent"), v.literal("skipped"), v.literal("failed")),
     reason: v.optional(v.string()),

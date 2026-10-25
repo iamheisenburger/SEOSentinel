@@ -1,8 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { firstArticleEmail, missedSlotCause, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth } from "../convex/lib/customerNotices.ts";
+import { firstArticleEmail, missedSlotCause, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth, setupReminderEmail } from "../convex/lib/customerNotices.ts";
 
 // D4 (P125-P126, Oct 20 2026): what Pentra tells a site's owner, in plain words.
+
+// P196 (Oct 25 2026): the first two real signups never started Pentra and nothing told them what was left.
+test("the setup reminder names the one step that is left, and how to turn emails off", () => {
+  const website = setupReminderEmail({ domain: "cedarcare.example", step: "website" });
+  assert.equal(website.subject, "One step left to start Pentra on cedarcare.example");
+  assert.match(website.text, /^You added cedarcare\.example to Pentra, but Pentra hasn't started writing for it yet\./);
+  assert.match(website.text, /What's left: Connect your website so Pentra can publish to it \(WordPress, GitHub, Webflow, Shopify or Ghost\)\. If your site runs on something else, choose “Paste the articles yourself” in setup instead\./);
+  assert.match(setupReminderEmail({ domain: "cedarcare.example", step: "plan" }).text, /What's left: Check your plan in Plans & billing \(https:\/\/pentra\.dev\/upgrade\)\./);
+  const start = setupReminderEmail({ domain: "cedarcare.example", step: "start" });
+  assert.match(start.text, /What's left: Check your business details, tick “My business details are accurate” and press Start Pentra\./);
+  for (const email of [website, start]) {
+    assert.match(email.text, /Finish setup in your dashboard: https:\/\/pentra\.dev\/dashboard/);
+    assert.match(email.text, /reply to this email and tell us where it stopped/);
+    assert.match(email.text, /turn these emails off in Settings: https:\/\/pentra\.dev\/settings$/);
+    assert.doesNotMatch(email.text, /within (a|24) (day|hours)/, "no promise the product can't keep for every site");
+  }
+});
 
 test("a late article's cause: the connection first, then the failure, then topics", () => {
   const base = { destinationVerified: true, plannedTopics: 5, failure: null };

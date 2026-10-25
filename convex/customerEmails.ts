@@ -1,10 +1,14 @@
-import { internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type MutationCtx } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { plausibleEmail, sendCustomerEmail } from "./lib/customerEmail";
-import { firstArticleEmail, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth, type MissedSlotCause,
-  type MonthlyImprovement, type MonthlySearch } from "./lib/customerNotices";
+import { firstArticleEmail, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth, setupReminderEmail, type MissedSlotCause,
+  type MonthlyImprovement, type MonthlySearch, type SetupStep } from "./lib/customerNotices";
+import { contentConnectionComplete, pasteDestination } from "./lib/contentSelection";
+import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
+import { publicationDestinationBlockers } from "./lib/autopilotReadiness";
+import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
 import { collectCurrentDomainPublishedSummariesSince, gscConnectionMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { publishedArticlePageUrl } from "./lib/searchPerformance";
 import { isCompleteGscDateRange } from "./lib/gscSearchAnalytics";
@@ -111,6 +115,51 @@ export const monthlyReports = internalMutation({ args: { cursor: v.optional(v.un
   return { noted };
 } });
 
+/** P196 (Oct 25 2026): a site added 20 to 72 hours ago that Pentra hasn't
+ * started for gets one email naming what's left (decided again at send time).
+ * The first two real signups never started, and nothing told them why. */
+const SETUP_REMINDER_AFTER_MS = 20 * 3_600_000, SETUP_REMINDER_UNTIL_MS = 72 * 3_600_000, SETUP_REMINDER_SPACING_MS = 1_500;
+export const noteSetupReminders = internalMutation({ args: {}, handler: async (ctx) => {
+  const now = Date.now();
+  const sites = await ctx.db.query("sites").withIndex("by_creation_time", q => q.gte("_creationTime", now - SETUP_REMINDER_UNTIL_MS)
+    .lte("_creationTime", now - SETUP_REMINDER_AFTER_MS)).take(200);
+  let noted = 0;
+  for (const site of sites) {
+    if (!site.userId || site.deletionStatus || site.accountDeletionRequestedAt || site.planParkedAt) continue;
+    if (await setupStarted(ctx, site)) continue;
+    const logged = await ctx.db.query("customer_emails")
+      .withIndex("by_site_kind_key", q => q.eq("siteId", site._id).eq("kind", "setup_reminder").eq("key", "first")).first();
+    if (logged) continue;
+    const logId = await ctx.db.insert("customer_emails", { siteId: site._id, kind: "setup_reminder", key: "first", status: "pending",
+      attempts: 0, createdAt: now, updatedAt: now });
+    await ctx.scheduler.runAfter(noted * SETUP_REMINDER_SPACING_MS, internal.customerEmails.send, { logId });
+    noted++;
+  }
+  return { noted };
+} });
+
+/** Pentra has started for a site once its owner pressed Start (either way of
+ * publishing), an article was asked for, or any article exists. */
+async function setupStarted(ctx: QueryCtx | MutationCtx, site: Doc<"sites">) {
+  if ((site.serviceMode === "growth_first" && site.contentSchedule) || site.contentSchedule?.autopilotSelectedAt) return true;
+  if ((await ctx.db.query("articles").withIndex("by_site", q => q.eq("siteId", site._id)).take(1)).length > 0) return true;
+  return (await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", site._id)).take(20))
+    .some(job => job.contentWork !== undefined || job.type === "article");
+}
+
+/** The first thing a site still needs, in the order the setup panel asks for it. */
+async function setupStep(ctx: QueryCtx, site: Doc<"sites">): Promise<SetupStep> {
+  let website = false;
+  try {
+    website = pasteDestination(site) ||
+      (contentConnectionComplete(site) && publisherDestinationReceiptVerified({ site }) && publicationDestinationBlockers(site).length === 0);
+  } catch { /* an incomplete destination is the website step */ }
+  if (!website) return "website";
+  const entitlement = await ctx.db.query("account_plan_entitlements").withIndex("by_user", q => q.eq("userId", site.userId!)).unique();
+  if (entitlement?.status !== "completed" || !(await siteExecutionAuthorized(ctx, site))) return "plan";
+  return "start";
+}
+
 /** One pending email, with its message, the owner's address and the attempts so far. */
 export const noticeContext = internalQuery({ args: { logId: v.id("customer_emails") }, handler: async (ctx, { logId }) => {
   const log = await ctx.db.get(logId);
@@ -162,6 +211,9 @@ export const noticeContext = internalQuery({ args: { logId: v.id("customer_email
       nextAt: site.contentSchedule && !site.contentSchedule.paused && site.contentSchedule.nextDeadlineAt > Date.now()
         ? site.contentSchedule.nextDeadlineAt : null, timeZone });
     if (!message) skipReason = "nothing_to_report";
+  } else if (log.kind === "setup_reminder") {
+    // Started since it was noted: nothing is left to tell.
+    if (site.userId && !(await setupStarted(ctx, site))) message = setupReminderEmail({ domain, step: await setupStep(ctx, site) });
   } else if (log.kind === "missed_slot" && log.cause) {
     // A slot that has since been published or skipped past needs no email.
     if (site.contentSchedule && site.contentSchedule.nextDeadlineAt === Number(log.key) && !site.contentSchedule.paused) {
