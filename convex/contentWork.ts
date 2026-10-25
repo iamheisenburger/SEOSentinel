@@ -1342,11 +1342,13 @@ const keptByBuyerFit = (t: Doc<"topic_clusters">) => t.buyerFit?.eligible === tr
 export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: Doc<"sites">,
   excludedIntents: { primaryKeyword: string; label?: string }[] = [],
   // P177: the caller's own read of the same topics (takeCurrentDomainTopics with LIMIT + 1), not read twice.
-  preloadedTopics?: Doc<"topic_clusters">[]) {
+  preloadedTopics?: Doc<"topic_clusters">[],
+  // P190: the caller's own read of the site's pages (by_site, LIMIT + 1).
+  preloadedPages?: Doc<"pages">[]) {
   const topics = preloadedTopics ?? await takeCurrentDomainTopics(ctx, site, LIMIT + 1);
   if (topics.length > LIMIT) throw new Error("Topic inventory is incomplete");
   const signals = tenantTopicBusinessSignals(site);
-  const pages = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", site._id)).take(LIMIT + 1);
+  const pages = preloadedPages ?? await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", site._id)).take(LIMIT + 1);
   if (pages.length > LIMIT) throw new Error("Existing page inventory is incomplete");
   const pageCoverage = pages.filter(p => pageMatchesCurrentDomain(site, p) && !["", "/", "/index"].includes(p.slug))
     .flatMap(p => [...(p.keywords ?? []), ...(p.title ? [p.title] : [])].map(primaryKeyword => ({ primaryKeyword })));
@@ -1429,8 +1431,9 @@ export function fallbackTopicProposals(site: Doc<"sites">, inventory: Awaited<Re
 }
 async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: Id<"topic_clusters">,
   excludedIntents: { primaryKeyword: string; label?: string }[] = [],
-  options: { demandOnly?: boolean; runway?: { planned: number; searched: number } } = {}) {
-  const inventory = await eligiblePlannedTopics(ctx, site, excludedIntents);
+  options: { demandOnly?: boolean; runway?: { planned: number; searched: number };
+    preloaded?: { pages: Doc<"pages">[]; topics: Doc<"topic_clusters">[] } } = {}) {
+  const inventory = await eligiblePlannedTopics(ctx, site, excludedIntents, options.preloaded?.topics, options.preloaded?.pages);
   const { planned, searched } = inventory;
   if (options.runway) Object.assign(options.runway, { planned: planned.length, searched: planned.filter(searched).length });
   if (preferredId) return planned.find(t => t._id === preferredId) ?? null;
@@ -2329,9 +2332,15 @@ export const advance = internalMutation({
     const nextOpenSlot = schedule.nextDeadlineAt + waiting.length * schedule.intervalMs;
     const failedAtNextOpen = work.filter(j => j.contentWork!.deadlineAt === nextOpenSlot);
     const replacementDue = Boolean(schedule.autopilotSelectedAt) && failedAtNextOpen.length === 1 && autopilotReplaceable(failedAtNextOpen[0]);
-    const improvement = replaceNextSlot || replacementDue ? null : await chooseImprovement(ctx, site, work);
+    // P190 (Oct 25 2026): the site's pages and topics are read once for this pass.
+    // The improvement choice and each topic choice read them again: on LeadPilot
+    // a preparation pass read its 64 pages (1.5 MB, with their full text) three
+    // times and its 393 topics twice, about 8 MB a pass.
+    const preloaded = { pages: await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId)).take(LIMIT + 1),
+      topics: await takeCurrentDomainTopics(ctx, site, LIMIT + 1) };
+    const improvement = replaceNextSlot || replacementDue ? null : await chooseImprovement(ctx, site, work, preloaded.pages);
     const runway = { planned: 0, searched: 0 };
-    let topic = improvement ? null : await chooseTopic(ctx, site, undefined, [], { demandOnly: Boolean(schedule.autopilotSelectedAt), runway });
+    let topic = improvement ? null : await chooseTopic(ctx, site, undefined, [], { demandOnly: Boolean(schedule.autopilotSelectedAt), runway, preloaded });
     if (!improvement && !topic && schedule.autopilotSelectedAt) {
       // No searched keyword is left: research new ones for the confirmed
       // business (within the ordinary spend limits). When the slot allows, the
@@ -2342,7 +2351,7 @@ export const advance = internalMutation({
           siteId, trigger: "content_work", reason: "content_work_stage_changed" });
         return { scheduled: 0, mode: "topics_researching" };
       }
-      topic = await chooseTopic(ctx, site);
+      topic = await chooseTopic(ctx, site, undefined, [], { preloaded });
     }
     if (!topic && !improvement) {
       // Wake exactly when keyword research may run again, instead of waiting

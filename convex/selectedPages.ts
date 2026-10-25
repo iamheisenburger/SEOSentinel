@@ -190,8 +190,10 @@ export async function exhaustedImprovementPages(ctx: QueryCtx | MutationCtx, sit
 
 /** Reuse the daily ingestion's exact tenant/date/epoch receipts. Weekly bounded
  * selection is discretionary; absent metrics do not veto unrelated creation. */
-export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jobs: Doc<"jobs">[]) {
-  const pages = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", site._id)).take(501);
+export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jobs: Doc<"jobs">[],
+  // P190: the scheduler pass's own read of the site's pages (by_site), shared with its topic choice.
+  preloadedPages?: Doc<"pages">[]) {
+  const pages = preloadedPages ?? await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", site._id)).take(501);
   if (pages.length > 500) return null;
   // Refreshes of Pentra's own older articles take at most one slot in four
   // and revisit the same article at most every 60 days (lib/articleRefresh).

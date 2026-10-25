@@ -9841,7 +9841,7 @@ test("B corrections and rollbacks work on a site with more than 500 jobs, readin
 // 18:00Z article published, so its next slot could not be prepared. A CPU profile at its size (393 topics, 120
 // articles, 64 pages, 2,402 Search Console rows) put most of the time in the business-fit gate re-deriving the same
 // stems, profile readings and verdicts thousands of times. They are computed once now; verdicts are unchanged.
-test("P188 a preparation pass at LeadPilot's size reuses fit verdicts and stays far inside the time limit", async () => {
+test("P188/P190 a preparation pass at LeadPilot's size stays far inside the time limit and reads pages and topics once", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
   const selected = await selectExistingPage(f, "md", `${correctionSurvivor}\n\n${"Irrigation teams record each valve, pump and zone check before the season starts. ".repeat(120)}`);
   const site = await selectGrowth(f, 86_400_000), saved = f.get(site.id)!;
@@ -9881,8 +9881,15 @@ test("P188 a preparation pass at LeadPilot's size reuses fit verdicts and stays 
     for (const job of f.tables.jobs ?? []) if (job.contentWork && job.status === "pending") Object.assign(job, { status: "failed" }, { contentWork: { ...job.contentWork, stage: "failed", retiredAt: f.now() } });
     return { mode: result.mode, ms: performance.now() - started };
   };
-  const first = await pass(), second = await pass();
+  const first = await pass();
+  const readsBefore = f.queryReads.length;
+  const second = await pass();
   assert.equal(first.mode, "buffer_fill"); assert.equal(second.mode, "buffer_fill");
+  // P190: one read each of the site's pages (their full text: 1.5 MB on LeadPilot) and topics for the whole pass,
+  // shared by the improvement choice and every topic choice (it was three and two: ~8 MB a pass).
+  const reads = f.queryReads.slice(readsBefore), count = (table: string) => reads.filter(r => r.table === table && r.index === "by_site").length;
+  assert.equal(count("pages"), 1, "pages are read once a pass");
+  assert.equal(count("topic_clusters"), 1, "topics are read once a pass");
   assert.ok(second.ms < 500, `a pass at this size takes ${Math.round(second.ms)} ms`);
   f.assertOffline();
 });
