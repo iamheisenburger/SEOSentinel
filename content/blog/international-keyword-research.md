@@ -126,6 +126,6 @@ Start with Step 2: check whether you already have any organic signal from that c
 
 ## Related reading
 
-- [Fiverr Keyword Research](/blog/fiverr-keywords-research)
-- [Keyword Clustering for Content Planning](/blog/keyword-clustering-content-planning)
-- [Keyword Clustering Strategy](/blog/keyword-clustering-strategy-organize-by-intent)
+- [Fiverr Keyword Research: A Practical Framework for Finding Terms Buyers Actually Search](/blog/fiverr-keywords-research)
+- [Keyword Clustering for Content Planning: A Complete Guide to Strategic SEO Organization](/blog/keyword-clustering-content-planning)
+- [Keyword Clustering Strategy: How to Organize Keywords by Search Intent](/blog/keyword-clustering-strategy-organize-by-intent)
