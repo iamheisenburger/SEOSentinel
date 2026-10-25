@@ -86,6 +86,9 @@ export const signupFunnel = internalQuery({ args: { since: v.number() }, handler
     searchConsole: 0, workStarted: 0, articleWaiting: 0, articlePublished: 0, planActive: 0, pasteChosen: 0 };
   // P184: which website each verified destination is, and whether the account's plan lets "Start Pentra" run.
   const publishMethods: Record<string, number> = {}, verifiedDestinations: Record<string, number> = {};
+  // P198: how far GitHub sites got through connecting, by presence only (never a value). New sites default to
+  // GitHub, so "github" in publishMethods includes owners who never chose a platform: "connectStarted" tells them apart.
+  const github = { sites: 0, connectStarted: 0, accountConnected: 0, repositoryChosen: 0, verified: 0 };
   const has = async (siteId: Id<"sites">, status: string) =>
     (await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", status)).take(1)).length > 0;
   for (const site of sites) {
@@ -108,11 +111,19 @@ export const signupFunnel = internalQuery({ args: { since: v.number() }, handler
     if (site.gscProperty) counts.searchConsole++;
     const method = site.publishMethod ?? "none";
     publishMethods[method] = (publishMethods[method] ?? 0) + 1;
+    if (method === "github") {
+      github.sites++;
+      const account = Boolean(site.githubToken), repository = Boolean(site.repoOwner && site.repoName);
+      if (account || repository || receipt) github.connectStarted++;
+      if (account) github.accountConnected++;
+      if (repository) github.repositoryChosen++;
+      if (receipt?.method === "github" && receipt.status === "verified") github.verified++;
+    }
     if ((await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", site._id)).take(1)).length) counts.workStarted++;
     if (await has(site._id, "published")) counts.articlePublished++;
     else if (await has(site._id, "ready") || await has(site._id, "review")) counts.articleWaiting++;
   }
-  return { since, ...counts, publishMethods, verifiedDestinations };
+  return { since, ...counts, publishMethods, verifiedDestinations, github };
 } });
 
 /** P191 (Oct 25 2026): why Autopilot's Related reading repair (P176/P180) left a

@@ -9853,6 +9853,18 @@ test("P182 the signup funnel counts how far new sites got, never naming a site o
   assert.equal(after.verifiedDestinations.github, after.destinationVerified, JSON.stringify(after.verifiedDestinations));
   assert.ok(after.planActive >= 1 && after.planActive <= after.sites, JSON.stringify(after));
   assert.equal((await f.invoke("opsProbes:signupFunnel", { since: f.now() + 60_000 })).sites, 0, "only sites added since the time asked");
+  // P198: how far GitHub sites got through connecting. One real signup's site was on GitHub (the default) and unverified:
+  // never started, or stopped at the account or the repository?
+  const second = f.tables.sites.find(s => s._id !== site.id)!;
+  Object.assign(second, { publishMethod: "github", githubToken: "synthetic-secret-token-value", repoOwner: undefined, repoName: undefined,
+    publisherDestinationReceipt: undefined });
+  const third = f.add("sites", { ...second, _id: undefined, domain: "never-connected.example", userId: "synthetic-third-owner",
+    githubToken: undefined });
+  const staged = await f.invoke("opsProbes:signupFunnel", { since: 0 });
+  assert.deepEqual(staged.github, { sites: 3, connectStarted: 2, accountConnected: 2, repositoryChosen: 1, verified: 1 },
+    "the Autopilot site is connected; one account is connected with no repository; one never started connecting");
+  assert.ok(!JSON.stringify(staged).includes("synthetic-secret-token-value"), "presence only, never a token");
+  assert.ok(third);
   const text = JSON.stringify(after);
   for (const stored of f.tables.sites) for (const value of [stored.domain, stored.userId, stored.siteName].filter(Boolean)) {
     assert.ok(!text.includes(String(value)), `the funnel named ${value}`);
