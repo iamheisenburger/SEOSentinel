@@ -9589,6 +9589,9 @@ test("P182 the signup funnel counts how far new sites got, never naming a site o
   assert.equal(after.contentServiceChosen, 1); assert.equal(after.autopilotChosen, 1); assert.equal(after.publishesAutomatically, 1);
   assert.equal(after.workStarted, 1); assert.equal(after.articleWaiting, 1); assert.equal(after.articlePublished, 0);
   assert.equal(after.freePlan + after.paidPlan + after.removed, after.sites);
+  // P184: the step "Start Pentra" waits on: a verified website (by platform) and an active plan.
+  assert.equal(after.verifiedDestinations.github, after.destinationVerified, JSON.stringify(after.verifiedDestinations));
+  assert.ok(after.planActive >= 1 && after.planActive <= after.sites, JSON.stringify(after));
   assert.equal((await f.invoke("opsProbes:signupFunnel", { since: f.now() + 60_000 })).sites, 0, "only sites added since the time asked");
   const text = JSON.stringify(after);
   for (const stored of f.tables.sites) for (const value of [stored.domain, stored.userId, stored.siteName].filter(Boolean)) {

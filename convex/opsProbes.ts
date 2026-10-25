@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getLimitsFromFeatures } from "./planLimits";
 import { autopilotPublicationConsented } from "./lib/autopilotEditor";
+import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
 
 /** Operator reads for V9 (Oct 24 2026): how large the documents are that the
  * product reads most often, as byte counts, stage labels and field names only
@@ -77,8 +78,9 @@ export const signupFunnel = internalQuery({ args: { since: v.number() }, handler
   const sites = await ctx.db.query("sites").withIndex("by_creation_time", q => q.gte("_creationTime", since)).take(500);
   const counts = { sites: sites.length, accounts: new Set(sites.map(site => site.userId).filter(Boolean)).size, removed: 0, freePlan: 0, paidPlan: 0,
     profileRead: 0, contentServiceChosen: 0, autopilotChosen: 0, publishesAutomatically: 0, reviewFirst: 0, destinationVerified: 0,
-    searchConsole: 0, workStarted: 0, articleWaiting: 0, articlePublished: 0 };
-  const publishMethods: Record<string, number> = {};
+    searchConsole: 0, workStarted: 0, articleWaiting: 0, articlePublished: 0, planActive: 0, pasteChosen: 0 };
+  // P184: which website each verified destination is, and whether the account's plan lets "Start Pentra" run.
+  const publishMethods: Record<string, number> = {}, verifiedDestinations: Record<string, number> = {};
   const has = async (siteId: Id<"sites">, status: string) =>
     (await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", status)).take(1)).length > 0;
   for (const site of sites) {
@@ -89,7 +91,15 @@ export const signupFunnel = internalQuery({ args: { since: v.number() }, handler
     if (site.contentSchedule?.autopilotSelectedAt) counts.autopilotChosen++;
     if (autopilotPublicationConsented(site)) counts.publishesAutomatically++;
     if (site.approvalRequired || site.contentSchedule?.ownerReviewedOnly) counts.reviewFirst++;
-    if (site.publisherDestinationReceipt) counts.destinationVerified++;
+    const receipt = site.publisherDestinationReceipt;
+    if (receipt) {
+      counts.destinationVerified++;
+      const kind = receipt.status === "verified" ? receipt.method : `${receipt.method} (${receipt.status})`;
+      verifiedDestinations[kind] = (verifiedDestinations[kind] ?? 0) + 1;
+    }
+    if (site.publishMethod === "manual") counts.pasteChosen++;
+    const entitlement = site.userId ? await ctx.db.query("account_plan_entitlements").withIndex("by_user", q => q.eq("userId", site.userId!)).unique() : null;
+    if (entitlement?.status === "completed" && await siteExecutionAuthorized(ctx, site)) counts.planActive++;
     if (site.gscProperty) counts.searchConsole++;
     const method = site.publishMethod ?? "none";
     publishMethods[method] = (publishMethods[method] ?? 0) + 1;
@@ -97,5 +107,5 @@ export const signupFunnel = internalQuery({ args: { since: v.number() }, handler
     if (await has(site._id, "published")) counts.articlePublished++;
     else if (await has(site._id, "ready") || await has(site._id, "review")) counts.articleWaiting++;
   }
-  return { since, ...counts, publishMethods };
+  return { since, ...counts, publishMethods, verifiedDestinations };
 } });
