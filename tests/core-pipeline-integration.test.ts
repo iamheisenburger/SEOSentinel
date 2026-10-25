@@ -4697,6 +4697,44 @@ test("P104 slot guarantee, operator pace and links on Autopilot-accepted drafts"
   });
 });
 
+/** P195: run the per-site sweeps the nightly fleet action scheduled, and nothing else, in their order. */
+async function runScheduledSweeps(f: ReturnType<typeof setup>) {
+  const results: Fields[] = [];
+  const due = f.tables._scheduled_functions.filter(row => row.name === "actions/growthTopics:sweepBuyerFit" && row.state.kind === "pending")
+    .sort((a, b) => a.at - b.at);
+  for (const row of due) {
+    row.state = { kind: "inProgress" };
+    results.push(await f.invoke(row.name, row.args));
+    row.state = { kind: "success" };
+  }
+  return results;
+}
+
+// P195 (Oct 25 2026): the nightly sweep ran every site one after another inside one action. With P194's plan audit (two
+// model calls a site) it would pass Convex's 10-minute action limit at a few dozen sites, and the last sites would never
+// be swept.
+test("P195 the nightly sweep schedules each Autopilot site as its own action and calls no model itself", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+  const site = await selectGrowth(f);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  // A second Autopilot site, and one that has not started Autopilot.
+  const second = f.add("sites", { ...f.get(site.id)!, _id: undefined, domain: "second-autopilot.example", userId: "synthetic-second-owner" });
+  const idle = f.add("sites", { ...f.get(site.id)!, _id: undefined, domain: "not-started.example", userId: "synthetic-idle-owner",
+    contentSchedule: { ...f.get(site.id)!.contentSchedule, autopilotSelectedAt: undefined } });
+  const calls = f.modelCalls.length;
+  assert.deepEqual(await f.invoke("actions/growthTopics:sweepBuyerFitFleet", {}), { sites: 2 });
+  assert.equal(f.modelCalls.length, calls, "the fleet action only schedules");
+  const scheduled = f.tables._scheduled_functions.filter(row => row.name === "actions/growthTopics:sweepBuyerFit" && row.state.kind === "pending");
+  assert.deepEqual(scheduled.map(row => row.args.siteId).sort(), [site.id, second].sort(), "one sweep per Autopilot site, none for a site not started");
+  assert.ok(!scheduled.some(row => row.args.siteId === idle));
+  const times = scheduled.map(row => row.at).sort((a, b) => a - b);
+  assert.ok(times[1] - times[0] >= 3_000, "spaced a few seconds apart");
+  const results = await runScheduledSweeps(f);
+  assert.equal(results.length, 2);
+  assert.ok(results.every(result => typeof result.judged === "number" && typeof result.rejected === "number"));
+  f.assertOffline();
+});
+
 // P105 (Oct 19 2026): buyer fit. LeadPilot (a B2B lead-qualification chat
 // widget) had "twitch chat widget" queued; word overlap admitted it. One cheap
 // model call judges researched keywords for the business, a daily sweep judges
@@ -4746,8 +4784,8 @@ test("P105 Autopilot writes only searches the business can serve", async t => {
       priority: 50, searchVolume, keywordDifficulty: 5, keywordDifficultyMeasured: true, createdAt: f.now(), updatedAt: f.now() });
     // Both pass the lexical checks; the model judges the bigger one another market.
     const unfit = topic("irrigation pump alert triage", 2400), fit = topic("irrigation pressure alert planning", 90);
-    const swept = await f.invoke("actions/growthTopics:sweepBuyerFitFleet", {});
-    assert.deepEqual(swept, { sites: 1, judged: 2, rejected: 1 });
+    assert.deepEqual(await f.invoke("actions/growthTopics:sweepBuyerFitFleet", {}), { sites: 1 });
+    assert.deepEqual(await runScheduledSweeps(f), [{ judged: 2, rejected: 1 }]);
     assert.equal(f.get(unfit)!.buyerFit.eligible, false);
     assert.equal(f.get(fit)!.buyerFit.eligible, true);
     // The lexical product-fit audit re-qualifies the topic; the buyer-fit verdict stands.
@@ -4789,8 +4827,8 @@ test("P105 Autopilot writes only searches the business can serve", async t => {
     const holder = f.add("jobs", { siteId: site.id, type: "article", status: "done", payload: { topicId: held, bufferFill: true },
       contentWork: { stage: "ready", deadlineAt: f.now() + 30 * day, windowStartAt: f.now() + 29 * day, profileHash: "p", connectionHash: "c",
         revisions: 0, replacements: 0, discardedArticleIds: [] }, createdAt: old, updatedAt: old });
-    const swept = await f.invoke("actions/growthTopics:sweepBuyerFitFleet", {});
-    assert.deepEqual(swept, { sites: 1, judged: 2, rejected: 1 }, "both stranded searches are judged");
+    assert.deepEqual(await f.invoke("actions/growthTopics:sweepBuyerFitFleet", {}), { sites: 1 });
+    assert.deepEqual(await runScheduledSweeps(f), [{ judged: 2, rejected: 1 }], "both stranded searches are judged");
     assert.equal(f.get(stranded)!.status, "planned"); assert.equal(f.get(stranded)!.buyerFit.eligible, true);
     assert.equal(f.get(unfit)!.status, "planned"); assert.equal(f.get(unfit)!.buyerFit.eligible, false);
     assert.equal(f.get(improvement)!.status, "queued", "a per-attempt improvement row never re-enters the plan");

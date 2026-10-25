@@ -342,21 +342,25 @@ async function auditPlan(ctx: ActionCtx, siteId: Id<"sites">): Promise<{ dropped
     auditedIds: context.items.map(item => item.id), decisions: answered ? auditPlannedWork(context.items, groups) : [] });
 }
 
-/** Daily: every Autopilot site's unjudged planned topics get a verdict. */
+/** Daily: every Autopilot site's unjudged planned topics get a verdict and its
+ * plan an audit (P194). P195 (Oct 25 2026): each site's sweep is its own
+ * action, a few seconds apart. Run one after another inside this action (two
+ * model calls a site since P194), the sweep would pass Convex's 10-minute
+ * action limit at a few dozen sites, and the sites at the end of the list
+ * would never be swept; a slow or failing site no longer holds up the rest. */
+const SWEEP_SPACING_MS = 3_000;
 export const sweepBuyerFitFleet = internalAction({ args: {},
-  handler: async (ctx): Promise<{ sites: number; judged: number; rejected: number }> => {
-    let cursor: string | null = null, sites = 0, judged = 0, rejected = 0;
+  handler: async (ctx): Promise<{ sites: number }> => {
+    let cursor: string | null = null, sites = 0;
     for (let page = 0; page < 100; page++) {
       const batch: { siteIds: Id<"sites">[]; isDone: boolean; continueCursor: string } =
         await ctx.runQuery(internal.contentWork.buyerFitSweepSites, { cursor });
       for (const siteId of batch.siteIds) {
-        try {
-          const result = await ctx.runAction(internal.actions.growthTopics.sweepBuyerFit, { siteId });
-          sites++; judged += result.judged; rejected += result.rejected;
-        } catch (error) { console.warn(`Buyer-fit sweep skipped ${siteId}: ${error instanceof Error ? error.message : "unknown"}`); }
+        await ctx.scheduler.runAfter(sites * SWEEP_SPACING_MS, internal.actions.growthTopics.sweepBuyerFit, { siteId });
+        sites++;
       }
       if (batch.isDone) break;
       cursor = batch.continueCursor;
     }
-    return { sites, judged, rejected };
+    return { sites };
   } });
