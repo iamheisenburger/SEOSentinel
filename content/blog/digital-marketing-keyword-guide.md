@@ -1,12 +1,12 @@
 ---
 title: "Digital Marketing Keywords: How to Find and Organize the Terms That Actually Drive Traffic"
-metaTitle: "Digital Marketing Keywords: Find & Organize Terms"
-description: "Learn how to source, sort by intent, cluster, and prioritize digital marketing keywords into a workflow that turns them into published pages."
+metaTitle: "Digital Marketing Keywords: Find and Organize Terms"
+description: "Learn how to source marketing keywords without paid tools, sort them by search intent, cluster them into pages, and decide which terms to target first."
 generator: "pentra"
-pentraDeliveryKey: "pentra:a93e2713f329547e5d783f3a8e3562a898b959af789100e19e0c1879c90728ab"
+pentraDeliveryKey: "pentra:2863a0a62c525b91587ac10a2068b69df08388df3e64be48b623607ae2e85637"
 status: "published"
 qualityGateVersion: 7
-auditedContentHash: "62af6f6631b2cc62a324ca593ea4790f2c618f42d63b80b2b4b64c9648b029b5"
+auditedContentHash: "87262e4525e5d523badcfbb1c47f2bd9fb9cc400f01b0490de9e10b11326cf82"
 canonicalUrl: "https://pentra.dev/blog/digital-marketing-keyword-guide"
 featuredImage: "https://wary-starfish-773.convex.cloud/api/storage/979b6f93-14e6-4577-ba98-16adb2f634a2"
 readingTime: 8
@@ -125,6 +125,20 @@ When in doubt about which keyword to act on next, run it through this short filt
 Answering those four questions honestly, for every candidate keyword, is a more reliable use of your time than simply expanding the list further.
 
 [Try Pentra](https://pentra.dev/sign-up)
+
+## What are marketing keywords, and which ones should you target first?
+
+Marketing keywords are the phrases people type into a search box when they are trying to learn something, compare options, or take an action, and the ones worth targeting are the phrases tied to a decision your site can genuinely help with. A broad phrase is rarely the best place to begin, because a generic overview seldom resolves any single query well.
+
+To choose where to start, work through these steps:
+
+- **Collect candidates.** Pull phrases from search autocomplete, "people also ask," your site search, competitor headings, and the wording prospects use in sales conversations.
+- **Label the intent.** Mark each phrase as informational, navigational, commercial investigation, or transactional, so the page format you plan matches what the searcher wants.
+- **Merge near-duplicates.** If two phrases would produce nearly identical outlines, put them on the same page rather than splitting them across separate URLs.
+- **Start close to your offer.** Favor phrases that sit near what you sell, where the current results are not all dominated by large, established domains, and where your site has a gap in the buyer journey.
+- **Record the target.** Note which phrase each page is meant to answer, then review it against your own Search Console data on a schedule.
+
+If a page already appears in results for a broad marketing phrase but sits far from page one, check two things in your own data. First, which queries it actually appears for. Second, whether its format matches the intent of those queries. A narrower angle, or a tighter answer near the top of the page, is usually a better next edit than adding more keywords to the same page.
 
 ## Related reading
 
