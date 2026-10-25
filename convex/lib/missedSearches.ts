@@ -15,7 +15,7 @@ import { normalizeFitKeyword, type BuyerFitBusiness, type BuyerFitVerdict } from
 
 /** Bumped when the check's logic changes: a finished check from an older
  * version is run again on its next request instead of being reused. */
-export const FREE_CHECK_VERSION = 7;
+export const FREE_CHECK_VERSION = 8;
 
 /** A finished check is reused for a week, so a shared link costs nothing. */
 export const FREE_CHECK_CACHE_MS = 7 * 86_400_000;

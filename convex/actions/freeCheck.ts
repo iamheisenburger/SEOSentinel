@@ -48,8 +48,12 @@ export async function proposeSeeds(domain: string, html: string, questions: stri
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
   const model = process.env.TOPIC_FIT_MODEL ?? BUYER_FIT_MODEL;
   const request = searchSeedRequest(domain, homepageDigest(html), questions, sections);
+  // Temperature 0 (P187, Oct 25 2026): the same homepage must read the same way
+  // every run. At the default, abchomeandcommercial.com's six Texas cities came
+  // back on one run and none on the next, which turned a local business's report
+  // into national volumes.
   const response = await new Anthropic({ apiKey, maxRetries: 1, timeout: 45_000, fetch }).messages.create({
-    model, max_tokens: SEARCH_SEEDS_MAX_TOKENS, system: request.system,
+    model, max_tokens: SEARCH_SEEDS_MAX_TOKENS, temperature: 0, system: request.system,
     messages: [{ role: "user", content: request.userMessage }],
     tools: [{ name: SEARCH_SEEDS_TOOL, description: "Record the searches and the business summary.", input_schema: request.inputSchema, strict: true }],
     tool_choice: structuredToolChoice(model, SEARCH_SEEDS_TOOL),
@@ -66,7 +70,7 @@ async function coverPages(input: Parameters<typeof pageCoverageRequest>[0]) {
   const model = process.env.TOPIC_FIT_MODEL ?? BUYER_FIT_MODEL;
   const request = pageCoverageRequest(input);
   const response = await new Anthropic({ apiKey, maxRetries: 1, timeout: 60_000, fetch }).messages.create({
-    model, max_tokens: PAGE_COVERAGE_MAX_TOKENS, system: request.system,
+    model, max_tokens: PAGE_COVERAGE_MAX_TOKENS, temperature: 0, system: request.system,
     messages: [{ role: "user", content: request.userMessage }],
     tools: [{ name: PAGE_COVERAGE_TOOL, description: "Record the page and topic for every search.", input_schema: request.inputSchema, strict: true }],
     tool_choice: structuredToolChoice(model, PAGE_COVERAGE_TOOL),

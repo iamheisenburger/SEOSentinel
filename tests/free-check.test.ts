@@ -327,7 +327,7 @@ const RANKED = [
 function world(options: { homepageDown?: boolean; resendStatus?: number; seedAnswer?: unknown; local?: boolean; bigHomepage?: boolean; botWall?: boolean;
   serpRanks?: Record<string, number>; serpFails?: string[] } = {}) {
   const calls: string[] = [], emails: Fields[] = [], seedRequests: string[] = [], labsSeeds: string[] = [], coverageRequests: string[] = [];
-  const rankedRequests: Fields[] = [], serpRequests: Fields[] = [];
+  const rankedRequests: Fields[] = [], serpRequests: Fields[] = [], temperatures: string[] = [];
   const page = (body: string, type = "text/html; charset=utf-8", status = 200) => new Response(body, { status, headers: { "content-type": type } });
   const ok = (result: unknown) => new Response(JSON.stringify({ status_code: 20000, cost: 0.01, tasks: [{ status_code: 20000, result }] }),
     { headers: { "content-type": "application/json" } });
@@ -387,6 +387,7 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
     if (url.origin === "https://api.anthropic.com") {
       const body = JSON.parse(String(init.body)), tool = body.tools?.[0]?.name;
       let input: unknown;
+      if (tool === "submit_search_seeds" || tool === "submit_page_coverage") temperatures.push(`${tool}:${body.temperature}`);
       if (tool === "submit_search_seeds") {
         seedRequests.push(String(body.messages[0].content));
         input = options.seedAnswer ?? { sells: "Glaze and kiln record software for ceramic studios.", customers: "Owners of pottery and ceramic studios.",
@@ -417,7 +418,7 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
     }
     assert.fail(`Unexpected network ${url.href}`);
   }, { RESEND_API_KEY: "synthetic-only" }, { syntheticHosts: [DOMAIN, `www.${DOMAIN}`] });
-  return { f, calls, emails, seedRequests, labsSeeds, coverageRequests, rankedRequests, serpRequests };
+  return { f, calls, emails, seedRequests, labsSeeds, coverageRequests, rankedRequests, serpRequests, temperatures };
 }
 
 const visitor = (n: number) => String(n).padStart(64, "a");
@@ -446,6 +447,16 @@ test("v7: a claim is shown only when Google confirms the site is absent; one it 
   assert.ok(serpRequests.every(body => body.depth === 20 && body.location_code === 2826), "Google's first two pages where the site sells");
   const diagnostics = await f.invoke("freeCheck:diagnosticsFor", { domain: DOMAIN });
   assert.deepEqual(diagnostics.diagnostics.verified, { asked: 7, answered: 6, absent: 4 });
+  f.assertOffline();
+});
+
+// P187 (Oct 25 2026): abchomeandcommercial.com's report found six Texas cities on Oct 21 and none on Oct 25 for the
+// same homepage, so a local business was measured on national volumes. Reading a site must not be a coin toss.
+test("v8: the same site reads the same way every run: the check's reading calls run at temperature 0", async () => {
+  const { f, temperatures } = world();
+  await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(1) });
+  assert.deepEqual((await f.runNextScheduled())?.result, { status: "done" });
+  assert.deepEqual(temperatures, ["submit_search_seeds:0", "submit_page_coverage:0"]);
   f.assertOffline();
 });
 
