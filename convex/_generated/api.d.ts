@@ -202,6 +202,7 @@ import type * as managedOutreachMailbox from "../managedOutreachMailbox.js";
 import type * as managedProvisioning from "../managedProvisioning.js";
 import type * as onboardingClaims from "../onboardingClaims.js";
 import type * as oneSetupExecutions from "../oneSetupExecutions.js";
+import type * as opsProbes from "../opsProbes.js";
 import type * as organicDiagnostics from "../organicDiagnostics.js";
 import type * as outcomes from "../outcomes.js";
 import type * as outreach from "../outreach.js";
@@ -425,6 +426,7 @@ declare const fullApi: ApiFromModules<{
   managedProvisioning: typeof managedProvisioning;
   onboardingClaims: typeof onboardingClaims;
   oneSetupExecutions: typeof oneSetupExecutions;
+  opsProbes: typeof opsProbes;
   organicDiagnostics: typeof organicDiagnostics;
   outcomes: typeof outcomes;
   outreach: typeof outreach;

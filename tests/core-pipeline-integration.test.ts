@@ -15,6 +15,7 @@ import { CADENCE_MICRO_SEED_VERSION, CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT } fro
 import { planProviderEnvelopeMicroUsd, AUTOMATIC_PLAN_TOPIC_CAPACITY } from "../convex/lib/planProviderBudget.ts";
 import { auditResultHash, SEMANTIC_AUDIT_SUFFIX } from "../convex/lib/contentAudit.ts";
 import { contentServiceStatus } from "../src/lib/content-service-status.ts";
+import { RELATED_REPAIR_RETRY_MS, relatedRepairAllowed } from "../convex/lib/contentCorrection.ts";
 
 const defaultBusinesses = [
   { name: "ReservoirNote", domain: "reservoir.example", cadence: 7,
@@ -3716,11 +3717,11 @@ test("SLC29 Search Console requires complete current epochs and distinguishes ze
   f.setIdentity("unrelated-fixture-owner"); await assert.rejects(f.invoke("searchPerformance:contentOutcome", { siteId: site.id }), /Not authorized/);
   f.assertOffline();
 });
-export async function selectExistingPage(f: ReturnType<typeof setup>, extension = "md", providedOriginal?: string) {
+export async function selectExistingPage(f: ReturnType<typeof setup>, extension = "md", providedOriginal?: string, pageSlug?: string) {
   const site = f.sites[0], stored = f.get(site.id)!;
   stored.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: stored as never,
     ownerAccountKey: accountDeletionKey(stored.userId), verifiedAt: f.now() });
-  const slug = slugify(site.keywords[0]), path = `content/blog/${slug}.${extension}`, url = `https://${site.domain}/blog/${slug}`;
+  const slug = pageSlug ?? slugify(site.keywords[0]), path = `content/blog/${slug}.${extension}`, url = `https://${site.domain}/blog/${slug}`;
   const original = providedOriginal ?? "This page preserves the confirmed local business facts and the customer's original explanation. Record the context behind each decision and ask an authorized reviewer to clarify anything that is uncertain. Keep the original record available when planning an addition to this guidance.";
   const raw = `---\ntitle: ${JSON.stringify(titleFor(site.keywords[0]))}\nmetaTitle: ${JSON.stringify(titleFor(site.keywords[0]).slice(0,60))}\ndescription: ${JSON.stringify(description)}\ncanonicalUrl: ${JSON.stringify(url)}\n---\n\n${original}\n`;
   f.repositories.get(site.name.toLowerCase())!.files.set(path, raw);
@@ -9455,6 +9456,85 @@ test("P176 Autopilot completes a cut Related reading title on its own page: exac
   f.setIdentity(null);
   await pumpUntil(f, () => f.get(rollback)!.contentWork.stage === "verified", 100, deadline - 5 * 60_000);
   assert.equal(f.get(selected.pageId)!.editable.sourceContent, original, "the repair is reversible");
+  f.assertOffline();
+});
+
+// P180 (Oct 24 2026): a quiet site gets a scheduler pass only every 3 hours, and each pass repaired one page, so
+// LeadPilot's 24 pages with cut Related reading titles would have waited about four days. A repair now books the next
+// one 30 minutes later; the linked titles are read by slug, not every published summary; a page left for its own
+// unfinished work is looked at again a day later instead of a week.
+test("P180 cut Related reading titles are repaired 30 minutes apart without a scheduler pass; a page with unfinished work is retried a day later", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const cutA = "- [What Is an AI Sales Agent? How It](/blog/ai-sales-agent)";
+  const wholeA = "- [What Is an AI Sales Agent? How It Works and Why Websites Need One](/blog/ai-sales-agent)";
+  const cutB = "- [How to Build a B2B Lead Scoring System](/blog/b2b-lead-scoring)";
+  const wholeB = "- [How to Build a B2B Lead Scoring System That Actually Works](/blog/b2b-lead-scoring)";
+  const first = await selectExistingPage(f, "md", `${correctionSurvivor}\n\n## Related reading\n\n${cutA}`);
+  f.setTime(f.now() + 1_000);
+  const second = await selectExistingPage(f, "md", `${correctionSurvivor}\n\n## Related reading\n\n${cutB}`, "second-guide");
+  f.setTime(f.now() + 1_000);
+  const third = await selectExistingPage(f, "md", `${correctionSurvivor}\n\n## Related reading\n\n${cutA}`, "third-guide");
+  const site = await selectGrowth(f, 8 * 3_600_000), saved = f.get(site.id)!;
+  Object.assign(saved.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  saved.gscDateEpochs = [];
+  for (const [slug, title] of [["ai-sales-agent", "What Is an AI Sales Agent? How It Works and Why Websites Need One"],
+    ["b2b-lead-scoring", "How to Build a B2B Lead Scoring System That Actually Works"]]) {
+    f.add("article_summaries", { siteId: site.id, slug, title, status: "published", canonicalDomain: saved.canonicalDomain ?? saved.domain,
+      domainRevision: saved.canonicalDomainRevision ?? 0, createdAt: f.now(), updatedAt: f.now() });
+  }
+  const ready = () => (f.tables.jobs ?? []).filter(j => j.contentWork?.stage === "ready");
+  await pumpUntil(f, () => ready().length === 2);
+  const shift = 12 * 3_600_000;
+  f.get(site.id)!.contentSchedule.nextDeadlineAt += shift;
+  for (const job of ready()) Object.assign(job.contentWork, { deadlineAt: job.contentWork.deadlineAt + shift,
+    windowStartAt: job.contentWork.windowStartAt + shift, windowWakeId: undefined });
+  // The third page's own work is unfinished (a refresh waiting for its slot): it keeps its source for now.
+  f.get(third.pageId)!.editable.lastWorkJobId = ready()[1]._id;
+  const deadline = f.get(site.id)!.contentSchedule.nextDeadlineAt, calls = f.modelCalls.length;
+  const repairs = () => (f.tables.jobs ?? []).filter(j => j.contentWork?.operation === "related_reading_titles");
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_full");
+  // No further scheduler pass is triggered from outside: the repairs book each other.
+  await pumpUntil(f, () => repairs().filter(j => j.contentWork.stage === "verified").length === 2, 300, deadline - 6 * 3_600_000);
+  const [one, two] = repairs().sort((a, b) => a.createdAt - b.createdAt);
+  assert.equal(one.contentWork.targetPageId, first.pageId); assert.equal(two.contentWork.targetPageId, second.pageId);
+  assert.ok(two.createdAt - one.createdAt >= 30 * 60_000 && two.createdAt - one.createdAt < 35 * 60_000, `${two.createdAt - one.createdAt} ms apart`);
+  assert.ok(f.get(first.pageId)!.editable.markdown.includes(wholeA)); assert.ok(f.get(second.pageId)!.editable.markdown.includes(wholeB));
+  // The pass ends at the last page; the page it left is looked at again a day later, not a week.
+  await pumpUntil(f, () => f.get(site.id)!.contentSchedule.relatedRepairCleanAt !== undefined, 300, deadline - 6 * 3_600_000);
+  const schedule = f.get(site.id)!.contentSchedule;
+  assert.ok(f.get(third.pageId)!.editable.markdown.includes(cutA), "a page with unfinished work keeps its source");
+  assert.equal(repairs().length, 2);
+  assert.ok(schedule.relatedRepairRetryAt - schedule.relatedRepairCleanAt <= RELATED_REPAIR_RETRY_MS &&
+    schedule.relatedRepairRetryAt > schedule.relatedRepairCleanAt, JSON.stringify(schedule));
+  const far = (at: number) => ({ ...f.get(site.id)!, contentSchedule: { ...schedule, nextDeadlineAt: at + 2 * shift } }) as never;
+  assert.equal(relatedRepairAllowed(far(schedule.relatedRepairRetryAt - 60_000), schedule.relatedRepairRetryAt - 60_000), false, "it rests until then");
+  assert.equal(relatedRepairAllowed(far(schedule.relatedRepairRetryAt), schedule.relatedRepairRetryAt), true);
+  // A day later the page's work is done: the next pass completes its titles, reading only the linked summaries.
+  const later = schedule.relatedRepairRetryAt + 60_000;
+  f.setTime(later);
+  f.get(site.id)!.contentSchedule.nextDeadlineAt = later + shift;
+  for (const job of ready()) Object.assign(job.contentWork, { deadlineAt: later + shift + (job.contentWork.deadlineAt - deadline),
+    windowStartAt: later + shift + (job.contentWork.windowStartAt - deadline), windowWakeId: undefined });
+  f.get(third.pageId)!.editable.lastWorkJobId = one._id;
+  const reads = f.queryReads.length;
+  assert.equal((await f.invoke("contentImprovements:requestRelatedReadingRepair", { siteId: site.id })).requested, true);
+  const summaryReads = f.queryReads.slice(reads).filter(r => r.table === "article_summaries");
+  assert.ok(summaryReads.length > 0 && summaryReads.every(r => r.index === "by_site_slug"), JSON.stringify(summaryReads));
+  await pumpUntil(f, () => repairs().filter(j => j.contentWork.stage === "verified").length === 3, 300, later + 6 * 3_600_000);
+  assert.ok(f.get(third.pageId)!.editable.markdown.includes(wholeA), f.get(third.pageId)!.editable.markdown);
+  assert.equal(f.modelCalls.length, calls, "no model runs");
+  // The operator's read-size probes (V9) return byte counts, stage labels and field names only, never content.
+  const sizes = await f.invoke("opsProbes:schedulerReadSizes", { siteId: site.id });
+  assert.ok(sizes.siteBytes > 0 && sizes.jobs.length >= 2 && sizes.jobs.every((j: Fields) => j.bytes > 0), JSON.stringify(sizes));
+  const month = await f.invoke("opsProbes:monthJobSizes", { siteId: site.id, monthStart: 0, cursor: null });
+  assert.ok(month.jobs > 0 && month.bytes >= month.largest && month.largest > 0, JSON.stringify(month));
+  const pageSizes = await f.invoke("opsProbes:siteTableSizes", { siteId: site.id, table: "pages" });
+  assert.ok(pageSizes.rows >= 3 && pageSizes.largestFields.some((x: Fields) => x.field === "editable.markdown"), JSON.stringify(pageSizes));
+  const topicSizes = await f.invoke("opsProbes:siteTableSizes", { siteId: site.id, table: "topic_clusters" });
+  assert.ok(topicSizes.rows > 0, JSON.stringify(topicSizes));
+  for (const probe of [sizes, month, pageSizes, topicSizes]) for (const text of ["Related reading", "AI Sales Agent", site.domain, correctionSurvivor.slice(0, 30)]) {
+    assert.ok(!JSON.stringify(probe).includes(text), `the probe returned content: ${text}`);
+  }
   f.assertOffline();
 });
 

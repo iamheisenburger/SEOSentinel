@@ -12,7 +12,8 @@ import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
 import { archiveConsumedImprovementArtifact } from "./articles";
 import type { Doc, Id } from "./_generated/dataModel";
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDomainBinding";
-import { planCorrectiveChange, relatedReadingRepairProposal, relatedRepairAllowed, verifyCorrectivePatch } from "./lib/contentCorrection";
+import { planCorrectiveChange, RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_SPACING_MS, relatedReadingHrefs, relatedReadingRepairProposal, relatedRepairAllowed,
+  verifyCorrectivePatch } from "./lib/contentCorrection";
 import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
 import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { closeVerifiedContentWake } from "./jobs";
@@ -136,27 +137,51 @@ async function insertCorrectionJob(ctx: MutationCtx, site: Doc<"sites">, args: {
  * live check, rollback), one page at a time, never while a slot is near
  * (relatedRepairAllowed). Pages are read RELATED_REPAIR_SCAN at a time from a
  * cursor; a pass that finds nothing rests for a week. Consent is the site's
- * Autopilot setup, which covers Pentra's own published pages. */
+ * Autopilot setup, which covers Pentra's own published pages.
+ *
+ * P180 (Oct 24 2026): a quiet site gets a scheduler pass only every 3 hours, so
+ * one repair a pass left LeadPilot's 24 cut pages for about four days. A repair
+ * now books the next request 30 minutes later, a window of pages with nothing
+ * to repair goes straight on to the next window, and the linked titles are read
+ * by slug (a few summaries a page) instead of every published summary a window.
+ * A page left for its unfinished work is looked at again a day later. */
 const RELATED_REPAIR_SCAN = 20;
 const RELATED_REPAIR_REASON = "Autopilot completes Related reading link titles it cut at its old 8-word limit.";
+/** The titles of the published articles a Related reading list links, by href. */
+async function relatedReadingTitles(ctx: MutationCtx, site: Doc<"sites">, hrefs: string[]) {
+  const titles = new Map<string, string>();
+  for (const href of new Set(hrefs)) {
+    const slug = href.split("/").filter(Boolean).find(segment => {
+      try { return publishedArticleInternalHref(site.urlStructure, segment) === href; } catch { return false; }
+    });
+    if (!slug) continue;
+    for (const stored of [slug, `/${slug}`]) {
+      const row = (await ctx.db.query("article_summaries").withIndex("by_site_slug", q => q.eq("siteId", site._id).eq("slug", stored)).take(20))
+        .find(summary => summary.status === "published" && articleMatchesCurrentDomain(site, summary));
+      if (row) { titles.set(href, row.title); break; }
+    }
+  }
+  return titles;
+}
 export const requestRelatedReadingRepair = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await ctx.db.get(siteId), now = Date.now(), schedule = site?.contentSchedule;
   if (!site || !schedule || !relatedRepairAllowed(site, now) || await siteHasActiveWork(ctx, siteId)) return { requested: false };
-  const summaries = (await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "published")).take(2001))
-    .filter(row => articleMatchesCurrentDomain(site, row));
-  const titles = new Map(summaries.map(row => [publishedArticleInternalHref(site.urlStructure, row.slug), row.title] as const));
   const pages = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId).gt("_creationTime", schedule.relatedRepairCursor ?? 0))
     .take(RELATED_REPAIR_SCAN);
+  // A new pass starts at the first page; a page it leaves for later brings the next pass forward to a day.
+  let retryAt = schedule.relatedRepairCursor ? schedule.relatedRepairRetryAt : undefined;
   for (const page of pages) {
     const e = page.editable;
     if (!e?.active || e.kind !== "github" || e.profileHash !== confirmedContentProfileHash(site) || e.connectionHash !== contentConnectionHash(site) ||
       schedule.profileHash !== e.profileHash || schedule.connectionHash !== e.connectionHash) continue;
-    const proposal = relatedReadingRepairProposal(e.markdown, titles, relatedReadingTitle);
+    const hrefs = relatedReadingHrefs(e.markdown);
+    if (!hrefs.length) continue;
+    const proposal = relatedReadingRepairProposal(e.markdown, await relatedReadingTitles(ctx, site, hrefs), relatedReadingTitle);
     if (!proposal) continue;
     // A page whose own work is unfinished (a refresh waiting for its slot) keeps
     // its source: the repair would make that work's exact base stale.
     const last = e.lastWorkJobId ? await ctx.db.get(e.lastWorkJobId) : null;
-    if (last && !["verified", "failed"].includes(last.contentWork?.stage ?? "")) continue;
+    if (last && !["verified", "failed"].includes(last.contentWork?.stage ?? "")) { retryAt ??= now + RELATED_REPAIR_RETRY_MS; continue; }
     let jobId: Id<"jobs">;
     try {
       const patch = planCorrectiveChange(site, page, { kind: "related_reading_titles", before: proposal.before,
@@ -164,12 +189,16 @@ export const requestRelatedReadingRepair = internalMutation({ args: { siteId: v.
       jobId = await insertCorrectionJob(ctx, site, { pageId: page._id, baseRevision: e.sourceRevision, permissionVersion: e.version, patch, observedAt: now },
         { opportunity: "Autopilot completes its own cut Related reading titles; not scheduled SEO delivery or growth", wake: "related_reading_repair" });
     } catch { continue; } // a layout the exact path cannot map: the page keeps its titles
-    await ctx.db.patch(siteId, { contentSchedule: { ...schedule, relatedRepairCursor: page._creationTime, relatedRepairAt: now }, updatedAt: now });
+    await ctx.db.patch(siteId, { contentSchedule: { ...schedule, relatedRepairCursor: page._creationTime, relatedRepairAt: now,
+      relatedRepairRetryAt: retryAt }, updatedAt: now });
+    await ctx.scheduler.runAt(now + RELATED_REPAIR_SPACING_MS, internal.contentImprovements.requestRelatedReadingRepair, { siteId });
     return { requested: true, jobId };
   }
   const passDone = pages.length < RELATED_REPAIR_SCAN;
-  await ctx.db.patch(siteId, { contentSchedule: { ...schedule, relatedRepairCursor: passDone ? 0 : pages.at(-1)!._creationTime, relatedRepairAt: now,
-    ...(passDone ? { relatedRepairCleanAt: now } : {}) }, updatedAt: now });
+  await ctx.db.patch(siteId, { contentSchedule: { ...schedule, relatedRepairCursor: passDone ? 0 : pages.at(-1)!._creationTime,
+    relatedRepairRetryAt: retryAt, ...(passDone ? { relatedRepairCleanAt: now } : {}) }, updatedAt: now });
+  // No commit was made, so no spacing is owed: the next window follows at once.
+  if (!passDone) await ctx.scheduler.runAfter(0, internal.contentImprovements.requestRelatedReadingRepair, { siteId });
   return { requested: false };
 } });
 

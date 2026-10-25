@@ -25,6 +25,7 @@ export default defineSchema({
       // P176: Autopilot's repair of Related reading titles cut at the old 8-word cap:
       // the page scan's cursor, the last request, and when a full pass found nothing.
       relatedRepairCursor: v.optional(v.number()), relatedRepairAt: v.optional(v.number()), relatedRepairCleanAt: v.optional(v.number()),
+      relatedRepairRetryAt: v.optional(v.number()),
       // What the last research run saw: its seeds, what discovery found and
       // why candidates were not added (counts only).
       topicsResearchReceipt: v.optional(v.object({

@@ -75,6 +75,14 @@ function relatedTitlesRepair(markdown: string, before: string, replacement: stri
   if (readerVisibleDefects(next).some((defect) => !previous.has(defect))) throw new Error("The repair would leave another reader-visible defect on the page");
   return replacement;
 }
+/** The links of a page's Related reading list (the list the repair may touch),
+ * or none when the page has no such list or it holds anything but links. */
+export function relatedReadingHrefs(markdown: string): string[] {
+  const blocks = markdown.split(/\n\s*\n/).map(block => block.trim());
+  const at = blocks.findIndex(block => /^##\s+Related reading$/i.test(block));
+  const lines = at >= 0 && blocks[at + 1] ? blocks[at + 1].split("\n") : [];
+  return lines.every(line => RELATED_ENTRY.test(line)) ? lines.map(line => RELATED_ENTRY.exec(line)![2]) : [];
+}
 /** The repair of a page's Related reading list from the live titles of the
  * articles it links (href to title): each entry cut from its linked title gets
  * the whole title (`wholeTitle`, relatedReadingTitle). Null when none is cut. */
@@ -153,8 +161,11 @@ export function planCorrectiveChange(site: Doc<"sites">, page: Doc<"pages">, inp
 /** When Autopilot may request its next Related reading repair (P176): an
  * Autopilot site publishing to GitHub, nothing paused or under owner review,
  * the next slot at least six hours away (a repair never delays an article),
- * 30 minutes after its last request, and a week after a pass found nothing. */
-export const RELATED_REPAIR_SLOT_LEAD_MS = 6 * 3_600_000, RELATED_REPAIR_SPACING_MS = 30 * 60_000, RELATED_REPAIR_REST_MS = 7 * 86_400_000;
+ * 30 minutes after its last repair, and a new pass over the site's pages a week
+ * after the last one ended (a day, when it had to leave a page with unfinished
+ * work for later: P180). A pass in progress continues. */
+export const RELATED_REPAIR_SLOT_LEAD_MS = 6 * 3_600_000, RELATED_REPAIR_SPACING_MS = 30 * 60_000, RELATED_REPAIR_REST_MS = 7 * 86_400_000,
+  RELATED_REPAIR_RETRY_MS = 86_400_000;
 export function relatedRepairAllowed(site: Doc<"sites">, now: number): boolean {
   const s = site.contentSchedule;
   return Boolean(s && site.serviceMode === "growth_first" && site.autopilotEnabled && s.autopilotSelectedAt && s.autopublishConsentAt &&
@@ -162,7 +173,8 @@ export function relatedRepairAllowed(site: Doc<"sites">, now: number): boolean {
     !site.deletionStatus && !site.accountDeletionRequestedAt && !site.publicationLeaseOwner &&
     s.nextDeadlineAt - now >= RELATED_REPAIR_SLOT_LEAD_MS &&
     (s.relatedRepairAt === undefined || now - s.relatedRepairAt >= RELATED_REPAIR_SPACING_MS) &&
-    (s.relatedRepairCleanAt === undefined || now - s.relatedRepairCleanAt >= RELATED_REPAIR_REST_MS));
+    (Boolean(s.relatedRepairCursor) || s.relatedRepairCleanAt === undefined || now - s.relatedRepairCleanAt >= RELATED_REPAIR_REST_MS ||
+      (s.relatedRepairRetryAt !== undefined && now >= s.relatedRepairRetryAt)));
 }
 
 export function verifyCorrectivePatch(site: Doc<"sites">, page: Doc<"pages">, patch: CorrectivePatch) {
