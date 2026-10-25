@@ -1373,6 +1373,8 @@ export default defineSchema({
       failure: v.optional(v.string()),
       retiredAt: v.optional(v.number()),
       retiredForReviewToken: v.optional(v.string()),
+      // P181: the version of the blocking checks a quality failure was judged by.
+      checksVersion: v.optional(v.number()),
       // Autopilot: this job is the single replacement for a failed job's slot.
       replacesJobId: v.optional(v.id("jobs")),
       // A ready article moved to the current cadence slot after the schedule

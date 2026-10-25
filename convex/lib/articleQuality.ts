@@ -94,6 +94,10 @@ export function preservedResearchEvidenceSnapshot(
  * check and editorial review are still required; their findings drive the
  * bounded rewrite instead of a veto. */
 export const AUTOPILOT_ACCEPTANCE = "pentra-autopilot";
+/** The version of the blocking publication checks. Bump it when a blocking
+ * check is corrected: a quality failure judged by an older version is no
+ * evidence that today's drafts keep failing (P181, Oct 25 2026). */
+export const CONTENT_CHECKS_VERSION = 1;
 const UNCITED_QUANTITY_ISSUE = /^\d+ quantified outcome or operational claim\(s\) lack an inline citation\.$/;
 export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number; claimEvidenceStatus?: string; markdown?: string } &
   Partial<Pick<PublicationArticle, "claimEvidence" | "productEvidenceSnapshot" | "productEvidenceHash">>, actor: "owner" | "autopilot" = "owner"): boolean {
@@ -2144,6 +2148,10 @@ export function readerVisibleDefects(markdown: string): string[] {
 function readableNumbers(sentence: string): Set<string> {
   return normalizedEvidenceNumbers(sentence
     .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    // A citation marker linked to its source ("([3](https://...))") is not a
+    // number the sentence states (P181, Oct 25 2026: unwrapped to "3", it held
+    // a pentra.dev draft whose seven cited sentences stated no number at all).
+    .replace(/\[\d+(?:\s*,\s*\d+)*\]\([^)]*\)/g, " ")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/https?:\/\/\S+/g, " "));
 }

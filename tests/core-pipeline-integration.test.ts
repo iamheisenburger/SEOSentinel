@@ -16,6 +16,7 @@ import { planProviderEnvelopeMicroUsd, AUTOMATIC_PLAN_TOPIC_CAPACITY } from "../
 import { auditResultHash, SEMANTIC_AUDIT_SUFFIX } from "../convex/lib/contentAudit.ts";
 import { contentServiceStatus } from "../src/lib/content-service-status.ts";
 import { RELATED_REPAIR_RETRY_MS, relatedRepairAllowed } from "../convex/lib/contentCorrection.ts";
+import { CONTENT_CHECKS_VERSION } from "../convex/lib/articleQuality.ts";
 
 const defaultBusinesses = [
   { name: "ReservoirNote", domain: "reservoir.example", cadence: 7,
@@ -3322,7 +3323,7 @@ test("SLC53 actual draft, factual review and revision share evidence rules witho
     assert.ok(audits.length > 0);
     for (const audit of audits) assert.match(audit.system, /does not require a brand mention, promotional section, CTA/);
     const revisions = f.modelCalls.filter(c => c.tools[0].name === "remediate_final_article");
-    assert.equal(revisions.length, 2);
+    assert.equal(revisions.length, 3, "two rewrites of the first draft, one of its replacement (P181)");
     for (const revision of revisions) {
       assert.match(revision.messages[0].content, /first-party product evidence remains unnumbered/);
       assert.match(revision.messages[0].content, /Delete that proposition completely/);
@@ -3347,10 +3348,10 @@ test("SLC32 exact revision and replacement call envelope stays in the original r
   assert.equal(f.tables.jobs.length, 1); assert.equal(job.contentWork.revisions, 2); assert.equal(job.contentWork.replacements, 1);
   assert.equal(job.contentWork.validationAuthorizationId, f.args.authorizationId); assert.equal(f.tables.provider_spend_reservations.length, 1);
   assert.equal(f.get(job.providerSpendReservationId)!.settledMicroUsd, job.contentWork.providerCalls.length * 200);
-  assert.equal(job.contentWork.providerCalls.length, 12);
+  assert.equal(job.contentWork.providerCalls.length, 15);
   assert.deepEqual(f.modelCalls.map(c => c.tools[0].name), ["submit_article", "review_article", "audit_final_article",
     "remediate_final_article", "review_article", "audit_final_article", "remediate_final_article", "review_article", "audit_final_article",
-    "submit_article", "review_article", "audit_final_article"]);
+    "submit_article", "review_article", "audit_final_article", "remediate_final_article", "review_article", "audit_final_article"]);
   assert.equal(f.tables.articles.some(a => a.status === "published" || a.publicationGateStatus === "passed"), false);
   t.diagnostic(JSON.stringify({ scenario: "offline_pricing_envelope", model: "mocked-content-model", calls: f.modelCalls.map(c => ({
     tool: c.tools[0].name, inputBound: Buffer.byteLength(JSON.stringify(c)) + 8192, outputBound: c.max_tokens })) }));
@@ -4081,7 +4082,8 @@ test("SLC no-op selection cannot count as delivery; bounded review uses a distin
   const selected = await selectExistingPage(f), site = await selectGrowth(f);
   await pumpUntil(f, () => f.tables.jobs?.some(j => j.contentWork?.stage === "verified"), 160);
   const first = f.tables.jobs[0];
-  assert.equal(first.contentWork.intent, "create"); assert.equal(first.contentWork.replacements, 1); assert.equal(first.contentWork.revisions, 2);
+  assert.equal(first.contentWork.intent, "create"); assert.equal(first.contentWork.replacements, 1);
+  assert.equal(first.contentWork.revisions, 1, "the replacement starts with one rewrite left (P181) and passed without it");
   assert.equal(f.repositories.get(site.name.toLowerCase())!.files.get(selected.path), selected.raw);
   assert.equal(f.get(selected.pageId)!.editable.lastImprovedAt, undefined);
   assert.equal(f.tables.published_article_revisions?.length ?? 0, 0); f.assertOffline();
@@ -4386,7 +4388,7 @@ test("SLC repair26 repeated rejection exhausts bounded recovery without extra ca
   assert.equal(f.modelCalls.length, 4); assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, START + 10 * 60_000); f.assertOffline();
 });
 
-test("SLC bounded reviews allow two targeted revisions and one distinct replacement, never unsupported acceptance", async () => {
+test("SLC bounded reviews allow two targeted revisions and one distinct replacement with its own rewrite, never unsupported acceptance", async () => {
   for (const quality of ["unsupported", "low"] as const) {
     const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], quality, budgetMicroUsd: 2_000_000 });
     await selectGrowth(f);
@@ -4394,7 +4396,7 @@ test("SLC bounded reviews allow two targeted revisions and one distinct replacem
     const jobs = f.tables.jobs.filter(j => j.contentWork); assert.equal(jobs.length, 1, diagnostic(f));
     assert.equal(jobs[0].contentWork.revisions, 2); assert.equal(jobs[0].contentWork.replacements, 1);
     assert.equal(f.modelCalls.filter(c => c.tools?.[0]?.name === "submit_article").length, 2);
-    assert.equal(f.modelCalls.filter(c => c.tools?.[0]?.name === "remediate_final_article").length, 2);
+    assert.equal(f.modelCalls.filter(c => c.tools?.[0]?.name === "remediate_final_article").length, 3);
     assert.equal(f.tables.articles.filter(a => a.status === "published" || a.publicationGateStatus === "passed").length, 0);
     assert.equal(f.tables.provider_spend_reservations.length, 1, "replacement shares the original budget");
     assert.equal(f.tables.provider_spend_reservations[0].settledMicroUsd,
@@ -4636,7 +4638,7 @@ test("P104 slot guarantee, operator pace and links on Autopilot-accepted drafts"
     streak.forEach((job, n) => {
       if (n > 0) f.tables.jobs.push(job);
       Object.assign(job, { status: "failed", updatedAt: f.now() - 60_000 });
-      Object.assign(job.contentWork, { stage: "failed", failure: "bounded_content_quality_exhausted",
+      Object.assign(job.contentWork, { stage: "failed", failure: "bounded_content_quality_exhausted", checksVersion: CONTENT_CHECKS_VERSION,
         deadlineAt: START - (n + 1) * day, windowStartAt: START - (n + 1) * day - 300_000 });
     });
   }
@@ -9535,6 +9537,74 @@ test("P180 cut Related reading titles are repaired 30 minutes apart without a sc
   for (const probe of [sizes, month, pageSizes, topicSizes]) for (const text of ["Related reading", "AI Sales Agent", site.domain, correctionSurvivor.slice(0, 30)]) {
     assert.ok(!JSON.stringify(probe).includes(text), `the probe returned content: ${text}`);
   }
+  f.assertOffline();
+});
+
+// P181 (Oct 25 2026): pentra.dev's Oct 27 slot failed on a check since corrected (a linked citation marker read as a
+// number) and its replacement draft got no edit pass. With an earlier replaced failure that read as a failing streak,
+// so the slot got no new article and would have been missed. Quality failures judged by an older version of the
+// blocking checks are no streak; failures under today's checks still stop replacements.
+test("P181 quality failures judged by older checks are no failing streak; current ones still stop replacements", async () => {
+  for (const current of [false, true]) {
+    const { f, site, waiting } = await p173TwoWaiting();
+    const [first, second] = waiting(), next = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+    const failed = (job: Fields) => {
+      Object.assign(job, { status: "failed", updatedAt: f.now() });
+      Object.assign(job.contentWork, { stage: "failed", failure: "bounded_content_quality_exhausted", approvedArtifactHash: undefined,
+        ...(current ? { checksVersion: CONTENT_CHECKS_VERSION } : {}) });
+    };
+    // The due slot's first job failed and was replaced by the article now waiting; the next slot's job failed too.
+    const replaced = f.add("jobs", { ...structuredClone(first), articleId: undefined });
+    failed(f.get(replaced)!);
+    first.contentWork.replacesJobId = replaced;
+    failed(second);
+    const result = await f.invoke("contentWork:advance", { siteId: site.id });
+    if (current) {
+      // Two failures under today's checks: the scheduler waits out the failure backoff, then still makes no replacement.
+      assert.equal(result.mode, "content_failure_backoff");
+      f.setTime(result.eligibleAt + 1);
+      assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "content_failed_slot");
+      assert.ok(!f.tables.jobs.some(j => j.contentWork?.replacesJobId === second._id), "no replacement");
+    } else {
+      assert.equal(result.mode, "buffer_replacement", JSON.stringify(result));
+      const replacement = f.get(result.activeJobId)!;
+      assert.equal(replacement.contentWork.replacesJobId, second._id);
+      assert.equal(replacement.contentWork.deadlineAt, next + f.get(site.id)!.contentSchedule.intervalMs, "the failed slot gets a new article");
+    }
+    f.assertOffline();
+  }
+});
+
+// P181: a replacement draft is a new article; it gets the one bounded rewrite its first review sends it through.
+test("P181 a replacement draft gets its edit pass instead of failing with the first draft's spent revisions", async () => {
+  const guide = "Scoring guide. VendorCRM scores each lead from its lead fields and recent engagement, and shows the factors behind every score so a sales team can decide which leads to call first and which to keep nurturing.";
+  let replacementDraft = false;
+  const options: Parameters<typeof setup>[0] = { growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000, quality: "low",
+    webResearch: { searches: 1, citations: [{ url: "https://help.vendorcrm.example/scoring", title: "Scoring guide", cited_text: "VendorCRM scores each lead from its lead fields and recent engagement." }] },
+    evidence: { sources: [{ url: "https://help.vendorcrm.example/scoring", title: "Scoring guide", text: guide }] },
+    draftResponse: (article: Fields) => replacementDraft ? ({ ...article,
+      markdown: String(article.markdown).replace("The synthetic field register contains an observation label and a review note [1].",
+        "VendorCRM scores each lead from its lead fields and recent engagement [1].")
+        .replace(/## Sources[\s\S]*$/, "## Sources\n\n[1] Scoring guide — https://help.vendorcrm.example/scoring"),
+      sources: [{ url: "https://help.vendorcrm.example/scoring", title: "Scoring guide" }] }) : article };
+  const f = setup(options);
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  f.setIdentity(null);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const job = () => f.tables.jobs.find(j => j.siteId === site.id && j.contentWork?.providerCalls.length);
+  // The first draft fails its review and both revisions; the job turns to a new topic.
+  await pumpUntil(f, () => job()?.contentWork.replacements === 1 || job()?.contentWork.stage === "failed", 400, START + 12 * 3_600_000);
+  assert.equal(job()!.contentWork.replacements, 1, JSON.stringify(job()!.contentWork.failure));
+  // The new draft is sound but names the company behind its cited page: its first review asks for the edit pass.
+  options.quality = undefined; replacementDraft = true;
+  await pumpUntil(f, () => ["ready", "failed"].includes(job()!.contentWork.stage), 400, START + 24 * 3_600_000);
+  assert.equal(job()!.contentWork.stage, "ready", JSON.stringify({ failure: job()!.contentWork.failure, revisions: job()!.contentWork.revisions }));
+  const rewrites = f.modelCalls.filter(c => c.tools?.[0]?.name === "remediate_final_article").map(c => JSON.stringify(c));
+  assert.ok(rewrites.some(call => call.includes("Rewrite without naming Vendorcrm")), "the replacement took its edit pass");
+  assert.ok(job()!.contentWork.providerCalls.length <= 20);
   f.assertOffline();
 });
 

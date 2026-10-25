@@ -32,7 +32,7 @@ import { authorizedWorkPage, chooseImprovement, contentWorkConnection, enrollVer
 import { noteFirstArticleLive } from "./customerEmails";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes } from "./articles";
-import { AUTOPILOT_ACCEPTANCE, ownerWaivableIssue, readerVisibleIssues } from "./lib/articleQuality";
+import { AUTOPILOT_ACCEPTANCE, CONTENT_CHECKS_VERSION, ownerWaivableIssue, readerVisibleIssues } from "./lib/articleQuality";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
 import { auditResultHash, clarifiableContentAudit, inconsistentAuditFeedback, internalContentProcessingError, retainedContradictoryContentAudit, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 import { contentJobUsesAllowance } from "./lib/contentUsage";
@@ -122,8 +122,9 @@ function autopilotSkippableFailure(job: Doc<"jobs">) {
  * topics and spend in a loop. The cadence resumes on the first success. */
 async function autopilotFailureBackoffUntil(ctx: MutationCtx, siteId: Id<"sites">, intervalMs: number) {
   const automatic = (j: Doc<"jobs">) => Boolean(j.contentWork && j.contentWork.intent === "create" && !j.contentWork.ownerRequest);
+  // A quality failure judged by checks since corrected says nothing about the next attempt (P181).
   const failed = (await ctx.db.query("jobs").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "failed")).order("desc").take(20))
-    .filter(j => automatic(j) && j.contentWork!.stage === "failed");
+    .filter(j => automatic(j) && j.contentWork!.stage === "failed" && !outdatedQualityVerdict(j));
   if (failed.length < 2) return 0;
   const done = (await ctx.db.query("jobs").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "done")).order("desc").take(10))
     .filter(automatic);
@@ -160,9 +161,17 @@ function contentSlotTriggerMatches(trigger: string, cw: { deadlineAt: number; re
  * park) so the owner and support see it instead of paying for repeats. */
 function replacementsHealthy(work: Doc<"jobs">[]) {
   const finished = work.filter(j => j.contentWork!.intent === "create" && ["verified", "failed"].includes(j.contentWork!.stage) &&
-    !HELD_BACK_FAILURES.has(j.contentWork!.failure ?? ""))
+    !HELD_BACK_FAILURES.has(j.contentWork!.failure ?? "") && !outdatedQualityVerdict(j))
     .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 3);
   return finished.filter(j => j.contentWork!.stage === "failed").length < 2;
+}
+/** P181 (Oct 25 2026): a pentra.dev slot's drafts failed on a check that read
+ * a linked citation marker as a number, and its replacement draft got no edit
+ * pass; with that failure and one before it read as a streak, the slot got no
+ * replacement and would have been missed. Quality failures judged by an older
+ * version of the blocking checks (CONTENT_CHECKS_VERSION) are not a streak. */
+function outdatedQualityVerdict(job: Doc<"jobs">) {
+  return job.contentWork!.failure === "bounded_content_quality_exhausted" && (job.contentWork!.checksVersion ?? 0) < CONTENT_CHECKS_VERSION;
 }
 /** Articles the nightly sweep held back after they were sealed (a repeat of a
  * live page, or a reader check added later): the write itself succeeded, so
@@ -1555,18 +1564,23 @@ async function reviseFailedWork(ctx: MutationCtx, site: Doc<"sites">, failed: Do
   const replacement = cw.replacements === 0 && !cw.ownerRequest
     ? await chooseTopic(ctx, site, undefined, discardedIntents) : null;
   if (replacement && failed.articleId) {
+    // P181 (Oct 25 2026): the replacement is a new draft and gets the one
+    // bounded rewrite a first review sends a draft through (the Autopilot edit
+    // pass). It inherited the first draft's spent revisions, so a replacement
+    // whose first review had a checkable finding failed without its rewrite.
     await ctx.db.patch(failed._id, { status: "pending", articleId: undefined, reservationId: undefined,
       workerAttempts: (failed.workerAttempts ?? 0) + 1,
       payload: { ...(cw.ownerRequest ? { manual: true } : {}), topicId: replacement._id, bufferFill: true, options: { includeImages: false, includeYouTube: false } },
       contentWork: { ...cw, intent: "create", targetPageId: undefined, baseRevision: undefined, permissionVersion: undefined,
-        opportunity: undefined, revisionId: undefined, editTarget: undefined, stage: "prepare", replacements: 1,
+        opportunity: undefined, revisionId: undefined, editTarget: undefined, stage: "prepare", replacements: 1, revisions: Math.min(cw.revisions, 1),
         discardedArticleIds: [...cw.discardedArticleIds, failed.articleId] }, updatedAt: Date.now() });
     // A page improvement that becomes a new article now counts toward the month.
     if (cw.intent !== "create") await refreshAccountUsage(ctx, site, 1);
     await ctx.db.patch(replacement._id, { status: "queued", updatedAt: Date.now() });
     return { scheduled: 1, mode: "buffer_fill", activeJobId: failed._id };
   }
-  await ctx.db.patch(failed._id, { status: "failed", contentWork: { ...cw, stage: "failed", failure: "bounded_content_quality_exhausted" }, updatedAt: Date.now() });
+  await ctx.db.patch(failed._id, { status: "failed", contentWork: { ...cw, stage: "failed", failure: "bounded_content_quality_exhausted",
+    checksVersion: CONTENT_CHECKS_VERSION }, updatedAt: Date.now() });
   await settleFailedContentWork(ctx, failed._id);
   if (!cw.ownerRequest && cw.intent === "create") {
     await retireQualityExhaustedTopics(ctx, site, [...cw.discardedArticleIds, ...(failed.articleId ? [failed.articleId] : [])]);
