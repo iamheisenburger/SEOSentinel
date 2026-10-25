@@ -1099,7 +1099,21 @@ const PRODUCT_OFFERING_WORDS = new Set([
   "widget",
 ]);
 
+/** P188 (Oct 25 2026): the fit gate's pure pieces are computed once. A
+ * scheduler pass at LeadPilot's size (393 topics, 120 articles, 64 pages,
+ * 2,402 Search Console rows) re-derived the same stems, profile readings and
+ * verdicts thousands of times and ran past Convex's 1-second limit on every
+ * pass, so its next slot could not be prepared. Results are unchanged. */
+const RELEVANCE_ROOTS = new Map<string, string>();
 function relevanceRoot(word: string): string {
+  const cached = RELEVANCE_ROOTS.get(word);
+  if (cached !== undefined) return cached;
+  const root = computeRelevanceRoot(word);
+  if (RELEVANCE_ROOTS.size >= 50_000) RELEVANCE_ROOTS.clear();
+  RELEVANCE_ROOTS.set(word, root);
+  return root;
+}
+function computeRelevanceRoot(word: string): string {
   let normalized = word
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
@@ -1237,6 +1251,25 @@ export type BusinessSignalMatch = {
   score: number;
 };
 
+const withoutAudienceWords = (words: string[]) => words.filter((word) => !AUDIENCE_SEGMENT_WORDS.has(word));
+type SignalSide = { signalWords: string[]; signalRoots: Set<string>; readings: string[][][] };
+const SIGNAL_SIDES = new Map<string, SignalSide>();
+/** A profile's words, distinctive roots and per-signal readings (P188). */
+function signalSide(businessSignals: string[], promoted?: ReadonlySet<string>): SignalSide {
+  const key = `${promoted ? [...promoted].sort().join(",") : ""}\u0002${businessSignals.join("\u0001")}`;
+  const cached = SIGNAL_SIDES.get(key);
+  if (cached) return cached;
+  const signalWords = businessSignals.flatMap(relevanceTokens);
+  const side = { signalWords, signalRoots: distinctiveRelevanceRoots(signalWords, promoted),
+    readings: businessSignals.map((signal) => {
+      const words = relevanceTokens(signal);
+      return [words, withoutAudienceWords(words)].map((sequence) => distinctiveRelevanceRootSequence(sequence, promoted));
+    }) };
+  if (SIGNAL_SIDES.size >= 500) SIGNAL_SIDES.clear();
+  SIGNAL_SIDES.set(key, side);
+  return side;
+}
+
 export function businessSignalMatch(
   keyword: string,
   businessSignals: string[],
@@ -1252,7 +1285,8 @@ export function businessSignalMatch(
     };
   }
 
-  const signalWords = businessSignals.flatMap(relevanceTokens);
+  const side = signalSide(businessSignals, promoted);
+  const signalWords = side.signalWords;
   if (signalWords.length === 0) {
     return {
       eligible: false,
@@ -1263,7 +1297,7 @@ export function businessSignalMatch(
   }
 
   const keywordRoots = distinctiveRelevanceRoots(keywordWords, promoted);
-  const signalRoots = distinctiveRelevanceRoots(signalWords, promoted);
+  const signalRoots = side.signalRoots;
   const matched = [...keywordRoots].filter((root) => signalRoots.has(root));
   const unmatched = [...keywordRoots].filter((root) => !signalRoots.has(root));
 
@@ -1291,17 +1325,13 @@ export function businessSignalMatch(
   // fixes its own order ("user-generated content" is not a "content
   // generator"). Audience words still count as matched or unsupported
   // subject words above.
-  const withoutAudience = (words: string[]) => words.filter((word) => !AUDIENCE_SEGMENT_WORDS.has(word));
   const reversible = !/\w-\w/.test(keyword);
-  const keywordReadings = [keywordWords, withoutAudience(keywordWords)]
+  const keywordReadings = [keywordWords, withoutAudienceWords(keywordWords)]
     .map((words) => distinctiveRelevanceRootSequence(words, promoted))
     .flatMap((sequence) => reversible ? [sequence, [...sequence].reverse()] : [sequence]);
-  const cohesiveMatchedCount = businessSignals.reduce((highest, signal) => {
-    const signalWords = relevanceTokens(signal);
-    const signalReadings = [signalWords, withoutAudience(signalWords)].map((words) => distinctiveRelevanceRootSequence(words, promoted));
-    return Math.max(highest, ...keywordReadings.flatMap((reading) =>
-      signalReadings.map((sequence) => longestSharedContiguousRootRun(reading, sequence))));
-  }, 0);
+  const cohesiveMatchedCount = side.readings.reduce((highest, signalReadings) =>
+    Math.max(highest, ...keywordReadings.flatMap((reading) =>
+      signalReadings.map((sequence) => longestSharedContiguousRootRun(reading, sequence)))), 0);
   const eligible = keywordRoots.size === 1
     ? matched.length === 1
     : matched.length >= 2 && ratio > 0.5 && cohesiveMatchedCount >= 2;
@@ -1625,7 +1655,23 @@ export function sharesBusinessSubject(keyword: string, signals: { coreBusinessSi
  * requires at least two matched subject words, a cohesive phrase from one
  * tenant signal and a product anchor.
  */
+const FIT_VERDICTS = new Map<string, TopicBusinessFitEvaluation>();
+let fitComputations = 0;
+/** How many verdicts were computed rather than reused (P188; tests read it). */
+export function topicFitComputations(): number { return fitComputations; }
 export function evaluateTopicBusinessFit(args: TopicBusinessFitArgs): TopicBusinessFitEvaluation {
+  const key = [args.keyword, args.label ?? "", args.growthSeed ?? "", args.coreBusinessSignals.join("\u0001"),
+    (args.productAnchorSignals ?? []).join("\u0001"), args.businessModelSignals.join("\u0001")].join("\u0002");
+  let verdict = FIT_VERDICTS.get(key);
+  if (!verdict) {
+    fitComputations += 1;
+    verdict = computeTopicBusinessFit(args);
+    if (FIT_VERDICTS.size >= 20_000) FIT_VERDICTS.clear();
+    FIT_VERDICTS.set(key, verdict);
+  }
+  return { ...verdict, reasons: [...verdict.reasons] };
+}
+function computeTopicBusinessFit(args: TopicBusinessFitArgs): TopicBusinessFitEvaluation {
   const strict = evaluateTopicBusinessFitWith(args);
   if (strict.eligible) return strict;
   const promoted = tenantCoreVocabulary(args.productAnchorSignals ?? []);

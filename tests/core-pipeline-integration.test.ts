@@ -9836,3 +9836,53 @@ test("B corrections and rollbacks work on a site with more than 500 jobs, readin
   assert.ok(jobRows < 20, `rollback reads the page's work, not the site's history (${jobRows} job rows)`);
   f.assertOffline();
 });
+
+// P188 (Oct 25 2026): from 17:58Z every LeadPilot scheduler pass ran past Convex's 1-second limit right after its
+// 18:00Z article published, so its next slot could not be prepared. A CPU profile at its size (393 topics, 120
+// articles, 64 pages, 2,402 Search Console rows) put most of the time in the business-fit gate re-deriving the same
+// stems, profile readings and verdicts thousands of times. They are computed once now; verdicts are unchanged.
+test("P188 a preparation pass at LeadPilot's size reuses fit verdicts and stays far inside the time limit", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+  const selected = await selectExistingPage(f, "md", `${correctionSurvivor}\n\n${"Irrigation teams record each valve, pump and zone check before the season starts. ".repeat(120)}`);
+  const site = await selectGrowth(f, 86_400_000), saved = f.get(site.id)!;
+  Object.assign(saved.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const domain = saved.canonicalDomain ?? saved.domain, revision = saved.canonicalDomainRevision ?? 0;
+  const words = ["irrigation", "valve", "pump", "zone", "sprinkler", "drip", "pressure", "controller", "schedule", "maintenance", "repair", "leak",
+    "inspection", "checklist", "winterize", "backflow", "nozzle", "timer", "lawn", "garden", "commercial", "residential", "cost", "guide", "template", "how", "to", "best"];
+  const phrase = (i: number, n: number) => Array.from({ length: n }, (_, k) => words[(i * 7 + k * 13 + k * k) % words.length]).join(" ");
+  const page = f.get(selected.pageId)!;
+  for (let i = 0; i < 63; i++) {
+    const slug = `guide-${i}`;
+    f.add("pages", { ...structuredClone(page), slug, url: `https://${domain}/blog/${slug}`, title: phrase(i, 5), keywords: Array.from({ length: 10 }, (_, k) => phrase(i + k, 3)),
+      editable: { ...structuredClone(page.editable), title: phrase(i, 6), lastReviewedAt: undefined, lastImprovedAt: undefined, lastWorkJobId: undefined, origin: "published_refresh" } });
+  }
+  for (let i = 0; i < 120; i++) {
+    const articleId = f.add("articles", { siteId: site.id, status: "published", title: phrase(i + 500, 6), slug: `post-${i}`, createdAt: f.now(), updatedAt: f.now() });
+    f.add("article_summaries", { articleId, siteId: site.id, canonicalDomain: domain, domainRevision: revision, status: "published", title: phrase(i + 500, 6),
+      slug: `post-${i}`, metaKeywords: Array.from({ length: 8 }, (_, k) => phrase(i + k + 900, 3)), createdAt: f.now(), updatedAt: f.now() });
+  }
+  const statuses = ["planned", "used", "disqualified", "used", "used", "disqualified", "used", "planned"];
+  for (let i = 0; i < 393; i++) f.add("topic_clusters", { siteId: site.id, primaryKeyword: phrase(i + 2000, 4), label: phrase(i + 2000, 5),
+    planningCanonicalDomain: domain, planningDomainRevision: revision, secondaryKeywords: Array.from({ length: 3 }, (_, k) => phrase(i + k + 3000, 4)),
+    intent: "informational", priority: 50, status: statuses[i % statuses.length], searchVolume: 50 + i, keywordDifficulty: 5 + (i % 20), keywordDifficultyMeasured: true,
+    serpTopUrls: Array.from({ length: 10 }, (_, k) => `https://site${(i + k) % 40}.example/${phrase(i + k, 2).replace(/ /g, "-")}`),
+    buyerFit: { eligible: true, reason: "synthetic", profileHash: "x", checkedAt: f.now() }, createdAt: f.now(), updatedAt: f.now() });
+  const dates = Array.from({ length: 28 }, (_, d) => new Date(START - (d + 1) * 86_400_000).toISOString().slice(0, 10));
+  saved.gscDateEpochs = dates.map(date => ({ date, syncEpoch: "scale" }));
+  Object.assign(saved, { gscAccessToken: "synthetic-only", gscProperty: `sc-domain:${domain}`, gscCanonicalDomain: domain, gscDomainRevision: revision });
+  for (let i = 0; i < 2400; i++) f.add("search_performance", { siteId: site.id, date: dates[i % 28], query: phrase(i + 5000, 3), page: `https://${domain}/blog/guide-${i % 64}`,
+    syncVersion: 2, syncEpoch: "scale", syncedAt: f.now(), clicks: 0, impressions: 5 + (i % 30), ctr: 0, position: 4 + (i % 30), createdAt: f.now() });
+  for (const job of f.tables.jobs ?? []) if (job.contentWork) Object.assign(job, { status: "failed" }, { contentWork: { ...job.contentWork, stage: "failed", retiredAt: f.now() } });
+  // The fixture runs the bundled functions, so the verdict cache itself is tested in p188-fit-memo.test.ts;
+  // here a pass at this size must prepare work and stay far inside the limit (about 40 ms after P188, 180-280 before).
+  const pass = async () => {
+    const started = performance.now();
+    const result = await f.invoke("contentWork:advance", { siteId: site.id });
+    for (const job of f.tables.jobs ?? []) if (job.contentWork && job.status === "pending") Object.assign(job, { status: "failed" }, { contentWork: { ...job.contentWork, stage: "failed", retiredAt: f.now() } });
+    return { mode: result.mode, ms: performance.now() - started };
+  };
+  const first = await pass(), second = await pass();
+  assert.equal(first.mode, "buffer_fill"); assert.equal(second.mode, "buffer_fill");
+  assert.ok(second.ms < 500, `a pass at this size takes ${Math.round(second.ms)} ms`);
+  f.assertOffline();
+});
