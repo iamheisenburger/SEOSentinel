@@ -148,6 +148,6 @@ Check three things: whether your business can genuinely serve the searcher, whet
 
 ## Related reading
 
-- [Affiliate Marketing Keyword Research](/blog/affiliate-marketing-keyword-research)
-- [Digital Marketing Keywords](/blog/digital-marketing-keyword-guide)
-- [PPC Keyword Research](/blog/ppc-keyword-research-framework)
+- [Affiliate Marketing Keyword Research: A Practical Framework for Finding Keywords That Convert](/blog/affiliate-marketing-keyword-research)
+- [Digital Marketing Keywords: How to Find and Organize the Terms That Actually Drive Traffic](/blog/digital-marketing-keyword-guide)
+- [PPC Keyword Research: A Practical Framework for Finding Keywords Worth Paying For](/blog/ppc-keyword-research-framework)
