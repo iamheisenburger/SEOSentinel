@@ -118,6 +118,6 @@ None of that is a claim that Pentra is faster, cheaper, or produces better ranki
 
 ## Related reading
 
-- [AI-Powered Content Generation](/blog/ai-powered-content-generation)
-- [Automated Publishing Software](/blog/automated-publishing-software-content-workflow)
-- [Free SEO Content Generator](/blog/free-seo-content-generator-evaluation-guide)
+- [AI-Powered Content Generation: What It Does and How to Evaluate It](/blog/ai-powered-content-generation)
+- [Automated Publishing Software: Streamlining Your Content Workflow From Draft to Live](/blog/automated-publishing-software-content-workflow)
+- [Free SEO Content Generator: How to Evaluate AI Tools for Your Content Workflow](/blog/free-seo-content-generator-evaluation-guide)
