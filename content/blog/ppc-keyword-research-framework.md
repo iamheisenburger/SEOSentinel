@@ -125,6 +125,6 @@ Many advertisers do, mainly to control the message a searcher sees when they loo
 
 ## Related reading
 
-- [Fiverr Keyword Research](/blog/fiverr-keywords-research)
-- [International Keyword Research](/blog/international-keyword-research)
-- [Keyword Clustering Strategy](/blog/keyword-clustering-strategy-organize-by-intent)
+- [Fiverr Keyword Research: A Practical Framework for Finding Terms Buyers Actually Search](/blog/fiverr-keywords-research)
+- [International Keyword Research: A Practical Framework for Targeting Global Search Markets](/blog/international-keyword-research)
+- [Keyword Clustering Strategy: How to Organize Keywords by Search Intent](/blog/keyword-clustering-strategy-organize-by-intent)
