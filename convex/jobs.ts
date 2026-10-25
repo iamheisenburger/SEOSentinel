@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { contentWorkCompleted, settleFailedContentWork, recoverContentWork, hasContentWorkProviderBudget } from "./contentWork";
 import { getLimitsFromFeatures } from "./planLimits";
+import { assertNotMidContentSetup } from "./lib/contentSetupPath";
 import { PUBLICATION_AUDIT_VERSION } from "./lib/publicationArtifact";
 import { publicationDeliveryBlocker } from "./lib/publicationEligibility";
 import {
@@ -5648,6 +5649,7 @@ export const queueArticleNow = mutation({
     if (site.deletionStatus || site.planParkedAt) {
       throw new Error("This site is not active under the current plan");
     }
+    assertNotMidContentSetup(site);
     const allowance = await currentSitePlanAllowance(ctx, site);
     if (!allowance.ok) throw new Error(allowance.reason);
     if (site.userId) {

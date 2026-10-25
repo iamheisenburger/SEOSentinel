@@ -18,6 +18,7 @@ import { stageLabel } from "@/components/content-work-overview";
 import { useActiveSite } from "@/contexts/site-context";
 import { Zap } from "lucide-react";
 import { manualPublicationBlocker } from "../../../../convex/lib/manualPublication";
+import { MID_SETUP_QUEUE_MESSAGE, midContentSetup } from "../../../../convex/lib/contentSetupPath";
 import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 import { userErrorMessage } from "@/lib/user-error";
 
@@ -34,6 +35,8 @@ export default function ArticlesPage() {
   const queueArticle = useMutation(api.jobs.queueArticleNow);
   const requestDraft = useMutation(api.contentWork.requestDraft);
   const readiness = useVisibleQuery(api.contentWork.readiness, site?.serviceMode === "growth_first" ? { siteId: site._id } : "skip");
+  // P197: a site mid content-service setup gets its first article through Start Pentra, never the older queue.
+  const midSetup = Boolean(site && midContentSetup(site));
   const draftRequestKey = useRef<{ siteId: string; key: string } | null>(null);
   const [generating, setGenerating] = useState(false);
 
@@ -115,6 +118,7 @@ export default function ArticlesPage() {
 
   const handleGenerate = async () => {
     if (!site?._id || generating) return;
+    if (midSetup) { setStatus(MID_SETUP_QUEUE_MESSAGE); return; }
     setGenerating(true);
     setStatus("Queued — generation will start shortly...");
     try {
@@ -141,7 +145,12 @@ export default function ArticlesPage() {
       <PageHeader
         title="Articles"
         subtitle={usageKnown ? `${articlesThisMonth} / ${maxArticles} articles this month` : "Checking this month's allowance…"}
-        actions={
+        actions={midSetup ? (
+          <Link href="/dashboard" className="inline-flex items-center gap-1.5 rounded-lg bg-[#0EA5E9] px-3 py-1.5 text-[12px] font-medium text-white transition hover:bg-[#38BDF8]">
+            <PenTool className="h-3.5 w-3.5" />
+            Start Pentra
+          </Link>
+        ) : (
           <div className="flex items-center gap-2">
             <select
               className="rounded-lg border border-white/[0.06] bg-[#0E0F11] px-2.5 py-1.5 text-[12px] text-[#F7F8F8] outline-none transition focus:border-[#0EA5E9]/50"
@@ -170,8 +179,14 @@ export default function ArticlesPage() {
               {atArticleLimit ? "Limit Reached" : generating ? "Requesting…" : "Generate"}
             </Button>
           </div>
-        }
+        )}
       />
+
+      {midSetup && (
+        <div role="status" className="rounded-lg bg-[#0EA5E9]/[0.08] px-4 py-2 text-[13px] text-[#38BDF8]">
+          {MID_SETUP_QUEUE_MESSAGE}
+        </div>
+      )}
 
       {status && (
         <div className="rounded-lg bg-[#0EA5E9]/[0.08] px-4 py-2 text-[13px] text-[#38BDF8]">
@@ -337,7 +352,8 @@ export default function ArticlesPage() {
               ? "Loading..."
               : activeTab !== "all"
                 ? "No articles match this filter."
-                : "No articles yet. Generate one to get started."}
+                : midSetup ? "No articles yet. Finish setup on your dashboard to get your first article."
+                  : "No articles yet. Generate one to get started."}
           </p>
         </div>
       )}

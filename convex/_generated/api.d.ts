@@ -85,6 +85,7 @@ import type * as lib_contentCorrectionProof from "../lib/contentCorrectionProof.
 import type * as lib_contentCustomer from "../lib/contentCustomer.js";
 import type * as lib_contentProviderRefusal from "../lib/contentProviderRefusal.js";
 import type * as lib_contentSelection from "../lib/contentSelection.js";
+import type * as lib_contentSetupPath from "../lib/contentSetupPath.js";
 import type * as lib_contentToolRequest from "../lib/contentToolRequest.js";
 import type * as lib_contentUsage from "../lib/contentUsage.js";
 import type * as lib_currentGscRows from "../lib/currentGscRows.js";
@@ -309,6 +310,7 @@ declare const fullApi: ApiFromModules<{
   "lib/contentCustomer": typeof lib_contentCustomer;
   "lib/contentProviderRefusal": typeof lib_contentProviderRefusal;
   "lib/contentSelection": typeof lib_contentSelection;
+  "lib/contentSetupPath": typeof lib_contentSetupPath;
   "lib/contentToolRequest": typeof lib_contentToolRequest;
   "lib/contentUsage": typeof lib_contentUsage;
   "lib/currentGscRows": typeof lib_currentGscRows;

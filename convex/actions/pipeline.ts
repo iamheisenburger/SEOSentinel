@@ -1,4 +1,5 @@
 "use node";
+import { assertNotMidContentSetup } from "../lib/contentSetupPath";
 import { contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
 import { autopilotCompanyNameIssue, autopilotCompanyNameNote, autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote,
   checkableFactCheckFindings, unsearchedCompanyMentions } from "../lib/autopilotEditor";
@@ -8097,7 +8098,8 @@ export const publishApproved = action({
 export const generateNow = action({
   args: { siteId: v.id("sites") },
   handler: async (ctx, { siteId }): Promise<{ articleId: Id<"articles"> }> => {
-    await requireOwnedSite(ctx, siteId);
+    // P197: a site mid content-service setup gets articles through Start Pentra only.
+    assertNotMidContentSetup(await requireOwnedSite(ctx, siteId));
 
     const topics: Doc<"topic_clusters">[] = await ctx.runQuery(
       internal.topics.listBySiteInternal,

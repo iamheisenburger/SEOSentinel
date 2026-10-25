@@ -9,6 +9,7 @@ import { contentConnectionComplete, pasteDestination } from "./lib/contentSelect
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { publicationDestinationBlockers } from "./lib/autopilotReadiness";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
+import { midContentSetup } from "./lib/contentSetupPath";
 import { collectCurrentDomainPublishedSummariesSince, gscConnectionMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { publishedArticlePageUrl } from "./lib/searchPerformance";
 import { isCompleteGscDateRange } from "./lib/gscSearchAnalytics";
@@ -139,12 +140,17 @@ export const noteSetupReminders = internalMutation({ args: {}, handler: async (c
 } });
 
 /** Pentra has started for a site once its owner pressed Start (either way of
- * publishing), an article was asked for, or any article exists. */
+ * publishing) or asked for a draft. A site set up through the content service
+ * starts only that way: an article from the older queue (one real signup made
+ * one without pressing Start) doesn't count (P197). A site on the older flow
+ * has started once it has any article. */
 async function setupStarted(ctx: QueryCtx | MutationCtx, site: Doc<"sites">) {
   if ((site.serviceMode === "growth_first" && site.contentSchedule) || site.contentSchedule?.autopilotSelectedAt) return true;
+  const jobs = await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", site._id)).take(20);
+  if (jobs.some(job => job.contentWork !== undefined)) return true;
+  if (midContentSetup(site)) return false;
   if ((await ctx.db.query("articles").withIndex("by_site", q => q.eq("siteId", site._id)).take(1)).length > 0) return true;
-  return (await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", site._id)).take(20))
-    .some(job => job.contentWork !== undefined || job.type === "article");
+  return jobs.some(job => job.type === "article");
 }
 
 /** The first thing a site still needs, in the order the setup panel asks for it. */

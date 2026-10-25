@@ -9380,6 +9380,36 @@ test("P196 a site Pentra hasn't started for a day after it was added gets one em
   f.assertOffline(); second.assertOffline(); started.assertOffline(); late.assertOffline();
 });
 
+// P197 (Oct 25 2026): one of the first real signups never pressed Start and made an article with the Articles page's
+// Generate, which ran the older queue for a site set up through the content service.
+test("P197 a site mid content-service setup never reaches the older article queue, and is still reminded to press Start", async () => {
+  const hour = 3_600_000;
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await createEmptyContentSite(f);
+  const owner = f.get(site.id)!.userId;
+  assert.ok(f.get(site.id)!.contentSetupRequestedAt !== undefined);
+  f.setIdentity(owner);
+  await assert.rejects(f.invoke("jobs:queueArticleNow", { siteId: site.id }), /Finish setup on your dashboard and press Start Pentra/);
+  await assert.rejects(f.invoke("actions/pipeline:generateNow", { siteId: site.id }), /Finish setup on your dashboard and press Start Pentra/);
+  assert.equal(f.tables.jobs?.length ?? 0, 0, "nothing was queued");
+  f.setIdentity(null);
+  // An article the older queue made before this fix doesn't count as started: the reminder still names Start.
+  f.add("articles", { siteId: site.id, status: "review", title: "An older-queue draft", slug: "older-queue-draft", markdown: "Draft.", createdAt: f.now() });
+  await f.invoke("customerEmails:recordContact", { userId: owner, email: "owner@reservoirnote.example" });
+  f.restartRuntime({ RESEND_API_KEY: "re_synthetic" });
+  f.setTime(f.now() + 21 * hour);
+  assert.deepEqual(await f.invoke("customerEmails:noteSetupReminders", {}), { noted: 1 });
+  const log = f.tables.customer_emails.find(e => e.kind === "setup_reminder")!;
+  const preview = await f.invoke("customerEmails:noticeContext", { logId: log._id });
+  assert.match(preview.message.text, /What's left: Check your business details, tick “My business details are accurate” and press Start Pentra\./);
+  // Once Start is pressed (the content service chosen, with its schedule) nothing is left to tell.
+  Object.assign(f.get(site.id)!, { serviceMode: "growth_first", contentSchedule: { intervalMs: 86_400_000, nextDeadlineAt: f.now() + hour } });
+  assert.deepEqual(await f.invoke("customerEmails:send", { logId: log._id }), { status: "skipped" });
+  assert.equal(f.get(log._id)!.reason, "no_longer_true");
+  assert.equal(f.opsEmails.length, 0);
+  f.assertOffline();
+});
+
 // D4 (P126, Oct 20 2026): when an Autopilot article is 6h+ late, the owner
 // hears it and why, once per slot and at most daily; never when they paused it.
 test("D4 the owner hears once when an Autopilot article is 6 hours late, and why", async () => {

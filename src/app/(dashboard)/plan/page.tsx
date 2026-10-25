@@ -32,6 +32,7 @@ import Link from "next/link";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { useActiveSite } from "@/contexts/site-context";
 import { cadenceLabel } from "../../../../convex/planLimits";
+import { MID_SETUP_QUEUE_MESSAGE, midContentSetup } from "../../../../convex/lib/contentSetupPath";
 import { topicTitle } from "@/lib/topic-title";
 import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 
@@ -156,6 +157,8 @@ export default function PlanPage() {
   // Growth-first sites set Autopilot and pace on the dashboard; the legacy
   // cadence projection and Schedule tab don't describe how they publish.
   const growthFirst = site?.serviceMode === "growth_first";
+  // P197: a site mid content-service setup gets its first article through Start Pentra, never the older queue.
+  const midSetup = Boolean(site && midContentSetup(site));
   const currentTab = growthFirst && activeTab === "schedule" ? "all" : activeTab;
 
   const sorted = useMemo(() => {
@@ -269,6 +272,7 @@ export default function PlanPage() {
 
   const handleGenerateArticle = async (topicId: Id<"topic_clusters">) => {
     if (!site?._id) return;
+    if (midSetup) { setStatus(MID_SETUP_QUEUE_MESSAGE); return; }
     setGeneratingTopicId(topicId);
     try {
       await queueArticle({ siteId: site._id, topicId });
@@ -657,6 +661,12 @@ export default function PlanPage() {
                       >
                         Disqualified
                       </span>
+                    ) : midSetup ? (
+                      <Link href="/dashboard" title={MID_SETUP_QUEUE_MESSAGE}
+                        className="inline-flex items-center gap-1 rounded-md border border-white/[0.1] px-2.5 py-1 text-[11px] font-medium text-[#D0D6E0] hover:bg-white/[0.05] hover:text-[#F7F8F8] transition">
+                        <Play className="h-2.5 w-2.5" />
+                        Start Pentra
+                      </Link>
                     ) : (
                       <button
                         onClick={() => handleGenerateArticle(topic._id)}

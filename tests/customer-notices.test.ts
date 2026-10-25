@@ -8,7 +8,7 @@ import { firstArticleEmail, missedSlotCause, missedSlotEmail, monthlyReportEmail
 test("the setup reminder names the one step that is left, and how to turn emails off", () => {
   const website = setupReminderEmail({ domain: "cedarcare.example", step: "website" });
   assert.equal(website.subject, "One step left to start Pentra on cedarcare.example");
-  assert.match(website.text, /^You added cedarcare\.example to Pentra, but Pentra hasn't started writing for it yet\./);
+  assert.match(website.text, /^You added cedarcare\.example to Pentra, but Pentra isn't running on it yet\./);
   assert.match(website.text, /What's left: Connect your website so Pentra can publish to it \(WordPress, GitHub, Webflow, Shopify or Ghost\)\. If your site runs on something else, choose “Paste the articles yourself” in setup instead\./);
   assert.match(setupReminderEmail({ domain: "cedarcare.example", step: "plan" }).text, /What's left: Check your plan in Plans & billing \(https:\/\/pentra\.dev\/upgrade\)\./);
   const start = setupReminderEmail({ domain: "cedarcare.example", step: "start" });

@@ -57,7 +57,7 @@ const SETUP_STEP: Record<SetupStep, string> = {
  * The first two real signups never started (one never pressed Start, one never connected a website) and nothing told them what was left. */
 export function setupReminderEmail(input: { domain: string; step: SetupStep }): { subject: string; text: string } {
   const lines = [
-    `You added ${input.domain} to Pentra, but Pentra hasn't started writing for it yet.`,
+    `You added ${input.domain} to Pentra, but Pentra isn't running on it yet.`,
     "",
     `What's left: ${SETUP_STEP[input.step].replace(/^./, c => c.toUpperCase())}`,
     "",
