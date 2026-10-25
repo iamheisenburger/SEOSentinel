@@ -139,8 +139,8 @@ Pentra is not the only way to build this. If you prefer to stay in control, you 
 ## Related reading
 
 - [How Do I Fact-Check AI-Generated Articles Before Publishing?](/blog/how-to-fact-check-ai-generated-articles)
-- [SaaS Blog Publishing Frequency](/blog/saas-blog-publishing-frequency-rankings)
-- [Free SEO Content Writing Software](/blog/free-seo-content-writing-software)
+- [SaaS Blog Publishing Frequency: How Often Should You Post for Rankings?](/blog/saas-blog-publishing-frequency-rankings)
+- [Free SEO Content Writing Software: What It Can and Cannot Do for Your Site](/blog/free-seo-content-writing-software)
 
 ## Sources
 
