@@ -160,9 +160,9 @@ At the end you will have a keyword-to-page plan built from your own buyers' lang
 
 ## Related reading
 
-- [Keywords for Research](/blog/keywords-for-research-how-to-find-search-terms)
-- [Affiliate Marketing Keyword Research](/blog/affiliate-marketing-keyword-research)
-- [Fiverr Keyword Research](/blog/fiverr-keywords-research)
+- [Keywords for Research: How to Find Search Terms Worth Writing About](/blog/keywords-for-research-how-to-find-search-terms)
+- [Affiliate Marketing Keyword Research: A Practical Framework for Finding Keywords That Convert](/blog/affiliate-marketing-keyword-research)
+- [Fiverr Keyword Research: A Practical Framework for Finding Terms Buyers Actually Search](/blog/fiverr-keywords-research)
 
 ## Sources
 
