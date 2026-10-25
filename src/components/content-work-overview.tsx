@@ -28,6 +28,31 @@ const CARD = "rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5 space-y-3";
 const H2 = "text-[15px] font-semibold text-[#F7F8F8]";
 const BODY = "text-[14px] leading-relaxed text-[#8A8F98]";
 
+/** P189 (Oct 25 2026): a site that starts on Review first got no article until its
+ * owner found the Articles page and asked for one; the first real signups stopped
+ * before seeing any article. The first one is one click from the overview. */
+function FirstDraft({ siteId, reviewToken, maximumMicroUsd }: { siteId: Id<"sites">; reviewToken: string; maximumMicroUsd: number }) {
+  const requestDraft = useMutation(api.contentWork.requestDraft);
+  const [requestKey] = useState(() => crypto.randomUUID());
+  const [busy, setBusy] = useState(false), [message, setMessage] = useState("");
+  const write = async () => {
+    setBusy(true); setMessage("");
+    try {
+      await requestDraft({ siteId, requestKey, reviewToken, maximumMicroUsd });
+      setMessage("Pentra is researching and writing your first article, usually within a few minutes. It appears here, ready for you to read and approve.");
+    } catch (err) {
+      setMessage(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Pentra couldn't start your first article. Refresh and try again.");
+    } finally { setBusy(false); }
+  };
+  return <div className="space-y-2">
+    <p className={BODY}>Pentra writes each article from your confirmed business facts; you read it, then publish it from <Link className="text-[#0EA5E9] hover:underline" href="/articles">Articles</Link>. Nothing publishes automatically.</p>
+    <button type="button" disabled={busy} onClick={write}
+      className="rounded-lg bg-[#0EA5E9] px-3.5 py-2 text-[14px] font-medium text-white transition hover:bg-[#0EA5E9]/90 disabled:opacity-60">
+      {busy ? "Starting…" : "Write my first article"}</button>
+    {message && <p role="status" className={BODY}>{message}</p>}
+  </div>;
+}
+
 export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
   const state = useVisibleQuery(api.contentWork.readiness, { siteId });
   if (!state || state.siteId !== siteId) return <p className={BODY}>Loading your content service…</p>;
@@ -80,7 +105,9 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
     <div className="grid gap-4 md:grid-cols-2 md:items-start">
       <div className="space-y-4">
       <section className={CARD}><h2 className={H2}>Upcoming work</h2>
-        {s?.ownerReviewedOnly ? <p className={BODY}>Request, review and publish from <Link className="text-[#0EA5E9] hover:underline" href="/articles">Articles</Link>. Nothing publishes automatically.</p>
+        {s?.ownerReviewedOnly && !upcoming.length && !published.length && typeof state.ownerDraft?.maximumMicroUsd === "number"
+          ? <FirstDraft siteId={siteId} reviewToken={state.reviewToken} maximumMicroUsd={state.ownerDraft.maximumMicroUsd} />
+          : s?.ownerReviewedOnly ? <p className={BODY}>Request, review and publish from <Link className="text-[#0EA5E9] hover:underline" href="/articles">Articles</Link>. Nothing publishes automatically.</p>
           : simple ? <p className={BODY}>{upcoming.length ? "Pentra is preparing your next articles."
             : quotaUsed ? <>You&apos;ve used all {planPerMonth} articles in your plan this month{s ? <>, so the next one starts {when(s.nextDeadlineAt)}</> : null}. <Link className="text-[#0EA5E9] hover:underline" href="/upgrade">Upgrade for more articles</Link>.</>
             : "Pentra will start preparing your next article shortly."}</p>
