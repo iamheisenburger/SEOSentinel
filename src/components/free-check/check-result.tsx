@@ -15,7 +15,7 @@ type View = NonNullable<FunctionReturnType<typeof api.freeCheck.get>>;
 const EYEBROW = "font-mono text-[12px] uppercase tracking-[0.12em] text-[#62666D]";
 const PANEL = "rounded-xl border border-white/[0.06] bg-[#0B0C0E] p-5 md:p-6";
 const STEPS = ["Reading your homepage", "Checking what Google can see", "Finding searches your customers make", "Checking which searches fit your business",
-  "Checking the pages you already have"];
+  "Checking the pages you already have", "Checking Google for each search"];
 
 const number = (value: number) => value.toLocaleString("en-US");
 const competition = (difficulty: number) => difficulty < 15 ? "Very low" : "Low";
@@ -110,7 +110,9 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
     <section className={PANEL}>
       <p className={EYEBROW}>Missed searches{view.countryName ? ` · Google in ${view.countryName}` : ""}</p>
       <h1 className="mt-3 text-2xl font-semibold tracking-tight text-[#F7F8F8] md:text-3xl [text-wrap:balance] [overflow-wrap:anywhere]">
-        {view.totalMissed > 0 ? `${view.totalMissed} Google ${view.totalMissed === 1 ? "search" : "searches"} ${view.domain} is missing` : `No missed searches found for ${view.domain}`}
+        {view.totalMissed > 0 ? `${view.totalMissed} Google ${view.totalMissed === 1 ? "search" : "searches"} ${view.domain} is missing`
+          : view.almost.length > 0 ? `${view.domain} is close to page one for ${view.almost.length} ${view.almost.length === 1 ? "search" : "searches"}`
+            : `No missed searches found for ${view.domain}`}
       </h1>
       {view.summary && <p className="mt-2 text-[13px] leading-relaxed text-[#62666D]">
         Pentra read {view.domain} as: {view.summary}{view.placesLabel ? ` Serves ${view.placesLabel}.` : ""}
@@ -118,12 +120,14 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
       {view.totalMissed > 0 ? <p className="mt-3 text-[15px] leading-relaxed text-[#8A8F98]">
         {view.placesLabel ? `People in ${view.placesLabel} make these searches about ${number(view.monthlySearches)} times a month.`
           : `People who could become your customers make these searches about ${number(view.monthlySearches)} times a month.`}
-        {" "}{view.domain} has no page for them and doesn&apos;t appear on Google&apos;s first two pages. Each has low competition, so a good page has a real chance to rank.
+        {" "}{view.domain} has no page for them, and a live Google check shows it isn&apos;t on the first two pages. Each has low competition, so a good page has a real chance to rank.
       </p> : <p className="mt-3 text-[15px] leading-relaxed text-[#8A8F98]">
         {view.keywordsUnavailable
           ? `Pentra couldn't find search data for ${view.domain}. This happens when a homepage has little text Pentra can read (for example, a site built entirely in JavaScript) or when the site is very new.`
-          : view.unranked.length > 0 || view.almost.length > 0
-            ? `${view.domain} already has a page for the low-competition searches Pentra found. The quickest wins are below: pages Google doesn't show yet, and pages close to page one.`
+          : view.almost.length > 0
+            ? `Google already shows ${view.domain} at positions 4 to 20 for these searches, about ${number(view.almost.reduce((sum, row) => sum + row.searchVolume, 0))} searches a month in all. Moving those pages onto page one is the quickest win.`
+            : view.unranked.length > 0
+            ? `${view.domain} already has a page for the low-competition searches Pentra found. The quickest wins are below: pages Google doesn't show yet.`
             : `Pentra didn't find low-competition searches from your customers that ${view.domain} has no page for. Your site may already cover them, or your homepage says little about what you sell.`}
       </p>}
       {view.missed.length > 0 && <div className="mt-5 overflow-hidden rounded-lg border border-white/[0.06]">
@@ -160,17 +164,6 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
       {view.totalMissed > 0 && <EmailReport domain={view.domain} full={view.hiddenCount > 0} />}
     </section>
 
-    {view.unranked.length > 0 && <section className={PANEL} aria-labelledby="free-check-unranked">
-      <h2 id="free-check-unranked" className="text-[17px] font-semibold text-[#F7F8F8]">Pages Google doesn&apos;t show yet</h2>
-      <p className="mt-1.5 text-[14px] leading-relaxed text-[#8A8F98]">{view.domain} has a page for these searches, but Google doesn&apos;t show it on its first two pages. Improving that page is usually faster than writing a new one.</p>
-      <ul className="mt-4 divide-y divide-white/[0.06]">
-        {view.unranked.map(row => <li key={row.url} className="py-3 text-[14px]">
-          <span className="block text-[#F7F8F8]">{row.keyword}</span>
-          <span className="block text-[#8A8F98]">{number(row.searchVolume)} a month{similar(row.variants) ? ` · ${similar(row.variants)}` : ""} · <span className="text-[#62666D] [overflow-wrap:anywhere]">{pagePath(row.url)}</span></span>
-        </li>)}
-      </ul>
-    </section>}
-
     {view.almost.length > 0 && <section className={PANEL} aria-labelledby="free-check-almost">
       <h2 id="free-check-almost" className="text-[17px] font-semibold text-[#F7F8F8]">Close to page one</h2>
       <p className="mt-1.5 text-[14px] leading-relaxed text-[#8A8F98]">{view.domain} already shows up for these searches at positions 4 to 20 on Google. Improving the page that ranks is usually the quickest win.</p>
@@ -178,6 +171,17 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
         {view.almost.map(row => <li key={row.url} className="py-3 text-[14px]">
           <span className="block text-[#F7F8F8]">{row.keyword}</span>
           <span className="block text-[#8A8F98]"><span className="text-[#D0D6E0]">#{row.position}</span> on Google · {number(row.searchVolume)} a month{similar(row.variants) ? ` · ${similar(row.variants)}` : ""} · <span className="text-[#62666D] [overflow-wrap:anywhere]">{pagePath(row.url)}</span></span>
+        </li>)}
+      </ul>
+    </section>}
+
+    {view.unranked.length > 0 && <section className={PANEL} aria-labelledby="free-check-unranked">
+      <h2 id="free-check-unranked" className="text-[17px] font-semibold text-[#F7F8F8]">Pages Google doesn&apos;t show yet</h2>
+      <p className="mt-1.5 text-[14px] leading-relaxed text-[#8A8F98]">{view.domain} has a page for these searches, but a live Google check shows it isn&apos;t on the first two pages. Improving that page is usually faster than writing a new one.</p>
+      <ul className="mt-4 divide-y divide-white/[0.06]">
+        {view.unranked.map(row => <li key={row.url} className="py-3 text-[14px]">
+          <span className="block text-[#F7F8F8]">{row.keyword}</span>
+          <span className="block text-[#8A8F98]">{number(row.searchVolume)} a month{similar(row.variants) ? ` · ${similar(row.variants)}` : ""} · <span className="text-[#62666D] [overflow-wrap:anywhere]">{pagePath(row.url)}</span></span>
         </li>)}
       </ul>
     </section>}

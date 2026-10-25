@@ -13,11 +13,12 @@ import { BUYER_FIT_CEILING_MICRO_USD, BUYER_FIT_MAX_KEYWORDS, BUYER_FIT_MODEL, b
   type BuyerFitVerdict } from "../lib/topicFit";
 import { structuredToolChoice } from "../lib/toolChoice";
 import { asksForFree, blockedHomepage, botWall, brandTerms, checkBusiness, checkSeeds, classifySearches, localHeadSeeds, FREE_CHECK_COVERAGE_SEARCHES, FREE_CHECK_HOME_MAX_BYTES,
+  FREE_CHECK_VERIFIED_MISSED, verifyClaims, type LivePosition,
   FREE_CHECK_MAX_DIFFICULTY, FREE_CHECK_SITEMAP_MAX_BYTES, freeCheckLocale, healthSummary, htmlLang, isBrandedKeyword, linkedPages, localSeeds,
   namesPlace, notACandidate, PAGE_COVERAGE_MAX_TOKENS, PAGE_COVERAGE_TOOL, pageCoverageRequest, parsePageCoverage, parseSearchSeeds,
   pathsForCoverage, SEARCH_SEEDS_MAX_TOKENS, SEARCH_SEEDS_TOOL, searchSeedRequest, selectAlmostThere, siteCoverage, siteSections, unreadableHomepage,
   type PageAnswer, type RankedKeyword, type SeedRead } from "../lib/missedSearches";
-import { discoverKeywords, getRankedKeywords, meterDataForSeoCost } from "./seoData";
+import { discoverKeywords, getRankedKeywords, meterDataForSeoCost, siteSerpPositions } from "./seoData";
 import { judgeBuyerFit } from "./growthTopics";
 
 /** Page addresses read from the sitemap, and sitemap files read from an index. */
@@ -35,7 +36,8 @@ type Outcome =
 
 type Diagnostics = { seedSource: "model" | "homepage"; seeds: string[]; topics?: string[]; discovered: number; ranked: number; judged: number;
   kept: number; sample?: Array<{ keyword: string; keep: boolean; reason: string }>; places?: string[]; freePlan?: string;
-  coverage?: "model" | "words"; pagesRead?: number; rankCheck?: "verified" | "partial"; homeTitle?: string; country?: string };
+  coverage?: "model" | "words"; pagesRead?: number; rankCheck?: "verified" | "partial"; homeTitle?: string; country?: string;
+  verified?: { asked: number; answered: number; absent: number } };
 
 /** One small model call: the searches a buyer would type, read from the
  * homepage and the site's sections (convex/lib/missedSearches.ts
@@ -258,9 +260,23 @@ export const run = internalAction({
       // With the coverage call's answer, only the searches it judged are shown.
       const shown = pages ? found.filter(k => kept.includes(normalizeFitKeyword(k.keyword))) : found;
       const classified = classifySearches(shown, verdicts, { brands, coverage, ranked, pages, places, freePlan: read?.freePlan });
+
+      // 6. Google itself, live, before any claim (P184): a missed or not-shown
+      // search is reported only when the site is absent from its top 20; one the
+      // site already ranks 4-20 for becomes close to page one.
+      await step("Checking Google for each search");
+      const claims = [...classified.missed.slice(0, FREE_CHECK_VERIFIED_MISSED), ...classified.unranked].map(row => row.keyword);
+      let live = new Map<string, LivePosition>();
+      if (claims.length > 0) {
+        const checked = await meterDataForSeoCost(() => siteSerpPositions(domain, claims, locationCode, locale.language));
+        spent.dataForSeoUsd += checked.usd; spent.uncertain ||= checked.uncertain;
+        live = checked.result;
+      }
+      const verified = verifyClaims(classified, selectAlmostThere(ranked, verdicts, brands, places), live);
+      diagnostics = { ...diagnostics, verified: { asked: claims.length, answered: live.size, absent: [...live.values()].filter(seen => seen === null).length } };
       return { kind: "done", businessName: (prefill.name || domain).slice(0, 80), countryName: locale.countryName,
-        summary: (read?.sells || prefill.summary || "").slice(0, 400), places, missed: classified.missed, unranked: classified.unranked,
-        almost: selectAlmostThere(ranked, verdicts, brands, places), health, keywordsUnavailable: found.length === 0 && ranked.length === 0 };
+        summary: (read?.sells || prefill.summary || "").slice(0, 400), places, missed: verified.missed, unranked: verified.unranked,
+        almost: verified.almost, health, keywordsUnavailable: found.length === 0 && ranked.length === 0 };
     };
     let outcome: Outcome;
     try { outcome = await check(); }

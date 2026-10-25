@@ -5,7 +5,7 @@ import { brandTerms, checkSeeds, classifySearches, excludedFromMissed, fallbackT
   placesLabel, searchSeedRequest, selectAlmostThere, selectMissedSearches, siteCoverage, siteSections, unreadableHomepage, botWall, blockedHomepage, localHeadSeeds,
   FREE_CHECK_DAILY_CAP_MICRO_USD,
   FREE_CHECK_EMAIL_ADDRESS_DAILY_LIMIT, FREE_CHECK_HEALTH_CHECKS, FREE_CHECK_IP_DAILY_LIMIT, FREE_CHECK_RESERVATION_MICRO_USD, FREE_CHECK_VERSION,
-  FREE_CHECK_VISIBLE } from "../convex/lib/missedSearches.ts";
+  FREE_CHECK_VISIBLE, verifyClaims, type LivePosition } from "../convex/lib/missedSearches.ts";
 import { homepageDigest } from "../convex/lib/sitePrefill.ts";
 import { plausibleEmail } from "../convex/lib/customerEmail.ts";
 import type { BuyerFitVerdict } from "../convex/lib/topicFit.ts";
@@ -324,9 +324,10 @@ const RANKED = [
   ["twitch glaze overlay", 12, 600], ["kiln log template", 45, 200],
 ] as const;
 
-function world(options: { homepageDown?: boolean; resendStatus?: number; seedAnswer?: unknown; local?: boolean; bigHomepage?: boolean; botWall?: boolean } = {}) {
+function world(options: { homepageDown?: boolean; resendStatus?: number; seedAnswer?: unknown; local?: boolean; bigHomepage?: boolean; botWall?: boolean;
+  serpRanks?: Record<string, number>; serpFails?: string[] } = {}) {
   const calls: string[] = [], emails: Fields[] = [], seedRequests: string[] = [], labsSeeds: string[] = [], coverageRequests: string[] = [];
-  const rankedRequests: Fields[] = [];
+  const rankedRequests: Fields[] = [], serpRequests: Fields[] = [];
   const page = (body: string, type = "text/html; charset=utf-8", status = 200) => new Response(body, { status, headers: { "content-type": type } });
   const ok = (result: unknown) => new Response(JSON.stringify({ status_code: 20000, cost: 0.01, tasks: [{ status_code: 20000, result }] }),
     { headers: { "content-type": "application/json" } });
@@ -368,6 +369,15 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
           keyword_properties: { keyword_difficulty: kd } } })) }]);
       }
       if (endpoint === "dataforseo_labs/google/keyword_ideas/live") return ok(labsItems(IDEAS));
+      if (endpoint === "serp/google/organic/live/regular") {
+        // Google, live (P184): other websites fill the page; this site appears only where the scenario puts it.
+        serpRequests.push(body);
+        if (options.serpFails?.includes(body.keyword)) return new Response("unavailable", { status: 503 });
+        const own = options.serpRanks?.[body.keyword];
+        const items = Array.from({ length: 20 }, (_, i) => ({ type: "organic", rank_group: i + 1, rank_absolute: i + 1,
+          url: own === i + 1 ? `https://www.${DOMAIN}/ranking-page` : `https://other-${i + 1}.example/page` }));
+        return ok([{ items }]);
+      }
       if (endpoint === "dataforseo_labs/google/bulk_keyword_difficulty/live") {
         const all = [...LABS, ...IDEAS, ...RELATED, ...LOCAL_LABS];
         return ok([{ items: body.keywords.map((keyword: string) => ({ keyword, keyword_difficulty: all.find(([k]) => k === keyword)?.[2] ?? 50 })) }]);
@@ -407,11 +417,49 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
     }
     assert.fail(`Unexpected network ${url.href}`);
   }, { RESEND_API_KEY: "synthetic-only" }, { syntheticHosts: [DOMAIN, `www.${DOMAIN}`] });
-  return { f, calls, emails, seedRequests, labsSeeds, coverageRequests, rankedRequests };
+  return { f, calls, emails, seedRequests, labsSeeds, coverageRequests, rankedRequests, serpRequests };
 }
 
 const visitor = (n: number) => String(n).padStart(64, "a");
 const spendRow = (f: ReturnType<typeof corePipelineFixture>) => f.tables.free_check_quota.find(r => r.kind === "spend")!;
+
+// P184 (Oct 25 2026): reports told abchomeandcommercial.com it was not on Google's first two pages for "pest control
+// san antonio" and Zingerman's the same for "corned beef ann arbor": a ranking database and one exact wording stood in
+// for Google. Every missed or not-shown search is now checked on Google live before it is shown.
+test("v7: a claim is shown only when Google confirms the site is absent; one it ranks 4-20 for is close to page one", async () => {
+  const { f, serpRequests } = world({ serpRanks: { "kiln firing schedule cone 6": 2, "pottery studio management": 7 }, serpFails: ["kiln log template"] });
+  await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(1) });
+  assert.deepEqual((await f.runNextScheduled())?.result, { status: "done" });
+  f.setIdentity("visitor-account");
+  const view = await f.invoke("freeCheck:get", { domain: DOMAIN });
+  f.setIdentity(null);
+  const missed = view.missed.map((k: Fields) => k.keyword);
+  assert.ok(!missed.includes("kiln firing schedule cone 6"), "Google shows the site at #2: not missed");
+  assert.ok(!missed.includes("pottery studio management"), "Google shows it at #7: close to page one, not missed");
+  assert.ok(!missed.includes("kiln log template"), "Google couldn't be asked: never claimed");
+  assert.deepEqual(missed, ["pottery inventory app", "ceramic studio inventory", "clay stock reconciliation"]);
+  assert.deepEqual(view.almost.map((k: Fields) => [k.keyword, k.position]), [["ceramic studio software", 9], ["pottery studio management", 7]],
+    "most searched first");
+  assert.equal(view.almost[1].url, `https://www.${DOMAIN}/ranking-page`, "the page Google shows");
+  assert.equal(view.totalMissed, 3);
+  assert.equal(serpRequests.length, 7, "every claim, once");
+  assert.ok(serpRequests.every(body => body.depth === 20 && body.location_code === 2826), "Google's first two pages where the site sells");
+  const diagnostics = await f.invoke("freeCheck:diagnosticsFor", { domain: DOMAIN });
+  assert.deepEqual(diagnostics.diagnostics.verified, { asked: 7, answered: 6, absent: 4 });
+  f.assertOffline();
+});
+
+test("v7: claims are verified pure: absent stays, top 3 is dropped, 4-20 moves to close to page one, unknown is never shown", () => {
+  const missed = [{ keyword: "a b", searchVolume: 900, difficulty: 10 }, { keyword: "c d", searchVolume: 500, difficulty: 10 },
+    { keyword: "e f", searchVolume: 300, difficulty: 10 }, { keyword: "g h", searchVolume: 100, difficulty: 10 }];
+  const unranked = [{ keyword: "i j", searchVolume: 700, url: "/i-j" }];
+  const live = new Map<string, LivePosition>([["a b", null], ["c d", { position: 3, url: "https://x.example/c" }],
+    ["e f", { position: 12, url: "https://x.example/e" }], ["i j", null]]);
+  const result = verifyClaims({ missed, unranked }, [{ keyword: "k l", searchVolume: 50, position: 9, url: "https://x.example/k" }], live);
+  assert.deepEqual(result.missed.map(k => k.keyword), ["a b"]);
+  assert.deepEqual(result.unranked.map(k => k.keyword), ["i j"]);
+  assert.deepEqual(result.almost.map(k => [k.keyword, k.position]), [["e f", 12], ["k l", 9]]);
+});
 
 test("a free check finds missed searches, holds and settles its cost, and is reused for a week", async () => {
   const { f, calls, seedRequests, labsSeeds, coverageRequests, rankedRequests } = world();
@@ -456,8 +504,9 @@ test("a free check finds missed searches, holds and settles its cost, and is reu
   const paid = calls.filter(c => c.startsWith("api.dataforseo.com")).length;
   // Ranked keywords, three topic suggestions, related searches and their
   // difficulty, then category ideas and theirs (the topics found under 15),
-  // then the shown searches' rankings checked by name.
-  assert.equal(paid, 9, `DataForSEO calls: ${paid}`);
+  // then the shown searches' rankings checked by name, then each claim on
+  // Google live (P184: 6 missed searches and 1 page Google doesn't show).
+  assert.equal(paid, 16, `DataForSEO calls: ${paid}`);
   let usd = 0;
   for (let i = 0; i < paid; i++) usd += 0.01;
   const cost = Math.ceil(usd * 1_000_000) + 60 + 60 + 60;

@@ -15,7 +15,7 @@ import { normalizeFitKeyword, type BuyerFitBusiness, type BuyerFitVerdict } from
 
 /** Bumped when the check's logic changes: a finished check from an older
  * version is run again on its next request instead of being reused. */
-export const FREE_CHECK_VERSION = 6;
+export const FREE_CHECK_VERSION = 7;
 
 /** A finished check is reused for a week, so a shared link costs nothing. */
 export const FREE_CHECK_CACHE_MS = 7 * 86_400_000;
@@ -523,6 +523,36 @@ export function classifySearches(found: DiscoveredKeyword[], verdicts: Map<strin
   }
   const unranked = [...byPage.values()].slice(0, FREE_CHECK_MAX_UNRANKED).map(({ variants, ...row }) => variants ? { ...row, variants } : row);
   return { missed, unranked };
+}
+
+/** P183 (Oct 25 2026): the most searched missed searches checked on Google itself. */
+export const FREE_CHECK_VERIFIED_MISSED = 10;
+export type LivePosition = { position: number; url: string } | null;
+
+/** P183 (Oct 25 2026): the report told abchomeandcommercial.com it was not on
+ * Google's first two pages for "pest control san antonio" and Zingerman's the
+ * same for "corned beef ann arbor": a third-party ranking database and one
+ * exact wording stood in for Google. A missed or not-shown search is reported
+ * only when Google itself (live, top 20) confirms the site is absent; a search
+ * the site already ranks 4-20 for becomes a close-to-page-one row, one it
+ * already wins (top 3) is dropped, and one Google could not be asked about is
+ * not reported at all. */
+export function verifyClaims(classified: { missed: MissedSearch[]; unranked: UnrankedSearch[] }, almost: AlmostSearch[],
+  live: Map<string, LivePosition>) {
+  const moved: AlmostSearch[] = [];
+  const confirmedAbsent = <T extends { keyword: string; searchVolume: number }>(rows: T[]) => rows.filter(row => {
+    const seen = live.get(row.keyword);
+    if (seen === undefined) return false;
+    if (seen === null) return true;
+    if (seen.position >= 4 && seen.position <= 20) moved.push({ keyword: row.keyword, searchVolume: row.searchVolume, position: seen.position, url: seen.url });
+    return false;
+  });
+  const missed = confirmedAbsent(classified.missed), unranked = confirmedAbsent(classified.unranked);
+  const pages = new Map<string, AlmostSearch>();
+  for (const row of [...almost, ...moved].sort((a, b) => b.searchVolume - a.searchVolume || a.position - b.position)) {
+    if (!pages.has(pageKey(row.url))) pages.set(pageKey(row.url), row);
+  }
+  return { missed, unranked, almost: [...pages.values()].slice(0, FREE_CHECK_MAX_ALMOST) };
 }
 
 /** Missed searches only (see classifySearches). */

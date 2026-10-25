@@ -1470,6 +1470,36 @@ export async function analyzeSERPFromDataForSEO(
   return analyzeSERPFromAPI(keyword, locationCode, languageCode);
 }
 
+/** P184 (Oct 25 2026): where a website stands on Google for each search, read
+ * live (organic results, top `depth`): its best position and that page, or null
+ * when Google does not show it there. A search whose request failed is left
+ * out, so a caller can never mistake "not asked" for "not ranking". One live
+ * request per search (Live endpoints take one task a request), in parallel. */
+export async function siteSerpPositions(domain: string, keywords: string[], locationCode: number, languageCode: string, depth = 20) {
+  const positions = new Map<string, { position: number; url: string } | null>();
+  const site = domain.toLowerCase().replace(/^www\./, "");
+  const onSite = (url: unknown) => {
+    try {
+      const host = new URL(String(url)).hostname.toLowerCase().replace(/^www\./, "");
+      return host === site || host.endsWith(`.${site}`);
+    } catch { return false; }
+  };
+  await Promise.all([...new Set(keywords)].map(async keyword => {
+    try {
+      const data = await dataForSEORequest("serp/google/organic/live/regular",
+        [{ keyword, location_code: locationCode, language_code: dataForSeoLanguageCode(languageCode), depth }], 45_000);
+      const items = data.tasks?.[0]?.result?.[0]?.items;
+      if (!Array.isArray(items)) return;
+      const own = items.filter((item: { type?: string; url?: string }) => item.type === "organic" && onSite(item.url))
+        .map((item: { rank_group?: number; rank_absolute?: number; url: string }) => ({ position: Number(item.rank_group ?? item.rank_absolute), url: item.url }))
+        .filter((item: { position: number }) => Number.isFinite(item.position) && item.position >= 1)
+        .sort((a: { position: number }, b: { position: number }) => a.position - b.position)[0];
+      positions.set(keyword, own && own.position <= depth ? own : null);
+    } catch { /* unknown: never reported as a claim */ }
+  }));
+  return positions;
+}
+
 async function analyzeSERPFromAPI(
   keyword: string,
   locationCode: number,

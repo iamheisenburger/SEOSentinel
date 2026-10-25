@@ -31,7 +31,9 @@ export const checkDiagnostics = v.object({ seedSource: v.union(v.literal("model"
   discovered: v.number(), ranked: v.number(), judged: v.number(), kept: v.number(),
   places: v.optional(v.array(v.string())), freePlan: v.optional(v.string()), coverage: v.optional(v.union(v.literal("model"), v.literal("words"))),
   pagesRead: v.optional(v.number()), rankCheck: v.optional(v.union(v.literal("verified"), v.literal("partial"))),
-  homeTitle: v.optional(v.string()), country: v.optional(v.string()) });
+  homeTitle: v.optional(v.string()), country: v.optional(v.string()),
+  // P184: claims checked live on Google, how many it answered, and how many it confirmed absent.
+  verified: v.optional(v.object({ asked: v.number(), answered: v.number(), absent: v.number() })) });
 
 async function counter(ctx: MutationCtx, key: string) {
   return ctx.db.query("free_check_quota").withIndex("by_key", q => q.eq("key", key)).first();
