@@ -1,6 +1,8 @@
 import { internalQuery } from "./_generated/server";
 import { v } from "convex/values";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+import { getLimitsFromFeatures } from "./planLimits";
+import { autopilotPublicationConsented } from "./lib/autopilotEditor";
 
 /** Operator reads for V9 (Oct 24 2026): how large the documents are that the
  * product reads most often, as byte counts, stage labels and field names only
@@ -66,3 +68,34 @@ export const monthJobSizes = internalQuery({ args: { siteId: v.id("sites"), mont
       inlineResults: sizes.reduce((s, j) => s + j.inlineResults, 0), largest: Math.max(0, ...sizes.map(j => j.bytes)),
       byIntent: sizes.reduce<Record<string, number>>((m, j) => ({ ...m, [`${j.intent}`]: (m[`${j.intent}`] ?? 0) + 1 }), {}) };
   } });
+
+/** V8 (Oct 25 2026): where new customers' sites stand, fleet-wide, as counts
+ * only (never a domain, account or article): how many sites were added since
+ * a time and how far each got through setup to its first article. Real users
+ * arrived from distribution; a step where they stop shows here first. */
+export const signupFunnel = internalQuery({ args: { since: v.number() }, handler: async (ctx, { since }) => {
+  const sites = await ctx.db.query("sites").withIndex("by_creation_time", q => q.gte("_creationTime", since)).take(500);
+  const counts = { sites: sites.length, accounts: new Set(sites.map(site => site.userId).filter(Boolean)).size, removed: 0, freePlan: 0, paidPlan: 0,
+    profileRead: 0, contentServiceChosen: 0, autopilotChosen: 0, publishesAutomatically: 0, reviewFirst: 0, destinationVerified: 0,
+    searchConsole: 0, workStarted: 0, articleWaiting: 0, articlePublished: 0 };
+  const publishMethods: Record<string, number> = {};
+  const has = async (siteId: Id<"sites">, status: string) =>
+    (await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", status)).take(1)).length > 0;
+  for (const site of sites) {
+    if (site.deletionStatus || site.planParkedAt) { counts.removed++; continue; }
+    if (getLimitsFromFeatures(site.planFeatures ?? []).maxArticles <= 3) counts.freePlan++; else counts.paidPlan++;
+    if (site.siteSummary?.trim()) counts.profileRead++;
+    if (site.serviceMode === "growth_first") counts.contentServiceChosen++;
+    if (site.contentSchedule?.autopilotSelectedAt) counts.autopilotChosen++;
+    if (autopilotPublicationConsented(site)) counts.publishesAutomatically++;
+    if (site.approvalRequired || site.contentSchedule?.ownerReviewedOnly) counts.reviewFirst++;
+    if (site.publisherDestinationReceipt) counts.destinationVerified++;
+    if (site.gscProperty) counts.searchConsole++;
+    const method = site.publishMethod ?? "none";
+    publishMethods[method] = (publishMethods[method] ?? 0) + 1;
+    if ((await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", site._id)).take(1)).length) counts.workStarted++;
+    if (await has(site._id, "published")) counts.articlePublished++;
+    else if (await has(site._id, "ready") || await has(site._id, "review")) counts.articleWaiting++;
+  }
+  return { since, ...counts, publishMethods };
+} });

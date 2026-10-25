@@ -6,8 +6,7 @@ import { PricingSection } from "@/components/landing/pricing-section";
 import { ProductFrame } from "@/components/landing/product-frame";
 import { RunLog } from "@/components/landing/run-log";
 import { AnswerPanel, ControlPanel, HealthPanel, RankingsPanel, SourcesPanel } from "@/components/landing/panels";
-import { convexHttp } from "@/lib/convexHttpClient";
-import { api } from "../../convex/_generated/api";
+import { cachedPublishedListing } from "@/lib/published-listing";
 import { servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
 
 // The latest guides are linked from the homepage so search engines find new articles quickly.
@@ -379,7 +378,8 @@ const faqSchema = {
 async function LatestGuides() {
   let articles: { _id: string; title: string; slug: string; createdAt: number }[] = [];
   try {
-    articles = (await convexHttp.query(api.blog.listPublishedByDomain, { domain: "pentra.dev" }))
+    // The listing cache /blog and every article page share (P182): one Convex read per 6 hours, not one per page.
+    articles = (await cachedPublishedListing("pentra.dev"))
       .filter(article => article.slug && servedOnItsOwnUrl("pentra.dev", article.slug)).sort((a, b) => b.createdAt - a.createdAt).slice(0, 6);
   } catch { articles = []; }
   if (articles.length === 0) return null;

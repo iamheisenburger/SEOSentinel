@@ -14,10 +14,14 @@ test("published blog posts render and emit per-article SEO data on the server", 
   // P159 (Oct 22 2026): most pentra.dev articles were linked only from /blog; each page now links related guides.
   assert.match(blogPostRoute, /relatedArticles\(article, \(await getPublishedList\(domain\)\)\.filter\(\(item\) => servedOnItsOwnUrl\(domain, item\.slug\)\)\)/);
   assert.match(blogPostRoute, /Related guides/);
-  // P167/P169 (Oct 23 2026): listings are read at most hourly per domain, not on every view.
+  // P167/P169 (Oct 23 2026): listings are read from one shared cache per domain, not on every view;
+  // P182 (Oct 25 2026): every 6 hours (~1 MB a read on pentra.dev), and the home page shares that cache.
   assert.match(blogPostRoute, /const getPublishedList = cachedPublishedListing;/);
   const listing = readFileSync("src/lib/published-listing.ts", "utf8");
-  assert.match(listing, /export const cachedPublishedListing = unstable_cache\(\s*async \(domain: string\) => convexHttp\.query\(api\.blog\.listPublishedByDomain, \{ domain \}\),\s*\["blog-related-listing"\],\s*\{ revalidate: 3600 \},\s*\);/);
+  assert.match(listing, /export const cachedPublishedListing = unstable_cache\(\s*async \(domain: string\) => convexHttp\.query\(api\.blog\.listPublishedByDomain, \{ domain \}\),\s*\["blog-related-listing"\],\s*\{ revalidate: 21_600 \},\s*\);/);
+  const home = readFileSync("src/app/page.tsx", "utf8");
+  assert.match(home, /await cachedPublishedListing\("pentra\.dev"\)/);
+  assert.doesNotMatch(home, /listPublishedByDomain/, "the home page never reads the listing outside the shared cache");
   const blogIndex = readFileSync("src/app/blog/page.tsx", "utf8");
   assert.match(blogIndex, /await cachedPublishedListing\(domain\)/);
   assert.doesNotMatch(blogIndex, /convexHttp\.query\(api\.blog\.listPublishedByDomain/, "the index never reads the listing on every view");

@@ -9575,6 +9575,28 @@ test("P181 quality failures judged by older checks are no failing streak; curren
   }
 });
 
+// P182 (Oct 25 2026): real users arrived from distribution (two free signups) and none reached Autopilot within the day;
+// the operator sees how far new sites got through setup, fleet-wide, as counts only.
+test("P182 the signup funnel counts how far new sites got, never naming a site or an account", async () => {
+  const f = setup({ growthFirst: true, businesses: slcBusinesses.slice(0, 2), budgetMicroUsd: 2_000_000 });
+  const before = await f.invoke("opsProbes:signupFunnel", { since: 0 });
+  assert.equal(before.sites, f.tables.sites.length);
+  assert.equal(before.autopilotChosen, 0); assert.equal(before.workStarted, 0);
+  const site = await selectGrowth(f, 8 * 3_600_000);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "ready").length === 2);
+  const after = await f.invoke("opsProbes:signupFunnel", { since: 0 });
+  assert.equal(after.contentServiceChosen, 1); assert.equal(after.autopilotChosen, 1); assert.equal(after.publishesAutomatically, 1);
+  assert.equal(after.workStarted, 1); assert.equal(after.articleWaiting, 1); assert.equal(after.articlePublished, 0);
+  assert.equal(after.freePlan + after.paidPlan + after.removed, after.sites);
+  assert.equal((await f.invoke("opsProbes:signupFunnel", { since: f.now() + 60_000 })).sites, 0, "only sites added since the time asked");
+  const text = JSON.stringify(after);
+  for (const stored of f.tables.sites) for (const value of [stored.domain, stored.userId, stored.siteName].filter(Boolean)) {
+    assert.ok(!text.includes(String(value)), `the funnel named ${value}`);
+  }
+  f.assertOffline();
+});
+
 // P181: a replacement draft is a new article; it gets the one bounded rewrite its first review sends it through.
 test("P181 a replacement draft gets its edit pass instead of failing with the first draft's spent revisions", async () => {
   const guide = "Scoring guide. VendorCRM scores each lead from its lead fields and recent engagement, and shows the factors behind every score so a sales team can decide which leads to call first and which to keep nurturing.";
