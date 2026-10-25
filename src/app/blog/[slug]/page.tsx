@@ -13,7 +13,7 @@ import { LandingNav } from "@/components/layout/landing-nav";
 import { convexHttp } from "@/lib/convexHttpClient";
 import "./article-content.css";
 import { articleFaq } from "@/lib/article-faq";
-import { consolidatedTarget, servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
+import { canonicalBlogHref, consolidatedTarget, servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
 import { relatedArticles } from "@/lib/related-articles";
 import { cachedPublishedListing } from "@/lib/published-listing";
 
@@ -150,7 +150,7 @@ function toIsoDate(timestamp: number | undefined): string | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
-function MarkdownRenderer({ markdown }: { markdown: string }) {
+function MarkdownRenderer({ markdown, domain, slug }: { markdown: string; domain: string; slug: string }) {
   return (
     <div className="article-content">
       <ReactMarkdown
@@ -159,8 +159,12 @@ function MarkdownRenderer({ markdown }: { markdown: string }) {
           // The page already renders the article title as its only h1.
           h1: ({ children }) => <h2>{children}</h2>,
           a: ({ href, children }) => {
-            const safe = href?.startsWith("/") || href?.startsWith("https://");
-            return safe ? <a href={href}>{children}</a> : <>{children}</>;
+            // A link to a consolidated duplicate goes straight to its article;
+            // one that would then point at this page stays plain text (P193).
+            const target = href ? canonicalBlogHref(domain, href) : href;
+            if (target !== href && target === `/blog/${slug}`) return <>{children}</>;
+            const safe = target?.startsWith("/") || target?.startsWith("https://");
+            return safe ? <a href={target}>{children}</a> : <>{children}</>;
           },
           img: ({ src, alt }) => {
             const safeSrc =
@@ -370,7 +374,7 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
         </div>
 
         <div className="mt-10">
-          <MarkdownRenderer markdown={article.markdown} />
+          <MarkdownRenderer markdown={article.markdown} domain={domain} slug={slug} />
         </div>
 
         {article.sources && article.sources.length > 0 && !markdownHasSourcesSection(article.markdown) && (
