@@ -29,6 +29,7 @@ function rhythm(intervalMs: number) {
 /** New-customer setup: one clear choice instead of delivery windows. */
 export function PentraSetupChoice({ state }: { state: SetupState }) {
   const select = useMutation(api.contentWork.selectServiceMode);
+  const updateSite = useMutation(api.sites.updateSite);
   // Other platforms (paste your own): Pentra writes, the owner publishes — Review first only.
   const paste = state.destination.kind === "manual";
   const [picked, setChoice] = useState<"autopilot" | "review">("autopilot");
@@ -36,7 +37,23 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
   const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const reviewAvailable = state.destination.kind === "github" || state.destination.kind === "wordpress" || isApiCmsMethod(state.destination.kind) || paste;
   const ready = state.destination.verified && state.entitlement;
+  // P185 (Oct 25 2026): the first real signups stopped here. Start was silently
+  // disabled until the confirmation box was ticked (one owner had everything else
+  // ready), and a site on a platform Pentra doesn't publish to could not start at
+  // all. Start now says what is missing, and such a site can start by pasting.
+  const missing = !state.destination.verified ? "Connect your website, or choose to paste articles yourself, to start."
+    : !state.entitlement ? "Check your plan in Billing to start." : null;
+  const usePaste = async () => {
+    setBusy(true); setError("");
+    try { await updateSite({ siteId: state.siteId, publishMethod: "manual" }); }
+    catch { setError("Pentra couldn't switch this site to pasting articles. Try again, or connect your website instead."); }
+    finally { setBusy(false); }
+  };
   const start = async () => {
+    if (!confirmed) {
+      setError("Tick \u201cMy business details are accurate\u201d above, then press Start Pentra. Pentra writes only from those facts.");
+      return;
+    }
     setBusy(true); setError("");
     try {
       await select({ siteId: state.siteId, mode: "growth_first", confirmBusinessProfile: true, reviewToken: state.reviewToken,
@@ -59,6 +76,9 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
       {step(true, "Business profile saved")}
       {step(state.destination.verified, paste ? "Website: you paste each approved article into your site" : "Website connected and verified",
         <Link className="ml-1 underline" href={`/sites/${state.siteId}?tab=settings`}>Connect your website</Link>)}
+      {!state.destination.verified && <li className="pl-5 text-[#8A8F98]">Not on WordPress, Shopify, Webflow, Ghost or GitHub?{" "}
+        <button type="button" className="underline disabled:opacity-50" disabled={busy} onClick={usePaste}>Paste the articles yourself</button>:
+        {" "}Pentra writes each one and you paste it into your site (Review first).</li>}
       {step(state.entitlement, "Plan active", <Link className="ml-1 underline" href="/settings/billing">Check billing</Link>)}
     </ul>
     <fieldset className="grid gap-3 md:grid-cols-2">
@@ -77,8 +97,8 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
     {(choice === "autopilot" || !reviewAvailable) && <p className="text-xs text-[#8A8F98]">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>}
     <label className="block text-sm"><input type="checkbox" className="mr-2" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
       My business details are accurate. Pentra writes only from these facts.</label>
-    <Button disabled={!ready || !confirmed || busy} loading={busy} onClick={start}>Start Pentra</Button>
-    {!ready && <p className="text-sm text-[#8A8F98]">Finish the steps above to start.</p>}
+    <Button disabled={!ready || busy} loading={busy} onClick={start}>Start Pentra</Button>
+    {missing && <p className="text-sm text-[#8A8F98]">{missing}</p>}
     {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
   </section>;
 }
