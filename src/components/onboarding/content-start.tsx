@@ -20,7 +20,9 @@ export function ContentStart() {
   const { isLoaded, userId } = useAuth(), upsert = useMutation(api.sites.upsert);
   const [siteId, setSiteId] = useState<Id<"sites"> | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [domain, setDomain] = useState(""), [name, setName] = useState(""), [summary, setSummary] = useState(""), [audience, setAudience] = useState(""), [product, setProduct] = useState(""), [questions, setQuestions] = useState("");
-  const [adapter, setAdapter] = useState("github"), [confirmed, setConfirmed] = useState(false);
+  // P213: no destination is preselected. Setup preselected GitHub and the first real signups' sites all became
+  // GitHub sites (one owner stopped at the repository picker): the owner chooses, or Pentra suggests it from the homepage.
+  const [adapter, setAdapter] = useState(""), [confirmed, setConfirmed] = useState(false);
   const [ctaUrl, setCtaUrl] = useState(""), [ctaText, setCtaText] = useState("");
   const ctaValid = !ctaUrl.trim() || /^https:\/\/[^\s<>"'()[\]]{3,300}$/.test(ctaUrl.trim());
   const prefillSite = useAction(api.actions.onboardingPrefill.prefill);
@@ -37,7 +39,14 @@ export function ContentStart() {
       setAudience(v => keep(v, found.audience)); setQuestions(v => keep(v, found.questions.join("\n")));
       setCtaUrl(v => keep(v, found.ctaUrl)); setCtaText(v => keep(v, found.ctaText));
       setConfirmed(false);
-      setFillNote(`Filled in from ${found.host}. Check every detail and correct anything that isn't right before saving.`);
+      // Where the site runs, when its homepage says so and the owner hasn't chosen yet.
+      const platform = !adapter && found.platform ? found.platform : null;
+      if (platform) setAdapter(platform.method);
+      const runsOn = !platform ? "" : platform.method === "manual"
+        ? `It looks like your site runs on ${platform.name}, which Pentra can't publish to directly, so pasting the articles in is selected below. `
+        : platform.method === "github" ? `It looks like your site is built with ${platform.name}, so GitHub is selected below. `
+        : `It looks like your site runs on ${platform.name}, so ${platform.name} is selected below. `;
+      setFillNote(`Filled in from ${found.host}. ${runsOn}Check every detail and correct anything that isn't right before saving.`);
     } catch (err) {
       setFillNote(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Pentra couldn't read that website. Fill in the details yourself.");
     } finally { setFilling(false); }
@@ -55,7 +64,7 @@ export function ContentStart() {
     if (checked) startFromFreeCheck(checked);
   }, [isAuthenticated]);
   async function save() {
-    if (!userId || !confirmed) return;
+    if (!userId || !confirmed || !adapter) return;
     setBusy(true); setError("");
     try {
       const billing = await fetch("/api/billing/sync-plan", { method: "POST", cache: "no-store" });
@@ -127,6 +136,7 @@ export function ContentStart() {
       <label className="block space-y-1.5"><span className="text-[13px] font-medium text-[#8A8F98]">Publishing destination</span>
         <select className="block w-full rounded-lg border border-white/[0.1] bg-[#08090A] px-3 py-2.5 text-[14px] text-[#F7F8F8] focus:border-white/30 focus:outline-none"
           aria-label="Content publishing destination" value={adapter} onChange={e => { setAdapter(e.target.value); setConfirmed(false); }}>
+          <option value="" disabled>Choose where your website runs</option>
           <option value="wordpress">WordPress · install the Pentra publisher plugin</option>
           <option value="shopify">Shopify · publishes to your store&apos;s blog</option>
           <option value="webflow">Webflow · publishes to your CMS blog collection</option>
@@ -134,6 +144,7 @@ export function ContentStart() {
           <option value="github">GitHub · plain Markdown/MDX (Next.js, Astro, Hugo…)</option>
           <option value="manual">Another platform (Wix, Squarespace…) · you paste articles in</option>
         </select></label>
+      {!adapter && <p className={HELP}>Choose the platform your website runs on. Not sure? Choose “Another platform”: Pentra writes each article and you paste it into your site.</p>}
       {adapter === "github" && <p className={HELP}>Pentra commits each article as a Markdown/MDX file to your site&apos;s repository. You&apos;ll connect GitHub in the next step.</p>}
       {adapter === "manual" && <p className={HELP}>Pentra researches, writes and fact-checks every article for you to review; you paste each one into your site&apos;s blog and Pentra confirms it&apos;s live.</p>}
       {isApiCmsMethod(adapter) && <p className={HELP}>Pentra publishes each article to your {CMS_PLATFORM_LABELS[adapter]} {adapter === "shopify" ? "store's blog" : adapter === "webflow" ? "CMS blog collection" : "site"} through {CMS_PLATFORM_LABELS[adapter]}&apos;s official API, then checks it&apos;s live. You&apos;ll connect it in the next step (about 3 minutes).</p>}
@@ -143,7 +154,7 @@ export function ContentStart() {
       <label className="flex items-start gap-3 text-[14px] text-[#F7F8F8]"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#F7F8F8]" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
         <span>These facts are accurate. Pentra writes only from them.</span></label>
       <div className="flex flex-wrap items-center gap-4">
-        <Button disabled={busy || !isLoaded || !userId || !confirmed || !ctaValid || !domain.trim() || !summary.trim() || !audience.trim() || !product.trim()} onClick={save}>{busy ? "Saving…" : "Save and continue"}</Button>
+        <Button disabled={busy || !isLoaded || !userId || !confirmed || !ctaValid || !adapter || !domain.trim() || !summary.trim() || !audience.trim() || !product.trim()} onClick={save}>{busy ? "Saving…" : "Save and continue"}</Button>
         <Link className="text-[13px] text-[#8A8F98] underline-offset-2 hover:text-[#F7F8F8] hover:underline" href="/upgrade">Plans &amp; billing</Link>
       </div>
       <p className={HELP}>Saving doesn&apos;t charge you. Pentra only adds new articles; it never changes your pricing, checkout or legal pages.</p>

@@ -33,3 +33,17 @@ test("NEW-USER the dashboard explains a used-up month and held-back drafts; copy
   const start = readFileSync("src/components/onboarding/content-start.tsx", "utf8");
   assert.match(start, /userErrorMessage\(err,/);
 });
+
+// P213 (Oct 26 2026): setup preselected GitHub as the publishing destination; the first real signups' sites all became
+// GitHub sites and one owner stopped at the repository picker. Nothing is preselected now, Save waits for a choice,
+// and a platform the homepage names is suggested with a note.
+test("P213 setup never preselects GitHub: the owner chooses, or Pentra suggests the platform from the homepage", () => {
+  const start = readFileSync("src/components/onboarding/content-start.tsx", "utf8");
+  assert.doesNotMatch(start, /useState\("github"\)/, "no destination is preselected");
+  assert.match(start, /const \[adapter, setAdapter\] = useState\(""\)/);
+  assert.match(start, /<option value="" disabled>Choose where your website runs<\/option>/);
+  assert.match(start, /disabled=\{[^}]*!adapter[^}]*\} onClick=\{save\}/, "Save waits for a destination");
+  assert.match(start, /if \(!userId \|\| !confirmed \|\| !adapter\) return;/);
+  assert.match(start, /found\.platform/, "the homepage's platform is suggested");
+  assert.match(readFileSync("convex/actions/onboardingPrefill.ts", "utf8"), /platform: detectSitePlatform\(page\.html\)/);
+});

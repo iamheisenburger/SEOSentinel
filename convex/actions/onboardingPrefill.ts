@@ -4,7 +4,7 @@ import { action } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { ConvexError, v } from "convex/values";
 import { fetchPage } from "../lib/fetchPage";
-import { extractBusinessPrefill, normalizePrefillHost } from "../lib/sitePrefill";
+import { detectSitePlatform, extractBusinessPrefill, normalizePrefillHost } from "../lib/sitePrefill";
 import { brandTerms, FREE_CHECK_HOME_MAX_BYTES } from "../lib/missedSearches";
 import { proposeSeeds } from "./freeCheck";
 
@@ -28,7 +28,9 @@ export const prefill = action({ args: { domain: v.string() }, handler: async (ct
   if (page.status === 0 || page.status >= 400) {
     throw new ConvexError("Pentra couldn't open that website over HTTPS. Check the address, or fill in the details yourself.");
   }
-  const found = extractBusinessPrefill(page.html, new URL(page.finalUrl).hostname || host);
+  const found = { ...extractBusinessPrefill(page.html, new URL(page.finalUrl).hostname || host),
+    // P213: where the site runs, so setup suggests the right publishing destination.
+    platform: detectSitePlatform(page.html) };
   try {
     const { read } = await proposeSeeds(host.replace(/^www\./, ""), page.html, found.questions, brandTerms(host.replace(/^www\./, ""), found.name), []);
     if (read) return { host, ...found, product: read.sells, audience: read.customers || found.audience };

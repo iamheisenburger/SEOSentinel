@@ -91,3 +91,28 @@ export function homepageDigest(html: string): { title: string; description: stri
   return { title: clip(title, 160), description: clip(meta(html, "description") || meta(html, "og:description"), 300), headings,
     text: clip(tagTexts(html, "p").filter(p => p.length >= 40).join(" "), 1500) };
 }
+
+/** P213 (Oct 26 2026): where a website runs, read from its homepage, so setup suggests the right publishing
+ * destination. Setup preselected GitHub, and the first real signups' sites all ended up as GitHub sites; one owner
+ * connected GitHub and stopped at the repository picker. Platforms Pentra can't publish to (Wix, Squarespace,
+ * Framer, HubSpot...) mean pasting; a site built with a code framework is usually published from a repository.
+ * null when the page names nothing: the owner chooses. */
+export type SitePlatform = { method: "wordpress" | "shopify" | "webflow" | "ghost" | "github" | "manual"; name: string };
+const PLATFORM_SIGNS: Array<[RegExp, SitePlatform]> = [
+  // WordPress first: a WordPress site may embed a Shopify buy button.
+  [/\/wp-content\/|\/wp-includes\/|<meta[^>]+name=["']generator["'][^>]+content=["']WordPress/i, { method: "wordpress", name: "WordPress" }],
+  [/cdn\.shopify\.com|shopify\.theme|shopify-section/i, { method: "shopify", name: "Shopify" }],
+  [/data-wf-site=|data-wf-page=|website-files\.com|webflow\.com\/css|<meta[^>]+content=["']Webflow["']/i, { method: "webflow", name: "Webflow" }],
+  [/<meta[^>]+name=["']generator["'][^>]+content=["']Ghost|ghost-portal|\/ghost\/api\//i, { method: "ghost", name: "Ghost" }],
+  [/static\.wixstatic\.com|parastorage\.com|<meta[^>]+content=["']Wix\.com/i, { method: "manual", name: "Wix" }],
+  [/static1\.squarespace\.com|squarespace-cdn\.com|<!-- This is Squarespace\. -->/i, { method: "manual", name: "Squarespace" }],
+  [/framerusercontent\.com|<meta[^>]+name=["']generator["'][^>]+content=["']Framer/i, { method: "manual", name: "Framer" }],
+  // HubSpot's tracking script is on many sites that don't run on its CMS: only the CMS's own signs count.
+  [/hs-sites\.com|<meta[^>]+name=["']generator["'][^>]+content=["']HubSpot/i, { method: "manual", name: "HubSpot" }],
+  [/__NEXT_DATA__|\/_next\/static\//, { method: "github", name: "Next.js" }],
+  [/<meta[^>]+name=["']generator["'][^>]+content=["'](Astro|Hugo|Gatsby|Jekyll|Eleventy|Docusaurus|Hexo)/i, { method: "github", name: "a static site generator" }],
+];
+export function detectSitePlatform(html: string): SitePlatform | null {
+  for (const [sign, platform] of PLATFORM_SIGNS) if (sign.test(html)) return platform;
+  return null;
+}

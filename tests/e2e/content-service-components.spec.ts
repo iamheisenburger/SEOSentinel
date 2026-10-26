@@ -187,7 +187,9 @@ for (const screen of ["overview", "controls", "start", "changed", "independent",
   } else if (screen === "start") {
     await expect(page.getByRole("heading", { name: "Set up Pentra for your website" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Save and continue" })).toBeDisabled();
-    await expect(page.getByLabel("Content publishing destination")).toHaveValue("github");
+    // P213: no destination is preselected (GitHub was, and the first real signups' sites all became GitHub sites).
+    await expect(page.getByLabel("Content publishing destination")).toHaveValue("");
+    await expect(page.getByText(/Choose the platform your website runs on/)).toBeVisible();
     await expect(page.getByRole("option", { name: /WordPress/ })).not.toHaveAttribute("disabled");
     await expect(page.getByText(/choose Autopilot or Review first/).first()).toBeVisible();
   }
