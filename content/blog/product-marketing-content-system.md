@@ -206,8 +206,8 @@ If your team needs to scale the search-content portion of that system while keep
 ## Related reading
 
 - [Ranking Optimization: A Decision Worksheet for Search Visibility](/blog/ranking-optimization-decision-system)
-- [B2B Conversion Optimization: Turning SEO Traffic Into Qualified](/blog/b2b-conversion-optimization-seo-traffic-qualified-leads)
-- [Best Practices in Content Marketing: Strategy for SaaS](/blog/best-practices-content-marketing-strategy-saas-b2b)
+- [B2B Conversion Optimization: Turning SEO Traffic Into Qualified Leads](/blog/b2b-conversion-optimization-seo-traffic-qualified-leads)
+- [Best Practices in Content Marketing: Strategy for SaaS and B2B Growth](/blog/best-practices-content-marketing-strategy-saas-b2b)
 
 ## Sources
 
