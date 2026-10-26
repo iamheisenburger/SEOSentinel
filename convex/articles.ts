@@ -101,6 +101,7 @@ import {
 } from "./lib/siteDomainBinding";
 import { PUBLISHED_REVISION_LEASE_MS } from "./lib/publishedRevision";
 import { contentJobUsesAllowance } from "./lib/contentUsage";
+import { servedDestinations } from "./lib/pentraConsolidation";
 import {
   appendRelatedInternalLinks,
   publishedArticleInternalHref,
@@ -2727,7 +2728,8 @@ async function deterministicInternalLinkRepair(
       .take(100),
     takeCurrentDomainArticles(ctx, site, 100),
   ]);
-  const destinations = [
+  // P217: never a page consolidated away (pentra.dev).
+  const destinations = servedDestinations(site.domain, [
     ...sitePages
       .filter((page) => pageMatchesCurrentDomain(site, page))
       .map((page) => ({
@@ -2755,7 +2757,7 @@ async function deterministicInternalLinkRepair(
     (destination, index, all) =>
       all.findIndex((candidate) => candidate.href === destination.href) ===
         index,
-  );
+  ));
   const selfHref = publishedArticleInternalHref(
     site.urlStructure,
     article.slug,

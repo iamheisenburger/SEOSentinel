@@ -33,6 +33,7 @@ import {
   stripGeneratedInternalLinks,
   validateInternalLinkSuggestions,
 } from "../lib/internalLinks";
+import { servedDestinations } from "../lib/pentraConsolidation";
 import {
   articleWordCeiling,
   articleReviewImprovesWithoutRegression,
@@ -5941,7 +5942,8 @@ async function handleLinks(
       }
     } catch { /* No proven target: retain normal substantive quality failure. */ }
   }
-  const destinations = [
+  // P217: never a page consolidated away (pentra.dev): it redirects, and its title would name another page.
+  const destinations = servedDestinations(site.domain, [
     ...linkPages.map(
       (page: {
         slug: string;
@@ -5961,7 +5963,7 @@ async function handleLinks(
   ].filter(
     (destination, index, all) =>
       all.findIndex((candidate) => candidate.href === destination.href) === index,
-  );
+  ));
 
   if (!article.markdown || destinations.length === 0) {
     if (expectedSealedContentHash) {

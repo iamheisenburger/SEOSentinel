@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { PENTRA_CONSOLIDATED, canonicalBlogHref, consolidatedTarget, servedOnItsOwnUrl } from "../src/lib/pentra-consolidation.ts";
+import { PENTRA_CONSOLIDATED, canonicalBlogHref, consolidatedTarget, servedDestinations, servedOnItsOwnUrl } from "../src/lib/pentra-consolidation.ts";
 
 test("pentra.dev consolidation: one hop to a served article, never a chain or a loop", () => {
   const entries = Object.entries(PENTRA_CONSOLIDATED);
@@ -79,3 +79,18 @@ test("the IndexNow key file is public and matches its script", () => {
   assert.ok(new RegExp(/PUBLIC_VERIFICATION_FILE = \/(.+)\/;/.exec(proxy)![1].replace(/\\\//g, "/")).test(`/${key}.txt`));
 });
 
+
+// P217 (Oct 26 2026): Convex still treated consolidated pentra.dev pages as live, so new articles linked them and the
+// page they lead to showed under the merged page's title (45 Related reading links on 19 pages, 10 lists linking one
+// page twice). Every link builder now offers only pages served on their own URL.
+test("P217 new internal links go only to pentra.dev pages served on their own URL", () => {
+  const merged = "how-to-refresh-blog-posts-for-seo", survivor = PENTRA_CONSOLIDATED[merged];
+  const kept = servedDestinations("pentra.dev", [{ href: `/blog/${merged}`, title: "Merged page" },
+    { href: `/blog/${survivor}`, title: "Survivor" }, { href: "/pricing", title: "Pricing" },
+    { href: `https://pentra.dev/blog/${merged}`, title: "Merged, absolute" }]);
+  assert.deepEqual(kept.map(d => d.title), ["Survivor", "Pricing"]);
+  assert.equal(servedDestinations("leadpilot.chat", [{ href: `/blog/${merged}` }]).length, 1, "another site's links are untouched");
+  for (const [file, count] of [["convex/actions/pipeline.ts", 1], ["convex/articles.ts", 1], ["convex/publishedRevisions.ts", 2]] as const) {
+    assert.equal((readFileSync(file, "utf8").match(/servedDestinations\(site\.domain,/g) ?? []).length, count, `${file} filters its link destinations`);
+  }
+});

@@ -73,6 +73,7 @@ import { CADENCE_MICRO_SEED_VERSION } from "./lib/cadenceMicroSeed";
 import { correctionInputHash, validatePublishedCorrection, PUBLISHED_CORRECTION_VERSION } from "./lib/publishedCorrection";
 import { validateClaimEvidenceLedger } from "./lib/articleQuality";
 import { artifactSnapshot, REVISION_ARTIFACT_RENDERER_VERSION, revisionArtifactRendererVersion } from "./lib/revisionArtifact";
+import { servedDestinations } from "./lib/pentraConsolidation";
 export { artifactSnapshot } from "./lib/revisionArtifact";
 import {
   primaryFallbackReceiptFingerprint,
@@ -845,13 +846,14 @@ export const prepareForCadenceRecovery = internalMutation({
         !base.artifact.publicationConfigHash ||
         base.artifact.publicationConfigHash !== currentConfigHash
       ) continue;
-      const liveDestinations = verifiedTargets
+      // P217: never a page consolidated away (pentra.dev).
+      const liveDestinations = servedDestinations(site.domain, verifiedTargets
         .filter((target) => target.articleId !== article._id)
         .map((target) => ({
           href: publishedArticleInternalHref(site.urlStructure, target.slug),
           title: target.title,
           keywords: target.metaKeywords,
-        }));
+        })));
       let next: PublishedRevisionArtifact | null = null;
       try {
         next = deterministicInternalLinkRevision({
@@ -1147,11 +1149,11 @@ export const prepareForGrowthAction = internalMutation({
         articles: tenantArticles.filter((candidate) => candidate._id !== article._id),
         now: timestamp,
       });
-      const liveDestinations = verifiedTargets.map((target) => ({
+      const liveDestinations = servedDestinations(site.domain, verifiedTargets.map((target) => ({
         href: publishedArticleInternalHref(site.urlStructure, target.slug),
         title: target.title,
         keywords: target.metaKeywords,
-      }));
+      })));
       try {
         next = deterministicInternalLinkRevision({
           artifact: base.artifact,

@@ -153,6 +153,7 @@ import type * as lib_outreachSuppression from "../lib/outreachSuppression.js";
 import type * as lib_outreachTargetLive from "../lib/outreachTargetLive.js";
 import type * as lib_ownerSearch from "../lib/ownerSearch.js";
 import type * as lib_pastedPublication from "../lib/pastedPublication.js";
+import type * as lib_pentraConsolidation from "../lib/pentraConsolidation.js";
 import type * as lib_planCandidateCheckpoint from "../lib/planCandidateCheckpoint.js";
 import type * as lib_planProviderBudget from "../lib/planProviderBudget.js";
 import type * as lib_planProviderReservation from "../lib/planProviderReservation.js";
@@ -379,6 +380,7 @@ declare const fullApi: ApiFromModules<{
   "lib/outreachTargetLive": typeof lib_outreachTargetLive;
   "lib/ownerSearch": typeof lib_ownerSearch;
   "lib/pastedPublication": typeof lib_pastedPublication;
+  "lib/pentraConsolidation": typeof lib_pentraConsolidation;
   "lib/planCandidateCheckpoint": typeof lib_planCandidateCheckpoint;
   "lib/planProviderBudget": typeof lib_planProviderBudget;
   "lib/planProviderReservation": typeof lib_planProviderReservation;
