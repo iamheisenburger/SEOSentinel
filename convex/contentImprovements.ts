@@ -12,7 +12,7 @@ import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
 import { archiveConsumedImprovementArtifact } from "./articles";
 import type { Doc, Id } from "./_generated/dataModel";
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDomainBinding";
-import { pagePath, planCorrectiveChange, RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_SPACING_MS, relatedReadingHrefs, relatedReadingRepairProposal, relatedRepairAllowed,
+import { pagePath, planCorrectiveChange, RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_SPACING_MS, RELATED_REPAIR_VERSION, relatedReadingHrefs, relatedReadingRepairProposal, relatedRepairAllowed,
   verifyCorrectivePatch } from "./lib/contentCorrection";
 import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
 import { canonicalBlogHref, consolidates, servedOnItsOwnUrl } from "./lib/pentraConsolidation";
@@ -171,6 +171,8 @@ export const requestRelatedReadingRepair = internalMutation({ args: { siteId: v.
     .take(RELATED_REPAIR_SCAN);
   // A new pass starts at the first page; a page it leaves for later brings the next pass forward to a day.
   let retryAt = schedule.relatedRepairCursor ? schedule.relatedRepairRetryAt : undefined;
+  // P220: the rules this pass runs by (a pass already under way keeps the ones it started with).
+  const passVersion = schedule.relatedRepairCursor ? schedule.relatedRepairPassVersion ?? 1 : RELATED_REPAIR_VERSION;
   for (const page of pages) {
     const e = page.editable;
     // P219: a page consolidated away (pentra.dev) redirects: its repair could never be verified live.
@@ -196,13 +198,14 @@ export const requestRelatedReadingRepair = internalMutation({ args: { siteId: v.
         { opportunity: "Autopilot completes its own cut Related reading titles; not scheduled SEO delivery or growth", wake: "related_reading_repair" });
     } catch { continue; } // a layout the exact path cannot map: the page keeps its titles
     await ctx.db.patch(siteId, { contentSchedule: { ...schedule, relatedRepairCursor: page._creationTime, relatedRepairAt: now,
-      relatedRepairRetryAt: retryAt }, updatedAt: now });
+      relatedRepairRetryAt: retryAt, relatedRepairPassVersion: passVersion }, updatedAt: now });
     await ctx.scheduler.runAt(now + RELATED_REPAIR_SPACING_MS, internal.contentImprovements.requestRelatedReadingRepair, { siteId });
     return { requested: true, jobId };
   }
   const passDone = pages.length < RELATED_REPAIR_SCAN;
   await ctx.db.patch(siteId, { contentSchedule: { ...schedule, relatedRepairCursor: passDone ? 0 : pages.at(-1)!._creationTime,
-    relatedRepairRetryAt: retryAt, ...(passDone ? { relatedRepairCleanAt: now } : {}) }, updatedAt: now });
+    relatedRepairRetryAt: retryAt, relatedRepairPassVersion: passVersion,
+    ...(passDone ? { relatedRepairCleanAt: now, relatedRepairCleanVersion: passVersion } : {}) }, updatedAt: now });
   // No commit was made, so no spacing is owed: the next window follows at once.
   if (!passDone) await ctx.scheduler.runAfter(0, internal.contentImprovements.requestRelatedReadingRepair, { siteId });
   return { requested: false };

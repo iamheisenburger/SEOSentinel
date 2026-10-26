@@ -17,7 +17,7 @@ import { CADENCE_MICRO_SEED_VERSION, CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT } fro
 import { planProviderEnvelopeMicroUsd, AUTOMATIC_PLAN_TOPIC_CAPACITY } from "../convex/lib/planProviderBudget.ts";
 import { auditResultHash, SEMANTIC_AUDIT_SUFFIX } from "../convex/lib/contentAudit.ts";
 import { contentServiceStatus } from "../src/lib/content-service-status.ts";
-import { RELATED_REPAIR_RETRY_MS, relatedRepairAllowed } from "../convex/lib/contentCorrection.ts";
+import { RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_VERSION, relatedRepairAllowed } from "../convex/lib/contentCorrection.ts";
 import { CONTENT_CHECKS_VERSION } from "../convex/lib/articleQuality.ts";
 
 const defaultBusinesses = [
@@ -10061,6 +10061,7 @@ test("P180 cut Related reading titles are repaired 30 minutes apart without a sc
   assert.equal(repairs().length, 2);
   assert.ok(schedule.relatedRepairRetryAt - schedule.relatedRepairCleanAt <= RELATED_REPAIR_RETRY_MS &&
     schedule.relatedRepairRetryAt > schedule.relatedRepairCleanAt, JSON.stringify(schedule));
+  assert.equal(schedule.relatedRepairCleanVersion, RELATED_REPAIR_VERSION, "P220: the finished pass records the rules it ran under");
   const far = (at: number) => ({ ...f.get(site.id)!, contentSchedule: { ...schedule, nextDeadlineAt: at + 2 * shift } }) as never;
   assert.equal(relatedRepairAllowed(far(schedule.relatedRepairRetryAt - 60_000), schedule.relatedRepairRetryAt - 60_000), false, "it rests until then");
   assert.equal(relatedRepairAllowed(far(schedule.relatedRepairRetryAt), schedule.relatedRepairRetryAt), true);

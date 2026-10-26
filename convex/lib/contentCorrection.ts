@@ -209,6 +209,10 @@ export function planCorrectiveChange(site: Doc<"sites">, page: Doc<"pages">, inp
  * work for later: P180). A pass in progress continues. */
 export const RELATED_REPAIR_SLOT_LEAD_MS = 6 * 3_600_000, RELATED_REPAIR_SPACING_MS = 30 * 60_000, RELATED_REPAIR_REST_MS = 7 * 86_400_000,
   RELATED_REPAIR_RETRY_MS = 86_400_000;
+/** P220 (Oct 26 2026): the rules the link repair runs by. A change to them (2, P218: links to consolidated pages)
+ * makes every page due once more: a pass records the rules it started under, and a site whose last finished pass
+ * ran under earlier rules runs a fresh one, instead of resting a week with pages passed under the old rules. */
+export const RELATED_REPAIR_VERSION = 2;
 export function relatedRepairAllowed(site: Doc<"sites">, now: number): boolean {
   const s = site.contentSchedule;
   return Boolean(s && site.serviceMode === "growth_first" && site.autopilotEnabled && s.autopilotSelectedAt && s.autopublishConsentAt &&
@@ -217,7 +221,7 @@ export function relatedRepairAllowed(site: Doc<"sites">, now: number): boolean {
     s.nextDeadlineAt - now >= RELATED_REPAIR_SLOT_LEAD_MS &&
     (s.relatedRepairAt === undefined || now - s.relatedRepairAt >= RELATED_REPAIR_SPACING_MS) &&
     (Boolean(s.relatedRepairCursor) || s.relatedRepairCleanAt === undefined || now - s.relatedRepairCleanAt >= RELATED_REPAIR_REST_MS ||
-      (s.relatedRepairRetryAt !== undefined && now >= s.relatedRepairRetryAt)));
+      (s.relatedRepairRetryAt !== undefined && now >= s.relatedRepairRetryAt) || (s.relatedRepairCleanVersion ?? 1) < RELATED_REPAIR_VERSION));
 }
 
 export function verifyCorrectivePatch(site: Doc<"sites">, page: Doc<"pages">, patch: CorrectivePatch) {

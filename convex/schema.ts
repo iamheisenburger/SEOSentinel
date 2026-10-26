@@ -26,6 +26,8 @@ export default defineSchema({
       // the page scan's cursor, the last request, and when a full pass found nothing.
       relatedRepairCursor: v.optional(v.number()), relatedRepairAt: v.optional(v.number()), relatedRepairCleanAt: v.optional(v.number()),
       relatedRepairRetryAt: v.optional(v.number()),
+      // P220: the repair rules (RELATED_REPAIR_VERSION) the current pass started under, and the last finished pass's.
+      relatedRepairPassVersion: v.optional(v.number()), relatedRepairCleanVersion: v.optional(v.number()),
       // What the last research run saw: its seeds, what discovery found and
       // why candidates were not added (counts only).
       topicsResearchReceipt: v.optional(v.object({

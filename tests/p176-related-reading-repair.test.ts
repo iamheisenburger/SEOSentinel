@@ -3,7 +3,7 @@
 // through the exact correction path; this repair can only extend a cut title into the whole title.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cutOfTitle, planCorrectiveChange, relatedReadingRepairProposal } from "../convex/lib/contentCorrection.ts";
+import { cutOfTitle, planCorrectiveChange, RELATED_REPAIR_VERSION, relatedReadingRepairProposal, relatedRepairAllowed } from "../convex/lib/contentCorrection.ts";
 import { relatedReadingTitle } from "../convex/lib/internalLinks.ts";
 
 const titles = new Map([
@@ -74,4 +74,18 @@ test("P218 on pentra.dev a link to a consolidated page goes to the page it leads
   assert.throws(() => plan(expected.replace("/blog/article-refresh-strategy-guide", "/blog/some-other-page")), /cannot change a link/);
   assert.throws(() => plan(expected.split("\n")[0]), /keeps the exact list|cannot change a link/);
   assert.throws(() => plan(expected, { domain: "leadpilot.chat" }, { ...(page(body) as object), url: "https://leadpilot.chat/blog/x" } as never), /cannot change a link/);
+});
+
+// P220 (Oct 26 2026): the repair walks a site's pages in one pass, then rests a week. P218 changed its rules mid-pass on
+// pentra.dev, so the pages already passed (one still links the same page twice) would have waited. A pass now records
+// the rules it ran under, and a site whose last finished pass ran under earlier rules is due again.
+test("P220 a change to the repair's rules runs one fresh pass over every page", () => {
+  const now = Date.UTC(2026, 9, 26, 12), hour = 3_600_000;
+  const site = (schedule: object) => ({ serviceMode: "growth_first", autopilotEnabled: true, publishMethod: "github",
+    contentSchedule: { autopilotSelectedAt: 1, autopublishConsentAt: 1, nextDeadlineAt: now + 24 * hour, ...schedule } }) as never;
+  const resting = { relatedRepairCursor: 0, relatedRepairCleanAt: now - hour };
+  assert.equal(relatedRepairAllowed(site({ ...resting, relatedRepairCleanVersion: RELATED_REPAIR_VERSION }), now), false, "a pass under today's rules rests");
+  assert.equal(relatedRepairAllowed(site(resting), now), true, "a pass finished before the rules had a version runs again");
+  assert.equal(relatedRepairAllowed(site({ ...resting, relatedRepairCleanVersion: RELATED_REPAIR_VERSION - 1 }), now), true);
+  assert.equal(relatedRepairAllowed(site({ ...resting, nextDeadlineAt: now + hour }), now), false, "still never near a slot");
 });
