@@ -94,3 +94,16 @@ test("P217 new internal links go only to pentra.dev pages served on their own UR
     assert.equal((readFileSync(file, "utf8").match(/servedDestinations\(site\.domain,/g) ?? []).length, count, `${file} filters its link destinations`);
   }
 });
+
+// P219 (Oct 26 2026): a page consolidated away answers 308, so a change delivered to it can never be verified live
+// (Pentra's live check needs the page at its own address). Once P218 made merged-link lists repair work, 3 of
+// pentra.dev's 19 queued pages were such redirects, and P209 would have renewed another for the repair.
+test("P219 the link repair, its adoption and page refreshes never pick a page consolidated away", () => {
+  const improvements = readFileSync("convex/contentImprovements.ts", "utf8"), selected = readFileSync("convex/selectedPages.ts", "utf8");
+  assert.match(improvements, /for \(const page of pages\) \{\n    const e = page\.editable;\n    \/\/ P219[^\n]*\n    if \(!servedOnItsOwnUrl\(site\.domain, page\.slug\)\) continue;/,
+    "the repair chain skips a page that redirects");
+  assert.match(selected, /const candidates = pages\.filter\(p => p\.editable\?\.active && servedOnItsOwnUrl\(site\.domain, p\.slug\)/, "page refreshes skip it");
+  assert.match(selected, /article\.status !== "published" \|\| !servedOnItsOwnUrl\(site\.domain, article\.slug\)/, "adoption skips it");
+  assert.match(readFileSync("convex/opsProbes.ts", "utf8"), /!servedOnItsOwnUrl\(site\.domain, row\.slug\) \? "redirects"/, "the probe says so");
+  assert.equal(servedOnItsOwnUrl("pentra.dev", "/international-keyword-research"), false, "a queued page that redirects");
+});

@@ -15,7 +15,7 @@ import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDoma
 import { pagePath, planCorrectiveChange, RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_SPACING_MS, relatedReadingHrefs, relatedReadingRepairProposal, relatedRepairAllowed,
   verifyCorrectivePatch } from "./lib/contentCorrection";
 import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
-import { canonicalBlogHref, consolidates } from "./lib/pentraConsolidation";
+import { canonicalBlogHref, consolidates, servedOnItsOwnUrl } from "./lib/pentraConsolidation";
 import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { closeVerifiedContentWake } from "./jobs";
 
@@ -173,6 +173,8 @@ export const requestRelatedReadingRepair = internalMutation({ args: { siteId: v.
   let retryAt = schedule.relatedRepairCursor ? schedule.relatedRepairRetryAt : undefined;
   for (const page of pages) {
     const e = page.editable;
+    // P219: a page consolidated away (pentra.dev) redirects: its repair could never be verified live.
+    if (!servedOnItsOwnUrl(site.domain, page.slug)) continue;
     if (!e?.active || e.kind !== "github" || e.profileHash !== confirmedContentProfileHash(site) || e.connectionHash !== contentConnectionHash(site) ||
       schedule.profileHash !== e.profileHash || schedule.connectionHash !== e.connectionHash) continue;
     const hrefs = relatedReadingHrefs(e.markdown);

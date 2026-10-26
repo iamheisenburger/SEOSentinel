@@ -18,6 +18,7 @@ import { REFRESH_COOLDOWN_MS, REFRESH_REVIEW_MS, refreshArticleOldEnough, refres
 import { isBrandedSearchQuery } from "./lib/searchPerformance";
 import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
 import { relatedReadingRepairProposal } from "./lib/contentCorrection";
+import { servedOnItsOwnUrl } from "./lib/pentraConsolidation";
 import { publicRevisionProjection } from "./lib/publicRevisionProjection";
 
 async function owner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
@@ -234,8 +235,9 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
   // page-2 refresh when a refresh slot is free and the 60-day cooldown is over.
   const refreshDue = (e: NonNullable<Doc<"pages">["editable"]>) => refreshablePentraPage(e, now) &&
     refreshAllowed && now - (e.lastImprovedAt ?? 0) >= REFRESH_COOLDOWN_MS;
-  const candidates = pages.filter(p => p.editable?.active && p.editable.connectionHash === contentConnectionHash(site) &&
-    p.editable.profileHash === confirmedContentProfileHash(site) &&
+  // P219: never a page consolidated away (pentra.dev): it redirects, so no change to it can be seen live.
+  const candidates = pages.filter(p => p.editable?.active && servedOnItsOwnUrl(site.domain, p.slug) &&
+    p.editable.connectionHash === contentConnectionHash(site) && p.editable.profileHash === confirmedContentProfileHash(site) &&
     // Page-2 refresh candidates are re-checked daily (Search Console moves daily).
     now - (p.editable.lastReviewedAt ?? 0) >= (p.editable.origin === "published_refresh" || refreshDue(p.editable) ? REFRESH_REVIEW_MS : CONTENT_PAGE_REVIEW_MS) &&
     now - (p.editable.lastImprovedAt ?? 0) >= CONTENT_PAGE_COOLDOWN_MS &&
@@ -307,7 +309,9 @@ export const refreshAdoptionContext = internalQuery({ args: { siteId: v.id("site
   const unadopted = published.filter(row => row.publicUrl && row.publicUrlStatus === "verified" && !adopted.has(row.publicUrl));
   const contentDir = publicationDeliveryConfig(site).contentDir;
   const candidateFor = (article: Doc<"articles"> | null, url: string, forRepair: boolean) =>
-    !article || !contentDir || article.siteId !== site._id || article.status !== "published" || article.publicationReceipt?.method !== "github" ||
+    // P219: a page consolidated away redirects: nothing adopted for it could be verified live.
+    !article || !contentDir || article.siteId !== site._id || article.status !== "published" || !servedOnItsOwnUrl(site.domain, article.slug) ||
+      article.publicationReceipt?.method !== "github" ||
       !article.publicationDeliveryHash || (!forRepair && article.contentWorkSourceJobId) ? null
       : { articleId: article._id, path: `${contentDir}/${article.slug.replace(/^\//, "")}.md`, url,
         deliveryKey: `pentra:${article.publicationDeliveryHash}`, forRepair };

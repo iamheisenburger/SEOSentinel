@@ -9,6 +9,7 @@ import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/interna
 import { relatedReadingRepairProposal } from "./lib/contentCorrection";
 import { confirmedContentProfileHash, contentConnectionHash } from "./lib/contentSelection";
 import { publicRevisionProjection } from "./lib/publicRevisionProjection";
+import { servedOnItsOwnUrl } from "./lib/pentraConsolidation";
 
 /** Operator reads for V9 (Oct 24 2026): how large the documents are that the
  * product reads most often, as byte counts, stage labels and field names only
@@ -185,7 +186,8 @@ export const relatedRepairBlockers = internalQuery({ args: { siteId: v.id("sites
     const proposal = relatedReadingRepairProposal(live.markdown, titles, relatedReadingTitle, onSite);
     if (!proposal) continue;
     const page = pages.get(row.slug.replace(/^\/+|\/+$/g, "")), e = page?.editable;
-    const reason = !page ? "no_page" : !e ? "not_enrolled" : !e.active ? "enrollment_inactive" : e.kind !== "github" ? `not_github_${e.kind}`
+    // P219: a page consolidated away redirects: no reader sees its list, and no repair could be verified on it.
+    const reason = !servedOnItsOwnUrl(site.domain, row.slug) ? "redirects" : !page ? "no_page" : !e ? "not_enrolled" : !e.active ? "enrollment_inactive" : e.kind !== "github" ? `not_github_${e.kind}`
       : e.profileHash !== confirmedContentProfileHash(site) ? "enrollment_stale_profile"
       : e.connectionHash !== contentConnectionHash(site) ? "enrollment_stale_connection"
       : !relatedReadingRepairProposal(e.markdown, titles, relatedReadingTitle, onSite) ? "enrolled_source_differs" : "repairable";
