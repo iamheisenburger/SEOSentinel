@@ -4936,6 +4936,27 @@ test("P173 a held-back first article costs no slot: the next article moves up an
   f.assertOffline();
 });
 
+// P203 (Oct 26 2026): the first plan audit (P194) held back pentra.dev's Oct 27 article at 02:40Z as a copy of a live
+// page; the scheduler then returned "content_failure_backoff" because the backoff counted the hold-back, after an earlier
+// failed draft, as a failing streak, so the slot's new article waited two hours. A held-back article is Pentra's own
+// decision, not a writing failure (replacementsHealthy already knew that since P173).
+test("P203 a held-back article never starts a failure backoff: its slot's new article starts at once", async () => {
+  const { f, site, waiting, failCheck } = await p173TwoWaiting();
+  const [, second] = waiting(), slot = second.contentWork.deadlineAt;
+  // A draft that failed on today's checks after the last success.
+  f.add("jobs", { siteId: site.id, type: "article", status: "failed", payload: {}, contentWork: { ...second.contentWork, stage: "failed",
+    failure: "bounded_content_quality_exhausted", checksVersion: CONTENT_CHECKS_VERSION, deadlineAt: f.now() - 2 * 3_600_000,
+    windowStartAt: f.now() - 3 * 3_600_000 }, articleId: undefined, createdAt: f.now(), updatedAt: f.now() });
+  failCheck(second);
+  assert.deepEqual(await f.invoke("contentWork:retireDuplicateReadyWork", { siteId: site.id }), { retired: 1 });
+  const result = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.notEqual(result.mode, "content_failure_backoff", JSON.stringify(result));
+  const replacement = f.tables.jobs.find(j => j.siteId === site.id && j.contentWork?.deadlineAt === slot && j._id !== second._id);
+  assert.ok(replacement, `the held-back slot's new article started now: ${JSON.stringify(result)}`);
+  assert.equal(replacement.contentWork.replacesJobId, second._id);
+  f.assertOffline();
+});
+
 test("P140 near-identical questions are one intent, and a waiting article that repeats a live page is replaced before its slot", async () => {
   const { contentIntentConflicts } = await import("../convex/lib/autopilotBuffer.ts");
   assert.ok(contentIntentConflicts({ primaryKeyword: "how often small business publish blog" },

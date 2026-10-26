@@ -123,9 +123,11 @@ function autopilotSkippableFailure(job: Doc<"jobs">) {
  * topics and spend in a loop. The cadence resumes on the first success. */
 async function autopilotFailureBackoffUntil(ctx: MutationCtx, siteId: Id<"sites">, intervalMs: number) {
   const automatic = (j: Doc<"jobs">) => Boolean(j.contentWork && j.contentWork.intent === "create" && !j.contentWork.ownerRequest);
-  // A quality failure judged by checks since corrected says nothing about the next attempt (P181).
+  // A quality failure judged by checks since corrected says nothing about the next attempt (P181), and an
+  // article Pentra held back (a copy of a live page, a reader check added since) is not a writing failure (P203:
+  // pentra.dev's first plan-audit hold-back put its slot's new article two hours into a backoff).
   const failed = (await ctx.db.query("jobs").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "failed")).order("desc").take(20))
-    .filter(j => automatic(j) && j.contentWork!.stage === "failed" && !outdatedQualityVerdict(j));
+    .filter(j => automatic(j) && j.contentWork!.stage === "failed" && !outdatedQualityVerdict(j) && !HELD_BACK_FAILURES.has(j.contentWork!.failure ?? ""));
   if (failed.length < 2) return 0;
   const done = (await ctx.db.query("jobs").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "done")).order("desc").take(10))
     .filter(automatic);
