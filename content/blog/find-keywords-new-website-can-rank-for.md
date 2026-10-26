@@ -112,6 +112,6 @@ It can, eventually, but broad terms are usually the hardest for a domain with no
 
 ## Related reading
 
-- [How to Find Content Gaps in Your Website for SEO: A Complete Guide](/blog/find-content-gaps-website-seo)
+- [How to Detect SEO Content Gaps in Your Website: A Complete Strategy Guide](/blog/how-to-detect-seo-content-gaps-website)
 - [Website Crawling for Keyword Research: A Beginner's Guide to Finding SEO Opportunities](/blog/website-crawling-keyword-research-guide)
 - [How to Automate Keyword Research for SEO: A Complete Step-by-Step Guide](/blog/automate-keyword-research-seo)
