@@ -120,6 +120,6 @@ That depends on the fact-checking step behind it. A schedule with a real, indepe
 
 ## Related reading
 
-- [How Often Should You Update Blog Posts for SEO? A Data-Driven Strategy Guide](/blog/how-often-update-blog-posts-seo)
-- [How to Detect Declining Blog Posts Before Rankings Drop](/blog/detect-declining-blog-posts-before-rankings-drop)
-- [How to Write SEO Articles at Scale Without Hiring Writers](/blog/write-seo-articles-at-scale-without-hiring)
+- [Article Refresh Strategy: Complete Guide to Updating Old Content for Better Rankings](/blog/article-refresh-strategy-guide)
+- [How to Detect Ranking Drops in SEO: A Complete Monitoring Guide](/blog/how-to-detect-ranking-drops-seo)
+- [Automated SEO Workflow: From Crawling to Publishing — The Complete 8-Step Pipeline](/blog/automated-seo-workflow-complete-guide)
