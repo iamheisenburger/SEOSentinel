@@ -142,7 +142,7 @@ async function insertCorrectionJob(ctx: MutationCtx, site: Doc<"sites">, args: {
  *
  * P180 (Oct 24 2026): a quiet site gets a scheduler pass only every 3 hours, so
  * one repair a pass left LeadPilot's 24 cut pages for about four days. A repair
- * now books the next request 30 minutes later, a window of pages with nothing
+ * now books the next request RELATED_REPAIR_SPACING_MS later (2 hours since P222: each repair is a deploy), a window of pages with nothing
  * to repair goes straight on to the next window, and the linked titles are read
  * by slug (a few summaries a page) instead of every published summary a window.
  * A page left for its unfinished work is looked at again a day later. */

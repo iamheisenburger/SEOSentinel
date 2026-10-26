@@ -17,7 +17,7 @@ import { CADENCE_MICRO_SEED_VERSION, CADENCE_MICRO_SEED_DISCOVERY_ENDPOINT } fro
 import { planProviderEnvelopeMicroUsd, AUTOMATIC_PLAN_TOPIC_CAPACITY } from "../convex/lib/planProviderBudget.ts";
 import { auditResultHash, SEMANTIC_AUDIT_SUFFIX } from "../convex/lib/contentAudit.ts";
 import { contentServiceStatus } from "../src/lib/content-service-status.ts";
-import { RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_VERSION, relatedRepairAllowed } from "../convex/lib/contentCorrection.ts";
+import { RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_SPACING_MS, RELATED_REPAIR_VERSION, relatedRepairAllowed } from "../convex/lib/contentCorrection.ts";
 import { CONTENT_CHECKS_VERSION } from "../convex/lib/articleQuality.ts";
 
 const defaultBusinesses = [
@@ -10052,7 +10052,7 @@ test("P180 cut Related reading titles are repaired 30 minutes apart without a sc
   await pumpUntil(f, () => repairs().filter(j => j.contentWork.stage === "verified").length === 2, 300, deadline - 6 * 3_600_000);
   const [one, two] = repairs().sort((a, b) => a.createdAt - b.createdAt);
   assert.equal(one.contentWork.targetPageId, first.pageId); assert.equal(two.contentWork.targetPageId, second.pageId);
-  assert.ok(two.createdAt - one.createdAt >= 30 * 60_000 && two.createdAt - one.createdAt < 35 * 60_000, `${two.createdAt - one.createdAt} ms apart`);
+  assert.ok(two.createdAt - one.createdAt >= RELATED_REPAIR_SPACING_MS && two.createdAt - one.createdAt < RELATED_REPAIR_SPACING_MS + 5 * 60_000, `${two.createdAt - one.createdAt} ms apart`);
   assert.ok(f.get(first.pageId)!.editable.markdown.includes(wholeA)); assert.ok(f.get(second.pageId)!.editable.markdown.includes(wholeB));
   // The pass ends at the last page; the page it left is looked at again a day later, not a week.
   await pumpUntil(f, () => f.get(site.id)!.contentSchedule.relatedRepairCleanAt !== undefined, 300, deadline - 6 * 3_600_000);

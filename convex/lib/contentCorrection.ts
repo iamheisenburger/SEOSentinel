@@ -213,7 +213,11 @@ export function planCorrectiveChange(site: Doc<"sites">, page: Doc<"pages">, inp
  * 30 minutes after its last repair, and a new pass over the site's pages a week
  * after the last one ended (a day, when it had to leave a page with unfinished
  * work for later: P180). A pass in progress continues. */
-export const RELATED_REPAIR_SLOT_LEAD_MS = 6 * 3_600_000, RELATED_REPAIR_SPACING_MS = 30 * 60_000, RELATED_REPAIR_REST_MS = 7 * 86_400_000,
+/** P222 (Oct 26 2026): a repair is a commit, and each commit is a deploy on the owner's hosting: Vercel's Hobby plan
+ * allows 100 a day across the account, pentra.dev's repository feeds two projects (two deploys a push), and two
+ * 30-minute repair chains plus the day's ships used them up at 11:51Z (LeadPilot's repair could not go live). Two
+ * hours apart leaves room for publications, which come first. */
+export const RELATED_REPAIR_SLOT_LEAD_MS = 6 * 3_600_000, RELATED_REPAIR_SPACING_MS = 2 * 3_600_000, RELATED_REPAIR_REST_MS = 7 * 86_400_000,
   RELATED_REPAIR_RETRY_MS = 86_400_000;
 /** P220 (Oct 26 2026): the rules the link repair runs by. A change to them (2, P218: links to consolidated pages)
  * makes every page due once more: a pass records the rules it started under, and a site whose last finished pass

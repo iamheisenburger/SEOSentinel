@@ -3,7 +3,7 @@
 // through the exact correction path; this repair can only extend a cut title into the whole title.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cutOfTitle, planCorrectiveChange, RELATED_REPAIR_VERSION, relatedReadingRepairProposal, relatedRepairAllowed } from "../convex/lib/contentCorrection.ts";
+import { cutOfTitle, planCorrectiveChange, RELATED_REPAIR_SPACING_MS, RELATED_REPAIR_VERSION, relatedReadingRepairProposal, relatedRepairAllowed } from "../convex/lib/contentCorrection.ts";
 import { relatedReadingTitle } from "../convex/lib/internalLinks.ts";
 
 const titles = new Map([
@@ -108,4 +108,14 @@ test("P221 a title cut after a dropped leading 'What' is completed; other texts 
   assert.equal(proposal.replacement, `- [${whole}](/blog/b2b-qualified-lead)`);
   assert.equal(planCorrectiveChange({} as never, page(body), { kind: "related_reading_titles", before: entry, replacement: proposal.replacement,
     reason: "Autopilot completes cut Related reading titles." }).after, proposal.replacement);
+});
+
+// P222 (Oct 26 2026): every repair is a commit and every commit a deploy on the owner's hosting. Vercel's Hobby plan
+// allows 100 deploys a day across the account; pentra.dev's repository feeds two projects, and two 30-minute repair
+// chains plus the day's ships used them up at 11:51Z, so LeadPilot's repair (and possibly its 18:00Z refresh) could
+// not go live. Repairs are two hours apart: about nine a site a day, leaving room for publications.
+test("P222 link repairs are spaced to leave the owner's daily deploys for publications", () => {
+  assert.ok(RELATED_REPAIR_SPACING_MS >= 2 * 3_600_000, `${RELATED_REPAIR_SPACING_MS} ms between repairs`);
+  const perSiteDay = Math.ceil(18 * 3_600_000 / RELATED_REPAIR_SPACING_MS); // the window is closed 6 hours before each daily slot
+  assert.ok(2 * perSiteDay + perSiteDay <= 30, "both owner sites' repairs (pentra.dev's twice) stay a small share of 100 deploys a day");
 });
