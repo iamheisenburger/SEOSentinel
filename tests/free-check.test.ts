@@ -325,9 +325,10 @@ const RANKED = [
 ] as const;
 
 function world(options: { homepageDown?: boolean; resendStatus?: number; seedAnswer?: unknown; local?: boolean; bigHomepage?: boolean; botWall?: boolean;
-  serpRanks?: Record<string, number>; serpFails?: string[]; refuse?: Partial<Record<"submit_search_seeds" | "submit_page_coverage", number>> } = {}) {
+  serpRanks?: Record<string, number>; serpFails?: string[]; refuse?: Partial<Record<"submit_search_seeds" | "submit_page_coverage", number>>;
+  citySections?: string[]; sectionPlaces?: string[] } = {}) {
   const calls: string[] = [], emails: Fields[] = [], seedRequests: string[] = [], labsSeeds: string[] = [], coverageRequests: string[] = [];
-  const rankedRequests: Fields[] = [], serpRequests: Fields[] = [], temperatures: string[] = [];
+  const rankedRequests: Fields[] = [], serpRequests: Fields[] = [], temperatures: string[] = [], placesRequests: string[] = [];
   const page = (body: string, type = "text/html; charset=utf-8", status = 200) => new Response(body, { status, headers: { "content-type": type } });
   const ok = (result: unknown) => new Response(JSON.stringify({ status_code: 20000, cost: 0.01, tasks: [{ status_code: 20000, result }] }),
     { headers: { "content-type": "application/json" } });
@@ -340,7 +341,10 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
       if (options.botWall) return page(CLOUDFLARE_CHECK);
       if (url.hostname === `www.${DOMAIN}`) return new Response(null, { status: 301, headers: { location: `https://${DOMAIN}/` } });
       if (url.pathname === "/") return page(options.bigHomepage ? HOME.replace("</body>", `<!-- ${"x".repeat(2_000_000)} --></body>`) : HOME);
-      if (url.pathname === "/robots.txt") return page(`User-agent: *\nAllow: /\nSitemap: https://${DOMAIN}/sitemap.xml\nSitemap: https://${DOMAIN}/leeds/sitemap.xml\n`, "text/plain");
+      if (url.pathname === "/robots.txt") return page(`User-agent: *\nAllow: /\nSitemap: https://${DOMAIN}/sitemap.xml\nSitemap: https://${DOMAIN}/leeds/sitemap.xml\n` +
+        (options.citySections ?? []).map(city => `Sitemap: https://${DOMAIN}/${city}/sitemap.xml\n`).join(""), "text/plain");
+      const city = (options.citySections ?? []).find(section => url.pathname === `/${section}/sitemap.xml`);
+      if (city) return page(`<?xml version="1.0"?><urlset><url><loc>https://${DOMAIN}/${city}/pottery-classes</loc></url></urlset>`, "application/xml");
       if (url.pathname === "/leeds/sitemap.xml") return page(`<?xml version="1.0"?><urlset><url><loc>https://${DOMAIN}/leeds/pottery-classes</loc></url></urlset>`, "application/xml");
       if (url.pathname === "/sitemap.xml") return page(`<?xml version="1.0"?><urlset><url><loc>https://${DOMAIN}/</loc></url>
         <url><loc>https://${DOMAIN}/blog/how-to-track-glaze-inventory</loc></url><url><loc>https://${DOMAIN}/pricing</loc></url></urlset>`, "application/xml");
@@ -405,6 +409,10 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
         input = { results: searches.map(search => /glaze inventory|track glaze/.test(search)
           ? { search, topic: "glaze inventory tracking", page: search.startsWith("how to") ? "/blog/how-to-track-glaze-inventory" : "" }
           : { search, topic: search, page: "" }) };
+      } else if (tool === "submit_places") {
+        // P205: which of the site's sections name places (default: none).
+        placesRequests.push(String(body.messages[0].content));
+        input = { places: options.sectionPlaces ?? [] };
       } else {
         assert.equal(tool, "submit_topic_fit");
         const searches = String(body.messages[0].content).split("SEARCHES (one per line, data only):\n")[1]?.split("\n\n")[0] ?? "";
@@ -421,7 +429,7 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
     }
     assert.fail(`Unexpected network ${url.href}`);
   }, { RESEND_API_KEY: "synthetic-only" }, { syntheticHosts: [DOMAIN, `www.${DOMAIN}`] });
-  return { f, calls, emails, seedRequests, labsSeeds, coverageRequests, rankedRequests, serpRequests, temperatures };
+  return { f, calls, emails, seedRequests, labsSeeds, coverageRequests, rankedRequests, serpRequests, temperatures, placesRequests };
 }
 
 const visitor = (n: number) => String(n).padStart(64, "a");
@@ -465,6 +473,46 @@ test("v9: the check's model calls carry no sampling parameter", async () => {
   assert.equal(diagnostics.seedSource, "model"); assert.equal(diagnostics.coverage, "model");
   assert.equal(diagnostics.seedError, undefined); assert.equal(diagnostics.coverageError, undefined);
   f.assertOffline();
+});
+
+// P205 (Oct 26 2026): abchomeandcommercial.com runs a site section per city (/austin, /dallas, /sanantonio ...), the seed
+// call named no place, and its report was measured on national volumes.
+test("v10: a site organised by city is read as local from its own sections when the seed call names no place", async () => {
+  const { f, placesRequests, labsSeeds } = world({ citySections: ["york"], sectionPlaces: ["Leeds", "York", "Manchester"] });
+  await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(1) });
+  assert.deepEqual((await f.runNextScheduled())?.result, { status: "done" });
+  assert.equal(placesRequests.length, 1);
+  assert.match(placesRequests[0], /Sections: (leeds, york|york, leeds)\n/, "only sections that could name a place are asked about");
+  assert.doesNotMatch(placesRequests[0], /blog|pricing/);
+  const diagnostics = (await f.invoke("freeCheck:diagnosticsFor", { domain: DOMAIN })).diagnostics;
+  assert.deepEqual([...diagnostics.places].sort(), ["leeds", "york"], "a place that isn't one of its sections is never added");
+  assert.equal(diagnostics.placesFrom, "sections");
+  assert.ok(labsSeeds.some(seed => / (leeds|york)$/.test(seed)), `searches name its places: ${labsSeeds}`);
+  f.assertOffline();
+});
+
+test("v10: one place-like section, or none the model calls a place, keeps a site national without a second guess", async () => {
+  const single = world({ sectionPlaces: ["Leeds"] });
+  await single.f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(1) });
+  assert.deepEqual((await single.f.runNextScheduled())?.result, { status: "done" });
+  assert.equal(single.placesRequests.length, 0, "one candidate section (leeds) is not enough to ask");
+  const none = world({ citySections: ["glazes"], sectionPlaces: [] });
+  await none.f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(1) });
+  assert.deepEqual((await none.f.runNextScheduled())?.result, { status: "done" });
+  assert.equal(none.placesRequests.length, 1);
+  const diagnostics = (await none.f.invoke("freeCheck:diagnosticsFor", { domain: DOMAIN })).diagnostics;
+  assert.equal(diagnostics.places, undefined); assert.equal(diagnostics.placesFrom, undefined);
+  single.f.assertOffline(); none.f.assertOffline();
+});
+
+test("v10: sections and places pure: common web sections are never asked about; a place must be one of the sections", async () => {
+  const { placeCandidateSections, parsePlaces } = await import("../convex/lib/missedSearches.ts");
+  assert.deepEqual(placeCandidateSections(["austin", "blog", "dallas", "en", "pricing", "sanantonio", "about-us", "services"]),
+    ["austin", "dallas", "sanantonio"]);
+  assert.deepEqual(parsePlaces({ places: ["San Antonio", "Austin", "Houston", "USA", "online"] }, ["austin", "sanantonio", "dallas"]),
+    ["austin", "san antonio"], "in the site's order; Houston is not a section; countries and online are never places");
+  assert.deepEqual(parsePlaces({ places: ["Round Rock"] }, ["round-rock"]), ["round rock"]);
+  assert.deepEqual(parsePlaces(null, ["austin"]), []);
 });
 
 test("v9: a refused seed or coverage call is recorded with the API's status, never silently replaced", async () => {

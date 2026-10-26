@@ -35,7 +35,9 @@ export const checkDiagnostics = v.object({ seedSource: v.union(v.literal("model"
   // P184: claims checked live on Google, how many it answered, and how many it confirmed absent.
   verified: v.optional(v.object({ asked: v.number(), answered: v.number(), absent: v.number() })),
   // P199: why the seed or coverage call fell back to the homepage's words, when it did.
-  seedError: v.optional(v.string()), coverageError: v.optional(v.string()) });
+  seedError: v.optional(v.string()), coverageError: v.optional(v.string()),
+  // P205: the places came from the site's own sections, not the seed call.
+  placesFrom: v.optional(v.literal("sections")) });
 
 async function counter(ctx: MutationCtx, key: string) {
   return ctx.db.query("free_check_quota").withIndex("by_key", q => q.eq("key", key)).first();

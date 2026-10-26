@@ -17,6 +17,7 @@ import { asksForFree, blockedHomepage, botWall, brandTerms, checkBusiness, check
   FREE_CHECK_MAX_DIFFICULTY, FREE_CHECK_SITEMAP_MAX_BYTES, freeCheckLocale, healthSummary, htmlLang, isBrandedKeyword, linkedPages, localSeeds,
   namesPlace, notACandidate, PAGE_COVERAGE_MAX_TOKENS, PAGE_COVERAGE_TOOL, pageCoverageRequest, parsePageCoverage, parseSearchSeeds,
   pathsForCoverage, SEARCH_SEEDS_MAX_TOKENS, SEARCH_SEEDS_TOOL, searchSeedRequest, selectAlmostThere, siteCoverage, siteSections, unreadableHomepage,
+  parsePlaces, placeCandidateSections, PLACES_MAX_TOKENS, PLACES_TOOL, placesRequest,
   type PageAnswer, type RankedKeyword, type SeedRead } from "../lib/missedSearches";
 import { discoverKeywords, getRankedKeywords, meterDataForSeoCost, siteSerpPositions } from "./seoData";
 import { judgeBuyerFit } from "./growthTopics";
@@ -37,7 +38,7 @@ type Outcome =
 type Diagnostics = { seedSource: "model" | "homepage"; seeds: string[]; topics?: string[]; discovered: number; ranked: number; judged: number;
   kept: number; sample?: Array<{ keyword: string; keep: boolean; reason: string }>; places?: string[]; freePlan?: string;
   coverage?: "model" | "words"; pagesRead?: number; rankCheck?: "verified" | "partial"; homeTitle?: string; country?: string;
-  verified?: { asked: number; answered: number; absent: number }; seedError?: string; coverageError?: string };
+  verified?: { asked: number; answered: number; absent: number }; seedError?: string; coverageError?: string; placesFrom?: "sections" };
 
 /** A failed model call as the check's diagnostics record it (P199): the API's
  * status and message, clipped; never a key or the request. */
@@ -70,6 +71,23 @@ export async function proposeSeeds(domain: string, html: string, questions: stri
   });
   const tool = response.content.find(block => block.type === "tool_use" && block.name === SEARCH_SEEDS_TOOL);
   return { read: parseSearchSeeds(tool && tool.type === "tool_use" ? tool.input : null, brands), costMicroUsd: buyerFitCostMicroUsd(response.usage) };
+}
+
+/** P205: one small call naming which of the site's own sections are places it
+ * serves (convex/lib/missedSearches.ts placesRequest). Throws when no answer came back. */
+async function placesFromSections(domain: string, title: string, sections: string[]) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+  const model = process.env.TOPIC_FIT_MODEL ?? BUYER_FIT_MODEL;
+  const request = placesRequest(domain, title, sections);
+  const response = await new Anthropic({ apiKey, maxRetries: 1, timeout: 30_000, fetch }).messages.create({
+    model, max_tokens: PLACES_MAX_TOKENS, system: request.system,
+    messages: [{ role: "user", content: request.userMessage }],
+    tools: [{ name: PLACES_TOOL, description: "Record the sections that name places the business serves.", input_schema: request.inputSchema, strict: true }],
+    tool_choice: structuredToolChoice(model, PLACES_TOOL),
+  });
+  const tool = response.content.find(block => block.type === "tool_use" && block.name === PLACES_TOOL);
+  return { places: parsePlaces(tool && tool.type === "tool_use" ? tool.input : null, request.sections), costMicroUsd: buyerFitCostMicroUsd(response.usage) };
 }
 
 /** One small model call (v4): which of the site's own pages already answers
@@ -167,11 +185,24 @@ export const run = internalAction({
       const sitePages = [...new Set([...sitemap.urls, ...linkedPages(page.html, host)])];
       const coverage = siteCoverage(sitePages, homeHealth.title);
       let read: SeedRead | null = null, seedError: string | undefined;
+      const sections = siteSections([...sitePages, ...robots.sitemaps]);
       try {
-        const proposed = await proposeSeeds(domain, page.html, prefill.questions, brands, siteSections([...sitePages, ...robots.sitemaps]));
+        const proposed = await proposeSeeds(domain, page.html, prefill.questions, brands, sections);
         read = proposed.read; spent.fitMicroUsd += proposed.costMicroUsd;
         if (!read) seedError = "unusable_answer";
       } catch (error) { spent.fitMicroUsd += BUYER_FIT_CEILING_MICRO_USD; seedError = modelCallError(error); }
+      // P205: a site organised by place (two or more of its own sections name places) is local even when the seed call named none.
+      let placesFrom: "sections" | undefined;
+      const placeSections = placeCandidateSections(sections);
+      if (read && read.places.length === 0 && placeSections.length >= 2) {
+        try {
+          const found = await placesFromSections(domain, homeHealth.title ?? prefill.name ?? domain, placeSections);
+          spent.fitMicroUsd += found.costMicroUsd;
+          if (found.places.length >= 2) { read = { ...read, places: found.places }; placesFrom = "sections"; }
+        } catch (error) {
+          if (!(error instanceof Error && error.message === "ANTHROPIC_API_KEY not set")) spent.fitMicroUsd += BUYER_FIT_CEILING_MICRO_USD;
+        }
+      }
       const locale = freeCheckLocale(host, htmlLang(page.html), read?.country);
       const locationCode = dataForSeoLocationCode(locale.country);
       const places = read?.places ?? [];
@@ -180,7 +211,7 @@ export const run = internalAction({
       const seeds = read ? (local ? localSeeds(read.topics.length ? read.topics : read.searches, places) : [...read.topics, ...read.searches])
         : checkSeeds(prefill, brands);
       diagnostics = { seedSource: read ? "model" : "homepage", seeds, ...(read ? { topics: read.topics, freePlan: read.freePlan } : {}),
-        ...(seedError ? { seedError } : {}),
+        ...(seedError ? { seedError } : {}), ...(placesFrom ? { placesFrom } : {}),
         homeTitle: (homeHealth.title ?? "").slice(0, 120), country: locale.country,
         ...(local ? { places } : {}), discovered: 0, ranked: 0, judged: 0, kept: 0, pagesRead: sitePages.length };
       let ranked: RankedKeyword[] = [];
