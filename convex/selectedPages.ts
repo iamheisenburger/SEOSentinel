@@ -339,7 +339,10 @@ export const refreshAdoptionContext = internalQuery({ args: { siteId: v.id("site
   for (const row of [...unadopted].sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0)).slice(0, RELATED_REPAIR_SCAN_ARTICLES)) {
     if (repairs >= RELATED_REPAIR_ADOPTIONS || taken.has(row.publicUrl!)) continue;
     const article = await ctx.db.get(row.articleId), live = article ? await publicRevisionProjection(ctx, site, article) : null;
-    if (!live?.markdown || !relatedReadingRepairProposal(live.markdown, titles, relatedReadingTitle)) continue;
+    let selfHref: string | undefined;
+    try { selfHref = publishedArticleInternalHref(site.urlStructure, row.slug); } catch { selfHref = undefined; }
+    // P218: a list linking consolidated pages is repair work too.
+    if (!live?.markdown || !relatedReadingRepairProposal(live.markdown, titles, relatedReadingTitle, { domain: site.domain, selfHref })) continue;
     const candidate = candidateFor(article, row.publicUrl!, true);
     if (candidate) { candidates.push(candidate); repairs += 1; }
   }

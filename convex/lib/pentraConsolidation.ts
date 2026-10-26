@@ -134,6 +134,11 @@ export const PENTRA_CONSOLIDATED: Readonly<Record<string, string>> = Object.free
 const normalizeHost = (domain: string) => domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "");
 
 /** The article a consolidated pentra.dev slug now redirects to, or null. */
+/** P218: whether a site has consolidated pages at all (pentra.dev only). */
+export function consolidates(domain: string | undefined): boolean {
+  return Boolean(domain) && normalizeHost(domain!) === PENTRA_DOMAIN;
+}
+
 export function consolidatedTarget(domain: string, slug: string): string | null {
   if (normalizeHost(domain) !== PENTRA_DOMAIN) return null;
   const clean = slug.trim().replace(/^\/+|\/+$/g, "");

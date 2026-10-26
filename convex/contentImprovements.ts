@@ -12,9 +12,10 @@ import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
 import { archiveConsumedImprovementArtifact } from "./articles";
 import type { Doc, Id } from "./_generated/dataModel";
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDomainBinding";
-import { planCorrectiveChange, RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_SPACING_MS, relatedReadingHrefs, relatedReadingRepairProposal, relatedRepairAllowed,
+import { pagePath, planCorrectiveChange, RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_SPACING_MS, relatedReadingHrefs, relatedReadingRepairProposal, relatedRepairAllowed,
   verifyCorrectivePatch } from "./lib/contentCorrection";
 import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
+import { canonicalBlogHref, consolidates } from "./lib/pentraConsolidation";
 import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { closeVerifiedContentWake } from "./jobs";
 
@@ -146,7 +147,7 @@ async function insertCorrectionJob(ctx: MutationCtx, site: Doc<"sites">, args: {
  * by slug (a few summaries a page) instead of every published summary a window.
  * A page left for its unfinished work is looked at again a day later. */
 const RELATED_REPAIR_SCAN = 20;
-const RELATED_REPAIR_REASON = "Autopilot completes Related reading link titles it cut at its old 8-word limit.";
+const RELATED_REPAIR_REASON = "Autopilot completes Related reading link titles it cut at its old 8-word limit, and points links to consolidated pages at the page they now lead to.";
 /** The titles of the published articles a Related reading list links, by href. */
 async function relatedReadingTitles(ctx: MutationCtx, site: Doc<"sites">, hrefs: string[]) {
   const titles = new Map<string, string>();
@@ -176,7 +177,10 @@ export const requestRelatedReadingRepair = internalMutation({ args: { siteId: v.
       schedule.profileHash !== e.profileHash || schedule.connectionHash !== e.connectionHash) continue;
     const hrefs = relatedReadingHrefs(e.markdown);
     if (!hrefs.length) continue;
-    const proposal = relatedReadingRepairProposal(e.markdown, await relatedReadingTitles(ctx, site, hrefs), relatedReadingTitle);
+    // P218: the titles of the pages consolidated links now lead to, too.
+    const finals = consolidates(site.domain) ? hrefs.map(href => canonicalBlogHref(site.domain, href)) : [];
+    const proposal = relatedReadingRepairProposal(e.markdown, await relatedReadingTitles(ctx, site, [...hrefs, ...finals]), relatedReadingTitle,
+      { domain: site.domain, selfHref: pagePath(page) });
     if (!proposal) continue;
     // A page whose own work is unfinished (a refresh waiting for its slot) keeps
     // its source: the repair would make that work's exact base stale.

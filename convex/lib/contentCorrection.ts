@@ -3,6 +3,7 @@ import { contentWords, exactReplacement, preserveWordPressReviewedText } from ".
 import { readerVisibleDefects } from "./articleQuality.ts";
 import { renderSafePublicationHtml } from "./safeMarkdownHtml.ts";
 import { isApiCmsMethod } from "./cmsDestinations.ts";
+import { canonicalBlogHref, consolidates } from "./pentraConsolidation.ts";
 
 export type CorrectiveInput = {
   kind: "factual_correction" | "technical_repair" | "reader_text_repair" | "related_reading_titles";
@@ -54,25 +55,57 @@ export function cutOfTitle(text: string, title: string): boolean {
   const a = titleWords(text), t = titleWords(title);
   return a.length > 0 && a.length < t.length && a.every((word, i) => t[i] === word);
 }
-function relatedTitlesRepair(markdown: string, before: string, replacement: string): string {
+/** P218 (Oct 26 2026): on a site with consolidated pages (pentra.dev), a Related reading link to a page that now
+ * redirects goes to the page it leads to, under that page's title; an entry that then repeats an earlier one, or leads
+ * to the page itself, goes. Every other site keeps the exact list of links. */
+export type RelatedReadingSite = { domain?: string; selfHref?: string };
+/** A page's own address on its site ("/blog/slug"), for an entry that would lead back to it. */
+export const pagePath = (page: { url?: string }) => {
+  try { return page.url ? new URL(page.url).pathname.replace(/\/+$/, "") : undefined; } catch { return undefined; }
+};
+const relatedFinal = (site: RelatedReadingSite | undefined, href: string) =>
+  consolidates(site?.domain) ? canonicalBlogHref(site!.domain!, href) : href;
+const dropsEntry = (site: RelatedReadingSite | undefined, final: string, kept: Set<string>) =>
+  consolidates(site?.domain) && (final === site?.selfHref || kept.has(final));
+
+function relatedTitlesRepair(markdown: string, before: string, replacement: string, site?: RelatedReadingSite): string {
   const blocks = markdown.split(/\n\s*\n/).map(block => block.trim()), at = blocks.indexOf(before);
   if (at < 1 || !/^##\s+Related reading$/i.test(blocks[at - 1])) throw new Error("Only Pentra's Related reading list is repaired this way");
   const was = before.split("\n").map(line => RELATED_ENTRY.exec(line)), now = replacement.split("\n").map(line => RELATED_ENTRY.exec(line));
-  if (was.some(entry => !entry) || now.length !== was.length || now.some(entry => !entry)) throw new Error("A Related reading repair keeps the exact list of links");
-  let changed = 0;
-  for (const [index, entry] of was.entries()) {
-    const [, oldText, href] = entry!, [, newText, newHref] = now[index]!;
-    if (newHref !== href) throw new Error("A Related reading repair cannot change a link");
+  if (was.some(entry => !entry) || now.some(entry => !entry)) throw new Error("A Related reading repair keeps the exact list of links");
+  let changed = 0, next = 0;
+  const kept = new Set<string>();
+  for (const entry of was) {
+    const [, oldText, href] = entry!, final = relatedFinal(site, href);
+    // Each entry stays (its cut title completed, or pointed at the page it now leads to), or goes only when it
+    // repeats an earlier entry or leads to the page itself (P218, consolidated sites only).
+    const repaired = now[next];
+    if (!repaired || (repaired[2] !== href && repaired[2] !== final)) {
+      if (dropsEntry(site, final, kept)) { changed++; continue; }
+      if (!repaired) throw new Error("A Related reading repair keeps the exact list of links");
+      throw new Error("A Related reading repair cannot change a link");
+    }
+    next++;
+    const [, newText, newHref] = repaired;
+    kept.add(final);
+    if (newHref !== href) {
+      if (!newText.trim() || titleWords(newText).length > 16 || newText.length > 120 || /[\[\](){}<>]/.test(newText)) {
+        throw new Error("A link pointed at the page it now leads to is named by that page's title");
+      }
+      changed++;
+      continue;
+    }
     if (newText === oldText) continue;
     if (!cutOfTitle(oldText, newText) || titleWords(newText).length > 16 || newText.length > 120 || /[\[\](){}<>]/.test(newText)) {
       throw new Error("A Related reading repair only completes a cut title");
     }
     changed++;
   }
+  if (next !== now.length || now.length === 0) throw new Error("A Related reading repair keeps the exact list of links");
   if (changed === 0) throw new Error("This Related reading list has no cut title to complete");
-  const next = exactReplacement(markdown, before, replacement);
+  const nextMarkdown = exactReplacement(markdown, before, replacement);
   const previous = new Set(readerVisibleDefects(markdown));
-  if (readerVisibleDefects(next).some((defect) => !previous.has(defect))) throw new Error("The repair would leave another reader-visible defect on the page");
+  if (readerVisibleDefects(nextMarkdown).some((defect) => !previous.has(defect))) throw new Error("The repair would leave another reader-visible defect on the page");
   return replacement;
 }
 /** The links of a page's Related reading list (the list the repair may touch),
@@ -86,7 +119,8 @@ export function relatedReadingHrefs(markdown: string): string[] {
 /** The repair of a page's Related reading list from the live titles of the
  * articles it links (href to title): each entry cut from its linked title gets
  * the whole title (`wholeTitle`, relatedReadingTitle). Null when none is cut. */
-export function relatedReadingRepairProposal(markdown: string, titleByHref: Map<string, string>, wholeTitle: (title: string) => string | null) {
+export function relatedReadingRepairProposal(markdown: string, titleByHref: Map<string, string>, wholeTitle: (title: string) => string | null,
+  site?: RelatedReadingSite) {
   const blocks = markdown.split(/\n\s*\n/).map(block => block.trim());
   const at = blocks.findIndex(block => /^##\s+Related reading$/i.test(block));
   const before = at >= 0 ? blocks[at + 1] : undefined;
@@ -94,14 +128,23 @@ export function relatedReadingRepairProposal(markdown: string, titleByHref: Map<
   const lines = before.split("\n");
   if (lines.some(line => !RELATED_ENTRY.test(line))) return null;
   let changed = false;
-  const repaired = lines.map(line => {
-    const [, text, href] = RELATED_ENTRY.exec(line)!;
-    const title = titleByHref.get(href), whole = title ? wholeTitle(title) : null;
-    if (!whole || whole === text || !cutOfTitle(text, whole)) return line;
+  const kept = new Set<string>(), repaired: string[] = [];
+  for (const line of lines) {
+    const [, text, href] = RELATED_ENTRY.exec(line)!, final = relatedFinal(site, href);
+    if (dropsEntry(site, final, kept)) { changed = true; continue; }
+    const title = titleByHref.get(final), whole = title ? wholeTitle(title) : null;
+    if (final !== href) {
+      // A link to a consolidated page needs the page it leads to by name; without its title the list waits.
+      if (!whole) return null;
+      kept.add(final); repaired.push(`- [${whole}](${final})`); changed = true;
+      continue;
+    }
+    kept.add(final);
+    if (!whole || whole === text || !cutOfTitle(text, whole)) { repaired.push(line); continue; }
     changed = true;
-    return `- [${whole}](${href})`;
-  });
-  return changed ? { before, replacement: repaired.join("\n") } : null;
+    repaired.push(`- [${whole}](${href})`);
+  }
+  return changed && repaired.length > 0 ? { before, replacement: repaired.join("\n") } : null;
 }
 const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const plain = (s: string) => !/[\n\[\]`#*<>|{}]|https?:/i.test(s);
@@ -131,7 +174,7 @@ export function planCorrectiveChange(site: Doc<"sites">, page: Doc<"pages">, inp
   } else if (input.kind === "related_reading_titles") {
     if (input.field || input.targetUrl || input.replacement === undefined) throw new Error("A Related reading repair takes only the exact repaired list");
     if (e.kind !== "github") throw new Error("A Related reading repair maps only to a GitHub Markdown source");
-    after = relatedTitlesRepair(e.markdown, before, input.replacement);
+    after = relatedTitlesRepair(e.markdown, before, input.replacement, { domain: site?.domain, selfHref: pagePath(page) });
   } else {
     if (input.field || !input.targetUrl) throw new Error("Technical correction requires a verified same-site destination");
     const links = [...before.matchAll(/\[([^\]\n]+)\]\((https:\/\/[^\s)]+)\)/g)];

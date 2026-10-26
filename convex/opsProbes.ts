@@ -178,13 +178,17 @@ export const relatedRepairBlockers = internalQuery({ args: { siteId: v.id("sites
     const article = await ctx.db.get(row.articleId);
     const live = article ? await publicRevisionProjection(ctx, site, article) : null;
     if (!live?.markdown) continue;
-    const proposal = relatedReadingRepairProposal(live.markdown, titles, relatedReadingTitle);
+    // P218: on pentra.dev, links to consolidated pages count as repair work too.
+    let selfHref: string | undefined;
+    try { selfHref = publishedArticleInternalHref(site.urlStructure, row.slug); } catch { selfHref = undefined; }
+    const onSite = { domain: site.domain, selfHref };
+    const proposal = relatedReadingRepairProposal(live.markdown, titles, relatedReadingTitle, onSite);
     if (!proposal) continue;
     const page = pages.get(row.slug.replace(/^\/+|\/+$/g, "")), e = page?.editable;
     const reason = !page ? "no_page" : !e ? "not_enrolled" : !e.active ? "enrollment_inactive" : e.kind !== "github" ? `not_github_${e.kind}`
       : e.profileHash !== confirmedContentProfileHash(site) ? "enrollment_stale_profile"
       : e.connectionHash !== contentConnectionHash(site) ? "enrollment_stale_connection"
-      : !relatedReadingRepairProposal(e.markdown, titles, relatedReadingTitle) ? "enrolled_source_differs" : "repairable";
+      : !relatedReadingRepairProposal(e.markdown, titles, relatedReadingTitle, onSite) ? "enrolled_source_differs" : "repairable";
     blocked.push({ slug: row.slug, cuts: cutCount(proposal), reason });
   }
   return { published: summaries.length, blocked };
