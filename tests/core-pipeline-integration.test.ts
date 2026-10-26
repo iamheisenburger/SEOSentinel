@@ -10018,6 +10018,31 @@ test("P176 Autopilot completes a cut Related reading title on its own page: exac
 // LeadPilot's 24 pages with cut Related reading titles would have waited about four days. A repair now books the next
 // one 30 minutes later; the linked titles are read by slug, not every published summary; a page left for its own
 // unfinished work is looked at again a day later instead of a week.
+// P223 (Oct 26 2026): pentra.dev's repair pass begun before P220 ended at 15:00Z under the old rules; the fresh pass
+// under today's rules waited for the next scheduler pass (about 3 hours). It now starts at once.
+test("P223 a repair pass that ends under older rules starts the fresh pass at once, and that one ends there", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+  const site = await selectGrowth(f, 8 * 3_600_000), saved = f.get(site.id)!;
+  Object.assign(saved.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const ready = () => (f.tables.jobs ?? []).filter(j => j.contentWork?.stage === "ready");
+  await pumpUntil(f, () => ready().length === 2);
+  const shift = 12 * 3_600_000;
+  saved.contentSchedule.nextDeadlineAt += shift;
+  for (const job of ready()) Object.assign(job.contentWork, { deadlineAt: job.contentWork.deadlineAt + shift,
+    windowStartAt: job.contentWork.windowStartAt + shift, windowWakeId: undefined });
+  // A pass begun under rules version 1 is at its last window (nothing left to repair after its cursor).
+  Object.assign(f.get(site.id)!.contentSchedule, { relatedRepairCursor: 1, relatedRepairPassVersion: 1 });
+  const booked = () => f.tables._scheduled_functions.filter(s => s.name === "contentImprovements:requestRelatedReadingRepair" && s.state.kind === "pending");
+  const before = booked().length;
+  assert.deepEqual(await f.invoke("contentImprovements:requestRelatedReadingRepair", { siteId: site.id }), { requested: false });
+  assert.equal(f.get(site.id)!.contentSchedule.relatedRepairCleanVersion, 1, "the old pass is recorded as done under its rules");
+  assert.equal(booked().length, before + 1, "the fresh pass is booked at once, not at the next scheduler pass");
+  assert.deepEqual(await f.invoke("contentImprovements:requestRelatedReadingRepair", { siteId: site.id }), { requested: false });
+  assert.equal(f.get(site.id)!.contentSchedule.relatedRepairCleanVersion, RELATED_REPAIR_VERSION, "the fresh pass runs under today's rules");
+  assert.equal(booked().length, before + 1, "and nothing more is booked after it");
+  f.assertOffline();
+});
+
 test("P180 cut Related reading titles are repaired 30 minutes apart without a scheduler pass; a page with unfinished work is retried a day later", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const cutA = "- [What Is an AI Sales Agent? How It](/blog/ai-sales-agent)";

@@ -206,8 +206,9 @@ export const requestRelatedReadingRepair = internalMutation({ args: { siteId: v.
   await ctx.db.patch(siteId, { contentSchedule: { ...schedule, relatedRepairCursor: passDone ? 0 : pages.at(-1)!._creationTime,
     relatedRepairRetryAt: retryAt, relatedRepairPassVersion: passVersion,
     ...(passDone ? { relatedRepairCleanAt: now, relatedRepairCleanVersion: passVersion } : {}) }, updatedAt: now });
-  // No commit was made, so no spacing is owed: the next window follows at once.
-  if (!passDone) await ctx.scheduler.runAfter(0, internal.contentImprovements.requestRelatedReadingRepair, { siteId });
+  // No commit was made, so no spacing is owed: the next window follows at once. P223: a pass that ran under earlier
+  // rules is followed at once by one under today's (P220), not at the next scheduler pass (up to 3 hours later).
+  if (!passDone || passVersion < RELATED_REPAIR_VERSION) await ctx.scheduler.runAfter(0, internal.contentImprovements.requestRelatedReadingRepair, { siteId });
   return { requested: false };
 } });
 

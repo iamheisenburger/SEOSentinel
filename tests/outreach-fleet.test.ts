@@ -265,6 +265,9 @@ test("fleet rechecks rollout readiness immediately before preparation", () => {
     outreach.indexOf("// ── Delivery ──"),
   );
   assert.match(internalPrepare, /isSeoGrowthActuationEligible\(site\)/);
+  // P223 (Oct 26 2026): an ineligible site prepares nothing and says why; it no longer throws (logged as uncaught).
+  assert.doesNotMatch(internalPrepare, /throw new Error\("SEO growth actuation is not enabled/);
+  assert.match(internalPrepare, /reasons: \{ actuation_not_enabled: 1 \}/);
 });
 
 test("fleet pagination and stage failures are tenant isolated", () => {

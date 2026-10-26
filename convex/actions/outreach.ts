@@ -653,7 +653,11 @@ export const prepareOutreachInternal = internalAction({
     const site = await ctx.runQuery(internal.sites.getFull, { siteId });
     if (!site) throw new Error("Site not found");
     if (!isSeoGrowthActuationEligible(site)) {
-      throw new Error("SEO growth actuation is not enabled for this tenant rollout");
+      // P223 (Oct 26 2026): the fleet planner and this check can disagree for a moment; nothing is prepared, and the
+      // stage reports why instead of throwing (it was logged as an uncaught error).
+      const budget = createOutreachPreparationBudget({ requestedLimit: limit ?? 25 });
+      return { considered: 0, drafted: 0, blocked: 0, skipped: 0, reasons: { actuation_not_enabled: 1 },
+        ...summarizeOutreachPreparationBudget({ budget, considered: 0, offered: 0, hasMore: false, unsettledCurrent: false }) };
     }
     return prepareHandler(ctx, siteId, site, limit ?? 25);
   },
