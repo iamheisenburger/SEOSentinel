@@ -8023,6 +8023,38 @@ test("P194 the plan audit never holds back a waiting article too close to its sl
   f.assertOffline();
 });
 
+// P215 (Oct 26 2026): when the article a planned or waiting search repeats is itself written and waiting to publish,
+// the audit said "Same article as the planned topic" or "Repeats a page the site already has": neither was true.
+test("P215 the plan audit says a search repeats an article waiting to publish, not a live page or a planned topic", async () => {
+  const hour = 3_600_000;
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+  const site = await selectGrowth(f, 8 * hour), saved = f.get(site.id)!;
+  Object.assign(saved.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const waiting = () => f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "ready" && j.contentWork.retiredAt === undefined)
+    .sort((a, b) => a.contentWork.deadlineAt - b.contentWork.deadlineAt);
+  await pumpUntil(f, () => waiting().length === 2);
+  for (const job of waiting()) Object.assign(job.contentWork, { deadlineAt: job.contentWork.deadlineAt + 12 * hour,
+    windowStartAt: job.contentWork.windowStartAt + 12 * hour, windowWakeId: undefined });
+  const [keeper, second] = waiting(), keeperKeyword = f.get(keeper.payload.topicId)!.primaryKeyword;
+  const planned = f.add("topic_clusters", { siteId: site.id, primaryKeyword: "irrigation valve leak plan", label: "Irrigation valve leak plan",
+    planningCanonicalDomain: saved.canonicalDomain ?? saved.domain, planningDomainRevision: saved.canonicalDomainRevision ?? 0,
+    secondaryKeywords: [], intent: "informational", status: "planned", priority: 50, createdAt: f.now(), updatedAt: f.now() });
+  const reservation = f.add("provider_spend_reservations", { siteId: site.id, purpose: "content_work", reservedMicroUsd: 1, createdAt: f.now() });
+  const outcome = await f.invoke("contentWork:recordPlanAudit", { siteId: site.id, reservationId: reservation, actualMicroUsd: 0, answered: true,
+    auditedIds: [`job:${keeper._id}`, `job:${second._id}`, `topic:${planned}`],
+    decisions: [{ id: `job:${keeper._id}`, action: "keep", secondary: [] },
+      { id: `job:${second._id}`, action: "covered", by: keeperKeyword, waitingKeeper: true },
+      { id: `topic:${planned}`, action: "merged", into: keeperKeyword, waitingKeeper: true }] });
+  assert.deepEqual(outcome, { dropped: 0, merged: 1, heldBack: 1 });
+  assert.equal(f.get(planned)!.disqualifiedReason, `Same article as “${keeperKeyword}”, already written and waiting to publish.`);
+  const held = f.get(second._id)!;
+  assert.equal(held.contentWork.failure, "duplicate_intent");
+  assert.ok(String(f.get(second.articleId)!.publicationGateIssues[0]).startsWith(`Same article as another one already written and waiting to publish (“${keeperKeyword}”)`));
+  assert.equal(f.get(second.payload.topicId)!.disqualifiedReason, "Same article as another one already written and waiting to publish.");
+  assert.equal(f.get(keeper._id)!.contentWork.stage, "ready", "the waiting article it repeats publishes");
+  f.assertOffline();
+});
+
 // P211 (Oct 26 2026): new topics were checked against the business's own pages (its service and product pages, posts it
 // wrote) only by shared words, so a page worded differently got a competing article. The grouping call reads them too.
 test("P211 research never plans an article on what one of the business's own pages already is, in other words", async () => {

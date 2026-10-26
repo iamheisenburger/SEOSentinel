@@ -113,10 +113,11 @@ export function groupSearches<T extends { keyword: string; searchVolume: number 
 // 2 (P211, Oct 26 2026): the audit also reads the business's own pages, so every plan is audited once more.
 export const PLAN_AUDIT_VERSION = 2;
 export type PlanAuditItem = { id: string; keyword: string; searchVolume: number; waiting: boolean };
+// waitingKeeper (P215): the article it repeats is written and waiting to publish, not a live page or a planned topic.
 export type PlanAuditDecision =
   | { id: string; action: "keep"; secondary: string[] }
-  | { id: string; action: "covered"; by: string }
-  | { id: string; action: "merged"; into: string };
+  | { id: string; action: "covered"; by: string; waitingKeeper?: true }
+  | { id: string; action: "merged"; into: string; waitingKeeper?: true };
 
 export function auditPlannedWork(items: PlanAuditItem[], groups: Map<string, ResearchGroup>): PlanAuditDecision[] {
   const decisions: PlanAuditDecision[] = [];
@@ -134,8 +135,9 @@ export function auditPlannedWork(items: PlanAuditItem[], groups: Map<string, Res
     const own = normalizeFitKeyword(keeper.keyword);
     decisions.push({ id: keeper.id, action: "keep", secondary: [...new Set(rest.filter(other => !other.waiting)
       .map(other => normalizeFitKeyword(other.keyword)))].filter(keyword => keyword !== own).slice(0, MAX_SECONDARY) });
-    for (const other of rest) decisions.push(other.waiting ? { id: other.id, action: "covered", by: keeper.keyword }
-      : { id: other.id, action: "merged", into: keeper.keyword });
+    // Waiting articles come first, so a waiting one is only ever kept back by another waiting one.
+    for (const other of rest) decisions.push(other.waiting ? { id: other.id, action: "covered", by: keeper.keyword, waitingKeeper: true }
+      : { id: other.id, action: "merged", into: keeper.keyword, ...(keeper.waiting ? { waitingKeeper: true as const } : {}) });
   }
   return decisions;
 }

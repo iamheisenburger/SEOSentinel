@@ -52,8 +52,9 @@ test("a waiting article keeps its group; a planned search with the same answer j
     { id: "job:z", keyword: "lead scoring sheet", searchVolume: 10, waiting: true },
   ], groups);
   assert.deepEqual(decisions.find(d => d.id === "job:y"), { id: "job:y", action: "keep", secondary: ["lead scoring templates free"] });
-  assert.deepEqual(decisions.find(d => d.id === "topic:x"), { id: "topic:x", action: "merged", into: "lead scoring template" });
-  assert.deepEqual(decisions.find(d => d.id === "job:z"), { id: "job:z", action: "covered", by: "lead scoring template" });
+  // P215: what they repeat is written and waiting to publish, not a live page or a planned topic.
+  assert.deepEqual(decisions.find(d => d.id === "topic:x"), { id: "topic:x", action: "merged", into: "lead scoring template", waitingKeeper: true });
+  assert.deepEqual(decisions.find(d => d.id === "job:z"), { id: "job:z", action: "covered", by: "lead scoring template", waitingKeeper: true });
 });
 
 test("a search the model gave no verdict for, or a covered_by outside the live list, changes nothing", () => {

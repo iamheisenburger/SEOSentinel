@@ -1935,7 +1935,7 @@ const waitingCreateJob = (job: Doc<"jobs">) => job.status === "done" && job.cont
  * a sound topic returns to the plan. False when the article is past holding
  * back (published, or a publication was attempted). */
 async function holdBackReadyWork(ctx: MutationCtx, site: Doc<"sites">, job: Doc<"jobs">, topic: Doc<"topic_clusters"> | null,
-  article: Doc<"articles"> | null, duplicate: boolean, notes: string[]) {
+  article: Doc<"articles"> | null, duplicate: boolean, notes: string[], duplicateReason = "Repeats a page the site already has.") {
   if (article && article.status !== "published" && !article.publicationLeaseOwner && !article.publicationAttemptedAt) {
     await quarantineUnpublishedArticle(ctx, article._id, notes);
   } else if (article) return false;
@@ -1945,7 +1945,7 @@ async function holdBackReadyWork(ctx: MutationCtx, site: Doc<"sites">, job: Doc<
   if (countsTowardMonthlyUsage(job, usageMonthBounds().monthStart)) await refreshAccountUsage(ctx, site, -1);
   if (topic && topic.siteId === site._id && !planCheckpointTopicExecutionLocked(topic)) {
     // A repeated search is covered; a sound topic goes back to the plan to be written again.
-    await ctx.db.patch(topic._id, duplicate ? { status: "disqualified", disqualifiedReason: "Repeats a page the site already has.", updatedAt: Date.now() }
+    await ctx.db.patch(topic._id, duplicate ? { status: "disqualified", disqualifiedReason: duplicateReason, updatedAt: Date.now() }
       : { status: "planned", updatedAt: Date.now() });
   }
   return true;
@@ -1996,7 +1996,7 @@ const clipQuote = (value: string | undefined, max: number) => (value ?? "").repl
 export const recordPlanAudit = internalMutation({ args: { siteId: v.id("sites"), reservationId: v.id("provider_spend_reservations"),
   actualMicroUsd: v.number(), answered: v.boolean(), auditedIds: v.array(v.string()),
   decisions: v.array(v.object({ id: v.string(), action: v.union(v.literal("keep"), v.literal("covered"), v.literal("merged")),
-    by: v.optional(v.string()), into: v.optional(v.string()), secondary: v.optional(v.array(v.string())) })) },
+    by: v.optional(v.string()), into: v.optional(v.string()), secondary: v.optional(v.array(v.string())), waitingKeeper: v.optional(v.literal(true)) })) },
   handler: async (ctx, { siteId, reservationId, actualMicroUsd, answered, auditedIds, decisions }) => {
     const reservation = await ctx.db.get(reservationId);
     const actual = Math.max(0, Math.ceil(actualMicroUsd));
@@ -2021,6 +2021,7 @@ export const recordPlanAudit = internalMutation({ args: { siteId: v.id("sites"),
         if (decision?.action === "covered" || decision?.action === "merged") {
           await ctx.db.patch(topic._id, { status: "disqualified", planAudit: stamp, updatedAt: now,
             disqualifiedReason: decision.action === "covered" ? `Repeats a page the site already has: “${clipQuote(decision.by, 120)}”.`
+              : decision.waitingKeeper ? `Same article as “${clipQuote(decision.into, 100)}”, already written and waiting to publish.`
               : `Same article as the planned topic “${clipQuote(decision.into, 100)}”.` });
           outcome[decision.action === "covered" ? "dropped" : "merged"]++;
         } else {
@@ -2038,8 +2039,11 @@ export const recordPlanAudit = internalMutation({ args: { siteId: v.id("sites"),
         const article = job.articleId ? await ctx.db.get(job.articleId) : null;
         if (decision?.action === "covered" && outcome.heldBack < PLAN_AUDIT_MAX_HELD_BACK && waitingCreateJob(job) &&
           job.contentWork!.deadlineAt - now >= PLAN_AUDIT_REPLACEMENT_LEAD_MS && (!topic || !ownerChosen(topic)) &&
-          await holdBackReadyWork(ctx, site, job, topic, article, true,
-            [`Repeats a page this site already has (“${clipQuote(decision.by, 120)}”), so it was held back and the slot got a new topic.`])) {
+          await holdBackReadyWork(ctx, site, job, topic, article, true, decision.waitingKeeper
+            // P215: two waiting articles on one search: the other one is not live yet.
+            ? [`Same article as another one already written and waiting to publish (“${clipQuote(decision.by, 120)}”), so it was held back and the slot got a new topic.`]
+            : [`Repeats a page this site already has (“${clipQuote(decision.by, 120)}”), so it was held back and the slot got a new topic.`],
+            decision.waitingKeeper ? "Same article as another one already written and waiting to publish." : undefined)) {
           outcome.heldBack++;
         } else if (topic && topic.siteId === siteId) await ctx.db.patch(topic._id, { planAudit: stamp });
       }
