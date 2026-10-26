@@ -15,7 +15,7 @@ import { normalizeFitKeyword, type BuyerFitBusiness, type BuyerFitVerdict } from
 
 /** Bumped when the check's logic changes: a finished check from an older
  * version is run again on its next request instead of being reused. */
-export const FREE_CHECK_VERSION = 10;
+export const FREE_CHECK_VERSION = 11;
 
 /** A finished check is reused for a week, so a shared link costs nothing. */
 export const FREE_CHECK_CACHE_MS = 7 * 86_400_000;
@@ -578,13 +578,15 @@ export type LivePosition = { position: number; url: string } | null;
  * already wins (top 3) is dropped, and one Google could not be asked about is
  * not reported at all. */
 export function verifyClaims(classified: { missed: MissedSearch[]; unranked: UnrankedSearch[] }, almost: AlmostSearch[],
-  live: Map<string, LivePosition>) {
-  const moved: AlmostSearch[] = [];
+  live: Map<string, LivePosition>, wins: AlmostSearch[] = []) {
+  const moved: AlmostSearch[] = [], won: AlmostSearch[] = [];
   const confirmedAbsent = <T extends { keyword: string; searchVolume: number }>(rows: T[]) => rows.filter(row => {
     const seen = live.get(row.keyword);
     if (seen === undefined) return false;
     if (seen === null) return true;
     if (seen.position >= 4 && seen.position <= 20) moved.push({ keyword: row.keyword, searchVolume: row.searchVolume, position: seen.position, url: seen.url });
+    // P206: a claim Google shows in its top 3 is a win, never dropped.
+    else if (seen.position >= 1 && seen.position <= 3) won.push({ keyword: row.keyword, searchVolume: row.searchVolume, position: seen.position, url: seen.url });
     return false;
   });
   const missed = confirmedAbsent(classified.missed), unranked = confirmedAbsent(classified.unranked);
@@ -592,7 +594,11 @@ export function verifyClaims(classified: { missed: MissedSearch[]; unranked: Unr
   for (const row of [...almost, ...moved].sort((a, b) => b.searchVolume - a.searchVolume || a.position - b.position)) {
     if (!pages.has(pageKey(row.url))) pages.set(pageKey(row.url), row);
   }
-  return { missed, unranked, almost: [...pages.values()].slice(0, FREE_CHECK_MAX_ALMOST) };
+  const winPages = new Map<string, AlmostSearch>();
+  for (const row of [...wins, ...won].sort((a, b) => b.searchVolume - a.searchVolume || a.position - b.position)) {
+    if (!winPages.has(pageKey(row.url)) && !pages.has(pageKey(row.url))) winPages.set(pageKey(row.url), row);
+  }
+  return { missed, unranked, almost: [...pages.values()].slice(0, FREE_CHECK_MAX_ALMOST), wins: [...winPages.values()].slice(0, FREE_CHECK_MAX_WINS) };
 }
 
 /** Missed searches only (see classifySearches). */
@@ -621,6 +627,25 @@ export function selectAlmostThere(ranked: RankedKeyword[], verdicts: Map<string,
       url: r.url, variants: 0 });
   }
   return [...pages.values()].slice(0, FREE_CHECK_MAX_ALMOST).map(({ variants, ...row }) => variants ? { ...row, variants } : row);
+}
+
+/** P206 (Oct 26 2026): the customer searches a site already wins (Google's top 3), one row per page, most searched first.
+ * zingermansdeli.com's report showed nothing missed and nothing close: its wins were dropped, so a strong local site read
+ * as an empty report. Same rules as close to page one (buyer fit, not the brand, naming its places). */
+export const FREE_CHECK_MAX_WINS = 5;
+export function selectWins(ranked: RankedKeyword[], verdicts: Map<string, BuyerFitVerdict>, brands: string[], places: string[] = []): AlmostSearch[] {
+  const rows = ranked
+    .filter(r => r.position >= 1 && r.position <= 3 && r.searchVolume >= 10 && !isBrandedKeyword(r.keyword, brands) &&
+      verdicts.get(normalizeResearchKeyword(r.keyword))?.keep === true && (places.length === 0 || namesPlace(r.keyword, places)))
+    .sort((a, b) => b.searchVolume - a.searchVolume || a.position - b.position);
+  const pages = new Map<string, AlmostSearch & { variants: number }>();
+  for (const r of rows) {
+    const prior = pages.get(pageKey(r.url));
+    if (prior) { prior.variants++; continue; }
+    pages.set(pageKey(r.url), { keyword: normalizeResearchKeyword(r.keyword), searchVolume: Math.round(r.searchVolume), position: Math.round(r.position),
+      url: r.url, variants: 0 });
+  }
+  return [...pages.values()].slice(0, FREE_CHECK_MAX_WINS).map(({ variants, ...row }) => variants ? { ...row, variants } : row);
 }
 
 /** Why the homepage couldn't be read, in the website's terms. A refused or
@@ -672,6 +697,8 @@ export type FreeCheckRow = {
   places?: string[];
   missed?: MissedSearch[];
   almost?: AlmostSearch[];
+  /** P206: searches it already wins (top 3). */
+  wins?: AlmostSearch[];
   unranked?: UnrankedSearch[];
   health?: { passed: number; total: number; issues: PageHealthIssue[] };
   keywordsUnavailable?: boolean;
@@ -691,15 +718,15 @@ export function freeCheckView(row: FreeCheckRow, signedIn: boolean) {
     missed: shown, hiddenCount: missed.length - shown.length, totalMissed: missed.length,
     // Each row is one topic counted at its biggest wording, so the total never adds up synonyms.
     monthlySearches: missed.reduce((sum, k) => sum + k.searchVolume, 0),
-    almost: row.almost ?? [], unranked: row.unranked ?? [], health: row.health ?? null, keywordsUnavailable: row.keywordsUnavailable === true,
+    almost: row.almost ?? [], wins: row.wins ?? [], unranked: row.unranked ?? [], health: row.health ?? null, keywordsUnavailable: row.keywordsUnavailable === true,
   };
 }
 
 /** The served places the result's searches actually name (the check looks up
  * its first places, so the headline never claims the others). */
-function placesNamed(row: Pick<FreeCheckRow, "places" | "missed" | "unranked" | "almost">): string[] {
+function placesNamed(row: Pick<FreeCheckRow, "places" | "missed" | "unranked" | "almost" | "wins">): string[] {
   const places = row.places ?? [];
-  const searches = [...(row.missed ?? []), ...(row.unranked ?? []), ...(row.almost ?? [])].map(k => k.keyword);
+  const searches = [...(row.missed ?? []), ...(row.unranked ?? []), ...(row.almost ?? []), ...(row.wins ?? [])].map(k => k.keyword);
   const named = places.filter(place => searches.some(keyword => namesPlace(keyword, [place])));
   return named.length ? named : places.slice(0, 2);
 }

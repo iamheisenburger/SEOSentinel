@@ -16,7 +16,7 @@ import { asksForFree, blockedHomepage, botWall, brandTerms, checkBusiness, check
   FREE_CHECK_VERIFIED_MISSED, verifyClaims, type LivePosition,
   FREE_CHECK_MAX_DIFFICULTY, FREE_CHECK_SITEMAP_MAX_BYTES, freeCheckLocale, healthSummary, htmlLang, isBrandedKeyword, linkedPages, localSeeds,
   namesPlace, notACandidate, PAGE_COVERAGE_MAX_TOKENS, PAGE_COVERAGE_TOOL, pageCoverageRequest, parsePageCoverage, parseSearchSeeds,
-  pathsForCoverage, SEARCH_SEEDS_MAX_TOKENS, SEARCH_SEEDS_TOOL, searchSeedRequest, selectAlmostThere, siteCoverage, siteSections, unreadableHomepage,
+  pathsForCoverage, SEARCH_SEEDS_MAX_TOKENS, SEARCH_SEEDS_TOOL, searchSeedRequest, selectAlmostThere, selectWins, siteCoverage, siteSections, unreadableHomepage,
   parsePlaces, placeCandidateSections, PLACES_MAX_TOKENS, PLACES_TOOL, placesRequest,
   type PageAnswer, type RankedKeyword, type SeedRead } from "../lib/missedSearches";
 import { discoverKeywords, getRankedKeywords, meterDataForSeoCost, siteSerpPositions } from "./seoData";
@@ -31,7 +31,8 @@ const RANKED_TOP = 300;
 type Classified = ReturnType<typeof classifySearches>;
 type Outcome =
   | { kind: "done"; businessName: string; countryName: string; summary: string; places: string[]; missed: Classified["missed"];
-    almost: ReturnType<typeof selectAlmostThere>; unranked: Classified["unranked"]; health: ReturnType<typeof healthSummary>; keywordsUnavailable: boolean }
+    almost: ReturnType<typeof selectAlmostThere>; wins: ReturnType<typeof selectWins>; unranked: Classified["unranked"];
+    health: ReturnType<typeof healthSummary>; keywordsUnavailable: boolean }
   // refund: nothing paid ran and the reason is the website's, not the visitor's daily allowance.
   | { kind: "failed"; error: string; refund?: boolean };
 
@@ -257,11 +258,11 @@ export const run = internalAction({
       // 4. Which of them this business's customers make: one buyer-fit call.
       await step("Checking which searches fit your business");
       const winnable = found.filter(k => k.difficultyMeasured && k.difficulty <= FREE_CHECK_MAX_DIFFICULTY && k.searchVolume >= 10 && offered(k.keyword));
-      const candidates = [...new Set([
-        ...winnable.map(k => normalizeFitKeyword(k.keyword)),
-        ...ranked.filter(r => r.position >= 4 && r.position <= 20 && r.searchVolume >= 10 && !isBrandedKeyword(r.keyword, brands) && (!local || namesPlace(r.keyword, places)))
-          .map(r => normalizeFitKeyword(r.keyword)),
-      ])].slice(0, BUYER_FIT_MAX_KEYWORDS);
+      const rankedWithin = (low: number, high: number) => ranked.filter(r => r.position >= low && r.position <= high && r.searchVolume >= 10 &&
+        !isBrandedKeyword(r.keyword, brands) && (!local || namesPlace(r.keyword, places))).map(r => normalizeFitKeyword(r.keyword));
+      // P206: the searches it already wins (top 3) are judged too, last, so they never take the room of a search to report.
+      const candidates = [...new Set([...winnable.map(k => normalizeFitKeyword(k.keyword)), ...rankedWithin(4, 20), ...rankedWithin(1, 3)])]
+        .slice(0, BUYER_FIT_MAX_KEYWORDS);
       let verdicts = new Map<string, BuyerFitVerdict>();
       if (candidates.length > 0) {
         try {
@@ -320,11 +321,11 @@ export const run = internalAction({
         spent.dataForSeoUsd += checked.usd; spent.uncertain ||= checked.uncertain;
         live = checked.result;
       }
-      const verified = verifyClaims(classified, selectAlmostThere(ranked, verdicts, brands, places), live);
+      const verified = verifyClaims(classified, selectAlmostThere(ranked, verdicts, brands, places), live, selectWins(ranked, verdicts, brands, places));
       diagnostics = { ...diagnostics, verified: { asked: claims.length, answered: live.size, absent: [...live.values()].filter(seen => seen === null).length } };
       return { kind: "done", businessName: (prefill.name || domain).slice(0, 80), countryName: locale.countryName,
         summary: (read?.sells || prefill.summary || "").slice(0, 400), places, missed: verified.missed, unranked: verified.unranked,
-        almost: verified.almost, health, keywordsUnavailable: found.length === 0 && ranked.length === 0 };
+        almost: verified.almost, wins: verified.wins, health, keywordsUnavailable: found.length === 0 && ranked.length === 0 };
     };
     let outcome: Outcome;
     try { outcome = await check(); }

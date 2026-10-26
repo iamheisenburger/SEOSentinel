@@ -21,7 +21,7 @@ export const almostRow = v.object({ keyword: v.string(), searchVolume: v.number(
 export const unrankedRow = v.object({ keyword: v.string(), searchVolume: v.number(), url: v.string(), variants: v.optional(v.number()) });
 const outcome = v.union(
   v.object({ kind: v.literal("done"), businessName: v.string(), countryName: v.string(), summary: v.string(), places: v.array(v.string()),
-    missed: v.array(missedRow), almost: v.array(almostRow), unranked: v.array(unrankedRow),
+    missed: v.array(missedRow), almost: v.array(almostRow), wins: v.optional(v.array(almostRow)), unranked: v.array(unrankedRow),
     health: v.object({ passed: v.number(), total: v.number(), issues: v.array(issue) }),
     keywordsUnavailable: v.boolean() }),
   v.object({ kind: v.literal("failed"), error: v.string(), refund: v.optional(v.boolean()) }),
@@ -136,7 +136,7 @@ export const complete = internalMutation({ args: { checkId: v.id("free_checks"),
     else {
       const done = args.outcome;
       await ctx.db.patch(args.checkId, { status: "done", businessName: done.businessName, countryName: done.countryName,
-        summary: done.summary || undefined, places: done.places, missed: done.missed, almost: done.almost, unranked: done.unranked,
+        summary: done.summary || undefined, places: done.places, missed: done.missed, almost: done.almost, wins: done.wins ?? [], unranked: done.unranked,
         health: done.health, keywordsUnavailable: done.keywordsUnavailable, ...cost });
     }
   } });

@@ -1805,6 +1805,8 @@ export default defineSchema({
     // variants: other wordings of the same topic, which one page answers.
     missed: v.optional(v.array(v.object({ keyword: v.string(), searchVolume: v.number(), difficulty: v.number(), variants: v.optional(v.number()) }))),
     almost: v.optional(v.array(v.object({ keyword: v.string(), searchVolume: v.number(), position: v.number(), url: v.string(), variants: v.optional(v.number()) }))),
+    // P206: customer searches the site already wins (Google's top 3).
+    wins: v.optional(v.array(v.object({ keyword: v.string(), searchVolume: v.number(), position: v.number(), url: v.string(), variants: v.optional(v.number()) }))),
     // v4: searches the site has a page for that Google doesn't show on its first two pages.
     unranked: v.optional(v.array(v.object({ keyword: v.string(), searchVolume: v.number(), url: v.string(), variants: v.optional(v.number()) }))),
     health: v.optional(v.object({ passed: v.number(), total: v.number(),

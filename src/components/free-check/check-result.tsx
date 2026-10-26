@@ -112,6 +112,7 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
       <h1 className="mt-3 text-2xl font-semibold tracking-tight text-[#F7F8F8] md:text-3xl [text-wrap:balance] [overflow-wrap:anywhere]">
         {view.totalMissed > 0 ? `${view.totalMissed} Google ${view.totalMissed === 1 ? "search" : "searches"} ${view.domain} is missing`
           : view.almost.length > 0 ? `${view.domain} is close to page one for ${view.almost.length} ${view.almost.length === 1 ? "search" : "searches"}`
+            : view.wins.length > 0 ? `${view.domain} already ranks near the top of Google for its customers' searches`
             : `No missed searches found for ${view.domain}`}
       </h1>
       {view.summary && <p className="mt-2 text-[13px] leading-relaxed text-[#62666D]">
@@ -126,6 +127,8 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
           ? `Pentra couldn't find search data for ${view.domain}. This happens when a homepage has little text Pentra can read (for example, a site built entirely in JavaScript) or when the site is very new.`
           : view.almost.length > 0
             ? `Google already shows ${view.domain} at positions 4 to 20 for these searches, about ${number(view.almost.reduce((sum, row) => sum + row.searchVolume, 0))} searches a month in all. Moving those pages onto page one is the quickest win.`
+            : view.wins.length > 0
+            ? `Google shows ${view.domain} in its top 3 for the searches below, about ${number(view.wins.reduce((sum, row) => sum + row.searchVolume, 0))} searches a month in all.${view.unranked.length > 0 ? " The quickest wins left are pages Google doesn't show yet." : " Keeping those pages current protects the customers they bring; the next pages to write are the searches around them."}`
             : view.unranked.length > 0
             ? `${view.domain} already has a page for the low-competition searches Pentra found. The quickest wins are below: pages Google doesn't show yet.`
             : `Pentra didn't find low-competition searches from your customers that ${view.domain} has no page for. Your site may already cover them, or your homepage says little about what you sell.`}
@@ -182,6 +185,17 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
         {view.unranked.map(row => <li key={row.url} className="py-3 text-[14px]">
           <span className="block text-[#F7F8F8]">{row.keyword}</span>
           <span className="block text-[#8A8F98]">{number(row.searchVolume)} a month{similar(row.variants) ? ` · ${similar(row.variants)}` : ""} · <span className="text-[#62666D] [overflow-wrap:anywhere]">{pagePath(row.url)}</span></span>
+        </li>)}
+      </ul>
+    </section>}
+
+    {view.wins.length > 0 && <section className={PANEL} aria-labelledby="free-check-wins">
+      <h2 id="free-check-wins" className="text-[17px] font-semibold text-[#F7F8F8]">Already near the top</h2>
+      <p className="mt-1.5 text-[14px] leading-relaxed text-[#8A8F98]">Google shows {view.domain} in its top 3 for these searches from its customers. Keeping these pages current protects the visits they already bring.</p>
+      <ul className="mt-4 divide-y divide-white/[0.06]">
+        {view.wins.map(row => <li key={row.url} className="py-3 text-[14px]">
+          <span className="block text-[#F7F8F8]">{row.keyword}</span>
+          <span className="block text-[#8A8F98]"><span className="text-[#D0D6E0]">#{row.position}</span> on Google · {number(row.searchVolume)} a month{similar(row.variants) ? ` · ${similar(row.variants)}` : ""} · <span className="text-[#62666D] [overflow-wrap:anywhere]">{pagePath(row.url)}</span></span>
         </li>)}
       </ul>
     </section>}

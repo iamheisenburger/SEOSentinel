@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { brandTerms, checkSeeds, classifySearches, excludedFromMissed, fallbackTopic, freeCheckDomain, freeCheckLocale, freeCheckReportEmail, freeCheckView,
   healthSummary, isBrandedKeyword, linkedPages, localSeeds, namesPlace, pageCoverageRequest, parsePageCoverage, parseSearchSeeds, pathsForCoverage,
   placesLabel, searchSeedRequest, selectAlmostThere, selectMissedSearches, siteCoverage, siteSections, unreadableHomepage, botWall, blockedHomepage, localHeadSeeds,
@@ -537,6 +538,37 @@ test("v7: claims are verified pure: absent stays, top 3 is dropped, 4-20 moves t
   assert.deepEqual(result.missed.map(k => k.keyword), ["a b"]);
   assert.deepEqual(result.unranked.map(k => k.keyword), ["i j"]);
   assert.deepEqual(result.almost.map(k => [k.keyword, k.position]), [["e f", 12], ["k l", 9]]);
+  // P206: a claim Google shows in its top 3 is a win, never just dropped.
+  assert.deepEqual(result.wins.map(k => [k.keyword, k.position]), [["c d", 3]]);
+});
+
+// P206 (Oct 26 2026): zingermansdeli.com's report showed nothing missed and nothing close: the searches it already wins
+// were dropped, so a strong local site read as an empty report.
+test("v11: the searches a site already wins (top 3) are shown, one per page, never its own name", async () => {
+  const { selectWins } = await import("../convex/lib/missedSearches.ts");
+  const ranked = [
+    { keyword: "deli ann arbor", position: 1, searchVolume: 1900, url: "https://zd.example/" },
+    { keyword: "best deli ann arbor", position: 2, searchVolume: 320, url: "https://zd.example/" },
+    { keyword: "zingermans deli", position: 1, searchVolume: 9900, url: "https://zd.example/" },
+    { keyword: "catering ann arbor", position: 3, searchVolume: 480, url: "https://zd.example/catering" },
+    { keyword: "sandwich shop detroit", position: 2, searchVolume: 700, url: "https://zd.example/menus" },
+    { keyword: "reuben sandwich ann arbor", position: 6, searchVolume: 260, url: "https://zd.example/menus" },
+  ];
+  const keep = new Map(ranked.map(r => [r.keyword, { keyword: r.keyword, keep: true, reason: "fits" }]));
+  const wins = selectWins(ranked, keep, ["zingermans"], ["ann arbor"]);
+  assert.deepEqual(wins.map(w => [w.keyword, w.position, w.url]), [["deli ann arbor", 1, "https://zd.example/"], ["catering ann arbor", 3, "https://zd.example/catering"]],
+    "top 3 only, the brand left out, its own place only, one row per page (the second wording counted with it)");
+  assert.equal(wins[0].variants, 1);
+  const { f } = world();
+  await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(1) });
+  assert.deepEqual((await f.runNextScheduled())?.result, { status: "done" });
+  const view = await f.invoke("freeCheck:get", { domain: DOMAIN });
+  assert.deepEqual(view.wins.map((w: Fields) => [w.keyword, w.position]), [["glaze inventory software", 2]], "the fixture site wins its #2 search; #1 is its own name");
+  const page = readFileSync("src/components/free-check/check-result.tsx", "utf8");
+  assert.match(page, /: view\.wins\.length > 0 \? `\$\{view\.domain\} already ranks near the top of Google for its customers' searches`/);
+  assert.match(page, /<h2 id="free-check-wins" [^>]*>Already near the top<\/h2>/);
+  assert.match(page, /\{view\.wins\.map\(row => <li key=\{row\.url\}/);
+  f.assertOffline();
 });
 
 test("a free check finds missed searches, holds and settles its cost, and is reused for a week", async () => {
