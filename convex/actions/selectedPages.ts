@@ -106,9 +106,11 @@ async function githubFileHistory(site: Doc<"sites">, path: string): Promise<unkn
   if (!response.ok) throw new Error(`GitHub file history unavailable (${response.status})`);
   return response.json();
 }
-export const adoptPublishedForRefreshInternal = internalAction({ args: { siteId: v.id("sites") }, handler: async (ctx, args): Promise<{ adopted: number; checked: number; retired?: number; repairAdopted?: number }> => {
+export const adoptPublishedForRefreshInternal = internalAction({ args: { siteId: v.id("sites") }, handler: async (ctx, args): Promise<{ adopted: number; checked: number; retired?: number; repairAdopted?: number; renewed?: number }> => {
+  // P209: Pentra's own articles enrolled under earlier business details follow the current ones first.
+  const { renewed } = await ctx.runMutation(internal.selectedPages.renewManagedEnrollmentsInternal, { siteId: args.siteId });
   const context = await ctx.runQuery(internal.selectedPages.refreshAdoptionContext, { siteId: args.siteId });
-  if (!context) return { adopted: 0, checked: 0 };
+  if (!context) return { adopted: 0, checked: 0, ...(renewed ? { renewed } : {}) };
   let adopted = 0, retired = 0, repairAdopted = 0;
   for (const page of await ctx.runQuery(internal.selectedPages.refreshAdoptionsToRecheck, { siteId: args.siteId })) {
     let history: unknown;
@@ -136,8 +138,8 @@ export const adoptPublishedForRefreshInternal = internalAction({ args: { siteId:
     }
   }
   // P192: pages adopted for the link-title repair get a repair pass now, not after the week's rest.
-  if (repairAdopted > 0) await ctx.runMutation(internal.selectedPages.reopenRelatedRepair, { siteId: args.siteId });
-  return { adopted, checked: context.candidates.length, ...(retired ? { retired } : {}), ...(repairAdopted ? { repairAdopted } : {}) };
+  if (repairAdopted > 0 || renewed > 0) await ctx.runMutation(internal.selectedPages.reopenRelatedRepair, { siteId: args.siteId });
+  return { adopted, checked: context.candidates.length, ...(retired ? { retired } : {}), ...(repairAdopted ? { repairAdopted } : {}), ...(renewed ? { renewed } : {}) };
 } });
 
 export const adoptPublishedForRefreshFleet = internalAction({ args: { cursor: v.optional(v.union(v.string(), v.null())) }, handler: async (ctx, { cursor }): Promise<{ sites: number }> => {

@@ -4846,6 +4846,40 @@ test("P105 Autopilot writes only searches the business can serve", async t => {
 // P140 (Oct 21 2026): pentra.dev's ready draft repeated a live page; the
 // duplicate check missed "should" and "posts".
 // P154 (Oct 21 2026): slot keeping counted fleet-wide (counts only, no identities).
+// P209 (Oct 26 2026): an enrollment records the business profile it was made under; refreshes, improvements and the
+// link-title repair skip one whose profile isn't current, and nothing renewed it (pentra.dev: 2 articles). One edit to
+// the business details stopped them for every existing article.
+test("P209 Pentra's own articles follow the current business details; owner pages, other connections and work in flight do not", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+  const site = await selectGrowth(f, 8 * 3_600_000);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  await pumpUntil(f, () => f.tables.jobs.some(j => j.contentWork?.stage === "verified"));
+  const managed = f.tables.pages.find(p => p.siteId === site.id && p.editable?.managedArticleId)!;
+  assert.ok(managed, "Autopilot's published article is enrolled as Pentra's own");
+  const before = managed.editable.profileHash, version = managed.editable.version;
+  // An owner-selected page, a managed page on another connection, and one whose work is still running.
+  const owner = f.add("pages", { siteId: site.id, url: "https://owner.example/pricing", slug: "pricing", title: "Pricing",
+    editable: { ...managed.editable, managedArticleId: undefined, origin: "selected" } });
+  const elsewhere = f.add("pages", { siteId: site.id, url: "https://owner.example/old", slug: "old", title: "Old",
+    editable: { ...managed.editable, connectionHash: "an-earlier-connection" } });
+  const running = f.add("jobs", { siteId: site.id, type: "article", status: "running", payload: {},
+    contentWork: { stage: "prepare", intent: "improve" }, createdAt: f.now(), updatedAt: f.now() });
+  const busy = f.add("pages", { siteId: site.id, url: "https://owner.example/busy", slug: "busy", title: "Busy",
+    editable: { ...managed.editable, lastWorkJobId: running } });
+  // The owner edits the business details.
+  f.get(site.id)!.siteSummary = `${f.get(site.id)!.siteSummary} Now also serving commercial greenhouses.`;
+  const current = confirmedContentProfileHash(f.get(site.id)! as never);
+  assert.notEqual(current, before);
+  assert.deepEqual(await f.invoke("selectedPages:renewManagedEnrollmentsInternal", { siteId: site.id }), { renewed: 1 });
+  assert.equal(f.get(managed._id)!.editable.profileHash, current, "Pentra's own article follows the current details");
+  assert.equal(f.get(managed._id)!.editable.version, version + 1);
+  assert.equal(f.get(owner)!.editable.profileHash, before, "an owner-selected page waits for the owner");
+  assert.equal(f.get(elsewhere)!.editable.profileHash, before, "a changed connection is never renewed");
+  assert.equal(f.get(busy)!.editable.profileHash, before, "work bound to the old details finishes first");
+  assert.deepEqual(await f.invoke("selectedPages:renewManagedEnrollmentsInternal", { siteId: site.id }), { renewed: 0 });
+  f.assertOffline();
+});
+
 test("P154 the fleet slot count sees an Autopilot site's published slot and returns no identities", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
   const site = await selectGrowth(f, 8 * 3_600_000);

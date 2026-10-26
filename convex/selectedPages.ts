@@ -78,6 +78,34 @@ export async function enrollVerifiedCreation(ctx: MutationCtx, site: Doc<"sites"
   else await ctx.db.insert("pages", { siteId: site._id, slug, url: article.publicUrl, title: article.title,
     canonicalDomain: siteCanonicalDomain(site)!, domainRevision: siteCanonicalDomainRevision(site), editable, createdAt: Date.now() });
 }
+/** P209 (Oct 26 2026): Pentra's own articles stay improvable after the owner edits the business details. An enrollment
+ * records the confirmed profile it was made under; page refreshes, improvements and the link-title repair skip one whose
+ * profile isn't the current one, and nothing ever renewed it: one edit to the business details stopped them for every
+ * existing article (pentra.dev had 2 such articles). An active enrollment of a Pentra-managed article on the same website
+ * connection takes the current profile, once no work bound to the old one is in flight. Owner-selected pages and a
+ * changed connection still need the owner. */
+export async function renewManagedEnrollments(ctx: MutationCtx, site: Doc<"sites">) {
+  let connectionHash: string;
+  try { connectionHash = contentConnectionHash(site); } catch { return 0; }
+  const profileHash = confirmedContentProfileHash(site);
+  const rows = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", site._id)).take(501);
+  if (rows.length > 500) return 0;
+  let renewed = 0;
+  for (const page of rows) {
+    const e = page.editable;
+    if (!e?.active || !e.managedArticleId || e.connectionHash !== connectionHash || e.profileHash === profileHash) continue;
+    const job = e.lastWorkJobId ? await ctx.db.get(e.lastWorkJobId) : null;
+    if (job?.contentWork && !["verified", "failed"].includes(job.contentWork.stage)) continue;
+    await ctx.db.patch(page._id, { editable: { ...e, profileHash, version: e.version + 1 } });
+    renewed++;
+  }
+  return renewed;
+}
+export const renewManagedEnrollmentsInternal = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site || site.deletionStatus || site.accountDeletionRequestedAt || site.serviceMode !== "growth_first") return { renewed: 0 };
+  return { renewed: await renewManagedEnrollments(ctx, site) };
+} });
 export const list = query({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await owner(ctx, siteId);
   let connectionHash: string | undefined;

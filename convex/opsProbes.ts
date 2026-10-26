@@ -176,7 +176,8 @@ export const relatedRepairBlockers = internalQuery({ args: { siteId: v.id("sites
     if (!proposal) continue;
     const page = pages.get(row.slug.replace(/^\/+|\/+$/g, "")), e = page?.editable;
     const reason = !page ? "no_page" : !e ? "not_enrolled" : !e.active ? "enrollment_inactive" : e.kind !== "github" ? `not_github_${e.kind}`
-      : e.profileHash !== confirmedContentProfileHash(site) || e.connectionHash !== contentConnectionHash(site) ? "enrollment_stale"
+      : e.profileHash !== confirmedContentProfileHash(site) ? "enrollment_stale_profile"
+      : e.connectionHash !== contentConnectionHash(site) ? "enrollment_stale_connection"
       : !relatedReadingRepairProposal(e.markdown, titles, relatedReadingTitle) ? "enrolled_source_differs" : "repairable";
     blocked.push({ slug: row.slug, cuts: cutCount(proposal), reason });
   }

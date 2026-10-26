@@ -28,7 +28,7 @@ import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
 import { contentConnectionHash, confirmedContentProfileHash, contentConnectionComplete, contentConsentToken, pasteDestination } from "./lib/contentSelection";
 import { contentFunding, contentIssue } from "./lib/contentCustomer";
 import { assertSafeImprovement } from "./lib/contentSelection";
-import { authorizedWorkPage, chooseImprovement, contentWorkConnection, enrollVerifiedCreation } from "./selectedPages";
+import { authorizedWorkPage, chooseImprovement, contentWorkConnection, enrollVerifiedCreation, renewManagedEnrollments } from "./selectedPages";
 import { noteFirstArticleLive } from "./customerEmails";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes } from "./articles";
@@ -866,6 +866,8 @@ async function confirmChangedSetup(ctx: MutationCtx, site: Doc<"sites">, reviewT
     await ctx.db.patch(site._id, { contentSchedule: { ...schedule, profileHash: confirmedContentProfileHash(site), connectionHash: contentConnectionHash(site),
       active: false, paused: Boolean(schedule.ownerReviewedOnly), autopublishConsentAt: schedule.ownerReviewedOnly ? undefined : Date.now() }, autopilotEnabled: !schedule.ownerReviewedOnly, autopilotRolloutMode: "warm", approvalRequired: Boolean(schedule.ownerReviewedOnly),
       ...(review.pristineLease ? { publicationLeaseOwner: undefined, publicationLeaseExpiresAt: undefined } : {}), updatedAt: Date.now() });
+    // P209: Pentra's own articles follow the business details the owner just confirmed.
+    await renewManagedEnrollments(ctx, site);
     if (!schedule.ownerReviewedOnly) await wake(ctx, site._id);
     return { status: "preparing" as const, retired: review.stale.length, issues: [] as SetupIssue[] };
 }
