@@ -56,6 +56,9 @@ type Tab = "overview" | "articles" | "settings";
 type SiteView = NonNullable<FunctionReturnType<typeof api.sites.get>>;
 
 const TONE_OPTIONS = ["professional", "friendly", "casual", "authoritative"];
+// P201: where a new site's owner starts connecting (GitHub and paste have their own buttons).
+const PLATFORM_CHOICES: Array<[string, string]> = [["wordpress", "WordPress"], ["shopify", "Shopify"], ["webflow", "Webflow"], ["ghost", "Ghost"]];
+const PLATFORM_CHOICE_CLS = "rounded-lg border border-white/[0.1] bg-[#0E0F11] px-3 py-1.5 text-[12px] font-medium text-[#D0D6E0] transition hover:border-[#0EA5E9]/50 hover:text-[#F7F8F8]";
 // P200: what the repository step says when there is nothing to pick.
 const GITHUB_LIST_FAILED = "Pentra couldn't list your GitHub repositories. Reconnect GitHub and try again, or type the repository below.";
 const NO_GITHUB_REPOSITORIES = "This GitHub account has no repository Pentra can publish to. If your website's repository belongs to an organization, " +
@@ -1149,6 +1152,10 @@ function ConnectionSection({ site }: { site: SiteView }) {
   // P200: an empty or failed repository list says why and what to do. One of the first real signups connected GitHub
   // and stopped here: with no repository to pick, the page showed only two empty boxes.
   const [repoListError, setRepoListError] = useState<string | null>(null);
+  // P201: a site set up through the content service with nothing connected yet first says where it runs. New sites
+  // default to GitHub, and one of the first real signups stopped inside GitHub's step.
+  const choosingPlatform = Boolean(site.contentSetupRequestedAt) && method === "github" && !hasGithubToken && !site.repoOwner && !editing;
+  const choose = (value: string) => { setConnectionError(null); setConnectionVerified(false); setMethod(value); setEditing(true); };
   // Connect opens GitHub in a small window; a blocked window used to fail with no message.
   const connectGithub = () => {
     setConnectionError(null);
@@ -1230,7 +1237,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
               <MethodIcon className="h-5 w-5 text-[#0EA5E9]" />
             </div>
             <div className="flex-1">
-              <p className="text-[14px] font-medium text-[#F7F8F8]">{labels[method] || method}</p>
+              <p className="text-[14px] font-medium text-[#F7F8F8]">{choosingPlatform ? "Not connected yet" : labels[method] || method}</p>
               {isGithub && site.repoOwner && !editing && (
                 <>
                   <p className="text-[12px] text-[#62666D] font-mono">{site.repoOwner}/{site.repoName}</p>
@@ -1378,7 +1385,20 @@ function ConnectionSection({ site }: { site: SiteView }) {
             </div>
           )}
 
-          {isGithub && (
+          {choosingPlatform && (
+            <div role="group" aria-label="Where does your website run?" className="flex flex-col gap-2 rounded-lg border border-[#0EA5E9]/[0.2] bg-[#0EA5E9]/[0.04] p-4">
+              <p className="text-[13px] font-medium text-[#F7F8F8]">Where does your website run?</p>
+              <div className="flex flex-wrap gap-2">
+                {PLATFORM_CHOICES.map(([value, label]) => (
+                  <button key={value} onClick={() => choose(value)} className={PLATFORM_CHOICE_CLS}>{label}</button>
+                ))}
+                <button onClick={connectGithub} className={PLATFORM_CHOICE_CLS}>GitHub (Next.js, Astro, Hugo…)</button>
+                <button onClick={() => choose("manual")} className={PLATFORM_CHOICE_CLS}>Something else: paste the articles yourself</button>
+              </div>
+            </div>
+          )}
+
+          {isGithub && !choosingPlatform && (
             <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (hasGithubToken ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]")}>
               {hasGithubToken ? (
                 <>
