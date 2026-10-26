@@ -50,10 +50,16 @@ function readerTextRepair(markdown: string, before: string, replacement: string)
  * words into the whole title, and nothing else on the page. No model runs. */
 const RELATED_ENTRY = /^- \[([^\]\n]+)\]\(([^)\s]+)\)$/;
 const titleWords = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, " ").split(/\s+/).filter(Boolean);
-/** A link text cut from a title: its words are the title's first words, and fewer. */
+/** P221 (Oct 26 2026): the old engine also dropped a title's leading question or filler word before cutting it
+ * ("Makes a B2B Qualified Lead—And How to Spot" for "What Makes a B2B Qualified Lead—And How to Spot One Before Sales
+ * Wastes Time"). Only such a word may be missing in front. */
+const DROPPED_LEADING_WORDS = new Set(["what", "how", "why", "when", "where", "which", "who", "is", "are", "do", "does", "can", "the", "a", "an"]);
+/** A link text cut from a title: its words are the title's first words, and fewer (or, P221, the title's words after
+ * a dropped leading question or filler word, at least three of them). */
 export function cutOfTitle(text: string, title: string): boolean {
   const a = titleWords(text), t = titleWords(title);
-  return a.length > 0 && a.length < t.length && a.every((word, i) => t[i] === word);
+  const from = (start: number) => a.length > 0 && start + a.length <= t.length && a.length < t.length && a.every((word, i) => t[start + i] === word);
+  return from(0) || (a.length >= 3 && DROPPED_LEADING_WORDS.has(t[0] ?? "") && from(1));
 }
 /** P218 (Oct 26 2026): on a site with consolidated pages (pentra.dev), a Related reading link to a page that now
  * redirects goes to the page it leads to, under that page's title; an entry that then repeats an earlier one, or leads
@@ -212,7 +218,7 @@ export const RELATED_REPAIR_SLOT_LEAD_MS = 6 * 3_600_000, RELATED_REPAIR_SPACING
 /** P220 (Oct 26 2026): the rules the link repair runs by. A change to them (2, P218: links to consolidated pages)
  * makes every page due once more: a pass records the rules it started under, and a site whose last finished pass
  * ran under earlier rules runs a fresh one, instead of resting a week with pages passed under the old rules. */
-export const RELATED_REPAIR_VERSION = 2;
+export const RELATED_REPAIR_VERSION = 3; // 3: P221 (a title cut after a dropped leading question word)
 export function relatedRepairAllowed(site: Doc<"sites">, now: number): boolean {
   const s = site.contentSchedule;
   return Boolean(s && site.serviceMode === "growth_first" && site.autopilotEnabled && s.autopilotSelectedAt && s.autopublishConsentAt &&

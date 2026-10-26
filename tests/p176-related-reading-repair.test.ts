@@ -89,3 +89,23 @@ test("P220 a change to the repair's rules runs one fresh pass over every page", 
   assert.equal(relatedRepairAllowed(site({ ...resting, relatedRepairCleanVersion: RELATED_REPAIR_VERSION - 1 }), now), true);
   assert.equal(relatedRepairAllowed(site({ ...resting, nextDeadlineAt: now + hour }), now), false, "still never near a slot");
 });
+
+// P221 (Oct 26 2026): the old engine also dropped a title's leading "What" before cutting it, so LeadPilot's lists read
+// "Makes a B2B Qualified Lead—And How to Spot" and "Is B2B Sales? A Beginner's Guide to B2B": not a cut from the start,
+// so the repair left them. A run of the title's words after a dropped leading question or filler word is a cut too.
+test("P221 a title cut after a dropped leading 'What' is completed; other texts stay", () => {
+  const whole = "What Makes a B2B Qualified Lead—And How to Spot One Before Sales Wastes Time";
+  assert.equal(cutOfTitle("Makes a B2B Qualified Lead—And How to Spot", whole), true);
+  assert.equal(cutOfTitle("Is B2B Sales? A Beginner's Guide to B2B", "What Is B2B Sales? A Beginner's Guide to B2B Sales Strategy and Lead Qualification"), true);
+  assert.equal(cutOfTitle("a B2B Qualified Lead—And How", whole), false, "only the first word may be missing");
+  assert.equal(cutOfTitle("Makes a", whole), false, "at least three words");
+  assert.equal(cutOfTitle("Lead Scoring Template", "Free Lead Scoring Template for B2B Teams"), false, "a leading word that isn't a question or filler word stays");
+  assert.equal(cutOfTitle("Exit Intent Detection: How It Works and What It Can Do for Your Website",
+    "Exit Intent Detection: How It Works and What It Can (and Can't) Do for Your Website"), false, "an aside left out is not a cut");
+  const entry = "- [Makes a B2B Qualified Lead—And How to Spot](/blog/b2b-qualified-lead)";
+  const body = `Intro paragraph that stays exactly as it was written.\n\n## Related reading\n\n${entry}\n\n## Sources\n\n1. [A source](https://example.org/a)`;
+  const proposal = relatedReadingRepairProposal(body, new Map([["/blog/b2b-qualified-lead", whole]]), relatedReadingTitle)!;
+  assert.equal(proposal.replacement, `- [${whole}](/blog/b2b-qualified-lead)`);
+  assert.equal(planCorrectiveChange({} as never, page(body), { kind: "related_reading_titles", before: entry, replacement: proposal.replacement,
+    reason: "Autopilot completes cut Related reading titles." }).after, proposal.replacement);
+});
