@@ -1766,6 +1766,10 @@ export default defineSchema({
     email: v.string(),
     emailUpdates: v.boolean(),
     updatedAt: v.number(),
+    // P202: the one "add your website" email to an account that signed up and never added a site.
+    addWebsiteReminder: v.optional(v.object({ notedAt: v.number(),
+      status: v.union(v.literal("pending"), v.literal("sent"), v.literal("skipped"), v.literal("failed")),
+      reason: v.optional(v.string()), attempts: v.number() })),
   }).index("by_user", ["userId"]),
   // Every service email decided for a site's owner, once per kind and key
   // (the first article; later the missed slot and the month). Site deletion

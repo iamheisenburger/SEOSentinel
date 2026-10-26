@@ -76,6 +76,25 @@ export function setupReminderEmail(input: { domain: string; step: SetupStep }): 
   return { subject: `One step left to start Pentra on ${input.domain}`, text: lines.join("\n") };
 }
 
+/** P202 (Oct 26 2026): the one email an account gets when, a day after signing up, it hasn't added a website. Of the
+ * first three real signups one never added one, and the setup reminder (P196) only reaches a site's owner. */
+export function addWebsiteEmail(): { subject: string; text: string } {
+  const lines = [
+    "You created a Pentra account, but you haven't added your website yet.",
+    "",
+    "What's left: add your website's address in your dashboard: https://pentra.dev/dashboard",
+    "",
+    "Pentra then reads what your business sells and you choose how it publishes: to your site directly (WordPress, Shopify, Webflow, Ghost or GitHub), or you paste the articles in yourself.",
+    "",
+    "If something in setup didn't work, reply to this email and tell us where it stopped.",
+    "",
+    "Pentra",
+    "",
+    "You get this email because you created a Pentra account. You can turn these emails off in Settings: https://pentra.dev/settings",
+  ];
+  return { subject: "Add your website to start Pentra", text: lines.join("\n") };
+}
+
 /** Why a scheduled article is late, as the owner can act on it. */
 export type MissedSlotCause = "connection" | "plan" | "writing_service" | "internal" | "checks" | "no_topics" | "preparing";
 const WRITING_SERVICE_FAILURES = new Set(["content_provider_unavailable", "content_provider_credit_unavailable",

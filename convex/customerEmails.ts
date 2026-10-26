@@ -3,7 +3,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { plausibleEmail, sendCustomerEmail } from "./lib/customerEmail";
-import { firstArticleEmail, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth, setupReminderEmail, type MissedSlotCause,
+import { addWebsiteEmail, firstArticleEmail, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth, setupReminderEmail, type MissedSlotCause,
   type MonthlyImprovement, type MonthlySearch, type SetupStep } from "./lib/customerNotices";
 import { contentConnectionComplete, pasteDestination } from "./lib/contentSelection";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
@@ -166,6 +166,64 @@ async function setupStep(ctx: QueryCtx, site: Doc<"sites">): Promise<SetupStep> 
   if (entitlement?.status !== "completed" || !(await siteExecutionAuthorized(ctx, site))) return "plan";
   return "start";
 }
+
+/** P202 (Oct 26 2026): an account that signed up 20 to 72 hours ago (its
+ * contact was recorded when it first opened the dashboard) and has no site gets
+ * one email asking it to add its website, decided again at send time. */
+export const noteAddWebsiteReminders = internalMutation({ args: {}, handler: async (ctx) => {
+  const now = Date.now();
+  const contacts = await ctx.db.query("account_contacts").withIndex("by_creation_time", q => q.gte("_creationTime", now - SETUP_REMINDER_UNTIL_MS)
+    .lte("_creationTime", now - SETUP_REMINDER_AFTER_MS)).take(200);
+  let noted = 0;
+  for (const contact of contacts) {
+    if (contact.addWebsiteReminder || !contact.emailUpdates) continue;
+    // Any site, even one being deleted: the account has been through setup.
+    if (await ctx.db.query("sites").withIndex("by_user", q => q.eq("userId", contact.userId)).first()) continue;
+    if (await ctx.db.query("account_deletion_receipts").withIndex("by_account_key", q => q.eq("accountKey", accountDeletionKey(contact.userId))).first()) continue;
+    await ctx.db.patch(contact._id, { addWebsiteReminder: { notedAt: now, status: "pending", attempts: 0 } });
+    await ctx.scheduler.runAfter(noted * SETUP_REMINDER_SPACING_MS, internal.customerEmails.sendAddWebsite, { contactId: contact._id });
+    noted++;
+  }
+  return { noted };
+} });
+
+/** The pending "add your website" email for one account, decided again now. */
+export const addWebsiteContext = internalQuery({ args: { contactId: v.id("account_contacts") }, handler: async (ctx, { contactId }) => {
+  const contact = await ctx.db.get(contactId);
+  if (!contact?.addWebsiteReminder || contact.addWebsiteReminder.status !== "pending") return null;
+  const hasSite = Boolean(await ctx.db.query("sites").withIndex("by_user", q => q.eq("userId", contact.userId)).first());
+  return { attempts: contact.addWebsiteReminder.attempts, email: contact.email, emailUpdates: contact.emailUpdates,
+    message: hasSite ? null : addWebsiteEmail() };
+} });
+
+export const markAddWebsite = internalMutation({ args: { contactId: v.id("account_contacts"), status: v.union(v.literal("pending"), v.literal("sent"),
+  v.literal("skipped"), v.literal("failed")), reason: v.optional(v.string()), attempts: v.number() },
+  handler: async (ctx, { contactId, status, reason, attempts }) => {
+    const contact = await ctx.db.get(contactId);
+    if (!contact?.addWebsiteReminder) return;
+    await ctx.db.patch(contactId, { addWebsiteReminder: { notedAt: contact.addWebsiteReminder.notedAt, status, attempts, ...(reason ? { reason } : {}) } });
+  } });
+
+/** Send one decided "add your website" email (one retry 15 minutes later if Resend refuses it). */
+export const sendAddWebsite = internalAction({ args: { contactId: v.id("account_contacts") }, handler: async (ctx, { contactId }): Promise<{ status: string }> => {
+  const context = await ctx.runQuery(internal.customerEmails.addWebsiteContext, { contactId });
+  if (!context) return { status: "not_pending" };
+  if (!context.message || !context.emailUpdates) {
+    await ctx.runMutation(internal.customerEmails.markAddWebsite, { contactId, status: "skipped",
+      reason: context.message ? "updates_off" : "no_longer_true", attempts: context.attempts });
+    return { status: "skipped" };
+  }
+  const sent = await sendCustomerEmail({ to: context.email, ...context.message });
+  const attempts = context.attempts + 1;
+  if (sent.sent) {
+    await ctx.runMutation(internal.customerEmails.markAddWebsite, { contactId, status: "sent", attempts });
+    return { status: "sent" };
+  }
+  const retry = attempts < MAX_ATTEMPTS;
+  await ctx.runMutation(internal.customerEmails.markAddWebsite, { contactId, status: retry ? "pending" : "failed", reason: sent.error ?? "send_failed", attempts });
+  if (retry) await ctx.scheduler.runAfter(RETRY_MS, internal.customerEmails.sendAddWebsite, { contactId });
+  return { status: retry ? "retrying" : "failed" };
+} });
 
 /** One pending email, with its message, the owner's address and the attempts so far. */
 export const noticeContext = internalQuery({ args: { logId: v.id("customer_emails") }, handler: async (ctx, { logId }) => {

@@ -9380,6 +9380,43 @@ test("P196 a site Pentra hasn't started for a day after it was added gets one em
   f.assertOffline(); second.assertOffline(); started.assertOffline(); late.assertOffline();
 });
 
+// P202 (Oct 26 2026): of the first three real signups one never added a website; the setup reminder (P196) only
+// reaches a site's owner. An account that signed up 20-72 hours ago with no site gets one email asking it to add one.
+test("P202 an account that never added a website gets one email asking it to, and the funnel counts it", async () => {
+  const hour = 3_600_000;
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = f.sites[0];
+  await f.invoke("customerEmails:recordContact", { userId: f.get(site.id)!.userId, email: "owner@reservoirnote.example" });
+  await f.invoke("customerEmails:recordContact", { userId: "synthetic-no-site", email: "new@reservoirnote.example" });
+  await f.invoke("customerEmails:recordContact", { userId: "synthetic-emails-off", email: "off@reservoirnote.example" });
+  await f.invoke("customerEmails:recordContact", { userId: "synthetic-adds-site", email: "later@reservoirnote.example" });
+  const contact = (userId: string) => f.tables.account_contacts.find(c => c.userId === userId)!;
+  contact("synthetic-emails-off").emailUpdates = false;
+  const funnel = await f.invoke("opsProbes:signupFunnel", { since: 0 });
+  assert.deepEqual(funnel.contacts, { since: 4, withoutSite: 3 }, "counts only");
+  assert.ok(!JSON.stringify(funnel).includes("reservoirnote"), "never an address");
+  f.restartRuntime({ RESEND_API_KEY: "re_synthetic" });
+  assert.deepEqual(await f.invoke("customerEmails:noteAddWebsiteReminders", {}), { noted: 0 }, "not in its first 20 hours");
+  f.setTime(f.now() + 21 * hour);
+  assert.deepEqual(await f.invoke("customerEmails:noteAddWebsiteReminders", {}), { noted: 2 }, "the two without a site, emails on");
+  assert.equal(contact(f.get(site.id)!.userId).addWebsiteReminder, undefined, "an account with a site is never asked");
+  assert.equal(contact("synthetic-emails-off").addWebsiteReminder, undefined);
+  assert.deepEqual(await f.invoke("customerEmails:sendAddWebsite", { contactId: contact("synthetic-no-site")._id }), { status: "sent" });
+  const email = f.opsEmails.at(-1)!;
+  assert.deepEqual(email.to, ["new@reservoirnote.example"]); assert.equal(email.subject, "Add your website to start Pentra");
+  assert.equal(email.reply_to, "pentrahelp@gmail.com");
+  assert.equal(contact("synthetic-no-site").addWebsiteReminder.status, "sent");
+  // An account that adds a site before its email goes out gets nothing.
+  f.add("sites", { ...f.get(site.id)!, _id: undefined, domain: "added-later.example", userId: "synthetic-adds-site" });
+  assert.deepEqual(await f.invoke("customerEmails:sendAddWebsite", { contactId: contact("synthetic-adds-site")._id }), { status: "skipped" });
+  assert.equal(contact("synthetic-adds-site").addWebsiteReminder.reason, "no_longer_true");
+  assert.equal(f.opsEmails.length, 1);
+  assert.deepEqual(await f.invoke("customerEmails:noteAddWebsiteReminders", {}), { noted: 0 }, "once per account");
+  f.setTime(f.now() + 60 * hour);
+  assert.deepEqual(await f.invoke("customerEmails:noteAddWebsiteReminders", {}), { noted: 0 }, "three days on, never");
+  f.assertOffline();
+});
+
 // P200 (Oct 26 2026): one of the first real signups connected GitHub and never chose a repository.
 test("P200 a site with GitHub connected but no repository is told to choose its repository", async () => {
   const hour = 3_600_000;

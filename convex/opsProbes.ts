@@ -123,7 +123,13 @@ export const signupFunnel = internalQuery({ args: { since: v.number() }, handler
     if (await has(site._id, "published")) counts.articlePublished++;
     else if (await has(site._id, "ready") || await has(site._id, "review")) counts.articleWaiting++;
   }
-  return { since, ...counts, publishMethods, verifiedDestinations, github };
+  // P202: accounts that opened the dashboard since then (Pentra records their contact) and how many never added a site.
+  const contactRows = await ctx.db.query("account_contacts").withIndex("by_creation_time", q => q.gte("_creationTime", since)).take(500);
+  const contacts = { since: contactRows.length, withoutSite: 0 };
+  for (const contact of contactRows) {
+    if (!(await ctx.db.query("sites").withIndex("by_user", q => q.eq("userId", contact.userId)).first())) contacts.withoutSite++;
+  }
+  return { since, ...counts, publishMethods, verifiedDestinations, github, contacts };
 } });
 
 /** P191 (Oct 25 2026): why Autopilot's Related reading repair (P176/P180) left a

@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { firstArticleEmail, missedSlotCause, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth, setupReminderEmail } from "../convex/lib/customerNotices.ts";
+import { addWebsiteEmail, firstArticleEmail, missedSlotCause, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth, setupReminderEmail } from "../convex/lib/customerNotices.ts";
+
+// P202 (Oct 26 2026): one of the first three real signups never added a website; the setup reminder reaches only a site's owner.
+test("the add-your-website email says what's left, where, and how to turn emails off", () => {
+  const email = addWebsiteEmail();
+  assert.equal(email.subject, "Add your website to start Pentra");
+  assert.match(email.text, /^You created a Pentra account, but you haven't added your website yet\./);
+  assert.match(email.text, /What's left: add your website's address in your dashboard: https:\/\/pentra\.dev\/dashboard/);
+  assert.match(email.text, /WordPress, Shopify, Webflow, Ghost or GitHub\), or you paste the articles in yourself\./);
+  assert.match(email.text, /reply to this email and tell us where it stopped/);
+  assert.match(email.text, /turn these emails off in Settings: https:\/\/pentra\.dev\/settings$/);
+});
 
 // D4 (P125-P126, Oct 20 2026): what Pentra tells a site's owner, in plain words.
 

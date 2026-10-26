@@ -185,5 +185,7 @@ crons.interval("site-health-first-check", { hours: 2 }, internal.siteHealth.sche
 crons.monthly("customer-monthly-report", { day: 3, hourUTC: 15, minuteUTC: 0 }, internal.customerEmails.monthlyReports, {});
 // P196: a site added 20-72 hours ago that Pentra hasn't started for gets one email naming what's left.
 crons.interval("customer-setup-reminders", { hours: 3 }, internal.customerEmails.noteSetupReminders, {});
+// P202: an account that signed up 20-72 hours ago and never added a website gets one email asking it to.
+crons.interval("customer-add-website-reminders", { hours: 3 }, internal.customerEmails.noteAddWebsiteReminders, {});
 
 export default crons;
