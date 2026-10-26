@@ -63,4 +63,10 @@ test("P213 the homepage tells setup where a website runs", () => {
     { method: "github", name: "Next.js" }, "HubSpot's tracking script doesn't make a site a HubSpot site");
   assert.equal(method(page('<meta name="generator" content="Astro v4.5.0">')), "github");
   assert.equal(detectSitePlatform(page('<link rel="stylesheet" href="/styles.css">')), null, "nothing named: the owner chooses");
+  // framer.com loads Shopify's consent script from cdn.shopify.com; its own generator tag says Framer.
+  assert.deepEqual(detectSitePlatform(page('<meta name="generator" content="Framer b422c98"><script src="https://cdn.shopify.com/shopifycloud/consent-tracking-api/v0.1/consent-tracking-api.js"></script>')),
+    { method: "manual", name: "Framer" }, "a generator tag names the platform before any asset host");
+  assert.equal(method(page('<meta content="Hugo 0.119.0" name="generator">')), "github", "either attribute order");
+  assert.equal(method(page('<script src="https://cdn.shopify.com/shopifycloud/consent-tracking-api/v0.1/consent-tracking-api.js"></script>')), null,
+    "a script other sites load from Shopify's CDN doesn't make a store");
 });

@@ -15,11 +15,11 @@ const HOME = `<!doctype html><html lang="en"><head><title>Compost Notes: plain g
 
 function world(seedAnswer: unknown = { sells: "Plain, practical articles about home composting, from a small test publication.",
   customers: "Home gardeners who want to compost kitchen and garden waste.", topics: ["home composting", "compost bin"],
-  searches: ["how to start composting", "compost bin for small garden"], places: [], free_plan: "unknown" }) {
+  searches: ["how to start composting", "compost bin for small garden"], places: [], free_plan: "unknown" }, home = HOME) {
   const seedCalls: string[] = [];
   const f = corePipelineFixture(async (url, init) => {
     if (url.hostname === HOST || url.hostname === `www.${HOST}`) {
-      return new Response(url.pathname === "/" ? HOME : "not found", { status: url.pathname === "/" ? 200 : 404, headers: { "content-type": "text/html; charset=utf-8" } });
+      return new Response(url.pathname === "/" ? home : "not found", { status: url.pathname === "/" ? 200 : 404, headers: { "content-type": "text/html; charset=utf-8" } });
     }
     if (url.origin === "https://api.anthropic.com") {
       const body = JSON.parse(String(init.body));
@@ -56,6 +56,22 @@ test("setup fills in what the business sells from a reading of its homepage, not
   const fallback = world({ sells: "", customers: "", topics: [], searches: [], places: [], free_plan: "unknown" });
   fallback.f.setIdentity("synthetic-new-owner");
   assert.match((await fallback.f.invoke("actions/onboardingPrefill:prefill", { domain: HOST })).product, /Compost Notes/);
+});
+
+// P213 (Oct 26 2026): setup preselected GitHub; the homepage now says where the site runs. A security check served
+// instead of the homepage is refused: its words would fill the form and its generator tag would name a platform.
+test("P213 setup reads where the site runs from its homepage, and never fills the form from a security check", async () => {
+  const wordpress = world(undefined, HOME.replace("</head>", '<meta name="generator" content="WordPress 6.6.2"></head>'));
+  wordpress.f.setIdentity("synthetic-new-owner");
+  assert.deepEqual((await wordpress.f.invoke("actions/onboardingPrefill:prefill", { domain: HOST })).platform, { method: "wordpress", name: "WordPress" });
+  const plain = world();
+  plain.f.setIdentity("synthetic-new-owner");
+  assert.equal((await plain.f.invoke("actions/onboardingPrefill:prefill", { domain: HOST })).platform, null, "nothing named: the owner chooses");
+  const walled = world(undefined, `<!doctype html><html><head><title>Just a moment...</title><meta name="generator" content="Astro v1.6.1"></head>
+<body><div id="challenge-platform">One more step. Please complete the security check to access this website.</div></body></html>`);
+  walled.f.setIdentity("synthetic-new-owner");
+  await assert.rejects(walled.f.invoke("actions/onboardingPrefill:prefill", { domain: HOST }), /security check instead of its homepage/);
+  assert.equal(walled.seedCalls.length, 0, "nothing is read or paid for");
 });
 
 test("GitHub connects before a repository is chosen, so the repository list can appear", async () => {

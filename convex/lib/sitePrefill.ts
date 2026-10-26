@@ -98,21 +98,36 @@ export function homepageDigest(html: string): { title: string; description: stri
  * Framer, HubSpot...) mean pasting; a site built with a code framework is usually published from a repository.
  * null when the page names nothing: the owner chooses. */
 export type SitePlatform = { method: "wordpress" | "shopify" | "webflow" | "ghost" | "github" | "manual"; name: string };
-const PLATFORM_SIGNS: Array<[RegExp, SitePlatform]> = [
-  // WordPress first: a WordPress site may embed a Shopify buy button.
-  [/\/wp-content\/|\/wp-includes\/|<meta[^>]+name=["']generator["'][^>]+content=["']WordPress/i, { method: "wordpress", name: "WordPress" }],
-  [/cdn\.shopify\.com|shopify\.theme|shopify-section/i, { method: "shopify", name: "Shopify" }],
-  [/data-wf-site=|data-wf-page=|website-files\.com|webflow\.com\/css|<meta[^>]+content=["']Webflow["']/i, { method: "webflow", name: "Webflow" }],
-  [/<meta[^>]+name=["']generator["'][^>]+content=["']Ghost|ghost-portal|\/ghost\/api\//i, { method: "ghost", name: "Ghost" }],
-  [/static\.wixstatic\.com|parastorage\.com|<meta[^>]+content=["']Wix\.com/i, { method: "manual", name: "Wix" }],
-  [/static1\.squarespace\.com|squarespace-cdn\.com|<!-- This is Squarespace\. -->/i, { method: "manual", name: "Squarespace" }],
-  [/framerusercontent\.com|<meta[^>]+name=["']generator["'][^>]+content=["']Framer/i, { method: "manual", name: "Framer" }],
-  // HubSpot's tracking script is on many sites that don't run on its CMS: only the CMS's own signs count.
-  [/hs-sites\.com|<meta[^>]+name=["']generator["'][^>]+content=["']HubSpot/i, { method: "manual", name: "HubSpot" }],
-  [/__NEXT_DATA__|\/_next\/static\//, { method: "github", name: "Next.js" }],
-  [/<meta[^>]+name=["']generator["'][^>]+content=["'](Astro|Hugo|Gatsby|Jekyll|Eleventy|Docusaurus|Hexo)/i, { method: "github", name: "a static site generator" }],
+const WORDPRESS: SitePlatform = { method: "wordpress", name: "WordPress" }, SHOPIFY: SitePlatform = { method: "shopify", name: "Shopify" };
+const WEBFLOW: SitePlatform = { method: "webflow", name: "Webflow" }, GHOST: SitePlatform = { method: "ghost", name: "Ghost" };
+const paste = (name: string): SitePlatform => ({ method: "manual", name });
+// A site's own generator tag names its platform outright, so it is read first (framer.com loads a Shopify consent
+// script from cdn.shopify.com; its generator tag says Framer).
+const GENERATORS: Array<[RegExp, SitePlatform]> = [
+  [/^WordPress/i, WORDPRESS], [/^Ghost/i, GHOST], [/^Webflow/i, WEBFLOW], [/^Shopify/i, SHOPIFY], [/^Framer/i, paste("Framer")],
+  [/^Wix/i, paste("Wix")], [/^Squarespace/i, paste("Squarespace")], [/^HubSpot/i, paste("HubSpot")], [/^Next\.js/i, { method: "github", name: "Next.js" }],
+  [/^(?:Astro|Hugo|Gatsby|Jekyll|Eleventy|Docusaurus|Hexo)/i, { method: "github", name: "a static site generator" }],
 ];
+// Otherwise the platform's own assets. WordPress first: a WordPress site may embed a Shopify buy button. Only a
+// store's own Shopify assets count (cdn.shopify.com also serves scripts other sites load).
+const ASSET_SIGNS: Array<[RegExp, SitePlatform]> = [
+  [/\/wp-content\/|\/wp-includes\//i, WORDPRESS],
+  [/Shopify\.theme|Shopify\.shop\b|shopify-section|\/cdn\/shop\/|cdn\.shopify\.com\/s\/files\//, SHOPIFY],
+  [/data-wf-site=|data-wf-page=|website-files\.com/i, WEBFLOW],
+  [/ghost-portal|\/ghost\/api\//i, GHOST],
+  [/static\.wixstatic\.com|parastorage\.com/i, paste("Wix")],
+  [/static1\.squarespace\.com|squarespace-cdn\.com|<!-- This is Squarespace\. -->/i, paste("Squarespace")],
+  [/framerusercontent\.com/i, paste("Framer")],
+  // HubSpot's tracking script is on many sites that don't run on its CMS: only the CMS's own hosting counts.
+  [/hs-sites\.com/i, paste("HubSpot")],
+  [/__NEXT_DATA__|\/_next\/static\//, { method: "github", name: "Next.js" }],
+];
+const generatorTag = (html: string) =>
+  (/<meta[^>]+name=["']generator["'][^>]+content=["']([^"']+)/i.exec(html) ?? /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']generator["']/i.exec(html))?.[1]?.trim() ?? "";
+/** The caller rules out bot-check pages first (missedSearches.ts botWall): Cloudflare's names its own generator. */
 export function detectSitePlatform(html: string): SitePlatform | null {
-  for (const [sign, platform] of PLATFORM_SIGNS) if (sign.test(html)) return platform;
+  const generator = generatorTag(html);
+  for (const [sign, platform] of GENERATORS) if (generator && sign.test(generator)) return platform;
+  for (const [sign, platform] of ASSET_SIGNS) if (sign.test(html)) return platform;
   return null;
 }

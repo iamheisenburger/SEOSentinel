@@ -5,7 +5,7 @@ import { internal } from "../_generated/api";
 import { ConvexError, v } from "convex/values";
 import { fetchPage } from "../lib/fetchPage";
 import { detectSitePlatform, extractBusinessPrefill, normalizePrefillHost } from "../lib/sitePrefill";
-import { brandTerms, FREE_CHECK_HOME_MAX_BYTES } from "../lib/missedSearches";
+import { botWall, brandTerms, FREE_CHECK_HOME_MAX_BYTES } from "../lib/missedSearches";
 import { proposeSeeds } from "./freeCheck";
 
 /** Suggest setup facts from the customer's own homepage. Signed-in owners
@@ -27,6 +27,11 @@ export const prefill = action({ args: { domain: v.string() }, handler: async (ct
   if ((page.status === 0 || page.status >= 400) && !host.startsWith("www.")) page = await fetchPage(`https://www.${host}/`, { maxBytes: FREE_CHECK_HOME_MAX_BYTES });
   if (page.status === 0 || page.status >= 400) {
     throw new ConvexError("Pentra couldn't open that website over HTTPS. Check the address, or fill in the details yourself.");
+  }
+  // P213: a security check served instead of the homepage is not the business: its words would fill the form
+  // ("One more step. Please complete the security check") and its generator tag would name a platform.
+  if (botWall(page.html)) {
+    throw new ConvexError("Your website showed Pentra a security check instead of its homepage, so Pentra couldn't read it. Fill in the details yourself.");
   }
   const found = { ...extractBusinessPrefill(page.html, new URL(page.finalUrl).hostname || host),
     // P213: where the site runs, so setup suggests the right publishing destination.
