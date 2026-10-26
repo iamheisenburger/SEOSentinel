@@ -10,7 +10,8 @@ import { publicationArtifactHash, publicationDeliveryConfig, sha256Hex } from ".
 import { isProviderRequestRefusal, legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain, gscConnectionMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
-import { preSerpReachCeiling, preSerpWinnability } from "./lib/winnableDiscovery";
+import { preSerpReachCeiling } from "./lib/winnableDiscovery";
+import { compareTopics, searchedWithin } from "./lib/topicOrder";
 import { measuredAuthorityIsFresh, tenantAuthorityFromStoredEvidence } from "./lib/expectedClickPortfolio";
 import { addSearchConsoleDays, isBrandedSearchQuery, publishedArticlePageUrl } from "./lib/searchPerformance";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
@@ -1213,6 +1214,8 @@ export const readiness = query({
       funding: { ...await contentFunding(ctx, site, pricing?.budgetMicroUsd),
         pricingScope: !pricing ? "unavailable" as const : pricing.validationAuthorizationId ? "validation_run" as const : "ordinary" as const },
       plan: await accountPlan(ctx, site),
+      // P212: the inputs of the order Autopilot writes topics in, for the dashboard's "Coming up next".
+      topicOrder: { difficultyCeiling: siteDifficultyCeiling(site), authority: storedTenantAuthority(site) ?? null },
       autopilot: { selectable: Boolean(site.contentSetupRequestedAt), on: Boolean(s && !s.ownerReviewedOnly && site.autopilotEnabled && !site.approvalRequired),
         reviewAvailable: ["github", "wordpress"].includes(site.publishMethod ?? "") || isApiCmsMethod(site.publishMethod) || pasteDestination(site),
         autopilotAvailable: !pasteDestination(site),
@@ -1406,22 +1409,9 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
     ![...covered, ...pageCoverage, ...excludedIntents].some(c => contentIntentConflicts(t, c)));
   // Keywords people measurably search for come first; within each group the
   // stored priority orders the work. Absence remains absent in storage.
-  const searched = (t: Doc<"topic_clusters">) => (t.searchVolume ?? 0) > 0 && (t.keywordDifficulty ?? 0) <= difficultyCeiling;
-  // Among searched keywords, a young site wins easy ones first: difficulty
-  // weighs more than raw volume (e.g. 100 searches at difficulty 10 beats
-  // 1,000 searches at difficulty 40).
-  const opportunity = (t: Doc<"topic_clusters">) => Math.log10(1 + (t.searchVolume ?? 0)) * 12 - (t.keywordDifficulty ?? 0) * 0.8;
-  // With measured authority, searched keywords are ordered by the chance this
-  // site can actually win them (Pentra's winnability model): a young domain
-  // writes the easy searches first instead of ones only an incumbent ranks
-  // for. The ordering drops nothing; only the reach ceiling above does.
-  const authority = storedTenantAuthority(site);
-  const winnability = (t: Doc<"topic_clusters">) => authority === undefined ? 0 : preSerpWinnability({ tenantAuthority: authority,
-    keywordDifficulty: t.keywordDifficulty, keywordDifficultyMeasured: t.keywordDifficultyMeasured, monthlySearches: t.searchVolume });
-  // The owner's searches come first, oldest first.
-  planned.sort((a, b) => Number(ownerChosen(b)) - Number(ownerChosen(a)) || (a.ownerChosenAt ?? 0) - (b.ownerChosenAt ?? 0) ||
-    Number(searched(b)) - Number(searched(a)) ||
-    (searched(a) && searched(b) ? winnability(b) - winnability(a) || opportunity(b) - opportunity(a) : 0) || (b.priority ?? 0) - (a.priority ?? 0));
+  const searched = (t: Doc<"topic_clusters">) => searchedWithin(t, difficultyCeiling);
+  // The order Autopilot writes in (convex/lib/topicOrder.ts), shown on the dashboard too (P212).
+  planned.sort(compareTopics({ difficultyCeiling, authority: storedTenantAuthority(site) ?? null }));
   return { topics, pageCoverage, fit, competitors, planned, searched };
 }
 /** P211 (Oct 26 2026): the business's own pages by title (its service and product pages, posts it wrote) for the copy

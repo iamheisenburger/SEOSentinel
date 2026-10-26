@@ -28,7 +28,8 @@ const state = { siteId: "sites:synthetic", setupPending: false, serviceMode: "gr
   entitlement: true, enabled: true, approvalRequired: false, bindingCurrent: true, schedule: { active: false, paused: true, nextDeadlineAt: 1, intervalMs: 86_400_000, timezone: "UTC" },
   funding: { status: "blocked", checkedAt: 2, monthlyLimitMicroUsd: 20_000_000, settledActualMicroUsd: 9_000_000, heldCeilingMicroUsd: 11_000_000, accountAvailableMicroUsd: 0, requestedMicroUsd: 500_000, dailyResetAt: 86_400_000, monthlyResetAt: 2_678_400_000, incrementalLimitMicroUsd: null },
   complete: true, ready: 0, work: [] };
-function render(component: string, queryState: unknown = state, outcome: unknown = { status: "incomplete", current: null }) {
+function render(component: string, queryState: unknown = state, outcome: unknown = { status: "incomplete", current: null },
+  topicRows: unknown[] | null = null) {
   const code = buildSync({ entryPoints: [`src/components/${component}.tsx`], bundle: true, platform: "node", format: "cjs", packages: "external", write: false }).outputFiles[0].text;
   const runtime = { exports: {} as Record<string, never> }, calls: string[] = [];
   runInNewContext(code, { module: runtime, exports: runtime.exports, TextEncoder, URL, Intl,
@@ -40,6 +41,7 @@ function render(component: string, queryState: unknown = state, outcome: unknown
         if (fn === "searchPerformance:contentOutcome") return outcome;
         if (fn === "selectedPages:list") return { complete: true, pages: [] };
         if (fn === "siteHealth:latest") return null;
+        if (fn === "topics:listBySite" && topicRows) return topicRows;
         if (fn === "topics:listBySite") return [
           { _id: "t1", label: "Irrigation valve inspection checklist", primaryKeyword: "irrigation valve inspection", status: "planned", priority: 90 },
           { _id: "t2", label: "Already written topic", primaryKeyword: "written", status: "used", priority: 99 },
@@ -60,6 +62,29 @@ function render(component: string, queryState: unknown = state, outcome: unknown
   const exported = component === "content-work-service" ? "ContentWorkService" : "ContentWorkOverview";
   return { html: renderToStaticMarkup(createElement(runtime.exports[exported], { siteId: "sites:synthetic" })), calls };
 }
+
+// P212 (Oct 26 2026): "Coming up next" sorted by stored priority while Autopilot writes searched keywords the site can
+// win first (contentWork.ts eligiblePlannedTopics), so the card named topics that would not be written next.
+test("P212 Coming up next lists topics in the order Autopilot writes them, never one past the site's reach", () => {
+  const topics = [
+    { _id: "a", label: "Unmeasured idea with top priority", primaryKeyword: "unmeasured idea", status: "planned", priority: 99 },
+    { _id: "b", label: "Easy searched keyword", primaryKeyword: "easy searched keyword", status: "planned", priority: 10,
+      searchVolume: 200, keywordDifficulty: 5, keywordDifficultyMeasured: true },
+    { _id: "c", label: "Keyword past its reach", primaryKeyword: "keyword past reach", status: "planned", priority: 95,
+      searchVolume: 5000, keywordDifficulty: 70, keywordDifficultyMeasured: true },
+    { _id: "d", label: "Harder searched keyword", primaryKeyword: "harder searched keyword", status: "planned", priority: 50,
+      searchVolume: 300, keywordDifficulty: 25, keywordDifficultyMeasured: true },
+  ];
+  const html = render("content-work-overview", { ...state, autopilot: { selectable: true, on: true },
+    plan: { tier: "starter", articlesPerMonth: 10, autopilotIntervalMs: 259_200_000 },
+    schedule: { ...state.schedule, paused: false, autopilotSelected: true }, results: { live: 3, liveThisMonth: 2, planUsedThisMonth: 4 },
+    topicOrder: { difficultyCeiling: 30, authority: 2 } }, undefined, topics).html;
+  const at = (label: string) => html.indexOf(label);
+  assert.ok(at("Easy searched keyword") > 0, "a searched keyword the site can win is coming up, whatever its stored priority");
+  assert.ok(at("Easy searched keyword") < at("Harder searched keyword"), "the easier search first, as Autopilot writes it");
+  assert.ok(at("Harder searched keyword") < at("Unmeasured idea with top priority"), "searched keywords before unmeasured ideas");
+  assert.equal(at("Keyword past its reach"), -1, "a search past the site's reach is never written, so never coming up");
+});
 
 test("Owner-reviewed setup has no automatic consent or artificial overdue deadline in its UI", () => {
   const setup = render("content-work-service", { ...state, setupPending: true, serviceMode: "legacy_articles", schedule: null });

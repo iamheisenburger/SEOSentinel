@@ -11,6 +11,7 @@ import { AdoptAutopilot, AutopilotSwitch } from "./pentra-setup-choice";
 import { topicTitle } from "@/lib/topic-title";
 import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 import { SearchConsolePrompt } from "./search-console-prompt";
+import { compareTopics, withinReach, type TopicOrderSite } from "../../convex/lib/topicOrder";
 export const money = (value: number | null) => value === null ? "Unknown" : `$${(value / 1_000_000).toFixed(4)}`;
 export const shownTime = (value: number, zone = "UTC") => new Intl.DateTimeFormat("en", { timeZone: zone, dateStyle: "medium", timeStyle: "long" }).format(value);
 export const fundingCopy = { available: "Internal capacity currently available; every paid admission rechecks it.", blocked: "Admission blocked by the existing spending or entitlement guards.", unknown: "Funding readiness unknown. No extra spending is authorized.", unconfigured: "Provider pricing is not configured. Preparation is not funded." };
@@ -122,7 +123,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
           <ul className="space-y-1 text-[13px]">{heldBack.map(w => <li key={w.jobId}><Link className="text-[#0EA5E9] hover:underline" href={`/articles/${w.articleId}`}>{w.title ? topicTitle(w.title) : "Held-back draft"}</Link><span className="text-[#62666D]"> · see the reviewer&apos;s notes</span></li>)}</ul>
         </div>}
       </section>
-      {plain && <UpcomingTopics siteId={siteId} autopilot={simple} />}
+      {plain && <UpcomingTopics siteId={siteId} autopilot={simple} order={state.topicOrder} />}
       </div>
       <div className="space-y-4">
       <section className={CARD}><h2 className={H2}>{plain ? "Published articles" : "Verified changes"}</h2>
@@ -297,11 +298,13 @@ export { topicTitle };
 const sameWords = (a: string, b: string) => a.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === b.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 /** What Autopilot will write next, so a hands-off customer can see and steer it. */
-function UpcomingTopics({ siteId, autopilot }: { siteId: Id<"sites">; autopilot: boolean }) {
+function UpcomingTopics({ siteId, autopilot, order }: { siteId: Id<"sites">; autopilot: boolean; order?: TopicOrderSite }) {
   const topics = useVisibleQuery(api.topics.listBySite, { siteId });
-  // The owner's own searches (C4) come first, oldest first, as Autopilot writes them.
-  const next = (topics ?? []).filter(writableTopic)
-    .sort((a, b) => Number(b.ownerChosenAt !== undefined) - Number(a.ownerChosenAt !== undefined) ||
+  // P212: in the order Autopilot writes them (the owner's own searches first, oldest first; then searched keywords the
+  // site can win), never a search past the site's reach. The card sorted by stored priority and named topics that
+  // would not be written next.
+  const next = (topics ?? []).filter(t => writableTopic(t) && (!order || withinReach(t, order.difficultyCeiling)))
+    .sort(order ? compareTopics(order) : (a, b) => Number(b.ownerChosenAt !== undefined) - Number(a.ownerChosenAt !== undefined) ||
       (a.ownerChosenAt ?? 0) - (b.ownerChosenAt ?? 0) || (b.priority ?? 0) - (a.priority ?? 0)).slice(0, 3);
   return <section className={CARD} aria-labelledby="upcoming-topics-heading">
     <h2 id="upcoming-topics-heading" className={H2}>Coming up next</h2>

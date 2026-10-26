@@ -196,6 +196,7 @@ import type * as lib_toolChoice from "../lib/toolChoice.js";
 import type * as lib_topicFit from "../lib/topicFit.js";
 import type * as lib_topicLifecycle from "../lib/topicLifecycle.js";
 import type * as lib_topicLifecycleDb from "../lib/topicLifecycleDb.js";
+import type * as lib_topicOrder from "../lib/topicOrder.js";
 import type * as lib_userError from "../lib/userError.js";
 import type * as lib_winnableDiscovery from "../lib/winnableDiscovery.js";
 import type * as lib_wordpressConditional from "../lib/wordpressConditional.js";
@@ -421,6 +422,7 @@ declare const fullApi: ApiFromModules<{
   "lib/topicFit": typeof lib_topicFit;
   "lib/topicLifecycle": typeof lib_topicLifecycle;
   "lib/topicLifecycleDb": typeof lib_topicLifecycleDb;
+  "lib/topicOrder": typeof lib_topicOrder;
   "lib/userError": typeof lib_userError;
   "lib/winnableDiscovery": typeof lib_winnableDiscovery;
   "lib/wordpressConditional": typeof lib_wordpressConditional;
