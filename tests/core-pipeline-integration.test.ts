@@ -4957,6 +4957,31 @@ test("P203 a held-back article never starts a failure backoff: its slot's new ar
   f.assertOffline();
 });
 
+// P204 (Oct 26 2026): pentra.dev's Oct 27 slot: its first draft failed, its replacement was sealed, and the first plan
+// audit held that replacement back as a copy of a live page. A replacement could not be replaced, so after the Oct 26
+// publication the slot would have been parked (missed).
+test("P204 a held-back replacement is replaced once more, and a slot never gets more than three articles", async () => {
+  const { f, site, waiting, failCheck } = await p173TwoWaiting();
+  const [, second] = waiting(), slot = second.contentWork.deadlineAt;
+  // The slot's first draft failed earlier (a skippable failure); the waiting article is its replacement.
+  const original = f.add("jobs", { siteId: site.id, type: "article", status: "failed", payload: {}, contentWork: { ...second.contentWork,
+    stage: "failed", failure: "content_model_response_invalid", replacesJobId: undefined }, articleId: undefined,
+    createdAt: second.createdAt - 1000, updatedAt: second.createdAt - 1000 });
+  f.get(original)!._creationTime = second._creationTime - 1000;
+  second.contentWork.replacesJobId = original;
+  failCheck(second);
+  assert.deepEqual(await f.invoke("contentWork:retireDuplicateReadyWork", { siteId: site.id }), { retired: 1 });
+  const result = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(result.mode, "buffer_replacement", JSON.stringify(result));
+  const third = f.tables.jobs.find(j => j.contentWork?.deadlineAt === slot && j.contentWork.replacesJobId === second._id)!;
+  assert.ok(third, "the held-back replacement is replaced");
+  // A third article that is held back too is not replaced again: three per slot at most.
+  Object.assign(third, { status: "failed", contentWork: { ...third.contentWork, stage: "failed", failure: "duplicate_intent" } });
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "content_failed_slot");
+  assert.equal(f.tables.jobs.filter(j => j.contentWork?.deadlineAt === slot).length, 3);
+  f.assertOffline();
+});
+
 test("P140 near-identical questions are one intent, and a waiting article that repeats a live page is replaced before its slot", async () => {
   const { contentIntentConflicts } = await import("../convex/lib/autopilotBuffer.ts");
   assert.ok(contentIntentConflicts({ primaryKeyword: "how often small business publish blog" },

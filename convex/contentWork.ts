@@ -145,8 +145,25 @@ const AUTOPILOT_REPLACEMENT_LEAD_MS = 60 * 60_000;
 export const SLOT_PREP_LEAD_MS = 6 * 3_600_000;
 function autopilotReplaceable(job: Doc<"jobs">) {
   const cw = job.contentWork;
-  return Boolean(cw && cw.stage === "failed" && !cw.ownerRequest && cw.retiredAt === undefined && !cw.replacesJobId &&
+  // P204: a replacement that Pentra itself held back (a copy of a live page, a reader check added since) is replaceable
+  // once more; any other failed replacement is not. SLOT_MAX_JOBS bounds a slot's jobs either way.
+  return Boolean(cw && cw.stage === "failed" && !cw.ownerRequest && cw.retiredAt === undefined &&
+    (!cw.replacesJobId || HELD_BACK_FAILURES.has(cw.failure ?? "")) &&
     (cw.intent === "create" ? autopilotSkippableFailure(job) : automaticImprovement(cw)));
+}
+/** P204 (Oct 26 2026): the first plan audit (P194) held back pentra.dev's Oct 27 article, the replacement for that
+ * slot's failed first draft, and a replacement could not be replaced: after the Oct 26 publication the slot would have
+ * been parked (missed). A slot's next article replaces its latest failed job, when that job is replaceable and not
+ * already replaced, and the slot has had fewer than SLOT_MAX_JOBS jobs. */
+const SLOT_MAX_JOBS = 3;
+function latestFailedAt(work: Doc<"jobs">[], deadlineAt: number) {
+  return work.filter(j => j.contentWork!.stage === "failed" && j.contentWork!.deadlineAt === deadlineAt)
+    .sort((a, b) => b._creationTime - a._creationTime)[0];
+}
+function slotReplacementCandidate(work: Doc<"jobs">[], deadlineAt: number) {
+  if (work.filter(j => j.contentWork!.deadlineAt === deadlineAt).length >= SLOT_MAX_JOBS) return null;
+  const failed = latestFailedAt(work, deadlineAt);
+  return failed && autopilotReplaceable(failed) && !work.some(j => j.contentWork!.replacesJobId === failed._id) ? failed : null;
 }
 /** Autopilot chose this page improvement or refresh itself. Its failure never
  * holds the slot: nothing was published for it, so the slot gets a new
@@ -2386,16 +2403,15 @@ export const advance = internalMutation({
     // the slot: the failed job stays on record, but it must not park the
     // schedule past the article that will be delivered for it.
     const slotCovered = waiting.some(j => j.contentWork!.deadlineAt === schedule.nextDeadlineAt);
-    const failedSlot = slotCovered ? undefined
-      : work.find(j => j.contentWork!.stage === "failed" && j.contentWork!.deadlineAt === schedule.nextDeadlineAt);
+    const failedSlot = slotCovered ? undefined : latestFailedAt(work, schedule.nextDeadlineAt);
     // Only sites that chose Autopilot in the new setup continue past a parked
     // draft; older contracts keep their failed slot exactly as recorded.
     const failure = failedSlot?.contentWork!.failure ?? "";
     // Autopilot's own page improvements never hold a slot, whatever the
     // site's contract: nothing was published for them.
     const improvementFailed = Boolean(failedSlot && automaticImprovement(failedSlot.contentWork!));
-    const replaceNextSlot = Boolean(failedSlot && (schedule.autopilotSelectedAt || improvementFailed) && autopilotReplaceable(failedSlot) && waiting.length === 0 &&
-      !work.some(j => j.contentWork!.replacesJobId === failedSlot._id) && replacementsHealthy(work) &&
+    const replaceNextSlot = Boolean(failedSlot && (schedule.autopilotSelectedAt || improvementFailed) && waiting.length === 0 &&
+      slotReplacementCandidate(work, schedule.nextDeadlineAt)?._id === failedSlot._id && replacementsHealthy(work) &&
       failedSlot.contentWork!.deadlineAt - Date.now() >= AUTOPILOT_REPLACEMENT_LEAD_MS);
     if (failedSlot && !replaceNextSlot && !failedSlot.contentWork!.ownerRequest && (improvementFailed ||
       (schedule.autopilotSelectedAt && autopilotSkippableFailure(failedSlot) &&
@@ -2444,8 +2460,7 @@ export const advance = internalMutation({
     // while each pass marked refresh candidates reviewed and left an unused
     // topic (P163, Oct 22 2026: LeadPilot's Oct 24 slot after its refresh failed).
     const nextOpenSlot = schedule.nextDeadlineAt + waiting.length * schedule.intervalMs;
-    const failedAtNextOpen = work.filter(j => j.contentWork!.deadlineAt === nextOpenSlot);
-    const replacementDue = Boolean(schedule.autopilotSelectedAt) && failedAtNextOpen.length === 1 && autopilotReplaceable(failedAtNextOpen[0]);
+    const replacementDue = Boolean(schedule.autopilotSelectedAt) && Boolean(slotReplacementCandidate(work, nextOpenSlot));
     // P190 (Oct 25 2026): the site's pages and topics are read once for this pass.
     // The improvement choice and each topic choice read them again: on LeadPilot
     // a preparation pass read its 64 pages (1.5 MB, with their full text) three
@@ -2512,8 +2527,9 @@ export const advance = internalMutation({
     }
     const deadlineAt = slot.nextDeadlineAt + waiting.length * slot.intervalMs;
     const atDeadline = work.filter(j => j.contentWork!.deadlineAt === deadlineAt);
-    const replacing = schedule.autopilotSelectedAt && !improvement && atDeadline.length === 1 && autopilotReplaceable(atDeadline[0]) &&
-      replacementsHealthy(work) && deadlineAt - Date.now() >= AUTOPILOT_REPLACEMENT_LEAD_MS ? atDeadline[0] : null;
+    const candidate = slotReplacementCandidate(work, deadlineAt);
+    const replacing = schedule.autopilotSelectedAt && !improvement && candidate &&
+      replacementsHealthy(work) && deadlineAt - Date.now() >= AUTOPILOT_REPLACEMENT_LEAD_MS ? candidate : null;
     if (atDeadline.length && !replacing) return { scheduled: 0, mode: "content_failed_slot" };
     const budgetRequest = { siteId, userId: site.userId!, purpose: "content_work" as const,
       trigger: `content_slot:${deadlineAt}${replacing ? ":replacement" : ""}`, reservedMicroUsd: pricing.budgetMicroUsd, timestamp: Date.now() };
