@@ -9397,6 +9397,8 @@ test("P196 a site Pentra hasn't started for a day after it was added gets one em
   assert.deepEqual(email.to, ["owner@reservoirnote.example"]); assert.equal(email.reply_to, "pentrahelp@gmail.com");
   assert.equal(email.subject, `One step left to start Pentra on ${site.domain}`);
   assert.match(String(email.text), /What's left: Connect your website so Pentra can publish to it/);
+  // P208: counted in the operator's funnel by outcome only.
+  assert.deepEqual((await f.invoke("opsProbes:signupFunnel", { since: 0 })).emails.setupReminder, { pending: 0, sent: 1, skipped: 0, failed: 0, reasons: {} });
   assert.deepEqual(await f.invoke("customerEmails:noteSetupReminders", {}), { noted: 0 }, "once per site");
   assert.equal(f.tables.customer_emails.filter(e => e.kind === "setup_reminder").length, 1);
   // A connected site that only needs Start is told to press it; one that started meanwhile is told nothing.
@@ -9457,6 +9459,10 @@ test("P202 an account that never added a website gets one email asking it to, an
   assert.deepEqual(await f.invoke("customerEmails:sendAddWebsite", { contactId: contact("synthetic-adds-site")._id }), { status: "skipped" });
   assert.equal(contact("synthetic-adds-site").addWebsiteReminder.reason, "no_longer_true");
   assert.equal(f.opsEmails.length, 1);
+  // P208: the operator's funnel counts what happened to these emails, by outcome and reason only.
+  const sent = (await f.invoke("opsProbes:signupFunnel", { since: 0 })).emails;
+  assert.deepEqual(sent.addWebsite, { pending: 0, sent: 1, skipped: 1, failed: 0, reasons: { no_longer_true: 1 } });
+  assert.ok(!JSON.stringify(sent).includes("reservoirnote"), "never an address");
   assert.deepEqual(await f.invoke("customerEmails:noteAddWebsiteReminders", {}), { noted: 0 }, "once per account");
   f.setTime(f.now() + 60 * hour);
   assert.deepEqual(await f.invoke("customerEmails:noteAddWebsiteReminders", {}), { noted: 0 }, "three days on, never");

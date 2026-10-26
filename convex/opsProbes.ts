@@ -129,7 +129,23 @@ export const signupFunnel = internalQuery({ args: { since: v.number() }, handler
   for (const contact of contactRows) {
     if (!(await ctx.db.query("sites").withIndex("by_user", q => q.eq("userId", contact.userId)).first())) contacts.withoutSite++;
   }
-  return { since, ...counts, publishMethods, verifiedDestinations, github, contacts };
+  // P208: what happened to the setup emails (P196 per site, P202 per account) decided since then: counts by outcome
+  // and reason only, never an address, a site or an account.
+  const outcomes = () => ({ pending: 0, sent: 0, skipped: 0, failed: 0, reasons: {} as Record<string, number> });
+  const emails = { setupReminder: outcomes(), addWebsite: outcomes() };
+  for (const site of sites) {
+    const log = await ctx.db.query("customer_emails").withIndex("by_site_kind_key", q => q.eq("siteId", site._id).eq("kind", "setup_reminder").eq("key", "first")).first();
+    if (!log) continue;
+    emails.setupReminder[log.status]++;
+    if (log.reason) emails.setupReminder.reasons[log.reason] = (emails.setupReminder.reasons[log.reason] ?? 0) + 1;
+  }
+  for (const contact of contactRows) {
+    const reminder = contact.addWebsiteReminder;
+    if (!reminder) continue;
+    emails.addWebsite[reminder.status]++;
+    if (reminder.reason) emails.addWebsite.reasons[reminder.reason] = (emails.addWebsite.reasons[reminder.reason] ?? 0) + 1;
+  }
+  return { since, ...counts, publishMethods, verifiedDestinations, github, contacts, emails };
 } });
 
 /** P191 (Oct 25 2026): why Autopilot's Related reading repair (P176/P180) left a
