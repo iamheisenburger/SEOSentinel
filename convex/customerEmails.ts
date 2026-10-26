@@ -3,7 +3,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { plausibleEmail, sendCustomerEmail } from "./lib/customerEmail";
-import { addWebsiteEmail, firstArticleEmail, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth, setupReminderEmail, type MissedSlotCause,
+import { addWebsiteEmail, draftReadyEmail, firstArticleEmail, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth, setupReminderEmail, type MissedSlotCause,
   type MonthlyImprovement, type MonthlySearch, type SetupStep } from "./lib/customerNotices";
 import { contentConnectionComplete, pasteDestination } from "./lib/contentSelection";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
@@ -75,6 +75,20 @@ export async function noteFirstArticleLive(ctx: MutationCtx, site: Doc<"sites">,
     status: earlier ? "skipped" : "pending", ...(earlier ? { reason: "not_first_article" } : {}), articleId: article._id,
     attempts: 0, createdAt: now, updatedAt: now });
   if (!earlier) await ctx.scheduler.runAfter(0, internal.customerEmails.send, { logId });
+}
+
+/** P210 (Oct 26 2026): an article the owner asked for is done (ready to publish, or handed back with the checks' notes).
+ * The owner gets one email half an hour later if it is still waiting for them (re-decided at send time). A draft the
+ * owner edited and resubmitted sends nothing more: they are already working on it. */
+const DRAFT_READY_DELAY_MS = 30 * 60_000;
+export async function noteDraftReady(ctx: MutationCtx, job: Doc<"jobs">, now: number) {
+  const request = job.contentWork?.ownerRequest;
+  if (!request || request.sourceArticleId || !job.siteId || !job.articleId) return;
+  const key = String(job._id);
+  if (await ctx.db.query("customer_emails").withIndex("by_site_kind_key", q => q.eq("siteId", job.siteId!).eq("kind", "draft_ready").eq("key", key)).first()) return;
+  const logId = await ctx.db.insert("customer_emails", { siteId: job.siteId, kind: "draft_ready", key, status: "pending", articleId: job.articleId,
+    attempts: 0, createdAt: now, updatedAt: now });
+  await ctx.scheduler.runAfter(DRAFT_READY_DELAY_MS, internal.customerEmails.send, { logId });
 }
 
 /** P126: content health found an Autopilot slot 6h+ late. The owner hears why,
@@ -279,6 +293,16 @@ export const noticeContext = internalQuery({ args: { logId: v.id("customer_email
   } else if (log.kind === "setup_reminder") {
     // Started since it was noted: nothing is left to tell.
     if (site.userId && !(await setupStarted(ctx, site))) message = setupReminderEmail({ domain, step: await setupStep(ctx, site) });
+  } else if (log.kind === "draft_ready") {
+    // Still waiting for the owner: not published, discarded or replaced by their own edit since.
+    const jobId = ctx.db.normalizeId("jobs", log.key);
+    const job = jobId ? await ctx.db.get(jobId) : null, cw = job?.contentWork;
+    const article = job?.articleId ? await ctx.db.get(job.articleId) : null;
+    const waiting = cw?.stage === "ready" || (cw?.stage === "failed" && cw.failure === "bounded_content_quality_exhausted");
+    if (job && cw?.ownerRequest && job.siteId === site._id && cw.retiredAt === undefined && waiting && article?.siteId === site._id &&
+      ["ready", "review"].includes(article.status ?? "") && !article.publicationAttemptedAt) {
+      message = draftReadyEmail({ domain, title: article.title, articleId: article._id, notes: cw.stage === "failed", paste: pasteDestination(site) });
+    }
   } else if (log.kind === "missed_slot" && log.cause) {
     // A slot that has since been published or skipped past needs no email.
     if (site.contentSchedule && site.contentSchedule.nextDeadlineAt === Number(log.key) && !site.contentSchedule.paused) {

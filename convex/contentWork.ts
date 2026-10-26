@@ -29,7 +29,7 @@ import { contentConnectionHash, confirmedContentProfileHash, contentConnectionCo
 import { contentFunding, contentIssue } from "./lib/contentCustomer";
 import { assertSafeImprovement } from "./lib/contentSelection";
 import { authorizedWorkPage, chooseImprovement, contentWorkConnection, enrollVerifiedCreation, renewManagedEnrollments } from "./selectedPages";
-import { noteFirstArticleLive } from "./customerEmails";
+import { noteDraftReady, noteFirstArticleLive } from "./customerEmails";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes } from "./articles";
 import { AUTOPILOT_ACCEPTANCE, CONTENT_CHECKS_VERSION, ownerWaivableIssue, readerVisibleIssues } from "./lib/articleQuality";
@@ -1607,6 +1607,8 @@ async function reviseFailedWork(ctx: MutationCtx, site: Doc<"sites">, failed: Do
   await ctx.db.patch(failed._id, { status: "failed", contentWork: { ...cw, stage: "failed", failure: "bounded_content_quality_exhausted",
     checksVersion: CONTENT_CHECKS_VERSION }, updatedAt: Date.now() });
   await settleFailedContentWork(ctx, failed._id);
+  // The owner's draft is handed back with the checks' notes: they hear it's waiting.
+  if (cw.ownerRequest && failed.articleId) await noteDraftReady(ctx, (await ctx.db.get(failed._id))!, Date.now());
   if (!cw.ownerRequest && cw.intent === "create") {
     await retireQualityExhaustedTopics(ctx, site, [...cw.discardedArticleIds, ...(failed.articleId ? [failed.articleId] : [])]);
   }
@@ -2650,6 +2652,7 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">, r
   if (stage === "ready") await closeContentWorkHold(ctx, (await ctx.db.get(job._id))!);
   if (cw.ownerRequest) {
     if (stage === "review_failed") await ctx.scheduler.runAfter(0, internal.contentWork.advanceOwnerDraft, { jobId: job._id });
+    else if (stage === "ready") await noteDraftReady(ctx, (await ctx.db.get(job._id))!, Date.now());
     return;
   }
   await wake(ctx, job.siteId!);

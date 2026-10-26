@@ -9503,6 +9503,68 @@ test("P202 an account that never added a website gets one email asking it to, an
   f.assertOffline();
 });
 
+// P210 (Oct 26 2026): a Review-first owner (every site that pastes its own articles, and both early real signups) only
+// saw a finished draft if they kept the page open, and a draft nobody comes back to is never published. The owner hears
+// that the article they asked for is waiting, half an hour after it is done, unless they acted on it meanwhile.
+test("P210 the owner hears when the article they asked for is ready to read, unless they already acted on it", async () => {
+  const reviewFirst = async (options: Parameters<typeof setup>[0] = {}) => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], ...options });
+    const site = await createEmptyContentSite(f), owner = f.get(site.id)!.userId;
+    await f.invoke("customerEmails:recordContact", { userId: owner, email: "owner@reservoirnote.example" });
+    f.restartRuntime({ RESEND_API_KEY: "re_synthetic" });
+    f.setIdentity(owner);
+    let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", ownerReviewedOnly: true,
+      confirmBusinessProfile: true, reviewToken: r.reviewToken });
+    r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    const requested = await f.invoke("contentWork:requestDraft", { siteId: site.id, reviewToken: r.reviewToken,
+      requestKey: "p210-first-article", maximumMicroUsd: r.ownerDraft.maximumMicroUsd });
+    await pumpUntil(f, () => ["ready", "failed"].includes(f.get(requested.jobId)!.contentWork.stage));
+    f.setIdentity(owner);
+    return { f, site, job: f.get(requested.jobId)!, log: (f.tables.customer_emails ?? []).find(e => e.kind === "draft_ready")! };
+  };
+  const sendAt = (f: ReturnType<typeof setup>, logId: string) =>
+    f.tables._scheduled_functions.find(s => s.name === "customerEmails:send" && s.args.logId === logId)!.at;
+
+  // A draft that passed its checks: one email half an hour later, linking the draft.
+  const { f, site, job, log } = await reviewFirst();
+  assert.equal(job.contentWork.stage, "ready", diagnostic(f));
+  assert.ok(log, "the owner's finished draft is noted for an email");
+  assert.deepEqual([log.key, log.status, log.articleId], [String(job._id), "pending", job.articleId]);
+  assert.equal(sendAt(f, log._id) - log.createdAt, 30 * 60_000, "not while the owner may still be on the page");
+  assert.equal(f.opsEmails.length, 0);
+  f.setTime(sendAt(f, log._id));
+  assert.deepEqual(await f.invoke("customerEmails:send", { logId: log._id }), { status: "sent" });
+  const article = f.get(job.articleId)!, email = f.opsEmails.at(-1)!;
+  assert.deepEqual(email.to, ["owner@reservoirnote.example"]); assert.equal(email.reply_to, "pentrahelp@gmail.com");
+  assert.equal(email.subject, `Your article for ${site.domain} is ready to read`);
+  assert.ok(String(email.text).includes(`"${article.title}"`));
+  assert.ok(String(email.text).includes(`https://pentra.dev/articles/${article._id}`), "the email links the draft page");
+  assert.match(String(email.text), /Nothing goes live until you publish it from that page/);
+  assert.deepEqual((await f.invoke("opsProbes:signupFunnel", { since: 0 })).emails.draftReady, { pending: 0, sent: 1, skipped: 0, failed: 0, reasons: {} });
+
+  // An owner who edits it within the half hour is already working on it: nothing for the original or the edit.
+  const editing = await reviewFirst(), g = editing.f, source = structuredClone(g.get(editing.job.articleId)!);
+  const again = await g.invoke("contentWork:readiness", { siteId: editing.site.id });
+  const edited = await g.invoke("contentWork:requestDraft", { siteId: editing.site.id, reviewToken: again.reviewToken,
+    maximumMicroUsd: again.ownerDraft.maximumMicroUsd, requestKey: "p210-owner-edited-draft", edit: { articleId: source._id,
+      artifactHash: publicationArtifactHash(source as never), markdown: `${source.markdown}\n\nCheck your approved business information before choosing the next step.` } });
+  await pumpUntil(g, () => ["ready", "failed"].includes(g.get(edited.jobId)!.contentWork.stage));
+  assert.equal(g.get(edited.jobId)!.contentWork.stage, "ready", diagnostic(g));
+  assert.equal(g.tables.customer_emails.filter(e => e.kind === "draft_ready").length, 1, "an edited draft sends nothing new");
+  if (g.get(editing.log._id)!.status === "pending") await g.invoke("customerEmails:send", { logId: editing.log._id });
+  assert.deepEqual([g.get(editing.log._id)!.status, g.get(editing.log._id)!.reason], ["skipped", "no_longer_true"]);
+  assert.ok(!g.opsEmails.some(e => /ready to read/.test(String(e.subject))));
+
+  // A draft handed back with the checks' notes: the email says so.
+  const notes = await reviewFirst({ quality: "low" });
+  assert.deepEqual([notes.job.contentWork.stage, notes.job.contentWork.failure], ["failed", "bounded_content_quality_exhausted"], diagnostic(notes.f));
+  notes.f.setTime(sendAt(notes.f, notes.log._id));
+  assert.deepEqual(await notes.f.invoke("customerEmails:send", { logId: notes.log._id }), { status: "sent" });
+  assert.match(String(notes.f.opsEmails.at(-1)!.text), /Pentra's checks left a few notes on it/);
+  f.assertOffline(); g.assertOffline(); notes.f.assertOffline();
+});
+
 // P200 (Oct 26 2026): one of the first real signups connected GitHub and never chose a repository.
 test("P200 a site with GitHub connected but no repository is told to choose its repository", async () => {
   const hour = 3_600_000;

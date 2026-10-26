@@ -95,6 +95,29 @@ export function addWebsiteEmail(): { subject: string; text: string } {
   return { subject: "Add your website to start Pentra", text: lines.join("\n") };
 }
 
+/** P210 (Oct 26 2026): the email an owner gets when the article they asked for is waiting for them. Review-first owners
+ * (every site that pastes its own articles) only saw a finished draft if they kept the page open, and one nobody comes
+ * back to is never published. `notes`: Pentra's checks handed it back with notes for the owner to read first. */
+export function draftReadyEmail(input: { domain: string; title: string; articleId: string; notes: boolean; paste: boolean }): { subject: string; text: string } {
+  const lines = [
+    `The article you asked Pentra for on ${input.domain} is ready for you to read:`,
+    "",
+    `"${input.title}"`,
+    `https://pentra.dev/articles/${input.articleId}`,
+    "",
+    input.notes ? "Pentra's checks left a few notes on it. Read them on that page: edit the draft, or accept the notes, before you approve it."
+      : "It was written from the business details you confirmed and checked against its sources.",
+    "",
+    input.paste ? "Nothing goes live until you paste it into your site. Then give Pentra the article's address on that page, and Pentra checks that it's live."
+      : "Nothing goes live until you publish it from that page. Edit anything you like first.",
+    "",
+    "Pentra",
+    "",
+    `You get this email because you asked Pentra for an article on ${input.domain}. You can turn these emails off in Settings: https://pentra.dev/settings`,
+  ];
+  return { subject: `Your article for ${input.domain} is ready to read`, text: lines.join("\n") };
+}
+
 /** Why a scheduled article is late, as the owner can act on it. */
 export type MissedSlotCause = "connection" | "plan" | "writing_service" | "internal" | "checks" | "no_topics" | "preparing";
 const WRITING_SERVICE_FAILURES = new Set(["content_provider_unavailable", "content_provider_credit_unavailable",

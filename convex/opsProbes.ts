@@ -132,12 +132,18 @@ export const signupFunnel = internalQuery({ args: { since: v.number() }, handler
   // P208: what happened to the setup emails (P196 per site, P202 per account) decided since then: counts by outcome
   // and reason only, never an address, a site or an account.
   const outcomes = () => ({ pending: 0, sent: 0, skipped: 0, failed: 0, reasons: {} as Record<string, number> });
-  const emails = { setupReminder: outcomes(), addWebsite: outcomes() };
+  // P210: the "your article is ready to read" emails too (per draft, a few a site at most).
+  const emails = { setupReminder: outcomes(), addWebsite: outcomes(), draftReady: outcomes() };
+  const count = (into: ReturnType<typeof outcomes>, log: Doc<"customer_emails">) => {
+    into[log.status]++;
+    if (log.reason) into.reasons[log.reason] = (into.reasons[log.reason] ?? 0) + 1;
+  };
   for (const site of sites) {
     const log = await ctx.db.query("customer_emails").withIndex("by_site_kind_key", q => q.eq("siteId", site._id).eq("kind", "setup_reminder").eq("key", "first")).first();
-    if (!log) continue;
-    emails.setupReminder[log.status]++;
-    if (log.reason) emails.setupReminder.reasons[log.reason] = (emails.setupReminder.reasons[log.reason] ?? 0) + 1;
+    if (log) count(emails.setupReminder, log);
+    for (const draft of await ctx.db.query("customer_emails").withIndex("by_site_kind_key", q => q.eq("siteId", site._id).eq("kind", "draft_ready")).take(20)) {
+      count(emails.draftReady, draft);
+    }
   }
   for (const contact of contactRows) {
     const reminder = contact.addWebsiteReminder;
