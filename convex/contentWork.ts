@@ -1424,6 +1424,26 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
     (searched(a) && searched(b) ? winnability(b) - winnability(a) || opportunity(b) - opportunity(a) : 0) || (b.priority ?? 0) - (a.priority ?? 0));
   return { topics, pageCoverage, fit, competitors, planned, searched };
 }
+/** P211 (Oct 26 2026): the business's own pages by title (its service and product pages, posts it wrote) for the copy
+ * checks, so Pentra never writes an article that competes with one. Word matching above reads their words; the
+ * grouping call reads them by what a searcher wants. Pentra's own articles are listed apart, and the home page and
+ * pages no one searches for are left out. */
+const OWN_PAGES_FOR_COPY_CHECK = 60;
+const UTILITY_PAGE_SEGMENTS = new Set(["index", "home", "about", "about-us", "contact", "contact-us", "privacy", "privacy-policy", "terms",
+  "terms-of-service", "terms-of-use", "legal", "cookies", "cookie-policy", "login", "log-in", "signin", "sign-in", "signup", "sign-up",
+  "register", "account", "my-account", "cart", "checkout", "search", "thank-you", "thanks", "404", "sitemap", "tag", "tags", "category",
+  "categories", "author", "page"]);
+export function ownPageTitles(site: Doc<"sites">, pages: Doc<"pages">[]): string[] {
+  const titles = new Set<string>();
+  for (const page of pages) {
+    if (titles.size >= OWN_PAGES_FOR_COPY_CHECK) break;
+    if (!pageMatchesCurrentDomain(site, page) || page.editable?.managedArticleId) continue;
+    const first = page.slug.replace(/^\/+/, "").split("/")[0].toLowerCase();
+    const title = (page.editable?.title ?? page.title ?? "").replace(/\s+/g, " ").trim();
+    if (first && !UTILITY_PAGE_SEGMENTS.has(first) && title.length >= 3) titles.add(title);
+  }
+  return [...titles];
+}
 const PAIN_POINT_TOPIC_NOTES = "A customer question the owner confirmed. Search forecasts are unknown. Answer it from supported business facts with conditional guidance; never invent experience or external claims.";
 const ANCHOR_TOPIC_NOTES = "Confirmed first-party reader question. Search forecasts are unknown. Use supported business facts and conditional guidance; never invent experience or external claims.";
 /** When no researched keyword is left: the owner's confirmed customer
@@ -1670,9 +1690,11 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
   const known = [...new Set(topics.slice(0, LIMIT).map(t => normalizeResearchKeyword(t.primaryKeyword)))];
   // Everything a new article must not repeat: topics plus published articles and pages.
   let coverage = known;
+  // P211: the site's pages are read once, for word matching and for the grouping call's list of its own pages.
+  const pages = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId)).take(LIMIT + 1);
   try {
     // The topics read above are passed on (P177): LeadPilot's 392 topic rows are 741 KB a read.
-    const inventory = await eligiblePlannedTopics(ctx, site, [], topics);
+    const inventory = await eligiblePlannedTopics(ctx, site, [], topics, pages);
     coverage = [...new Set([...known, ...inventory.pageCoverage.map(c => normalizeResearchKeyword(c.primaryKeyword ?? ""))].filter(Boolean))];
   } catch { /* an incomplete inventory keeps the topic list only */ }
   // P179: what research must not repeat, as the grouping call reads it: articles
@@ -1689,7 +1711,7 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
   const dropped = [...new Set((await ctx.db.query("topic_research_drops").withIndex("by_site_dropped", q => q.eq("siteId", siteId)).order("desc")
     .take(TOPIC_RESEARCH_DROPS_READ)).filter(d => d.profileHash === profileHash).map(d => d.keyword))];
   return { domain: site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null, seeds, known, coverage, dropped,
-    existing: existing.slice(0, 150),
+    existing: existing.slice(0, 150), ownPages: ownPageTitles(site, pages.slice(0, LIMIT)),
     signals, searchConsole: searchConsoleTopicCandidatesFrom(site, searches),
     tenantAuthority: storedTenantAuthority(site) ?? null,
     canonicalDomain: siteCanonicalDomain(site) ?? site.domain, domainRevision: siteCanonicalDomainRevision(site),
@@ -1949,7 +1971,9 @@ export const planAuditContext = internalQuery({ args: { siteId: v.id("sites") },
   const site = await ctx.db.get(siteId);
   if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt || site.deletionStatus || site.accountDeletionRequestedAt) return null;
   let planned: Doc<"topic_clusters">[];
-  try { planned = (await eligiblePlannedTopics(ctx, site)).planned.filter(t => !ownerChosen(t)); } catch { return null; }
+  // P211: the site's pages are read once, for the plan and for the call's list of the business's own pages.
+  const pages = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId)).take(LIMIT + 1);
+  try { planned = (await eligiblePlannedTopics(ctx, site, [], undefined, pages)).planned.filter(t => !ownerChosen(t)); } catch { return null; }
   const live = (await ctx.db.query("article_summaries").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published"))
     .order("desc").take(PLAN_AUDIT_LIVE)).filter(row => articleMatchesCurrentDomain(site, row));
   const waiting: { job: Doc<"jobs">; topic: Doc<"topic_clusters"> }[] = [];
@@ -1964,7 +1988,7 @@ export const planAuditContext = internalQuery({ args: { siteId: v.id("sites") },
     : { id: `topic:${topic._id}`, keyword: topic.primaryKeyword, searchVolume: topic.searchVolume ?? 0, waiting: false });
   const newestLiveAt = live.reduce((newest, row) => Math.max(newest, row.publishedAt ?? row.articleCreatedAt ?? 0), 0);
   const due = audited.some(topic => topic.planAudit?.version !== PLAN_AUDIT_VERSION || topic.planAudit.checkedAt < newestLiveAt);
-  return { business: buyerFitBusiness(site), items, existing: live.map(row => row.title), due };
+  return { business: buyerFitBusiness(site), items, existing: live.map(row => row.title), ownPages: ownPageTitles(site, pages), due };
 } });
 /** The audit's one call is held before it is sent, like the buyer-fit sweep's. */
 export const reservePlanAudit = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {

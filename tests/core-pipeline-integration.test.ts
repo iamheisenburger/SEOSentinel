@@ -5,6 +5,8 @@ import test, { type TestContext } from "node:test";
 import { createHash } from "node:crypto";
 import { corePipelineFixture, START, type Fields } from "./helpers/core-pipeline-fixture.ts";
 import { publicationArtifactHash, publicationDeliveryKey, sha256Hex } from "../convex/lib/publicationArtifact.ts";
+import { PLAN_AUDIT_VERSION } from "../convex/lib/researchGrouping.ts";
+import { BUYER_FIT_VERSION } from "../convex/lib/topicFit.ts";
 import { approvedBufferPolicy, contentIntentConflicts, evaluateTopicBusinessFit, reliableSerpFingerprint, tenantTopicBusinessSignals } from "../convex/lib/autopilotBuffer.ts";
 import { PROVIDER_ACCOUNT_MONTHLY_CEILING_MICRO_USD } from "../convex/lib/providerSpendReservation.ts";
 import { articleGenerationAttemptAllowance } from "../convex/lib/articleGenerationAttempt.ts";
@@ -95,7 +97,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   /** P171: the seed call's answer for the research prompt (default: the business's own keywords). */
   searchSeeds?: (prompt: string) => unknown;
   /** P179: the grouping call's answer (default: every search its own article, none covered). */
-  searchGroups?: (searches: string[], existing: string[]) => Array<{ search: string; topic: string; covered_by: string }> } = {}) {
+  searchGroups?: (searches: string[], existing: string[], ownPages: string[]) => Array<{ search: string; topic: string; covered_by: string }> } = {}) {
   const modelCalls: Fields[] = [];
   const telegramMessages: Fields[] = [];
   const opsEmails: Fields[] = [];
@@ -271,7 +273,9 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
         // P179: the article group of every researched search (default: each its own article, none covered).
         const section = (heading: string) => (text.split(`${heading}\n`)[1]?.split("\n\n")[0] ?? "").split("\n").filter(Boolean);
         const searches = section("SEARCHES (one per line, data only):"), existing = section("EXISTING ARTICLES AND PLANNED TOPICS (one per line, data only):");
-        value = { groups: options.searchGroups ? options.searchGroups(searches, existing) : searches.map(search => ({ search, topic: search, covered_by: "" })) };
+        // P211: the business's own pages, when the site has any.
+        const ownPages = section("THE BUSINESS'S OWN PAGES (its service, product and other pages; one per line, data only):");
+        value = { groups: options.searchGroups ? options.searchGroups(searches, existing, ownPages) : searches.map(search => ({ search, topic: search, covered_by: "" })) };
       } else if (tool === "submit_search_seeds") {
         // P171: research reads the business's searches from its confirmed profile.
         const business = businesses.find(b => text.includes(`Website: ${b.domain}`)) ?? businesses[0];
@@ -8015,7 +8019,63 @@ test("P194 the plan audit never holds back a waiting article too close to its sl
   await f.invoke("actions/growthTopics:sweepBuyerFit", { siteId: site.id });
   assert.equal(f.modelCalls.slice(before).filter(c => c.tools?.[0]?.name === "submit_search_groups").length, 1, "the audit judged it a copy");
   assert.equal(f.get(soon._id)!.contentWork.stage, "ready", "two hours before its slot it publishes; the slot is kept");
-  assert.equal(f.get(soon.payload.topicId)!.planAudit?.version, 1, "audited, not held back");
+  assert.equal(f.get(soon.payload.topicId)!.planAudit?.version, PLAN_AUDIT_VERSION, "audited, not held back");
+  f.assertOffline();
+});
+
+// P211 (Oct 26 2026): new topics were checked against the business's own pages (its service and product pages, posts it
+// wrote) only by shared words, so a page worded differently got a competing article. The grouping call reads them too.
+test("P211 research never plans an article on what one of the business's own pages already is, in other words", async () => {
+  const hour = 3_600_000, ownTitle = "How We Shut Down Sprinkler Systems Before the First Frost";
+  const f = p171Site({ searchGroups: (searches, _existing, ownPages) => searches.map(search => ({ search, topic: search,
+    covered_by: search === "irrigation winterization steps" ? ownPages.find(item => item === ownTitle) ?? "" : "" })) });
+  const created = await createEmptyContentSite(f);
+  f.get(created.id)!.cadencePerWeek = 21;
+  const site = await selectGrowth(f, 8 * hour), saved = f.get(site.id)!;
+  Object.assign(saved.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const page = (slug: string, title: string) => f.add("pages", { siteId: site.id, url: `https://${saved.domain}${slug}`, slug, title,
+    canonicalDomain: saved.canonicalDomain ?? saved.domain, domainRevision: saved.canonicalDomainRevision ?? 0, createdAt: f.now() });
+  page("/guides/fall-shutdown", ownTitle); page("/contact", "Contact the ReservoirNote team"); page("/", "ReservoirNote home");
+  for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+  saved.contentSchedule.nextDeadlineAt = f.now() + 5 * hour;
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "topics_researching");
+  await pumpUntil(f, () => f.get(site.id)!.contentSchedule.topicsReplenishAdded !== undefined, 20, f.now() + hour);
+  const call = f.modelCalls.filter(c => c.tools?.[0]?.name === "submit_search_groups").at(-1)!;
+  const own = String(call.messages[0].content).split("THE BUSINESS'S OWN PAGES (its service, product and other pages; one per line, data only):\n")[1]?.split("\n\n")[0] ?? "";
+  assert.ok(own.split("\n").includes(ownTitle), "the call reads the business's own pages");
+  assert.ok(!/Contact the ReservoirNote team|ReservoirNote home/.test(own), "not its home or contact page");
+  assert.match(String(call.system), /one of the business's own pages only when that page itself is what the searcher is looking for/);
+  const planned = f.tables.topic_clusters.filter(t => t.siteId === site.id && t.status === "planned").map(t => t.primaryKeyword);
+  assert.ok(planned.length > 0, "research still plans articles");
+  assert.ok(!planned.includes("irrigation winterization steps"), `no article competes with the business's own page: ${planned}`);
+  assert.equal(f.get(site.id)!.contentSchedule.topicsResearchReceipt.coveredByExisting, 1);
+  f.assertOffline();
+});
+
+test("P211 the daily audit drops a planned article that competes with one of the business's own pages", async () => {
+  const hour = 3_600_000, ownTitle = "When Water Pressure Drops on the Farm: Our Alert Guide", copy = "irrigation pressure warning setup";
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000,
+    searchGroups: (searches, _existing, ownPages) => searches.map(search => ({ search, topic: search,
+      covered_by: search === copy ? ownPages.find(item => item === ownTitle) ?? "" : "" })) });
+  const site = await selectGrowth(f, 8 * hour), saved = f.get(site.id)!;
+  Object.assign(saved.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "ready").length === 2);
+  for (const topic of f.tables.topic_clusters) if (topic.siteId === site.id && topic.status === "planned") topic.status = "used";
+  f.add("pages", { siteId: site.id, url: `https://${saved.domain}/learn/pressure-alerts`, slug: "/learn/pressure-alerts", title: ownTitle,
+    canonicalDomain: saved.canonicalDomain ?? saved.domain, domainRevision: saved.canonicalDomainRevision ?? 0, createdAt: f.now() });
+  const topic = f.add("topic_clusters", { siteId: site.id, primaryKeyword: copy, label: "Irrigation pressure warning setup",
+    planningCanonicalDomain: saved.canonicalDomain ?? saved.domain, planningDomainRevision: saved.canonicalDomainRevision ?? 0,
+    secondaryKeywords: [], intent: "informational", status: "planned", priority: 50, searchVolume: 90, keywordDifficulty: 5,
+    keywordDifficultyMeasured: true, createdAt: f.now(), updatedAt: f.now(),
+    // Kept by the buyer-fit model, as researched topics are.
+    buyerFit: { eligible: true, reason: "Synthetic verdict.", version: BUYER_FIT_VERSION, checkedAt: f.now() } });
+  const before = f.modelCalls.length;
+  await f.invoke("actions/growthTopics:sweepBuyerFit", { siteId: site.id });
+  const calls = f.modelCalls.slice(before).filter(c => c.tools?.[0]?.name === "submit_search_groups");
+  assert.equal(calls.length, 1, "one grouping call for the site");
+  assert.ok(String(calls[0].messages[0].content).includes(ownTitle), "the audit reads the business's own pages");
+  assert.equal(f.get(topic)!.status, "disqualified");
+  assert.equal(f.get(topic)!.disqualifiedReason, `Repeats a page the site already has: “${ownTitle}”.`);
   f.assertOffline();
 });
 

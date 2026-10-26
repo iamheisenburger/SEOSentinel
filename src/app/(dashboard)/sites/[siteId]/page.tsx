@@ -1294,6 +1294,8 @@ function ConnectionSection({ site }: { site: SiteView }) {
                     ))}
                   </select>
                   <p className="text-[11px] text-[#62666D]">Or type it below.</p>
+                  {/* P211: one of the first real signups connected GitHub and stopped at this list; a site that isn't built from a repository needs the way out here. */}
+                  <p className="text-[11px] text-[#8A8F98]">Website not built from one of these repositories? Choose the platform it runs on under Publishing method above, or Copy &amp; Paste.</p>
                 </div>
               )}
               {isGithub && hasGithubToken && repoChoices && repoChoices.length === 0 && (

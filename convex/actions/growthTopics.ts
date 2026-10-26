@@ -19,7 +19,7 @@ import { auditPlannedWork, groupSearches, parseResearchGroups, RESEARCH_GROUPS_M
   type PlanAuditItem, type ResearchGroup } from "../lib/researchGrouping";
 
 type ResearchContext = { domain: string; language: string; targetCountry: string | null; seeds: string[]; known: string[];
-  coverage: string[]; dropped: string[]; existing: string[]; signals: { coreBusinessSignals: string[]; productAnchorSignals: string[]; businessModelSignals: string[] };
+  coverage: string[]; dropped: string[]; existing: string[]; ownPages?: string[]; signals: { coreBusinessSignals: string[]; productAnchorSignals: string[]; businessModelSignals: string[] };
   searchConsole: Array<{ keyword: string; impressions: number; position: number }>; tenantAuthority: number | null;
   canonicalDomain: string; domainRevision: number; business: BuyerFitBusiness; maximumDifficulty?: number };
 
@@ -44,8 +44,9 @@ async function proposeProfileSeeds(business: BuyerFitBusiness, brands: string[],
 /** P179: one call groups the kept searches by the article that would answer
  * them (convex/lib/researchGrouping.ts). Throws when no answer came back; the
  * caller then counts the call's ceiling and keeps every search on its own. */
-async function groupResearchSearches(business: BuyerFitBusiness, searches: string[], existing: string[], minimumSearches = 2) {
-  const request = researchGroupingRequest(business, searches, existing);
+async function groupResearchSearches(business: BuyerFitBusiness, searches: string[], existing: string[],
+  { ownPages = [], minimumSearches = 2 }: { ownPages?: string[]; minimumSearches?: number } = {}) {
+  const request = researchGroupingRequest(business, searches, existing, ownPages);
   if (request.searches.length < minimumSearches) return { groups: new Map<string, ResearchGroup>(), costMicroUsd: 0 };
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
@@ -215,7 +216,7 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
     const kept = judged.filter(k => k.fit?.keep);
     if (kept.length >= 2) {
       try {
-        const answer = await groupResearchSearches(context.business, kept.map(k => k.keyword), context.existing);
+        const answer = await groupResearchSearches(context.business, kept.map(k => k.keyword), context.existing, { ownPages: context.ownPages });
         groupCostMicroUsd = answer.costMicroUsd;
         const result = groupSearches(kept, answer.groups);
         Object.assign(grouping, { merged: result.merged, covered: result.covered });
@@ -324,7 +325,7 @@ async function judgeUnjudgedTopics(ctx: ActionCtx, siteId: Id<"sites">): Promise
  * grouping call, its spend reserved before it is sent, only when the plan or
  * the live articles changed since the last audit. */
 async function auditPlan(ctx: ActionCtx, siteId: Id<"sites">): Promise<{ dropped: number; merged: number; heldBack: number } | null> {
-  const context: { business: BuyerFitBusiness; items: PlanAuditItem[]; existing: string[]; due: boolean } | null =
+  const context: { business: BuyerFitBusiness; items: PlanAuditItem[]; existing: string[]; ownPages: string[]; due: boolean } | null =
     await ctx.runQuery(internal.contentWork.planAuditContext, { siteId });
   if (!context || !context.due || context.items.length === 0) return null;
   const reservationId: Id<"provider_spend_reservations"> | null = await ctx.runMutation(internal.contentWork.reservePlanAudit, { siteId });
@@ -332,7 +333,8 @@ async function auditPlan(ctx: ActionCtx, siteId: Id<"sites">): Promise<{ dropped
   let groups = new Map<string, ResearchGroup>(), costMicroUsd = BUYER_FIT_CEILING_MICRO_USD, answered = false;
   try {
     // One search is enough here: it can repeat a live article.
-    ({ groups, costMicroUsd } = await groupResearchSearches(context.business, context.items.map(item => item.keyword), context.existing, 1));
+    ({ groups, costMicroUsd } = await groupResearchSearches(context.business, context.items.map(item => item.keyword), context.existing,
+      { ownPages: context.ownPages, minimumSearches: 1 }));
     answered = true;
   } catch (error) {
     // A call that was sent and lost counts at its ceiling; nothing was sent without a key.
