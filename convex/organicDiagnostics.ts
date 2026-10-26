@@ -260,7 +260,8 @@ export const snapshot = internalQuery({
     const receiptDays = new Set((site.gscDateEpochs ?? []).filter(r => r.date >= start && r.date <= through).map(r => r.date)).size;
     const articleUrls = new Set(summaries.map(row => publishedArticlePageUrl(site.domain, site.urlStructure, row.slug)));
     const byPage = new Map<string, { impressions: number; clicks: number; weighted: number }>();
-    const byWeek = new Map<string, { impressions: number; clicks: number }>();
+    // P216: V7 is judged on non-branded impressions week over week, so each week carries them too.
+    const byWeek = new Map<string, { impressions: number; clicks: number; nonBrandedImpressions: number; nonBrandedClicks: number }>();
     const buckets: Record<string, number> = { "1-3": 0, "4-10": 0, "11-20": 0, "21-50": 0, "51+": 0 };
     let impressions = 0, clicks = 0, nonBrandedImpressions = 0, nonBrandedClicks = 0;
     for (const row of pages.rows) {
@@ -270,8 +271,9 @@ export const snapshot = internalQuery({
       page.impressions += row.impressions; page.clicks += row.clicks; page.weighted += row.weightedPosition;
       byPage.set(row.page, page);
       const weekStart = addSearchConsoleDays(row.date, -((new Date(`${row.date}T00:00:00Z`).getUTCDay() + 6) % 7));
-      const week = byWeek.get(weekStart) ?? { impressions: 0, clicks: 0 };
-      week.impressions += row.impressions; week.clicks += row.clicks; byWeek.set(weekStart, week);
+      const week = byWeek.get(weekStart) ?? { impressions: 0, clicks: 0, nonBrandedImpressions: 0, nonBrandedClicks: 0 };
+      week.impressions += row.impressions; week.clicks += row.clicks;
+      week.nonBrandedImpressions += row.nonBrandedImpressions; week.nonBrandedClicks += row.nonBrandedClicks; byWeek.set(weekStart, week);
       if (row.impressions > 0) {
         const position = row.weightedPosition / row.impressions;
         const bucket = position <= 3 ? "1-3" : position <= 10 ? "4-10" : position <= 20 ? "11-20" : position <= 50 ? "21-50" : "51+";

@@ -3679,6 +3679,26 @@ test("SLC29 pause before execution preserves the reservation and an in-flight se
   });
 });
 
+// P216 (Oct 26 2026): V7 (results in the customer's Search Console) is judged on non-branded impressions week over week,
+// and the operator's weekly series counted branded and non-branded together (LeadPilot's own name is a large share).
+test("P216 the operator snapshot splits each week's impressions and clicks into non-branded", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f), stored = f.get(site.id)!;
+  const day = 86_400_000, end = Date.UTC(2026, 8, 7); // a Monday
+  stored.gscDataThrough = "2026-09-07";
+  stored.gscDateEpochs = Array.from({ length: 28 }, (_, i) => ({ date: new Date(end - i * day).toISOString().slice(0, 10), syncEpoch: `current-${i}` }));
+  const row = (i: number, impressions: number, nonBrandedImpressions: number, clicks: number, nonBrandedClicks: number) =>
+    f.add("search_page_daily", { siteId: site.id, date: new Date(end - i * day).toISOString().slice(0, 10), syncEpoch: `current-${i}`,
+      page: `https://${site.domain}/blog/page`, clicks, impressions, nonBrandedImpressions, nonBrandedClicks, weightedPosition: impressions * 5,
+      position: 5, ctr: 0, createdAt: START });
+  row(0, 30, 10, 3, 1); row(1, 20, 20, 0, 0); row(7, 50, 5, 2, 0);
+  const weeks = (await f.invoke("organicDiagnostics:snapshot", { siteId: site.id, days: 28 })).weeks;
+  assert.deepEqual(weeks, [
+    { week: "2026-08-31", impressions: 70, clicks: 2, nonBrandedImpressions: 25, nonBrandedClicks: 0 },
+    { week: "2026-09-07", impressions: 30, clicks: 3, nonBrandedImpressions: 10, nonBrandedClicks: 1 },
+  ]);
+  f.assertOffline();
+});
+
 test("SLC29 Search Console requires complete current epochs and distinguishes zero, missing, delayed and new-page cohorts", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] }), site = await selectGrowth(f), stored = f.get(site.id)!;
   f.setIdentity(stored.userId);
