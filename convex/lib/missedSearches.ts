@@ -15,7 +15,7 @@ import { normalizeFitKeyword, type BuyerFitBusiness, type BuyerFitVerdict } from
 
 /** Bumped when the check's logic changes: a finished check from an older
  * version is run again on its next request instead of being reused. */
-export const FREE_CHECK_VERSION = 11;
+export const FREE_CHECK_VERSION = 12;
 
 /** A finished check is reused for a week, so a shared link costs nothing. */
 export const FREE_CHECK_CACHE_MS = 7 * 86_400_000;
@@ -115,6 +115,11 @@ export function brandTerms(domain: string, name: string): string[] {
   if (phrase.includes(" ")) terms.add(phrase);
   if (label.length >= 4 && squashed.length >= 4 && (label === squashed || label.startsWith(squashed) || label.endsWith(squashed))) terms.add(label);
   if (!squashed && label.length >= 5) terms.add(label);
+  // P207 (Oct 26 2026): a possessive name is searched without its apostrophe: "Zingerman's Deli" is "zingerman deli
+  // ann arbor" and "zingermans reuben", and the free check showed that as a search the deli wins. A first word of five
+  // letters or more before the possessive "s" is the brand, with and without its "s".
+  const words = phrase.split(" ");
+  if (words.length >= 2 && words[1] === "s" && words[0].length >= 5) { terms.add(words[0]); terms.add(`${words[0]}s`); }
   return [...terms];
 }
 

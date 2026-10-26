@@ -42,6 +42,10 @@ test("the brand is the business name, never a generic word domain", () => {
   assert.ok(!isBrandedKeyword("emergency plumbing repair", plumbing), "a generic domain word is not a brand");
   assert.ok(isBrandedKeyword("joe s plumbing hours", plumbing));
   assert.deepEqual(brandTerms("acme-tools.com", "Home"), ["acme-tools"], "a page word is never taken as the name");
+  // P207: a possessive name is searched without its apostrophe; the free check showed "zingerman deli ann arbor" as a win.
+  const deli = brandTerms("zingermansdeli.com", "Zingerman's Deli");
+  assert.ok(isBrandedKeyword("zingerman deli ann arbor", deli) && isBrandedKeyword("zingermans reuben", deli));
+  assert.ok(!isBrandedKeyword("deli ann arbor", deli) && !isBrandedKeyword("best deli sandwiches ann arbor", deli));
 });
 
 test("seeds come from the homepage's own product words, never the brand", () => {
