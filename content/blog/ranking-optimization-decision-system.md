@@ -128,9 +128,8 @@ The final artifact is not a promise of improved rankings. It is a documented edi
 
 ## Related reading
 
-- [B2B Conversion Optimization: Turning SEO Traffic Into Qualified](/blog/b2b-conversion-optimization-seo-traffic-qualified-leads)
-- [On Page Off Page SEO: The Complete Framework](/blog/on-page-off-page-seo-complete-framework)
-- [B2B SaaS Content Strategy for Ranking and Lead](/blog/b2b-saas-content-strategy-ranking-lead-generation)
+- [B2B SaaS Content Strategy for Ranking and Lead Generation: A Complete Guide](/blog/b2b-saas-content-strategy-ranking-lead-generation)
+- [On-Page and Off-Page SEO: Complete Strategy Guide for Rankings](/blog/on-page-off-page-seo-strategy-guide)
 
 ## Sources
 
