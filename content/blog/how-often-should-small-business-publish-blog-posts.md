@@ -97,5 +97,4 @@ If you've worked through the framework above and concluded that your real bottle
 ## Related reading
 
 - [SEO Content Calendar: How Often Should You Publish New Posts](/blog/how-often-publish-blog-posts-seo)
-- [SaaS Blog Publishing Frequency: How Often Should You Post for Rankings?](/blog/saas-blog-publishing-frequency-rankings)
-- [How Often Should You Update Blog Posts for SEO? A Data-Driven Strategy Guide](/blog/how-often-update-blog-posts-seo)
+- [Article Refresh Strategy: Complete Guide to Updating Old Content for Better Rankings](/blog/article-refresh-strategy-guide)
