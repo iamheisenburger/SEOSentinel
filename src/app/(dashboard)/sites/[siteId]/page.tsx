@@ -56,6 +56,11 @@ type Tab = "overview" | "articles" | "settings";
 type SiteView = NonNullable<FunctionReturnType<typeof api.sites.get>>;
 
 const TONE_OPTIONS = ["professional", "friendly", "casual", "authoritative"];
+// P200: what the repository step says when there is nothing to pick.
+const GITHUB_LIST_FAILED = "Pentra couldn't list your GitHub repositories. Reconnect GitHub and try again, or type the repository below.";
+const NO_GITHUB_REPOSITORIES = "This GitHub account has no repository Pentra can publish to. If your website's repository belongs to an organization, " +
+  "approve Pentra for that organization in GitHub (Settings → Applications → Authorized OAuth Apps → Pentra → Grant), then reconnect. " +
+  "If your website isn't built from a GitHub repository, choose the platform it runs on above, or Copy & Paste.";
 
 /** "professional|authoritative" → "Professional, authoritative". */
 function formatTone(tone: string): string {
@@ -1141,6 +1146,9 @@ function ConnectionSection({ site }: { site: SiteView }) {
   // After GitHub is connected, the owner picks a repository it can publish to
   // instead of typing its owner and name (Phase 4, D3). Typing still works.
   const [repoChoices, setRepoChoices] = useState<FunctionReturnType<typeof api.publisher.listGithubRepositories> | null>(null);
+  // P200: an empty or failed repository list says why and what to do. One of the first real signups connected GitHub
+  // and stopped here: with no repository to pick, the page showed only two empty boxes.
+  const [repoListError, setRepoListError] = useState<string | null>(null);
   // Connect opens GitHub in a small window; a blocked window used to fail with no message.
   const connectGithub = () => {
     setConnectionError(null);
@@ -1157,7 +1165,8 @@ function ConnectionSection({ site }: { site: SiteView }) {
   useEffect(() => {
     if (!editing || !isGithub || !hasGithubToken || repoChoices) return;
     let live = true;
-    listGithubRepositories({ siteId: site._id }).then((repos) => { if (live) setRepoChoices(repos); }).catch(() => { if (live) setRepoChoices([]); });
+    listGithubRepositories({ siteId: site._id }).then((repos) => { if (live) { setRepoListError(null); setRepoChoices(repos); } })
+      .catch((error) => { if (live) { setRepoListError(userErrorMessage(error, GITHUB_LIST_FAILED)); setRepoChoices([]); } });
     return () => { live = false; };
   }, [editing, isGithub, hasGithubToken, repoChoices, listGithubRepositories, site._id]);
 
@@ -1279,6 +1288,9 @@ function ConnectionSection({ site }: { site: SiteView }) {
                   </select>
                   <p className="text-[11px] text-[#62666D]">Or type it below.</p>
                 </div>
+              )}
+              {isGithub && hasGithubToken && repoChoices && repoChoices.length === 0 && (
+                <p role="status" className="text-[12px] text-[#FBBF24]">{repoListError ?? NO_GITHUB_REPOSITORIES}</p>
               )}
               {isGithub && (
                 <div className="grid grid-cols-2 gap-3">

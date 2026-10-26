@@ -9380,6 +9380,26 @@ test("P196 a site Pentra hasn't started for a day after it was added gets one em
   f.assertOffline(); second.assertOffline(); started.assertOffline(); late.assertOffline();
 });
 
+// P200 (Oct 26 2026): one of the first real signups connected GitHub and never chose a repository.
+test("P200 a site with GitHub connected but no repository is told to choose its repository", async () => {
+  const hour = 3_600_000;
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = f.sites[0], owner = f.get(site.id)!.userId;
+  Object.assign(f.get(site.id)!, { publishMethod: "github", githubToken: "synthetic-only", repoOwner: undefined, repoName: undefined,
+    publisherDestinationReceipt: undefined });
+  await f.invoke("customerEmails:recordContact", { userId: owner, email: "owner@reservoirnote.example" });
+  f.restartRuntime({ RESEND_API_KEY: "re_synthetic" });
+  f.setTime(f.now() + 21 * hour);
+  assert.deepEqual(await f.invoke("customerEmails:noteSetupReminders", {}), { noted: 1 });
+  const log = f.tables.customer_emails.find(e => e.kind === "setup_reminder")!;
+  const preview = await f.invoke("customerEmails:noticeContext", { logId: log._id });
+  assert.match(preview.message.text, /What's left: Choose the GitHub repository your website is built from/);
+  // Without GitHub connected at all, it is the website step.
+  f.get(site.id)!.githubToken = undefined;
+  assert.match((await f.invoke("customerEmails:noticeContext", { logId: log._id })).message.text, /What's left: Connect your website/);
+  f.assertOffline();
+});
+
 // P197 (Oct 25 2026): one of the first real signups never pressed Start and made an article with the Articles page's
 // Generate, which ran the older queue for a site set up through the content service.
 test("P197 a site mid content-service setup never reaches the older article queue, and is still reminded to press Start", async () => {

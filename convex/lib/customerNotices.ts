@@ -46,8 +46,10 @@ export function firstArticleEmail(input: { domain: string; title: string; url: s
 }
 
 /** P196: what a new site still needs before Pentra can start, in the order the setup panel asks for it. */
-export type SetupStep = "website" | "plan" | "start";
+export type SetupStep = "repository" | "website" | "plan" | "start";
 const SETUP_STEP: Record<SetupStep, string> = {
+  // P200: GitHub connected, no repository chosen (where one of the first real signups stopped).
+  repository: "choose the GitHub repository your website is built from: open Settings (https://pentra.dev/settings), go to Publishing, click Edit and pick it. If your website isn't built from a GitHub repository, choose the platform it runs on there instead, or paste the articles yourself.",
   website: "connect your website so Pentra can publish to it (WordPress, GitHub, Webflow, Shopify or Ghost). If your site runs on something else, choose “Paste the articles yourself” in setup instead.",
   plan: "check your plan in Plans & billing (https://pentra.dev/upgrade).",
   start: "check your business details, tick “My business details are accurate” and press Start Pentra.",

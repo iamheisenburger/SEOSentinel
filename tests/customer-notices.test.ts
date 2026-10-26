@@ -11,6 +11,9 @@ test("the setup reminder names the one step that is left, and how to turn emails
   assert.match(website.text, /^You added cedarcare\.example to Pentra, but Pentra isn't running on it yet\./);
   assert.match(website.text, /What's left: Connect your website so Pentra can publish to it \(WordPress, GitHub, Webflow, Shopify or Ghost\)\. If your site runs on something else, choose “Paste the articles yourself” in setup instead\./);
   assert.match(setupReminderEmail({ domain: "cedarcare.example", step: "plan" }).text, /What's left: Check your plan in Plans & billing \(https:\/\/pentra\.dev\/upgrade\)\./);
+  // P200: GitHub connected, no repository chosen.
+  assert.match(setupReminderEmail({ domain: "cedarcare.example", step: "repository" }).text,
+    /What's left: Choose the GitHub repository your website is built from: open Settings \(https:\/\/pentra\.dev\/settings\), go to Publishing, click Edit and pick it\. If your website isn't built from a GitHub repository, choose the platform it runs on there instead, or paste the articles yourself\./);
   const start = setupReminderEmail({ domain: "cedarcare.example", step: "start" });
   assert.match(start.text, /What's left: Check your business details, tick “My business details are accurate” and press Start Pentra\./);
   for (const email of [website, start]) {

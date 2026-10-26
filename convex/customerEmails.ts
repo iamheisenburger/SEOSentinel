@@ -160,7 +160,8 @@ async function setupStep(ctx: QueryCtx, site: Doc<"sites">): Promise<SetupStep> 
     website = pasteDestination(site) ||
       (contentConnectionComplete(site) && publisherDestinationReceiptVerified({ site }) && publicationDestinationBlockers(site).length === 0);
   } catch { /* an incomplete destination is the website step */ }
-  if (!website) return "website";
+  // P200: GitHub connected with no repository chosen is its own step.
+  if (!website) return (site.publishMethod ?? "github") === "github" && site.githubToken && !(site.repoOwner && site.repoName) ? "repository" : "website";
   const entitlement = await ctx.db.query("account_plan_entitlements").withIndex("by_user", q => q.eq("userId", site.userId!)).unique();
   if (entitlement?.status !== "completed" || !(await siteExecutionAuthorized(ctx, site))) return "plan";
   return "start";
