@@ -1818,7 +1818,9 @@ export default defineSchema({
       pagesRead: v.optional(v.number()), rankCheck: v.optional(v.union(v.literal("verified"), v.literal("partial"))),
       homeTitle: v.optional(v.string()), country: v.optional(v.string()),
       // P186: the live Google check's counts (P184); must match checkDiagnostics in freeCheck.ts.
-      verified: v.optional(v.object({ asked: v.number(), answered: v.number(), absent: v.number() })) })),
+      verified: v.optional(v.object({ asked: v.number(), answered: v.number(), absent: v.number() })),
+      // P199: why the seed or coverage call fell back to the homepage's words.
+      seedError: v.optional(v.string()), coverageError: v.optional(v.string()) })),
   }).index("by_domain", ["domain"]).index("by_requested", ["requestedAt"]),
   // Daily limits for free checks: per visitor (an HMAC of IP and day, so a
   // row can't be linked to a person or across days), the day's spend, and

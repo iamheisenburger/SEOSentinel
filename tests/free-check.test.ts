@@ -325,7 +325,7 @@ const RANKED = [
 ] as const;
 
 function world(options: { homepageDown?: boolean; resendStatus?: number; seedAnswer?: unknown; local?: boolean; bigHomepage?: boolean; botWall?: boolean;
-  serpRanks?: Record<string, number>; serpFails?: string[] } = {}) {
+  serpRanks?: Record<string, number>; serpFails?: string[]; refuse?: Partial<Record<"submit_search_seeds" | "submit_page_coverage", number>> } = {}) {
   const calls: string[] = [], emails: Fields[] = [], seedRequests: string[] = [], labsSeeds: string[] = [], coverageRequests: string[] = [];
   const rankedRequests: Fields[] = [], serpRequests: Fields[] = [], temperatures: string[] = [];
   const page = (body: string, type = "text/html; charset=utf-8", status = 200) => new Response(body, { status, headers: { "content-type": type } });
@@ -388,6 +388,9 @@ function world(options: { homepageDown?: boolean; resendStatus?: number; seedAns
       const body = JSON.parse(String(init.body)), tool = body.tools?.[0]?.name;
       let input: unknown;
       if (tool === "submit_search_seeds" || tool === "submit_page_coverage") temperatures.push(`${tool}:${body.temperature}`);
+      const refused = options.refuse?.[tool as "submit_search_seeds" | "submit_page_coverage"];
+      if (refused) return new Response(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "synthetic refusal of this request" } }),
+        { status: refused, headers: { "content-type": "application/json" } });
       if (tool === "submit_search_seeds") {
         seedRequests.push(String(body.messages[0].content));
         input = options.seedAnswer ?? { sells: "Glaze and kiln record software for ceramic studios.", customers: "Owners of pottery and ceramic studios.",
@@ -450,13 +453,29 @@ test("v7: a claim is shown only when Google confirms the site is absent; one it 
   f.assertOffline();
 });
 
-// P187 (Oct 25 2026): abchomeandcommercial.com's report found six Texas cities on Oct 21 and none on Oct 25 for the
-// same homepage, so a local business was measured on national volumes. Reading a site must not be a coin toss.
-test("v8: the same site reads the same way every run: the check's reading calls run at temperature 0", async () => {
+// P199 (Oct 25 2026): P187 sent temperature 0 on the seed and coverage calls; the one check that ran with it
+// (abchomeandcommercial.com) lost both of those calls while the buyer-fit call without it answered, and the report
+// silently fell back to its homepage's words ("find a location near you", "learn how we help you").
+test("v9: the check's model calls carry no sampling parameter", async () => {
   const { f, temperatures } = world();
   await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(1) });
   assert.deepEqual((await f.runNextScheduled())?.result, { status: "done" });
-  assert.deepEqual(temperatures, ["submit_search_seeds:0", "submit_page_coverage:0"]);
+  assert.deepEqual(temperatures, ["submit_search_seeds:undefined", "submit_page_coverage:undefined"]);
+  const diagnostics = (await f.invoke("freeCheck:diagnosticsFor", { domain: DOMAIN })).diagnostics;
+  assert.equal(diagnostics.seedSource, "model"); assert.equal(diagnostics.coverage, "model");
+  assert.equal(diagnostics.seedError, undefined); assert.equal(diagnostics.coverageError, undefined);
+  f.assertOffline();
+});
+
+test("v9: a refused seed or coverage call is recorded with the API's status, never silently replaced", async () => {
+  const { f } = world({ refuse: { submit_search_seeds: 400, submit_page_coverage: 400 } });
+  await f.invoke("freeCheck:request", { domain: DOMAIN, visitor: visitor(1) });
+  assert.deepEqual((await f.runNextScheduled())?.result, { status: "done" });
+  const diagnostics = (await f.invoke("freeCheck:diagnosticsFor", { domain: DOMAIN })).diagnostics;
+  assert.equal(diagnostics.seedSource, "homepage", "the homepage's words stand in");
+  assert.match(diagnostics.seedError, /^http_400: /, "and the operator sees why");
+  assert.ok(!/sk-ant|x-api-key/i.test(diagnostics.seedError), "never a key");
+  if (diagnostics.coverage === "words" && diagnostics.kept > 0) assert.match(diagnostics.coverageError, /^http_400: /);
   f.assertOffline();
 });
 

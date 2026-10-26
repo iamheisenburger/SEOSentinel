@@ -37,7 +37,16 @@ type Outcome =
 type Diagnostics = { seedSource: "model" | "homepage"; seeds: string[]; topics?: string[]; discovered: number; ranked: number; judged: number;
   kept: number; sample?: Array<{ keyword: string; keep: boolean; reason: string }>; places?: string[]; freePlan?: string;
   coverage?: "model" | "words"; pagesRead?: number; rankCheck?: "verified" | "partial"; homeTitle?: string; country?: string;
-  verified?: { asked: number; answered: number; absent: number } };
+  verified?: { asked: number; answered: number; absent: number }; seedError?: string; coverageError?: string };
+
+/** A failed model call as the check's diagnostics record it (P199): the API's
+ * status and message, clipped; never a key or the request. */
+function modelCallError(error: unknown): string {
+  if (error instanceof Error && error.message === "ANTHROPIC_API_KEY not set") return "no_key";
+  const status = (error as { status?: unknown } | null)?.status;
+  const message = error instanceof Error ? error.message : String(error);
+  return `${typeof status === "number" ? `http_${status}: ` : ""}${message}`.replace(/\s+/g, " ").trim().slice(0, 160);
+}
 
 /** One small model call: the searches a buyer would type, read from the
  * homepage and the site's sections (convex/lib/missedSearches.ts
@@ -48,12 +57,13 @@ export async function proposeSeeds(domain: string, html: string, questions: stri
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
   const model = process.env.TOPIC_FIT_MODEL ?? BUYER_FIT_MODEL;
   const request = searchSeedRequest(domain, homepageDigest(html), questions, sections);
-  // Temperature 0 (P187, Oct 25 2026): the same homepage must read the same way
-  // every run. At the default, abchomeandcommercial.com's six Texas cities came
-  // back on one run and none on the next, which turned a local business's report
-  // into national volumes.
+  // P199 (Oct 25 2026): no sampling parameter. P187 sent temperature 0 here and on
+  // the coverage call; the one check that ran with it (abchomeandcommercial.com,
+  // 17:58Z) lost both of those calls while the buyer-fit call without it answered,
+  // so the report silently fell back to its homepage's words. A failed call is
+  // now recorded in the check's diagnostics.
   const response = await new Anthropic({ apiKey, maxRetries: 1, timeout: 45_000, fetch }).messages.create({
-    model, max_tokens: SEARCH_SEEDS_MAX_TOKENS, temperature: 0, system: request.system,
+    model, max_tokens: SEARCH_SEEDS_MAX_TOKENS, system: request.system,
     messages: [{ role: "user", content: request.userMessage }],
     tools: [{ name: SEARCH_SEEDS_TOOL, description: "Record the searches and the business summary.", input_schema: request.inputSchema, strict: true }],
     tool_choice: structuredToolChoice(model, SEARCH_SEEDS_TOOL),
@@ -70,7 +80,7 @@ async function coverPages(input: Parameters<typeof pageCoverageRequest>[0]) {
   const model = process.env.TOPIC_FIT_MODEL ?? BUYER_FIT_MODEL;
   const request = pageCoverageRequest(input);
   const response = await new Anthropic({ apiKey, maxRetries: 1, timeout: 60_000, fetch }).messages.create({
-    model, max_tokens: PAGE_COVERAGE_MAX_TOKENS, temperature: 0, system: request.system,
+    model, max_tokens: PAGE_COVERAGE_MAX_TOKENS, system: request.system,
     messages: [{ role: "user", content: request.userMessage }],
     tools: [{ name: PAGE_COVERAGE_TOOL, description: "Record the page and topic for every search.", input_schema: request.inputSchema, strict: true }],
     tool_choice: structuredToolChoice(model, PAGE_COVERAGE_TOOL),
@@ -156,11 +166,12 @@ export const run = internalAction({
       const brands = brandTerms(domain, prefill.name);
       const sitePages = [...new Set([...sitemap.urls, ...linkedPages(page.html, host)])];
       const coverage = siteCoverage(sitePages, homeHealth.title);
-      let read: SeedRead | null = null;
+      let read: SeedRead | null = null, seedError: string | undefined;
       try {
         const proposed = await proposeSeeds(domain, page.html, prefill.questions, brands, siteSections([...sitePages, ...robots.sitemaps]));
         read = proposed.read; spent.fitMicroUsd += proposed.costMicroUsd;
-      } catch { spent.fitMicroUsd += BUYER_FIT_CEILING_MICRO_USD; }
+        if (!read) seedError = "unusable_answer";
+      } catch (error) { spent.fitMicroUsd += BUYER_FIT_CEILING_MICRO_USD; seedError = modelCallError(error); }
       const locale = freeCheckLocale(host, htmlLang(page.html), read?.country);
       const locationCode = dataForSeoLocationCode(locale.country);
       const places = read?.places ?? [];
@@ -169,6 +180,7 @@ export const run = internalAction({
       const seeds = read ? (local ? localSeeds(read.topics.length ? read.topics : read.searches, places) : [...read.topics, ...read.searches])
         : checkSeeds(prefill, brands);
       diagnostics = { seedSource: read ? "model" : "homepage", seeds, ...(read ? { topics: read.topics, freePlan: read.freePlan } : {}),
+        ...(seedError ? { seedError } : {}),
         homeTitle: (homeHealth.title ?? "").slice(0, 120), country: locale.country,
         ...(local ? { places } : {}), discovered: 0, ranked: 0, judged: 0, kept: 0, pagesRead: sitePages.length };
       let ranked: RankedKeyword[] = [];
@@ -250,7 +262,7 @@ export const run = internalAction({
           ranked = [...ranked, ...verified.result.filter(r => !known.has(`${normalizeFitKeyword(r.keyword)} ${r.url}`))];
         }
       }
-      let pages: Map<string, PageAnswer> | null = null;
+      let pages: Map<string, PageAnswer> | null = null, coverageError: string | undefined;
       if (kept.length > 0) {
         const paths = pathsForCoverage([...sitePages, ...ranked.map(r => r.url)], kept);
         const path = (url: string) => { try { return decodeURI(new URL(url).pathname).replace(/\/+$/, "") || "/"; } catch { return url; } };
@@ -258,9 +270,10 @@ export const run = internalAction({
           const covered = await coverPages({ domain, sells: read?.sells ?? prefill.summary, searches: kept, paths,
             ranked: ranked.slice(0, 60).map(r => ({ keyword: r.keyword, path: path(r.url), position: r.position })) });
           pages = covered.pages; spent.fitMicroUsd += covered.costMicroUsd;
-        } catch { spent.fitMicroUsd += BUYER_FIT_CEILING_MICRO_USD; }
+          if (!pages) coverageError = "unusable_answer";
+        } catch (error) { spent.fitMicroUsd += BUYER_FIT_CEILING_MICRO_USD; coverageError = modelCallError(error); }
       }
-      diagnostics = { ...diagnostics, coverage: pages ? "model" : "words", rankCheck };
+      diagnostics = { ...diagnostics, coverage: pages ? "model" : "words", rankCheck, ...(coverageError ? { coverageError } : {}) };
       // With the coverage call's answer, only the searches it judged are shown.
       const shown = pages ? found.filter(k => kept.includes(normalizeFitKeyword(k.keyword))) : found;
       const classified = classifySearches(shown, verdicts, { brands, coverage, ranked, pages, places, freePlan: read?.freePlan });

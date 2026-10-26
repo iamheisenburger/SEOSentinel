@@ -33,7 +33,9 @@ export const checkDiagnostics = v.object({ seedSource: v.union(v.literal("model"
   pagesRead: v.optional(v.number()), rankCheck: v.optional(v.union(v.literal("verified"), v.literal("partial"))),
   homeTitle: v.optional(v.string()), country: v.optional(v.string()),
   // P184: claims checked live on Google, how many it answered, and how many it confirmed absent.
-  verified: v.optional(v.object({ asked: v.number(), answered: v.number(), absent: v.number() })) });
+  verified: v.optional(v.object({ asked: v.number(), answered: v.number(), absent: v.number() })),
+  // P199: why the seed or coverage call fell back to the homepage's words, when it did.
+  seedError: v.optional(v.string()), coverageError: v.optional(v.string()) });
 
 async function counter(ctx: MutationCtx, key: string) {
   return ctx.db.query("free_check_quota").withIndex("by_key", q => q.eq("key", key)).first();
