@@ -76,6 +76,7 @@ import type * as lib_cadenceMicroSeedSettlement from "../lib/cadenceMicroSeedSet
 import type * as lib_cadenceRefill from "../lib/cadenceRefill.js";
 import type * as lib_cadenceRevision from "../lib/cadenceRevision.js";
 import type * as lib_cadenceSettings from "../lib/cadenceSettings.js";
+import type * as lib_clickPotential from "../lib/clickPotential.js";
 import type * as lib_cmsDestinations from "../lib/cmsDestinations.js";
 import type * as lib_cmsPublishers from "../lib/cmsPublishers.js";
 import type * as lib_coherentDeletion from "../lib/coherentDeletion.js";
@@ -303,6 +304,7 @@ declare const fullApi: ApiFromModules<{
   "lib/cadenceRefill": typeof lib_cadenceRefill;
   "lib/cadenceRevision": typeof lib_cadenceRevision;
   "lib/cadenceSettings": typeof lib_cadenceSettings;
+  "lib/clickPotential": typeof lib_clickPotential;
   "lib/cmsDestinations": typeof lib_cmsDestinations;
   "lib/cmsPublishers": typeof lib_cmsPublishers;
   "lib/coherentDeletion": typeof lib_coherentDeletion;

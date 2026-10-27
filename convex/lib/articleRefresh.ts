@@ -9,6 +9,7 @@
  *   and its most-shown search, "lead scoring template", at 31, both out of reach);
  * - the same article is refreshed at most once every 60 days.
  * When nothing qualifies, the slot is an ordinary new article. Pure. */
+import { clickPotential } from "./clickPotential.ts";
 
 export const REFRESH_MIN_AGE_MS = 28 * 86_400_000;
 export const REFRESH_COOLDOWN_MS = 60 * 86_400_000;
@@ -41,9 +42,10 @@ export function shownPositionWeight(position: number): number {
   return position >= REFRESH_MIN_POSITION && position <= REFRESH_MAX_POSITION ? Math.min(1, (20 / position) ** 2) : 0;
 }
 
-/** What answering a search is worth: its impressions, weighted by position. */
+/** What answering a search is worth: its impressions, weighted by position and by whether people click through on it
+ * (P228: a definition Google answers on the results page is worth less). */
 export function refreshOpportunityValue(opportunity: RefreshOpportunity): number {
-  return opportunity.impressions * shownPositionWeight(opportunity.position);
+  return opportunity.impressions * shownPositionWeight(opportunity.position) * clickPotential(opportunity.query);
 }
 
 /** Impression-weighted average position per search, for one page, most valuable first. */

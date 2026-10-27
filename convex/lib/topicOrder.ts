@@ -6,9 +6,10 @@
  * written next. Pure.
  */
 import { preSerpWinnability } from "./winnableDiscovery.ts";
+import { clickPotential } from "./clickPotential.ts";
 
 export type OrderedTopic = { ownerChosenAt?: number; searchVolume?: number; keywordDifficulty?: number;
-  keywordDifficultyMeasured?: boolean; priority?: number };
+  keywordDifficultyMeasured?: boolean; priority?: number; primaryKeyword?: string };
 /** The site's reach (keyword difficulty ceiling) and measured authority, when fresh. */
 export type TopicOrderSite = { difficultyCeiling: number; authority: number | null };
 
@@ -27,13 +28,17 @@ export function compareTopics(site: TopicOrderSite) {
   // Among searched keywords, a young site wins easy ones first: difficulty
   // weighs more than raw volume (e.g. 100 searches at difficulty 10 beats
   // 1,000 searches at difficulty 40).
-  const opportunity = (t: OrderedTopic) => Math.log10(1 + (t.searchVolume ?? 0)) * 12 - (t.keywordDifficulty ?? 0) * 0.8;
+  // P228: a definition Google answers on its results page (convex/lib/clickPotential.ts) waits behind searches people
+  // open a page for: it counts at 0.4 of its chance of winning, and 15 points less without measured authority.
+  const clicks = (t: OrderedTopic) => clickPotential(t.primaryKeyword);
+  const opportunity = (t: OrderedTopic) => Math.log10(1 + (t.searchVolume ?? 0)) * 12 - (t.keywordDifficulty ?? 0) * 0.8 -
+    (clicks(t) < 1 ? 15 : 0);
   // With measured authority, searched keywords are ordered by the chance this
   // site can actually win them (Pentra's winnability model): a young domain
   // writes the easy searches first instead of ones only an incumbent ranks
   // for. The ordering drops nothing; only the reach ceiling does.
   const winnability = (t: OrderedTopic) => site.authority === null ? 0 : preSerpWinnability({ tenantAuthority: site.authority,
-    keywordDifficulty: t.keywordDifficulty, keywordDifficultyMeasured: t.keywordDifficultyMeasured, monthlySearches: t.searchVolume });
+    keywordDifficulty: t.keywordDifficulty, keywordDifficultyMeasured: t.keywordDifficultyMeasured, monthlySearches: t.searchVolume }) * clicks(t);
   const owner = (t: OrderedTopic) => t.ownerChosenAt !== undefined;
   // The owner's searches come first, oldest first; then keywords people measurably search for; within each group the
   // stored priority orders the work.
