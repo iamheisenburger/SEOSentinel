@@ -39,6 +39,7 @@ import { auditResultHash, clarifiableContentAudit, inconsistentAuditFeedback, in
 import { contentJobUsesAllowance } from "./lib/contentUsage";
 import { BUYER_FIT_MAX_KEYWORDS, BUYER_FIT_RESERVATION_MICRO_USD, BUYER_FIT_VERSION, type BuyerFitBusiness } from "./lib/topicFit";
 import { PLAN_AUDIT_VERSION } from "./lib/researchGrouping";
+import { servedOnItsOwnUrl } from "./lib/pentraConsolidation";
 import { OWNER_SEARCH_MAX_WAITING, OWNER_SEARCH_MEASURE_MICRO_USD, OWNER_SEARCH_NOTES, OWNER_SEARCH_PRIORITY,
   ownerSearchArticleType, ownerSearchKeyword } from "./lib/ownerSearch";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
@@ -1693,7 +1694,8 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
   for (const [status, take] of [["ready", 10], ["published", 120]] as const) {
     const rows = await ctx.db.query("article_summaries").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", status))
       .order("desc").take(take);
-    existing.push(...rows.filter(row => articleMatchesCurrentDomain(site, row)).map(row => row.title));
+    // P225: an article consolidated away answers nothing itself; the article it redirects to is listed.
+    existing.push(...rows.filter(row => articleMatchesCurrentDomain(site, row) && servedOnItsOwnUrl(site.domain, row.slug)).map(row => row.title));
   }
   existing.push(...topics.filter(t => ["planned", "pending", "queued"].includes(t.status ?? "planned")).map(t => t.primaryKeyword));
   // P172: searches the buyer-fit model already dropped for this profile are not judged again.
@@ -1965,7 +1967,7 @@ export const planAuditContext = internalQuery({ args: { siteId: v.id("sites") },
   const pages = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId)).take(LIMIT + 1);
   try { planned = (await eligiblePlannedTopics(ctx, site, [], undefined, pages)).planned.filter(t => !ownerChosen(t)); } catch { return null; }
   const live = (await ctx.db.query("article_summaries").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published"))
-    .order("desc").take(PLAN_AUDIT_LIVE)).filter(row => articleMatchesCurrentDomain(site, row));
+    .order("desc").take(PLAN_AUDIT_LIVE)).filter(row => articleMatchesCurrentDomain(site, row) && servedOnItsOwnUrl(site.domain, row.slug));
   const waiting: { job: Doc<"jobs">; topic: Doc<"topic_clusters"> }[] = [];
   for (const job of await waitingCreateWork(ctx, siteId)) {
     const topicId = (job.payload as { topicId?: Id<"topic_clusters"> } | undefined)?.topicId;

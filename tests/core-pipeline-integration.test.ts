@@ -8131,6 +8131,32 @@ test("P211 the daily audit drops a planned article that competes with one of the
   f.assertOffline();
 });
 
+// P225 (Oct 27 2026): the plan audit listed pentra.dev's 147 published titles for its 57 served pages (the others were
+// consolidated and redirect), and replays judged "seo web content writing" new beside the live "Search Engine Optimization
+// Content Writing: A Practical Guide" in 2 of 3 runs; with only the served pages listed, 6 of 6 named it a copy.
+test("P225 the plan audit and research list only articles served on their own URL", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+  const site = await selectGrowth(f, 8 * 3_600_000), saved = f.get(site.id)!;
+  Object.assign(saved.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const merged = "How to Automate Your SEO Workflow", kept = "Automated SEO Workflow: The Complete Pipeline";
+  for (const [slug, title] of [["how-to-automate-seo-workflow", merged], ["automated-seo-workflow-complete-guide", kept]]) {
+    f.add("article_summaries", { articleId: `articles:${slug}`, siteId: site.id, status: "published", slug, title,
+      canonicalDomain: saved.canonicalDomain ?? saved.domain, domainRevision: saved.canonicalDomainRevision ?? 0,
+      publishedAt: f.now(), articleCreatedAt: f.now() });
+  }
+  const listed = async () => [(await f.invoke("contentWork:planAuditContext", { siteId: site.id }))!.existing,
+    (await f.invoke("contentWork:growthTopicContext", { siteId: site.id }))!.existing];
+  for (const existing of await listed()) assert.ok(existing.includes(merged) && existing.includes(kept), "another site serves every article");
+  // On pentra.dev the first slug is consolidated into the second (it redirects there).
+  saved.canonicalDomain ??= saved.domain;
+  saved.domain = "pentra.dev";
+  for (const existing of await listed()) {
+    assert.ok(existing.includes(kept), "the article served on its own URL is listed");
+    assert.ok(!existing.includes(merged), "the article consolidated into it is not");
+  }
+  f.assertOffline();
+});
+
 // P177 (Oct 24 2026): LeadPilot's research context took 857 ms of Convex's 1-second query limit: it read the site's
 // 392 topic rows (741 KB) twice and re-tokenized ~78,000 keyword texts and SERP URL lists from scratch.
 test("P177 the research context reads the topic list once, and keyword work is cached", async () => {

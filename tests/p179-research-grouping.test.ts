@@ -4,10 +4,18 @@
 // search an existing article or planned topic already answers is dropped.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { groupSearches, parseResearchGroups, researchGroupingRequest } from "../convex/lib/researchGrouping.ts";
+import { groupSearches, parseResearchGroups, PLAN_AUDIT_VERSION, researchGroupingRequest } from "../convex/lib/researchGrouping.ts";
 
 const business = { name: "ReservoirNote", domain: "reservoir.example", summary: "Irrigation maintenance scheduling software." };
 const existing = ["Fixing an Irrigation Controller That Won't Start", "irrigation pump service checklist"];
+
+// P225 (Oct 27 2026): replays of pentra.dev's plan audit judged "seo web content writing" a new article beside its live
+// "Search Engine Optimization Content Writing: A Practical Guide" in 2 of 3 runs; it was due to publish the next morning.
+test("P225 another wording of an existing article (an abbreviation, a word like web) is its copy, and every plan is audited again", () => {
+  const { system } = researchGroupingRequest(business, ["seo web content writing", "drip line repair"], existing);
+  assert.match(system, /Judge by what the searcher wants, not by shared words\. Wordings that differ only by an abbreviation \(SEO is search engine optimization\), word order, singular or plural, or a word such as web, online, website, digital or a year that doesn't change what the page must cover want the same page, so an existing article on one already answers the other\. /);
+  assert.equal(PLAN_AUDIT_VERSION, 3);
+});
 
 test("the grouping request lists the existing articles and every search, as data", () => {
   const request = researchGroupingRequest(business, ["Irrigation Repair Cost", "irrigation repair cost", "drip line repair"], existing);
