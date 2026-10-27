@@ -352,7 +352,8 @@ export const refreshAdoptionContext = internalQuery({ args: { siteId: v.id("site
   }
   return { site, connectionHash, profileHash: confirmedContentProfileHash(site), candidates };
 } });
-const RELATED_REPAIR_SCAN_ARTICLES = 60, RELATED_REPAIR_ADOPTIONS = 10;
+export const RELATED_REPAIR_SCAN_ARTICLES = 60;
+const RELATED_REPAIR_ADOPTIONS = 10;
 
 /** P192: an adoption made for the link-title repair opens a new repair pass at
  * the next scheduler pass (the last pass may be resting for a week). */

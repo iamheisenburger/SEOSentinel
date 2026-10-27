@@ -10,6 +10,7 @@ import { relatedReadingRepairProposal } from "./lib/contentCorrection";
 import { confirmedContentProfileHash, contentConnectionHash } from "./lib/contentSelection";
 import { publicRevisionProjection } from "./lib/publicRevisionProjection";
 import { servedOnItsOwnUrl } from "./lib/pentraConsolidation";
+import { RELATED_REPAIR_SCAN_ARTICLES } from "./selectedPages";
 
 /** Operator reads for V9 (Oct 24 2026): how large the documents are that the
  * product reads most often, as byte counts, stage labels and field names only
@@ -170,6 +171,16 @@ export const relatedRepairBlockers = internalQuery({ args: { siteId: v.id("sites
   }
   const pages = new Map((await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId)).take(1001))
     .map(page => [page.slug.replace(/^\/+|\/+$/g, ""), page] as const));
+  // P226 (Oct 27 2026): why the daily adoption (selectedPages:refreshAdoptionContext) gave an article no enrolled page:
+  // LeadPilot's 04:10Z run adopted 3 of 11. Its checks in its order: a verified public URL, a GitHub publication receipt
+  // with a delivery hash (the file's proof that Pentra wrote it), then one of the newest unadopted articles it scans.
+  const enrolled = new Set([...pages.values()].filter(page => page.editable).map(page => page.url));
+  const scanned = new Set(summaries.filter(row => row.publicUrl && row.publicUrlStatus === "verified" && !enrolled.has(row.publicUrl))
+    .sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0)).slice(0, RELATED_REPAIR_SCAN_ARTICLES).map(row => row._id));
+  const adoptionBlock = (row: Doc<"article_summaries">, article: Doc<"articles">) =>
+    !row.publicUrl || row.publicUrlStatus !== "verified" ? "url_unverified"
+      : article.publicationReceipt?.method !== "github" ? `receipt_${article.publicationReceipt?.method ?? "none"}`
+      : !article.publicationDeliveryHash ? "no_delivery_hash" : !scanned.has(row._id) ? "outside_scan" : "adoptable";
   const cutCount = (proposal: { before: string; replacement: string }) => {
     const before = proposal.before.split("\n"), after = proposal.replacement.split("\n");
     return before.filter((line, i) => line !== after[i]).length;
@@ -187,7 +198,8 @@ export const relatedRepairBlockers = internalQuery({ args: { siteId: v.id("sites
     if (!proposal) continue;
     const page = pages.get(row.slug.replace(/^\/+|\/+$/g, "")), e = page?.editable;
     // P219: a page consolidated away redirects: no reader sees its list, and no repair could be verified on it.
-    const reason = !servedOnItsOwnUrl(site.domain, row.slug) ? "redirects" : !page ? "no_page" : !e ? "not_enrolled" : !e.active ? "enrollment_inactive" : e.kind !== "github" ? `not_github_${e.kind}`
+    const reason = !servedOnItsOwnUrl(site.domain, row.slug) ? "redirects" : !page ? `no_page:${adoptionBlock(row, article!)}`
+      : !e ? `not_enrolled:${adoptionBlock(row, article!)}` : !e.active ? "enrollment_inactive" : e.kind !== "github" ? `not_github_${e.kind}`
       : e.profileHash !== confirmedContentProfileHash(site) ? "enrollment_stale_profile"
       : e.connectionHash !== contentConnectionHash(site) ? "enrollment_stale_connection"
       : !relatedReadingRepairProposal(e.markdown, titles, relatedReadingTitle, onSite) ? "enrolled_source_differs" : "repairable";

@@ -10214,8 +10214,48 @@ test("P191 the repair-blocker probe says why a cut Related reading title was lef
   publish(enrolledSlug, "Enrolled guide", `${correctionSurvivor}\n\n## Related reading\n\n${cut}`);
   publish("older-guide", "Older guide", `${correctionSurvivor}\n\n## Related reading\n\n${cut}`);
   const probe = await f.invoke("opsProbes:relatedRepairBlockers", { siteId: site.id });
-  assert.deepEqual(probe.blocked, [{ slug: enrolledSlug, cuts: 1, reason: "repairable" }, { slug: "older-guide", cuts: 1, reason: "no_page" }]);
+  assert.deepEqual(probe.blocked, [{ slug: enrolledSlug, cuts: 1, reason: "repairable" }, { slug: "older-guide", cuts: 1, reason: "no_page:url_unverified" }]);
   assert.ok(!JSON.stringify(probe).includes("AI Sales Agent"), "slugs and reasons only");
+  f.assertOffline();
+});
+
+// P226 (Oct 27 2026): LeadPilot's 04:10Z adoption took 3 of the 11 articles whose Related reading list needed repair and
+// that had no enrolled page; the probe said "no_page" for the other 8. It now names the adoption check each one fails.
+test("P226 the repair-blocker probe names the adoption check an article without a page fails", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const list = `${correctionSurvivor}\n\n## Related reading\n\n- [What Is an AI Sales Agent? How It](/blog/ai-sales-agent)`;
+  const site = await selectGrowth(f, 8 * 3_600_000), saved = f.get(site.id)!;
+  const domain = saved.canonicalDomain ?? saved.domain, revision = saved.canonicalDomainRevision ?? 0;
+  const receipt = (method: string) => ({ publicationReceipt: { method, deliveryKey: "pentra:synthetic", contentHash: "synthetic",
+    externalId: "synthetic", url: "synthetic", status: "published", receivedAt: f.now() } });
+  const verified = (slug: string) => ({ publicUrl: `https://${domain}/blog/${slug}`, publicUrlStatus: "verified" });
+  const publish = (slug: string, minutesOld: number, markdown: string | null, article: object = {}, summary: object = {}) => {
+    const at = f.now() - minutesOld * 60_000;
+    const articleId = markdown === null ? `articles:none-${slug}` : f.add("articles", { siteId: site.id, status: "published", title: slug, slug,
+      markdown, canonicalDomain: domain, domainRevision: revision, createdAt: at, updatedAt: at, ...article });
+    f.add("article_summaries", { articleId, siteId: site.id, canonicalDomain: domain, domainRevision: revision, status: "published",
+      title: slug === "ai-sales-agent" ? "What Is an AI Sales Agent? How It Works and Why Websites Need One" : slug, slug,
+      publishedAt: at, createdAt: at, updatedAt: at, ...summary });
+  };
+  const proven = { ...receipt("github"), publicationDeliveryHash: "a".repeat(64) };
+  publish("ai-sales-agent", 500, "An article.");
+  publish("adoptable-guide", 0, list, proven, verified("adoptable-guide"));
+  // 59 newer articles with nothing to repair fill the rest of the 60 the adoption scans.
+  for (let i = 1; i <= 59; i++) publish(`newer-${i}`, i, null, {}, verified(`newer-${i}`));
+  publish("outside-guide", 60, list, proven, verified("outside-guide"));
+  publish("no-hash-guide", 61, list, receipt("github"), verified("no-hash-guide"));
+  publish("wordpress-guide", 62, list, receipt("wordpress"), verified("wordpress-guide"));
+  publish("no-receipt-guide", 63, list, {}, verified("no-receipt-guide"));
+  publish("unverified-guide", 64, list, proven);
+  const probe = await f.invoke("opsProbes:relatedRepairBlockers", { siteId: site.id });
+  assert.deepEqual(probe.blocked, [
+    { slug: "adoptable-guide", cuts: 1, reason: "no_page:adoptable" },
+    { slug: "outside-guide", cuts: 1, reason: "no_page:outside_scan" },
+    { slug: "no-hash-guide", cuts: 1, reason: "no_page:no_delivery_hash" },
+    { slug: "wordpress-guide", cuts: 1, reason: "no_page:receipt_wordpress" },
+    { slug: "no-receipt-guide", cuts: 1, reason: "no_page:receipt_none" },
+    { slug: "unverified-guide", cuts: 1, reason: "no_page:url_unverified" },
+  ]);
   f.assertOffline();
 });
 
