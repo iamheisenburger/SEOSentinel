@@ -7,7 +7,7 @@ import { contentIssue } from "./lib/contentCustomer";
 import { eligiblePlannedTopics, fallbackTopicProposals, topicResearchDueAt } from "./contentWork";
 import { healthFingerprint, opsEmailConfigured, sendOpsEmail } from "./lib/opsEmail";
 import { missedSlotCause } from "./lib/customerNotices";
-import { slotOutcomes } from "./lib/slotOutcomes";
+import { missedSlotCauses, slotOutcomes } from "./lib/slotOutcomes";
 
 /**
  * Daily Autopilot health check.
@@ -193,6 +193,7 @@ export const fleetSlotCounts = internalQuery({
   handler: async (ctx, { cursor, now }) => {
     const page = await ctx.db.query("sites").paginate({ cursor, numItems: 10 });
     const totals = { autopilotSites: 0, due: 0, onTime: 0, late: 0, missed: 0 };
+    const missedBy: Record<string, number> = {};
     for (const site of page.page) {
       if (site.deletionStatus || site.accountDeletionRequestedAt || site.serviceMode !== "growth_first" || !site.autopilotEnabled ||
         !site.contentSchedule?.autopilotSelectedAt) continue;
@@ -201,11 +202,13 @@ export const fleetSlotCounts = internalQuery({
         .gte("contentWork.deadlineAt", now - 7 * 86_400_000).lte("contentWork.deadlineAt", now)).take(200))
         .filter(job => job.contentWork && !job.contentWork.ownerRequest && !job.contentWork.operation &&
           (job.contentWork.retiredAt === undefined || job.contentWork.failure === "duplicate_intent" || job.contentWork.failure === "reader_visible_defect"))
-        .map(job => ({ deadlineAt: job.contentWork!.deadlineAt, publishedAt: job.contentWork!.publishedAt }));
+        .map(job => ({ deadlineAt: job.contentWork!.deadlineAt, publishedAt: job.contentWork!.publishedAt, createdAt: job.createdAt,
+          failure: job.contentWork!.failure, stage: job.contentWork!.stage }));
       const counts = slotOutcomes(jobs, now, HEALTH_OVERDUE_GRACE_MS);
       totals.due += counts.due; totals.onTime += counts.onTime; totals.late += counts.late; totals.missed += counts.missed;
+      for (const [cause, n] of Object.entries(missedSlotCauses(jobs, now, HEALTH_OVERDUE_GRACE_MS))) missedBy[cause] = (missedBy[cause] ?? 0) + n;
     }
-    return { isDone: page.isDone, continueCursor: page.continueCursor, totals };
+    return { isDone: page.isDone, continueCursor: page.continueCursor, totals, missedBy };
   },
 });
 

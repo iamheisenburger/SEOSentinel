@@ -4915,7 +4915,9 @@ test("P154 the fleet slot count sees an Autopilot site's published slot and retu
   const totals = { autopilotSites: 0, due: 0, onTime: 0, late: 0, missed: 0 };
   for (let pages = 0; pages < 20; pages++) {
     const page = await f.invoke("contentHealth:fleetSlotCounts", { cursor, now: f.now() });
-    assert.deepEqual(Object.keys(page).sort(), ["continueCursor", "isDone", "totals"], "counts only");
+    assert.deepEqual(Object.keys(page).sort(), ["continueCursor", "isDone", "missedBy", "totals"], "counts only");
+    // P230: missed slots by their last attempt's outcome, as outcome codes and counts, never a site.
+    for (const [cause, n] of Object.entries(page.missedBy)) assert.ok(/^[a-z_]+$/.test(cause) && typeof n === "number", cause);
     for (const key of Object.keys(totals) as (keyof typeof totals)[]) totals[key] += page.totals[key];
     if (page.isDone) break; cursor = page.continueCursor;
   }
