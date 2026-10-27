@@ -35,6 +35,8 @@ test("named or advisory documentation prose is not pipeline text", async () => {
 });
 
 test("the writer states a documented fact itself instead of pointing at the documentation", () => {
-  const writer = readFileSync("convex/actions/pipeline.ts", "utf8");
-  assert.match(writer, /state the fact itself as plain guidance with its citation and leave the company out \(never "that documentation says"/);
+  // P231: the rule's wording lives in otherCompaniesRule (convex/lib/sourceQuality.ts), which the writer uses.
+  assert.match(readFileSync("convex/actions/pipeline.ts", "utf8"), /otherCompaniesRule\(topic\?\.primaryKeyword\)/);
+  const rule = readFileSync("convex/lib/sourceQuality.ts", "utf8");
+  assert.match(rule, /state the fact itself as plain guidance with its citation and leave the company out \(never "that documentation says"/);
 });

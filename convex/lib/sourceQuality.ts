@@ -92,6 +92,25 @@ export function normalizeEvidenceUrl(value: string): string | null {
   }
 }
 
+/**
+ * P231 (Oct 27 2026): a search that asks for a kind of product ("free ai tools for seo optimization", "lead scoring
+ * solutions", "best crm for realtors", "blog publishing services"). Its reader wants the products named, so the article
+ * names them, with facts only from cited sources. P162 (Oct 22) let an article name another company only when the
+ * search named it: pentra.dev's Oct 27 article for "free ai tools for seo optimization" named no tool at all, while its
+ * one growing page (25 → 72 impressions a week, written in July) has a section for each of five tools it names.
+ */
+const PRODUCT_KINDS = /\b(?:tools?|software|apps?|applications|platforms?|solutions|services|providers?|vendors?|plugins?|extensions|generators?|crms?)\b/i;
+export function searchAsksForProducts(search: string | undefined): boolean {
+  return PRODUCT_KINDS.test(search ?? "");
+}
+
+/** The writer's rule for naming other companies and products, for this search. */
+export function otherCompaniesRule(search: string | undefined): string {
+  return searchAsksForProducts(search)
+    ? `- OTHER COMPANIES: This search asks for a kind of product (“${(search ?? "").trim()}”), so name the specific products a reader would compare, with a clear section or table row for each that says what it is for. Every fact about a product must come from a supplied source, cited (its own documentation or help pages are the authority on it); never state another product's prices, plans, editions, limits or rankings unless a supplied source states them, and never call one better without a source. Never name the banned companies above.`
+    : `- OTHER COMPANIES: Name another company or product only when the primary keyword names it. When a cited source is another company's documentation, state the fact itself as plain guidance with its citation and leave the company out (never "that documentation says" or "the same guide states"); never describe another company's plans, editions or prices unless the primary keyword names that company.`;
+}
+
 /** The products a comparison search names, by the name their websites go by:
  * "seobot alternatives" → seobot, "seobot vs outrank" → seobot and outrank,
  * "compare surfer seo and frase" → surferseo and frase. A side of more than

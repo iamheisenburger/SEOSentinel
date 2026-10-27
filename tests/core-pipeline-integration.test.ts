@@ -10356,7 +10356,9 @@ test("P182 the signup funnel counts how far new sites got, never naming a site o
 test("P181 a replacement draft gets its edit pass instead of failing with the first draft's spent revisions", async () => {
   const guide = "Scoring guide. VendorCRM scores each lead from its lead fields and recent engagement, and shows the factors behind every score so a sales team can decide which leads to call first and which to keep nurturing.";
   let replacementDraft = false;
-  const options: Parameters<typeof setup>[0] = { growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000, quality: "low",
+  // P231: the edit pass for a company the search does not name applies to searches that ask for no kind of product; this
+  // business's searches are about garden visits, not "... software" (a search for software may name the products).
+  const options: Parameters<typeof setup>[0] = { growthFirst: true, businesses: [slcBusinesses[1]], budgetMicroUsd: 2_000_000, quality: "low",
     webResearch: { searches: 1, citations: [{ url: "https://help.vendorcrm.example/scoring", title: "Scoring guide", cited_text: "VendorCRM scores each lead from its lead fields and recent engagement." }] },
     evidence: { sources: [{ url: "https://help.vendorcrm.example/scoring", title: "Scoring guide", text: guide }] },
     draftResponse: (article: Fields) => replacementDraft ? ({ ...article,

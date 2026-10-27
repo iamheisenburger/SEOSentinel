@@ -174,8 +174,10 @@ import {
 import { spliceRefreshSection } from "../lib/contentSelection";
 import {
   citedCompanyName,
+  otherCompaniesRule,
   productNamesInSearch,
   readableSourceTitle,
+  searchAsksForProducts,
   researchOutcomeNote,
   strictEvidenceSources,
 } from "../lib/sourceQuality";
@@ -4552,6 +4554,8 @@ async function handleArticle(
           site.targetCountry ? `Readers are in: ${site.targetCountry}` : "",
           `Do not research ${site.siteName ?? site.domain} itself or its competitors; research the subject for its readers.`,
           namedProducts.length ? `This compares the products the search names (“${topic.primaryKeyword}”). For a fact about one of them, its own website (features, plans and pricing pages) and documentation are the authoritative sources: cite those pages, not third-party lists.` : "",
+          // P231: the article names the products a search for a kind of product asks for, so research finds them.
+          !namedProducts.length && searchAsksForProducts(topic.primaryKeyword) ? `This search asks for a kind of product (“${topic.primaryKeyword}”). Find the products a reader would compare and, for facts about each one, its own documentation or help pages.` : "",
         ].filter(Boolean).join("\n"),
         maxUses: 3,
         firstPartyProducts: namedProducts,
@@ -4797,7 +4801,8 @@ async function handleArticle(
     `- HYPOTHETICALS: Label invented examples explicitly as hypothetical and never present their details or results as evidence.`,
     `- PRACTICAL VALUE: Give the reader a concrete answer and a useful next step: an evidence-grounded explanation, a decision framework with explicit trade-offs, or a reader-run check with inputs and observable results. Label proposed frameworks as recommendations, not established industry facts, once and in reader terms. Never write about your sources, research or drafting process in the article (no "no external sources were verified for this draft", "the documentation we can verify", "the excerpt is truncated" or "the supplied evidence"); when a limitation matters, tell the reader what to check (for example "check the vendor's current documentation for the full list"). Never contrast your advice with the sources or say which parts are or are not from them (no "not figures from the sources", "rather than a rule from the sources", "source-specified" or "the sources do not give"): cite a sourced fact with its number and state everything else as plain advice. Do not claim uniqueness, competitor inferiority, or guaranteed traffic.`,
     `- COMPARISONS: A documented capability does not establish that competing tools lack it or that it produces better results. Omit unsupported superlatives and comparative outcome claims. Where useful, propose a conditional test the reader can evaluate using their own data.`,
-    `- OTHER COMPANIES: Name another company or product only when the primary keyword names it. When a cited source is another company's documentation, state the fact itself as plain guidance with its citation and leave the company out (never "that documentation says" or "the same guide states"); never describe another company's plans, editions or prices unless the primary keyword names that company.`,
+    // P231: a search for a kind of product names the products (convex/lib/sourceQuality.ts otherCompaniesRule).
+    otherCompaniesRule(topic?.primaryKeyword),
     `- METADATA: The title and description must accurately describe the finished article. Do not promise templates, benchmarks, features, outcomes or coverage that the article does not actually provide. Never call the article evidence-based, data-driven, research-backed or proven unless it cites supplied sources.`,
     `- ORIGINAL VALUE IS NOT INVENTED EXPERIENCE: Never manufacture first-hand framing. Do not write that anyone analysed, measured, tested, tracked, or observed anything unless that measurement appears in the supplied evidence. Differentiation must come from verified mechanics and reasoning, never from fabricated experience.`,
     `- NO META-TALK: Output article content only. No explanations outside the JSON.`,

@@ -10,6 +10,7 @@
  * findings a source or the confirmed profile can settle get one bounded
  * rewrite that corrects them; they never block on their own.
  */
+import { searchAsksForProducts } from "./sourceQuality.ts";
 export function autopilotPublicationConsented(site: {
   serviceMode?: string; autopilotEnabled?: boolean; approvalRequired?: boolean;
   contentSchedule?: { ownerReviewedOnly?: boolean; autopilotSelectedAt?: number; autopublishConsentAt?: number } | null;
@@ -45,6 +46,8 @@ export function autopilotEditPassIssue(count: number): string {
  * and link targets are not prose. At most six sentences. */
 export function unsearchedCompanyMentions(markdown: string, companies: readonly (string | null)[],
   context: { search: string; title?: string; business: readonly string[] }): Array<{ company: string; sentence: string }> {
+  // P231: a search for a kind of product asks for the products by name (the business's competitors stay banned).
+  if (searchAsksForProducts(context.search)) return [];
   const words = new Set(`${context.search} ${context.title ?? ""}`.toLowerCase().match(/[a-z0-9]+/g) ?? []);
   const own = new Set(context.business.map((name) => name.toLowerCase().replace(/[^a-z0-9]/g, "")).filter(Boolean));
   const named = [...new Set(companies.filter((company): company is string => Boolean(company)))]
