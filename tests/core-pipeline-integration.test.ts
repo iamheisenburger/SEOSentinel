@@ -9257,6 +9257,60 @@ test("NEW-USER journeys: a free account reaches a first article on every support
   t.diagnostic(JSON.stringify(journeyLog));
 });
 
+// P229 (Oct 27 2026): none of the 3 accounts that signed up since Oct 24 reached an article. Start in Review first wrote
+// nothing until the owner also asked for an article, so an owner who started saw an empty dashboard.
+test("P229 Start in Review first writes the first article at once, and only ever the first", async t => {
+  await t.test("paste_it_yourself", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = f.sites[0], owner = newFreeAccount(f);
+    f.tables.sites.splice(0); f.tables.pages.splice(0);
+    f.setIdentity(owner);
+    site.id = await f.invoke("sites:upsert", { createOnly: true, contentSetup: true, domain: site.domain, clerkUserId: owner,
+      siteName: "Harbor Family Clinic", siteSummary: "Local family medicine clinic", niche: "Local family medicine clinic", blogTheme: "Local family medicine clinic",
+      targetAudienceSummary: "Local patients choosing a clinic", productUsage: "Book appointments", anchorKeywords: slcBusinesses[0].keywords,
+      painPoints: slcBusinesses[0].keywords, language: "en", publishMethod: "manual", autopilotEnabled: false, approvalRequired: true, inferToneNiche: false });
+    f.get(site.id)!.planFeatures = [];
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", ownerReviewedOnly: true, confirmBusinessProfile: true, reviewToken: r.reviewToken });
+    f.setIdentity(null);
+    const drafts = () => f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.ownerRequest);
+    await pumpUntil(f, () => drafts().some(j => ["ready", "failed"].includes(j.contentWork.stage)));
+    assert.equal(drafts().length, 1, "Start alone wrote the first article");
+    const [first] = drafts();
+    assert.equal(first.contentWork.ownerRequest.key, `first-draft-${site.id}`);
+    assert.equal(first.contentWork.stage, "ready", diagnostic(f));
+    assert.ok(f.tables.customer_emails.some(e => e.siteId === site.id && e.kind === "draft_ready" && e.key === String(first._id)), "the owner hears it is ready");
+    // Running it again (a retried Start) never writes a second one.
+    assert.deepEqual(await f.invoke("contentWork:startFirstDraft", { siteId: site.id }), { started: false });
+    f.assertOffline();
+  });
+  await t.test("owner_already_asked", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    f.setIdentity(saved.userId);
+    let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", ownerReviewedOnly: true, confirmBusinessProfile: true, reviewToken: r.reviewToken });
+    r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    const asked = await f.invoke("contentWork:requestDraft", { siteId: site.id, reviewToken: r.reviewToken, requestKey: "owner-asked-first-draft",
+      maximumMicroUsd: r.ownerDraft.maximumMicroUsd });
+    f.setIdentity(null);
+    await pumpUntil(f, () => ["ready", "failed"].includes(f.get(asked.jobId)!.contentWork.stage));
+    const drafts = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.ownerRequest);
+    assert.deepEqual(drafts.map(j => j.contentWork.ownerRequest.key), ["owner-asked-first-draft"], "the owner's own request is the first article");
+    f.assertOffline();
+  });
+  await t.test("autopilot_unchanged", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const owner = newFreeAccount(f);
+    const site = await createEmptyContentSite(f);
+    await startAutopilot(f, site.id, owner);
+    await pumpUntil(f, () => f.tables.jobs.some(j => j.siteId === site.id && j.contentWork), 40, START + 48 * 3_600_000);
+    assert.equal(f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.ownerRequest).length, 0, "Autopilot's slots, no owner draft");
+    assert.equal(f.tables._scheduled_functions.filter(s => s.name.includes("startFirstDraft")).length, 0);
+    f.assertOffline();
+  });
+});
+
 test("NEW-USER free plan: failed drafts never strand a slot as an internal error, and both usage counters agree", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], quality: "low" });
   const owner = newFreeAccount(f);

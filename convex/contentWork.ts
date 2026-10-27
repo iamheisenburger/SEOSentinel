@@ -1014,6 +1014,8 @@ export const selectServiceMode = mutation({
       }
     }
     if (!args.ownerReviewedOnly) await wake(ctx, site._id);
+    // P229: Review first writes the first article at once; the owner reads it before anything goes live.
+    else await ctx.scheduler.runAfter(0, internal.contentWork.startFirstDraft, { siteId: site._id });
     return { changed: true };
   },
 });
@@ -1481,6 +1483,77 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
   return (await ctx.db.get(id))!;
 }
 
+/** One new owner-requested draft (not an edit of an existing one): the plan's monthly allowance, a topic, a funded
+ * hold, then the priced worker. A draft the owner already has in progress is returned instead of a second one. */
+async function admitFreshOwnerDraft(ctx: MutationCtx, site: Doc<"sites">, schedule: NonNullable<Doc<"sites">["contentSchedule"]>,
+  jobs: Doc<"jobs">[], args: { requestKey: string; maximumMicroUsd?: number; topicId?: Id<"topic_clusters"> }) {
+  const outstanding = jobs.find(j => j.contentWork?.ownerRequest && j.contentWork.retiredAt === undefined &&
+    !["verified", "failed"].includes(j.contentWork.stage));
+  if (outstanding) return { jobId: outstanding._id, created: false };
+  const pricing = await pricingConfiguration(ctx, site);
+  // The owner's screen names the price it asks for; Start in Review first asks for the current one.
+  if (!pricing || (args.maximumMicroUsd !== undefined && args.maximumMicroUsd !== pricing.budgetMicroUsd)) {
+    throw new ConvexError("Draft pricing changed; refresh before requesting work");
+  }
+  // Fresh drafts count against the plan's monthly article allowance across the account's sites. The owner validation
+  // grant keeps its separate cumulative allowance.
+  const allowance = await ownerDraftAllowance(ctx, site, Boolean(pricing.validationAuthorizationId));
+  if (allowance && allowance.used >= allowance.limit) {
+    throw new ConvexError(allowance.tier === "free"
+      ? `Your ${allowance.limit} free articles for this month are used. Choose a plan in Billing to keep publishing, or wait until the 1st.`
+      : `You've used all ${allowance.limit} articles in your plan this month. Upgrade in Billing or wait until the 1st.`);
+  }
+  const topic = await chooseTopic(ctx, site, args.topicId);
+  if (!topic) throw new ConvexError("No distinct supported topic is available. Review your business offerings or select another planned topic.");
+  const requestedAt = Date.now(), { budgetMicroUsd, ...price } = pricing;
+  const request = { siteId: site._id, userId: site.userId!, purpose: "content_work" as const,
+    trigger: `content_slot:${requestedAt}`, reservedMicroUsd: budgetMicroUsd, timestamp: requestedAt };
+  let funding = await inspectSharedProviderBudget(ctx, request);
+  if (!funding.ok && await closeFinishedContentHolds(ctx, site) > 0) funding = await inspectSharedProviderBudget(ctx, request);
+  if (!funding.ok) throw new ConvexError(contentIssue(funding.reason) ?? "Draft funding is unavailable");
+  const jobId = await ctx.db.insert("jobs", { siteId: site._id, canonicalDomain: siteCanonicalDomain(site)!,
+    domainRevision: siteCanonicalDomainRevision(site), rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
+    type: "article", status: "pending", workerAttempts: 0, publicationAttempts: 0,
+    payload: { manual: true, topicId: topic._id, bufferFill: true, options: { includeImages: false, includeYouTube: false } },
+    contentWork: { ownerRequest: { userId: site.userId!, key: args.requestKey, requestedAt },
+      validationAuthorizationId: schedule.validationAuthorizationId, intent: "create", stage: "prepare",
+      deadlineAt: requestedAt, windowStartAt: requestedAt, profileHash: schedule.profileHash, connectionHash: schedule.connectionHash,
+      revisions: 0, replacements: 0, discardedArticleIds: [], budgetMicroUsd, pricing: price, providerCalls: [] },
+    createdAt: requestedAt, updatedAt: requestedAt });
+  const reserved = await reserveSharedProviderBudget(ctx, { ...request, contentWorkJobId: jobId });
+  if (!reserved.ok) throw new ConvexError("Draft reservation changed; no work was admitted");
+  await ctx.db.patch(jobId, { providerSpendReservationId: reserved.reservationId });
+  await ctx.db.patch(topic._id, { status: "queued", updatedAt: requestedAt });
+  await refreshAccountUsage(ctx, site, 1);
+  await ctx.scheduler.runAfter(0, internal.actions.pipeline.processNextJob, { siteId: site._id, jobId });
+  return { jobId, created: true };
+}
+
+/** Whether a site can take an owner-requested draft now: content service on, a destination Pentra publishes to (or
+ * the owner pastes), verified unless pasted, and a plan that allows it. */
+async function ownerDraftsOpen(ctx: MutationCtx, site: Doc<"sites">) {
+  const schedule = site.contentSchedule;
+  return Boolean(site.serviceMode === "growth_first" && schedule &&
+    (["github", "wordpress"].includes(site.publishMethod ?? "") || isApiCmsMethod(site.publishMethod) || pasteDestination(site)) &&
+    contentConnectionComplete(site) && (pasteDestination(site) || publisherDestinationReceiptVerified({ site })) &&
+    await contentEntitlementAuthorized(ctx, site));
+}
+
+/** P229 (Oct 27 2026): none of the 3 accounts that signed up since Oct 24 reached an article. Start in Review first
+ * wrote nothing until the owner also asked for an article, so an owner who started saw an empty dashboard. Start now
+ * writes the first article at once (the draft-ready email follows when it is ready). Only ever the site's first owner
+ * draft: an owner who already asked for one gets nothing extra. Runs after Start, so Start never fails on it. */
+export const startFirstDraft = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId), schedule = site?.contentSchedule;
+  if (!site?.userId || !schedule?.ownerReviewedOnly || !site.contentSetupRequestedAt || site.deletionStatus ||
+    site.accountDeletionRequestedAt || site.planParkedAt || !await ownerDraftsOpen(ctx, site) ||
+    schedule.profileHash !== confirmedContentProfileHash(site) || schedule.connectionHash !== contentConnectionHash(site)) return { started: false };
+  const jobs = await jobsForSite(ctx, site._id);
+  if (jobs.some(j => j.contentWork?.ownerRequest)) return { started: false };
+  const { jobId } = await admitFreshOwnerDraft(ctx, site, schedule, jobs, { requestKey: `first-draft-${site._id}` });
+  return { started: true, jobId };
+} });
+
 /** An explicit owner order uses the same priced worker, not the automatic
  * schedule's failed slot. Its approval is for drafting only, never publishing. */
 export const requestDraft = mutation({
@@ -1499,6 +1572,8 @@ export const requestDraft = mutation({
     const jobs = await jobsForSite(ctx, site._id);
     const same = jobs.find(j => j.contentWork?.ownerRequest?.userId === site.userId && j.contentWork?.ownerRequest?.key === args.requestKey);
     if (same) return { jobId: same._id, created: false };
+    // P229: a fresh draft is admitted exactly as the first draft that Start in Review first writes.
+    if (!args.edit) return await admitFreshOwnerDraft(ctx, site, schedule, jobs, args);
     const source = args.edit ? await ctx.db.get(args.edit.articleId) : null;
     const sourceJobs = source ? jobs.filter(j => j.articleId === source._id && j.contentWork?.ownerRequest &&
       j.contentWork.retiredAt === undefined) : [];

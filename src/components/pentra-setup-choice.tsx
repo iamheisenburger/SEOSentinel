@@ -76,9 +76,9 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
       {step(true, "Business profile saved")}
       {step(state.destination.verified, paste ? "Website: you paste each approved article into your site" : "Website connected and verified",
         <Link className="ml-1 underline" href={`/sites/${state.siteId}?tab=settings`}>Connect your website</Link>)}
-      {!state.destination.verified && <li className="pl-5 text-[#8A8F98]">Not on WordPress, Shopify, Webflow, Ghost or GitHub?{" "}
+      {!state.destination.verified && <li className="pl-5 text-[#8A8F98]">Not connected yet, or not on WordPress, Shopify, Webflow, Ghost or GitHub?{" "}
         <button type="button" className="underline disabled:opacity-50" disabled={busy} onClick={usePaste}>Paste the articles yourself</button>:
-        {" "}Pentra writes each one and you paste it into your site (Review first).</li>}
+        {" "}Pentra writes your first article as soon as you press Start, and you paste it into your site (Review first). Connect your website later to publish automatically.</li>}
       {step(state.entitlement, "Plan active", <Link className="ml-1 underline" href="/settings/billing">Check billing</Link>)}
     </ul>
     <fieldset className="grid gap-3 md:grid-cols-2">
@@ -91,7 +91,7 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
       <label className={`rounded-xl border p-4 transition ${reviewAvailable ? "cursor-pointer hover:border-white/20" : "opacity-50"} ${choice === "review" ? "border-[#0EA5E9] bg-[#0EA5E9]/[0.06]" : "border-white/10"}`}>
         <input type="radio" name="pentra-mode" className="mr-2" disabled={!reviewAvailable} checked={choice === "review"} onChange={() => setChoice("review")} />
         <span className="font-medium text-[#F7F8F8]">Review first</span>
-        <p className="mt-1 text-sm text-[#8A8F98]">{paste ? "Pentra researches and writes each article; you read it, then paste it into your site's blog." : reviewAvailable ? "You ask for each article when you want one; Pentra researches, writes and checks it, then you read, edit and approve it before it goes live." : "Connect your website to choose this."}</p>
+        <p className="mt-1 text-sm text-[#8A8F98]">{paste ? "Pentra writes your first article as soon as you press Start; you read it, then paste it into your site's blog." : reviewAvailable ? "Pentra writes your first article as soon as you press Start. You read, edit and approve every article before it goes live, and ask for the next one when you want it." : "Connect your website to choose this."}</p>
       </label>
     </fieldset>
     {(choice === "autopilot" || !reviewAvailable) && <p className="text-xs text-[#8A8F98]">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}</p>}
