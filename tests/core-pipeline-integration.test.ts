@@ -9467,6 +9467,21 @@ test("K2 operator readouts read only the newest articles of a site", async () =>
   assert.equal((await f.invoke("articles:listRecentBySiteInternal", { siteId: site.id, limit: 500 })).length, articles.length, "the limit is capped, never unbounded");
 });
 
+// P224 (Oct 27 2026): the hourly operator tick read slots from organicDiagnostics:snapshot (9.6 MB a call); 16 such
+// calls were 0.14 GB of a 10.5-hour Convex measurement. The slot probe reads only the jobs near now, by deadline.
+test("P224 the operator's slot probe lists the slots around now from the deadline index alone", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 }), site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.filter(j => j.contentWork?.stage === "ready").length === 2);
+  const start = f.queryReads.length;
+  const probe = await f.invoke("opsProbes:upcomingSlots", { siteId: site.id });
+  assert.deepEqual(probe.slots.map((s: { stage: string; intent: string }) => [s.intent, s.stage]), [["create", "ready"], ["create", "ready"]]);
+  assert.ok(probe.slots[0].deadlineAt < probe.slots[1].deadlineAt, "in deadline order");
+  assert.equal(probe.nextDeadlineAt, f.get(site.id)!.contentSchedule.nextDeadlineAt);
+  const reads = f.queryReads.slice(start).map(r => [r.table, r.index]);
+  assert.deepEqual(reads.filter(([table]) => table === "jobs"), [["jobs", "by_site_content_deadline"]], JSON.stringify(reads));
+  assert.ok(!reads.some(([table]) => ["articles", "pages", "article_summaries", "search_page_daily"].includes(String(table))), "no content or Search Console rows");
+});
+
 // D4 (P125, Oct 20 2026): a new owner hears when their site's first article
 // is live: once, from hello@pentra.dev, at the verified address Clerk gave
 // pentra.dev's plan sync, never when they turned emails off or when the site

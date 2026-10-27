@@ -195,3 +195,19 @@ export const relatedRepairBlockers = internalQuery({ args: { siteId: v.id("sites
   }
   return { published: summaries.length, blocked };
 } });
+
+/** P224 (Oct 27 2026): a site's content slots around now, light. The hourly operator tick reads this instead of
+ * organicDiagnostics:snapshot (9.6 MB a call: 16 routine calls were 0.14 GB of a 10.5-hour Convex measurement). Jobs
+ * whose deadline lies from 30 hours ago to 4 days ahead, without link repairs and owner work; no content. */
+export const upcomingSlots = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site) return null;
+  const now = Date.now();
+  const jobs = await ctx.db.query("jobs").withIndex("by_site_content_deadline", q => q.eq("siteId", siteId)
+    .gte("contentWork.deadlineAt", now - 30 * 3_600_000).lte("contentWork.deadlineAt", now + 4 * 86_400_000)).take(80);
+  return { nextDeadlineAt: site.contentSchedule?.nextDeadlineAt ?? null, paused: Boolean(site.contentSchedule?.paused),
+    slots: jobs.filter(j => j.contentWork && !j.contentWork.ownerRequest && !j.contentWork.operation && !j.contentWork.correction)
+      .map(j => ({ deadlineAt: j.contentWork!.deadlineAt, intent: j.contentWork!.intent, stage: j.contentWork!.stage,
+        failure: j.contentWork!.failure ?? null, publishedAt: j.contentWork!.publishedAt ?? null,
+        replaces: Boolean(j.contentWork!.replacesJobId), articleId: j.articleId ?? null })) };
+} });
