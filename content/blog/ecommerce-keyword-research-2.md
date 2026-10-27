@@ -112,6 +112,6 @@ This depends on your current page-to-keyword map and what's missing. If your cat
 
 ## Related reading
 
-- [International Keyword Research: A Practical Framework for Targeting Global Search Markets](/blog/international-keyword-research)
+- [Localized Keyword Research: How to Find the Search Terms Your Market Actually Uses](/blog/localized-keyword-research-2)
 - [Fiverr Keyword Research: A Practical Framework for Finding Terms Buyers Actually Search](/blog/fiverr-keywords-research)
 - [Keyword Research for Content Creators: A Step-by-Step Guide](/blog/keyword-research-for-content-creators-guide)
