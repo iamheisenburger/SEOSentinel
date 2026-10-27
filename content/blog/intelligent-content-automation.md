@@ -114,6 +114,4 @@ Check it against your own measured history in your search performance data sourc
 
 ## Related reading
 
-- [How to Automate SEO Content Creation Without Hiring Writers](/blog/automate-seo-content-creation-without-writers)
-- [How to Automate Your SEO Content Pipeline: A Complete 8-Step Framework](/blog/automate-seo-content-pipeline)
 - [Automated SEO Workflow: From Crawling to Publishing — The Complete 8-Step Pipeline](/blog/automated-seo-workflow-complete-guide)
