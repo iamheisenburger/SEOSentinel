@@ -153,9 +153,9 @@ There is no fixed timeline. Google states that some changes can take effect with
 
 ## Related reading
 
-- [SEO Article Writing Speed: How Fast Can AI Really Write Ranking Content?](/blog/how-fast-ai-write-articles-ranking-seo)
-- [How to Automate Your SEO Workflow: A Step-by-Step Guide to Hands-Off SEO Operations](/blog/how-to-automate-seo-workflow)
-- [AI Article Writer for SEO: Does It Actually Rank?](/blog/ai-article-writer-seo-ranking)
+- [AI Content Generator vs Manual Article Writing: Which Wins for Rankings](/blog/ai-content-generator-vs-manual-writing-rankings)
+- [Automated SEO Workflow: From Crawling to Publishing — The Complete 8-Step Pipeline](/blog/automated-seo-workflow-complete-guide)
+- [AI Content Generator for SEO: Automated Article Writing That Ranks](/blog/ai-content-generator-seo-automated-article-writing)
 
 ## Sources
 
