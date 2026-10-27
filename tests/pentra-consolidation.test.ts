@@ -47,10 +47,24 @@ test("P193: copies Google skipped and pages it never showed join the page Google
     assert.equal(servedOnItsOwnUrl("pentra.dev", shown), true, shown);
   }
   // Recent articles Google indexed, or has not had 14 days to judge, keep their own URLs.
-  for (const kept of ["saas-keyword-research", "how-to-fact-check-ai-generated-articles", "how-often-should-small-business-publish-blog-posts",
+  for (const kept of ["saas-keyword-research", "how-often-should-small-business-publish-blog-posts",
     "ecommerce-keyword-research-2", "free-seo-content-writing-software", "improving-pages-close-to-page-one"]) {
     assert.equal(servedOnItsOwnUrl("pentra.dev", kept), true, kept);
   }
+});
+
+// P227 (Oct 27 2026): each page Google stopped showing fell 1-5 days after Pentra published another page on its topic:
+// the fact-check framework (positions 8-15) last showed Oct 1, two days after "How Do I Fact-Check AI-Generated Articles
+// Before Publishing?" went live; neither has been shown since. Two pages answering one question become one again.
+test("P227: two pages answering one question become one, in one hop", () => {
+  const to = (slug: string) => consolidatedTarget("pentra.dev", slug);
+  assert.equal(to("how-to-fact-check-ai-generated-articles"), "fact-check-ai-generated-content-verification-framework");
+  assert.equal(to("how-often-publish-blog-posts-seo"), "how-often-should-small-business-publish-blog-posts");
+  // The page that pointed to the calendar article goes straight to its new destination.
+  assert.equal(to("saas-blog-publishing-frequency-rankings"), "how-often-should-small-business-publish-blog-posts");
+  for (const kept of ["fact-check-ai-generated-content-verification-framework", "how-often-should-small-business-publish-blog-posts",
+    "website-crawling-keyword-research-guide", "website-crawling-for-seo-guide", "get-customers-from-google-without-writing-every-article",
+    "writing-every-article-yourself-practical-guide"]) assert.equal(servedOnItsOwnUrl("pentra.dev", kept), true, kept);
 });
 
 test("P193: links inside an article go straight to the consolidated article; any other link is untouched", () => {

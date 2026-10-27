@@ -66,8 +66,9 @@ export const PENTRA_CONSOLIDATED: Readonly<Record<string, string>> = Object.free
   "automated-seo-content-calendar-30-minutes": "seo-content-calendar-tools-small-teams",
   "automate-seo-content-calendar-planning": "seo-content-calendar-tools-small-teams",
   "automated-content-calendar-tools-comparison": "seo-content-calendar-tools-small-teams",
-  // Publishing frequency
-  "saas-blog-publishing-frequency-rankings": "how-often-publish-blog-posts-seo",
+  // Publishing frequency (P227: the older calendar page, never shown in 42 days, joins the indexed answer page)
+  "saas-blog-publishing-frequency-rankings": "how-often-should-small-business-publish-blog-posts",
+  "how-often-publish-blog-posts-seo": "how-often-should-small-business-publish-blog-posts",
   // The SEO workflow and articles at scale
   "how-to-automate-seo-workflow": "automated-seo-workflow-complete-guide",
   "automate-seo-content-pipeline": "automated-seo-workflow-complete-guide",
@@ -107,8 +108,10 @@ export const PENTRA_CONSOLIDATED: Readonly<Record<string, string>> = Object.free
   "b2b-conversion-optimization-seo-traffic-qualified-leads": "b2b-saas-content-strategy-ranking-lead-generation",
   "b2b-conversion-rate-optimization-content-automation": "b2b-saas-content-strategy-ranking-lead-generation",
   "b2b-conversion-optimisation-quality-content-sales-leads": "b2b-saas-content-strategy-ranking-lead-generation",
-  // Fact-checking AI content
+  // Fact-checking AI content (P227: Google showed the framework at positions 8-15 until Oct 1, two days after the
+  // question page went live on Sep 29; since then neither is shown, so the copy joins the page Google ranked)
   "fact-check-ai-generated-content": "fact-check-ai-generated-content-verification-framework",
+  "how-to-fact-check-ai-generated-articles": "fact-check-ai-generated-content-verification-framework",
   // SEO tools for small teams
   "best-seo-tools-small-teams-2025": "best-free-seo-tools-for-small-teams",
   // Keyword research automation
