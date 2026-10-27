@@ -220,3 +220,38 @@ test("the sitemap date is the page's publication, never a maintenance write", as
     assert.equal((await f.run("listPublishedSlugs")).articles[0].updatedAt, 1000, `summary mode: ${summaryMode}`);
   }
 });
+
+// P233 (Oct 27 2026): a page consolidated away redirects and is never listed or in the sitemap, yet the listing and
+// the sitemap projected it, reading its revisions: 88 of pentra.dev's 147 published articles.
+test("P233 the listing and sitemap never read the revisions of a page consolidated away", async () => {
+  const site: Row = { _id: "site", domain: "pentra.dev", publishMethod: "github", repoOwner: "owner", repoName: "repo", repoDefaultBranch: "main" };
+  const row = (id: string, slug: string, at: number) => ({ _id: id, siteId: "site", status: "published", title: slug, slug, metaDescription: "d",
+    readingTime: 3, publishedAt: at, createdAt: at });
+  const articles = [row("served", "automated-seo-workflow-complete-guide", 1000), row("merged", "how-to-automate-seo-workflow", 900)];
+  const tables: Record<string, Row[]> = { sites: [site], articles, published_article_revisions: [],
+    article_summaries: articles.map(a => ({ ...a, _id: `summary-${a._id}`, articleId: a._id, articleCreatedAt: a.createdAt })),
+    maintenance_state: [{ key: "publication-integrity-v4", status: "completed" }] };
+  const revisionReads: unknown[] = [];
+  const ctx = { db: {
+    get: async (id: string) => structuredClone(Object.values(tables).flat().find(r => r._id === id) ?? null),
+    query(table: string) {
+      const conditions: Array<(r: Row) => boolean> = [];
+      const range = { eq(key: string, value: unknown) {
+        if (table === "published_article_revisions" && (key === "articleId" || key === "servedArticleId")) revisionReads.push(value);
+        conditions.push(r => r[key] === value); return range; } };
+      const rows = () => structuredClone(tables[table].filter(r => conditions.every(fn => fn(r))));
+      const chain = { withIndex(_name: string, fn: (q: typeof range) => unknown) { fn(range); return chain; }, order() { return chain; },
+        async first() { return rows()[0] ?? null; }, async take(n: number) { return rows().slice(0, n); }, async collect() { return rows(); } };
+      return chain;
+    },
+  } };
+  const runtime = { exports: {} as Record<string, { _handler(ctx: unknown, args: unknown): Promise<Row> }> };
+  runInNewContext(source, { module: runtime, exports: runtime.exports, require: createRequire(import.meta.url), URL, TextEncoder, TextDecoder });
+  const slugs = (await runtime.exports.listPublishedSlugs._handler(ctx, { domain: "pentra.dev" })).articles.map((a: Row) => a.slug);
+  const listed = (await runtime.exports.listPublishedByDomain._handler(ctx, { domain: "pentra.dev" }) as unknown as Row[]).map(a => a.slug);
+  // Arrays made inside the VM have another realm's prototype: compare their contents.
+  assert.equal(slugs.join(","), "automated-seo-workflow-complete-guide");
+  assert.equal(listed.join(","), "automated-seo-workflow-complete-guide");
+  assert.ok(revisionReads.length > 0, "the served page's revisions are still read");
+  assert.ok(!revisionReads.includes("merged"), "the merged page's revisions are never read");
+});

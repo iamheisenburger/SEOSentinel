@@ -3,6 +3,7 @@ import type { QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { publicRevisionProjection, projectPublicArticleRows } from "./lib/publicRevisionProjection";
+import { servedOnItsOwnUrl } from "./lib/pentraConsolidation";
 import {
   articleMatchesCurrentDomain,
   siteCanonicalDomain,
@@ -153,6 +154,13 @@ async function currentArticleBySlug(
   return null;
 }
 
+/** P233 (Oct 27 2026): a page consolidated away redirects (pentra.dev; P193/P227), so it is never listed and never in
+ * the sitemap. It was projected anyway, reading its revisions and improvements: 88 of pentra.dev's 147 published
+ * articles, a growing share of the listing's ~3 MB a call as Related reading repairs add revisions. */
+function servedRows<T extends { slug?: string }>(site: Doc<"sites">, rows: T[]): T[] {
+  return rows.filter((row) => servedOnItsOwnUrl(site.domain, row.slug ?? ""));
+}
+
 export const listPublishedByDomain = query({
   args: { domain: v.string() },
   handler: async (ctx, { domain }) => {
@@ -163,7 +171,7 @@ export const listPublishedByDomain = query({
     const published = useSummaries
       ? await currentPublishedSummaries(ctx, site)
       : await currentPublishedArticles(ctx, site);
-    const projected = await projectPublicArticleRows(ctx, site, published);
+    const projected = await projectPublicArticleRows(ctx, site, servedRows(site, [...published]));
     return projected.map((a) => ({
         _id: "articleId" in a ? a.articleId : a._id,
         title: a.title,
@@ -189,13 +197,14 @@ export const listPublishedSlugs = query({
     const published = useSummaries
       ? await currentPublishedSummaries(ctx, site)
       : await currentPublishedArticles(ctx, site);
-    const projected = await projectPublicArticleRows(ctx, site, published);
+    const served = servedRows(site, [...published]);
+    const projected = await projectPublicArticleRows(ctx, site, served);
     // The sitemap's lastmod is when the public page last changed: a delivered
     // correction or improvement (projected with its delivery time), else its
     // publication. Maintenance writes (live checks, the daily 12:30Z Search
     // Console inspections) bumped every article's lastmod every day (Oct 21
     // 2026), which teaches Google to ignore it on a site it already crawls rarely.
-    const unchanged = new Set<unknown>(published);
+    const unchanged = new Set<unknown>(served);
     const articles = projected.map((a) => {
       const publishedAt = "articleId" in a ? a.publishedAt ?? a.articleCreatedAt : a.publishedAt ?? a.createdAt;
       const deliveredAt = !unchanged.has(a) && "updatedAt" in a && typeof a.updatedAt === "number" ? a.updatedAt : 0;
