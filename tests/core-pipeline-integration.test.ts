@@ -4949,6 +4949,33 @@ test("P152 a waiting article that fails a reader check added since it was sealed
   f.assertOffline();
 });
 
+// P232 (Oct 27 2026): P231 names the products a search for a kind of product asks for. pentra.dev's Oct 29 article
+// ("blog publishing services") was written the day before under the old rule and names no service.
+test("P232 a waiting article for a kind of product, written the week before P231, is written again naming them", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+  const site = await selectGrowth(f, 8 * 3_600_000);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  const waiting = () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready" && j.contentWork.retiredAt === undefined);
+  await pumpUntil(f, () => waiting().length === 2);
+  const [category, other] = waiting();
+  const categoryTopic = f.get(category.payload.topicId)!, otherTopic = f.get(other.payload.topicId)!;
+  categoryTopic.primaryKeyword = "irrigation scheduling software for landscapers";
+  otherTopic.primaryKeyword = "irrigation valve inspection workflow";
+  const lastWeek = Date.UTC(2026, 9, 26, 9);
+  f.get(category.articleId)!.createdAt = lastWeek; f.get(other.articleId)!.createdAt = lastWeek;
+  assert.deepEqual(await f.invoke("contentWork:retireDuplicateReadyWork", { siteId: site.id }), { retired: 1 });
+  assert.equal(f.get(category._id)!.contentWork.failure, "reader_visible_defect");
+  assert.match(String(f.get(category.articleId)!.publicationGateIssues[0]), /^Written before Pentra named the products/);
+  assert.equal(f.get(categoryTopic._id)!.status, "planned", "its topic goes back to the plan, to be written again");
+  assert.equal(f.get(other._id)!.contentWork.stage, "ready", "a search for no kind of product keeps its article");
+  // An article written under P231, or long before it (never waiting this long), is left alone.
+  const again = waiting()[0];
+  f.get(again.payload.topicId)!.primaryKeyword = "irrigation scheduling apps";
+  f.get(again.articleId)!.createdAt = Date.UTC(2026, 9, 27, 21);
+  assert.deepEqual(await f.invoke("contentWork:retireDuplicateReadyWork", { siteId: site.id }), { retired: 0 });
+  f.assertOffline();
+});
+
 // P173 (Oct 24 2026): after the 02:40Z sweep held back LeadPilot's waiting article, its scheduler returned
 // "content_failed_slot" on every pass: the hold-back and an earlier rejected draft read as a failing streak (2 of the
 // last 3 finished articles failed), so the held slot got no replacement and would have been parked (missed). And a

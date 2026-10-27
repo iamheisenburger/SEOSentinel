@@ -40,6 +40,7 @@ import { contentJobUsesAllowance } from "./lib/contentUsage";
 import { BUYER_FIT_MAX_KEYWORDS, BUYER_FIT_RESERVATION_MICRO_USD, BUYER_FIT_VERSION, type BuyerFitBusiness } from "./lib/topicFit";
 import { PLAN_AUDIT_VERSION } from "./lib/researchGrouping";
 import { servedOnItsOwnUrl } from "./lib/pentraConsolidation";
+import { searchAsksForProducts } from "./lib/sourceQuality";
 import { OWNER_SEARCH_MAX_WAITING, OWNER_SEARCH_MEASURE_MICRO_USD, OWNER_SEARCH_NOTES, OWNER_SEARCH_PRIORITY,
   ownerSearchArticleType, ownerSearchKeyword } from "./lib/ownerSearch";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
@@ -1990,14 +1991,26 @@ export const retireDuplicateReadyWork = internalMutation({ args: { siteId: v.id(
     // day; one that fails a reader-visible check added since (P149's source
     // talk, found on the Compost Notes test site) is held back before its slot.
     const defects = !duplicate && article && article.siteId === siteId ? readerVisibleIssues(article) : [];
-    if (!duplicate && defects.length === 0) continue;
+    // P232: written in the week before P231 for a search that asks for a kind of product, it names none of the products;
+    // it is held back and its topic goes back to the plan, to be written again naming them.
+    const unnamedProducts = !duplicate && defects.length === 0 && Boolean(topic && searchAsksForProducts(topic.primaryKeyword)) &&
+      writtenJustBeforeProductNames(article);
+    if (!duplicate && defects.length === 0 && !unnamedProducts) continue;
     if (await holdBackReadyWork(ctx, site, job, topic, article, duplicate,
       duplicate ? ["Repeats a page this site already has, so it was held back and the slot got a new topic."]
+        : unnamedProducts ? ["Written before Pentra named the products a search for a kind of product asks for, so it was held back and its topic will be written again."]
         : ["It fails a reader check added after it was written, so it was held back and the slot got a new article.", ...defects.slice(0, 3)])) retired++;
   }
   if (retired > 0) await wake(ctx, siteId);
   return { retired };
 } });
+/** P232: P231 (shipped 20:09Z Oct 27 2026) names the products a search for a kind of product asks for. A waiting
+ * article is at most a few days old, so the ones written under the old rule were written in the week before it. */
+const PRODUCT_NAMES_RULE_AT = Date.UTC(2026, 9, 27, 20, 9);
+function writtenJustBeforeProductNames(article: Doc<"articles"> | null) {
+  const at = article?.createdAt ?? article?._creationTime ?? 0;
+  return at >= PRODUCT_NAMES_RULE_AT - 7 * 86_400_000 && at < PRODUCT_NAMES_RULE_AT;
+}
 /** Autopilot's waiting articles (sealed, before their slot): its own new
  * articles only, never an owner's request or an operation. */
 async function waitingCreateWork(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
