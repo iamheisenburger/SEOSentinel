@@ -1429,6 +1429,27 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     assert.notEqual(job.payload.topicId, harder, "480 searches at difficulty 14 beat 1,000 at difficulty 40");
     f.assertOffline();
   });
+  // P238 (Oct 28 2026): pentra.dev's Oct 27 research added 3 topics; one was held back as a copy, the other two filled
+  // Oct 28 and 29, and research waited out its three-day gap, past the Oct 30 slot.
+  await t.test("P238 with no topic left, research runs a day after the last run, not after the full gap", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    f.setIdentity(saved.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+    f.setIdentity(null);
+    Object.assign(f.get(site.id)!, { anchorKeywords: [], painPoints: [], keyFeatures: [], productUsage: "" });
+    f.get(site.id)!.contentSchedule.profileHash = confirmedContentProfileHash(f.get(site.id)! as never);
+    for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+    // The last research ran 25 hours ago and added three topics: a three-day gap on a daily site.
+    const lastRun = f.now() - 25 * 3_600_000;
+    Object.assign(f.get(site.id)!.contentSchedule, { intervalMs: 86_400_000, topicsReplenishedAt: lastRun, topicsReplenishAdded: 3,
+      topicsResearchReceipt: f.get(site.id)!.contentSchedule.topicsResearchReceipt ?? { method: 99 }, nextDeadlineAt: f.now() + 30 * 3_600_000 });
+    const result = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal(result.mode, "topics_researching", JSON.stringify(result));
+    assert.ok(f.get(site.id)!.contentSchedule.topicsReplenishedAt > lastRun, "research starts now");
+    f.assertOffline();
+  });
   await t.test("empty_keyword_research_falls_back_without_missing_the_slot", async () => {
     const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
     const site = await createEmptyContentSite(f), saved = f.get(site.id)!;

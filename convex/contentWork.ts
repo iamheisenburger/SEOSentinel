@@ -277,10 +277,19 @@ const TOPIC_RESEARCH_DROPS_READ = 600;
 const TOPIC_RESEARCH_WAIT_MARGIN_MS = 90 * 60_000;
 /** Autopilot writes for searched keywords: when none is left, research new
  * ones for the confirmed business (bounded spend, at most every few days). */
-async function startTopicResearchIfDue(ctx: MutationCtx, site: Doc<"sites">, articleBudgetMicroUsd: number) {
+/** P238 (Oct 28 2026): with no searched keyword left, research may run again a day after the last run instead of after
+ * the full gap. The gap assumes every topic a run adds gets written, but the plan audit and the nightly sweep hold some
+ * back: pentra.dev's Oct 27 run added 3, one was held back as a copy and the other two filled Oct 28 and 29, so its
+ * Oct 30 slot had no topic until research came due on Oct 30 at 12:22Z, after the slot. A run that found nothing keeps
+ * its week, and research never runs more than once a day. */
+export function exhaustedTopicResearchDueAt(schedule: Parameters<typeof topicResearchDueAt>[0]) {
+  if (researchMethodOutdated(schedule) || schedule.topicsReplenishAdded === 0) return topicResearchDueAt(schedule);
+  return Math.min(topicResearchDueAt(schedule), (schedule.topicsReplenishedAt ?? 0) + TOPIC_REPLENISH_MIN_GAP_MS);
+}
+async function startTopicResearchIfDue(ctx: MutationCtx, site: Doc<"sites">, articleBudgetMicroUsd: number, options: { exhausted?: boolean } = {}) {
   const schedule = site.contentSchedule;
   if (!schedule?.autopilotSelectedAt || !site.userId) return false;
-  if (Date.now() < topicResearchDueAt(schedule)) return false;
+  if (Date.now() < (options.exhausted ? exhaustedTopicResearchDueAt(schedule) : topicResearchDueAt(schedule))) return false;
   const request = { siteId: site._id, userId: site.userId, purpose: "topic_plan" as const, trigger: `autopilot_topics:${Math.floor(Date.now() / TOPIC_REPLENISH_MIN_GAP_MS)}`,
     reservedMicroUsd: TOPIC_REPLENISH_BUDGET_MICRO_USD, timestamp: Date.now() };
   // Research only when the account can still afford the article after it: the cadence comes first.
@@ -2590,7 +2599,7 @@ export const advance = internalMutation({
       // No searched keyword is left: research new ones for the confirmed
       // business (within the ordinary spend limits). When the slot allows, the
       // article waits for that research; the cadence never does.
-      const researching = await startTopicResearchIfDue(ctx, site, pricing.budgetMicroUsd);
+      const researching = await startTopicResearchIfDue(ctx, site, pricing.budgetMicroUsd, { exhausted: true });
       if (researching && !replaceNextSlot && schedule.nextDeadlineAt - Date.now() >= TOPIC_RESEARCH_WAIT_MARGIN_MS) {
         await ctx.scheduler.runAfter(10 * 60_000, internal.autopilot.dispatchSiteFollowup, {
           siteId, trigger: "content_work", reason: "content_work_stage_changed" });
@@ -2601,7 +2610,7 @@ export const advance = internalMutation({
     if (!topic && !improvement) {
       // Wake exactly when keyword research may run again, instead of waiting
       // up to three hours for the next scheduled check.
-      const researchAt = schedule.autopilotSelectedAt ? topicResearchDueAt(schedule) : 0;
+      const researchAt = schedule.autopilotSelectedAt ? exhaustedTopicResearchDueAt(schedule) : 0;
       if (researchAt > Date.now() && researchAt - Date.now() <= 86_400_000) {
         await ctx.scheduler.runAt(researchAt, internal.autopilot.dispatchSiteFollowup, {
           siteId, trigger: "content_work", reason: "topic_research_due" });
