@@ -8737,6 +8737,37 @@ test("A refresh adoption of a file the owner later edits is retired before any w
   f.assertOffline();
 });
 
+// P235 (Oct 28 2026): four of LeadPilot's articles were published by Pentra and later revised by Pentra ("Pentra revise
+// pentra:..."), so their files carry the revision's delivery key. The daily adoption checked only the first
+// publication's key and refused Pentra's own files, leaving their Related reading lists unrepairable.
+test("P235 an article Pentra revised since publishing it is adopted: its file carries the revision's key", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const day = 86_400_000, site = await selectGrowth(f, 7 * day);
+  await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.stage === "verified")));
+  const created = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!, article = f.get(created.articleId)!;
+  const enrolled = f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!, path = String(enrolled.editable.path);
+  delete enrolled.editable;
+  f.setTime(Math.max(f.now(), article.publishedAt + 29 * day));
+  const date = new Date(f.now() - day).toISOString().slice(0, 10), syncEpoch = `refresh-${date}`;
+  f.get(site.id)!.gscDateEpochs = [...(f.get(site.id)!.gscDateEpochs ?? []), { date, syncEpoch }];
+  f.add("search_performance", { siteId: site.id, date, syncEpoch, page: article.publicUrl, query: `${site.keywords[0]} diagnostic decision`,
+    syncVersion: 2, syncedAt: f.now(), clicks: 0, impressions: 40, ctr: 0, position: 14, createdAt: f.now() });
+  f.get(site.id)!.publisherDestinationReceipt = expectedPublisherDestinationReceipt({ site: f.get(site.id)! as never,
+    ownerAccountKey: accountDeletionKey(f.get(site.id)!.userId), verifiedAt: f.now() });
+  // Pentra delivered a revision of the article since: its file now carries the revision's key, in a Pentra commit.
+  const repo = f.repositories.get(site.name.toLowerCase())!, revisionKey = "b".repeat(64), commit = "pentra-revise-commit";
+  const revised = String(repo.files.get(path)).replace(/pentraDeliveryKey: "pentra:[0-9a-f]+"/, `pentraDeliveryKey: "pentra:${revisionKey}"`);
+  assert.notEqual(revised, repo.files.get(path), "the file names the revision's delivery");
+  repo.blobs.set("revised-blob", revised); repo.trees.set(`${commit}-tree`, [{ path, sha: "revised-blob" }]);
+  repo.commits.set(commit, `${commit}-tree`); repo.parents.set(commit, repo.head);
+  repo.messages.set(commit, `Pentra revise pentra:${revisionKey}: ${article.title}`); repo.head = commit; repo.files.set(path, revised);
+  f.add("published_article_revisions", { siteId: site.id, articleId: article._id, status: "verified", revisionKey, kind: "editorial_correction",
+    receipt: { method: "github", deliveryKey: `pentra:${revisionKey}`, status: "committed" }, createdAt: f.now(), updatedAt: f.now() });
+  assert.deepEqual(await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id }), { adopted: 1, checked: 1 });
+  assert.ok(f.tables.pages.some(p => p.url === article.publicUrl && p.editable?.active), "Pentra's revised file is enrolled");
+  f.assertOffline();
+});
+
 test("A failed automatic refresh never holds its slot: the site keeps publishing new articles", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const day = 86_400_000, site = await selectGrowth(f, 7 * day);

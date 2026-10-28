@@ -19,7 +19,7 @@ import { isBrandedSearchQuery } from "./lib/searchPerformance";
 import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
 import { relatedReadingRepairProposal } from "./lib/contentCorrection";
 import { servedOnItsOwnUrl } from "./lib/pentraConsolidation";
-import { publicRevisionProjection } from "./lib/publicRevisionProjection";
+import { pentraDeliveryKeys, publicRevisionProjection } from "./lib/publicRevisionProjection";
 
 async function owner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
   const site = await ctx.db.get(siteId), identity = await ctx.auth.getUserIdentity();
@@ -324,8 +324,9 @@ export const refreshAdoptionContext = internalQuery({ args: { siteId: v.id("site
       .filter(entry => entry.best).sort((a, b) => refreshOpportunityValue(b.best!) - refreshOpportunityValue(a.best!))
       .slice(0, Math.max(1, Math.min(args.limit ?? 3, 5)));
     for (const { row } of scored) {
-      const candidate = candidateFor(await ctx.db.get(row.articleId), row.publicUrl!, false);
-      if (candidate) candidates.push(candidate);
+      const article = await ctx.db.get(row.articleId), candidate = candidateFor(article, row.publicUrl!, false);
+      // P235: the file may carry the key of a revision Pentra delivered since its first publication.
+      if (candidate) candidates.push({ ...candidate, deliveryKeys: await pentraDeliveryKeys(ctx, article!) });
     }
   }
   // P192 (Oct 25 2026): an article whose live Related reading list still has a
@@ -348,7 +349,7 @@ export const refreshAdoptionContext = internalQuery({ args: { siteId: v.id("site
     // P218: a list linking consolidated pages is repair work too.
     if (!live?.markdown || !relatedReadingRepairProposal(live.markdown, titles, relatedReadingTitle, { domain: site.domain, selfHref })) continue;
     const candidate = candidateFor(article, row.publicUrl!, true);
-    if (candidate) { candidates.push(candidate); repairs += 1; }
+    if (candidate) { candidates.push({ ...candidate, deliveryKeys: await pentraDeliveryKeys(ctx, article!) }); repairs += 1; }
   }
   return { site, connectionHash, profileHash: confirmedContentProfileHash(site), candidates };
 } });

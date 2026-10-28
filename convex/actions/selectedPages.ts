@@ -121,7 +121,8 @@ export const adoptPublishedForRefreshInternal = internalAction({ args: { siteId:
   for (const candidate of context.candidates) {
     try {
       const source = await renderedSnapshot(await readSelectedSource(context.site, { path: candidate.path }, { pentraCreated: true }));
-      if (source.kind !== "github" || source.url !== candidate.url || !pentraOwnedMarkdown(source.sourceContent, candidate.deliveryKey)) continue;
+      if (source.kind !== "github" || source.url !== candidate.url ||
+        !candidate.deliveryKeys.some(key => pentraOwnedMarkdown(source.sourceContent, key))) continue;
       // Customer edits are preserved: a file any non-Pentra commit touched is the owner's.
       if (!pentraOnlyFileHistory(await githubFileHistory(context.site, candidate.path))) continue;
       const result = await ctx.runMutation(internal.selectedPages.recordRefreshAdoption, {

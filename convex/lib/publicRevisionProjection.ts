@@ -33,6 +33,18 @@ async function latestAcknowledgedRevision(ctx: QueryCtx, articleId: Id<"articles
     b.createdAt - a.createdAt || b._creationTime - a._creationTime)[0];
 }
 
+/** P235 (Oct 28 2026): the delivery keys Pentra's own file for this article may carry in its frontmatter: its first
+ * publication's and, once Pentra delivered a revision or an improvement of it, the newest such delivery's. LeadPilot's
+ * articles revised by Pentra carry the revision's key ("Pentra revise pentra:..."), and the daily adoption, checking
+ * only the first, refused four of Pentra's own files (Oct 28 04:10Z). */
+export async function pentraDeliveryKeys(ctx: QueryCtx, article: Doc<"articles">): Promise<string[]> {
+  const [revision, improvement] = await Promise.all([latestAcknowledgedRevision(ctx, article._id), latestDeliveredImprovement(ctx, article._id)]);
+  const newest = [revision, improvement].filter((row): row is NonNullable<typeof row> => Boolean(row)).sort((a, b) => b.createdAt - a.createdAt)[0];
+  const delivered = (newest?.receipt as { deliveryKey?: unknown } | undefined)?.deliveryKey;
+  return [...new Set([...(article.publicationDeliveryHash ? [`pentra:${article.publicationDeliveryHash}`] : []),
+    ...(typeof delivered === "string" && delivered.startsWith("pentra:") ? [delivered] : [])])];
+}
+
 export async function publicRevisionProjection(ctx: QueryCtx, site: Doc<"sites">, article: Doc<"articles">): Promise<Doc<"articles"> | null> {
   const [revision, improvement] = await Promise.all([latestAcknowledgedRevision(ctx, article._id), latestDeliveredImprovement(ctx, article._id)]);
   if (improvement && (!revision || improvement.createdAt > revision.createdAt)) return projectDeliveredImprovement(site, article, improvement);
