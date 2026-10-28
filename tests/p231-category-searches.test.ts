@@ -20,8 +20,8 @@ test("P231 a search for a kind of product is told apart from one about a task or
 
 test("P231 the writer names the products a search for a kind of product asks for, from cited sources only", () => {
   const category = otherCompaniesRule("free ai tools for seo optimization");
-  assert.match(category, /name the specific products a reader would compare/);
-  assert.match(category, /Every fact about a product must come from a supplied source, cited/);
+  assert.match(category, /name the specific products, services or places a reader would compare or use/);
+  assert.match(category, /Every fact about one must come from a supplied source, cited/);
   assert.match(category, /never state another product's prices, plans, editions, limits or rankings unless a supplied source states them/);
   assert.match(category, /Never name the banned companies above\./);
   assert.match(otherCompaniesRule("lead scoring marketing"), /^- OTHER COMPANIES: Name another company or product only when the primary keyword names it\./,
@@ -34,3 +34,17 @@ test("P231 the edit pass leaves product names in an article for a kind of produc
   assert.deepEqual(unsearchedCompanyMentions(markdown, companies, { search: "free seo tools for small teams", business: ["Pentra"] }), []);
   assert.equal(unsearchedCompanyMentions(markdown, companies, { search: "how to find broken backlinks", business: ["Pentra"] }).length, 1);
 });
+
+// P236 (Oct 28 2026): pentra.dev's Oct 29 article for "where to promote blog posts after publishing" named no place.
+test("P236 a search for places to do something asks for them by name; one about a spot inside the page does not", () => {
+  for (const search of ["where to promote blog posts after publishing", "where can i share my blog posts", "best communities for saas founders",
+    "top seo forums", "sites like medium", "places to submit a startup", "free directories to list a local business"]) {
+    assert.equal(searchAsksForProducts(search), true, search);
+  }
+  for (const search of ["where to put keywords in a blog post", "how to promote a blog post", "seo for small business websites",
+    "how often should a small business publish blog posts"]) {
+    assert.equal(searchAsksForProducts(search), false, search);
+  }
+  assert.match(otherCompaniesRule("where to promote blog posts after publishing"), /name the specific products, services or places/);
+});
+

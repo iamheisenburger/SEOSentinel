@@ -4555,7 +4555,7 @@ async function handleArticle(
           `Do not research ${site.siteName ?? site.domain} itself or its competitors; research the subject for its readers.`,
           namedProducts.length ? `This compares the products the search names (“${topic.primaryKeyword}”). For a fact about one of them, its own website (features, plans and pricing pages) and documentation are the authoritative sources: cite those pages, not third-party lists.` : "",
           // P231: the article names the products a search for a kind of product asks for, so research finds them.
-          !namedProducts.length && searchAsksForProducts(topic.primaryKeyword) ? `This search asks for a kind of product (“${topic.primaryKeyword}”). Find the products a reader would compare and, for facts about each one, its own documentation or help pages.` : "",
+          !namedProducts.length && searchAsksForProducts(topic.primaryKeyword) ? `This search asks for specific options (“${topic.primaryKeyword}”). Find the products, services or places a reader would compare or use and, for facts about each one, its own documentation or help pages.` : "",
         ].filter(Boolean).join("\n"),
         maxUses: 3,
         firstPartyProducts: namedProducts,

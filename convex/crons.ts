@@ -90,9 +90,11 @@ crons.interval(
 // fleet pass is provider-free unless an exact site has exhausted its ordinary two-step
 // plan, has no usable inventory or active work, and can atomically reserve the
 // two bounded $0.10 phases. Per-site mutations retain the one-shot authority.
+// P236 (Oct 28 2026): hourly, not every 15 minutes. Each pass reads both expected-click backfills' readiness (~125 KB
+// each) for every eligible site: 192 calls, ~24 MB of the 24 h Convex measurement to 04:46Z Oct 28, with no rescue due.
 crons.interval(
   "cadence-micro-seed-fleet",
-  { minutes: 15 },
+  { hours: 1 },
   internal.actions.cadenceMicroSeed.dispatchCadenceMicroSeedFleet,
   {},
 );

@@ -100,14 +100,17 @@ export function normalizeEvidenceUrl(value: string): string | null {
  * one growing page (25 → 72 impressions a week, written in July) has a section for each of five tools it names.
  */
 const PRODUCT_KINDS = /\b(?:tools?|software|apps?|applications|platforms?|solutions|services|providers?|vendors?|plugins?|extensions|generators?|crms?)\b/i;
+/** P236 (Oct 28 2026): a search for places to do something asks for them by name too. pentra.dev's Oct 29 article for
+ * "where to promote blog posts after publishing" named none ("your own site", "communities", "partners"). */
+const PLACES = /\bwhere (?:to|can i|should i) (?:promote|share|post|publish|advertise|list|sell|submit|find|buy|hire)\b|\b(?:best|top|free)\s+(?:\w+\s+){0,3}(?:sites|websites|places|channels|communities|forums|directories|marketplaces|networks|newsletters|podcasts)\b|\b(?:sites|websites|places|channels|communities|forums|directories|marketplaces)\s+(?:to|for|like)\b/i;
 export function searchAsksForProducts(search: string | undefined): boolean {
-  return PRODUCT_KINDS.test(search ?? "");
+  return PRODUCT_KINDS.test(search ?? "") || PLACES.test(search ?? "");
 }
 
 /** The writer's rule for naming other companies and products, for this search. */
 export function otherCompaniesRule(search: string | undefined): string {
   return searchAsksForProducts(search)
-    ? `- OTHER COMPANIES: This search asks for a kind of product (“${(search ?? "").trim()}”), so name the specific products a reader would compare, with a clear section or table row for each that says what it is for. Every fact about a product must come from a supplied source, cited (its own documentation or help pages are the authority on it); never state another product's prices, plans, editions, limits or rankings unless a supplied source states them, and never call one better without a source. Never name the banned companies above.`
+    ? `- OTHER COMPANIES: This search asks for specific options (“${(search ?? "").trim()}”), so name the specific products, services or places a reader would compare or use, with a clear section or table row for each that says what it is for. Every fact about one must come from a supplied source, cited (its own documentation or help pages are the authority on it); never state another product's prices, plans, editions, limits or rankings unless a supplied source states them, and never call one better without a source. Never name the banned companies above.`
     : `- OTHER COMPANIES: Name another company or product only when the primary keyword names it. When a cited source is another company's documentation, state the fact itself as plain guidance with its citation and leave the company out (never "that documentation says" or "the same guide states"); never describe another company's plans, editions or prices unless the primary keyword names that company.`;
 }
 

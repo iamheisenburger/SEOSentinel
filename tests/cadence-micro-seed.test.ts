@@ -1941,6 +1941,8 @@ test("lifecycle is inspect-first, no-replay, atomic at handoffs, and fleet-gener
     /recordCadenceScheduleResult[\s\S]*currentTopicFit[\s\S]*business_fit_drifted[\s\S]*exactTopicScheduled/,
   );
   assert.match(crons, /cadence-micro-seed-fleet/);
+  // P236: hourly; every 15 minutes read ~24 MB a day of readiness for no rescue.
+  assert.match(crons, /"cadence-micro-seed-fleet",\s*\{ hours: 1 \}/);
   assert.match(action, /dispatchCadenceMicroSeedFleet/);
   assert.match(action, /runCadenceMicroSeedFleetSite/);
   assert.match(schema, /cadence_micro_seed_jobs: defineTable/);
