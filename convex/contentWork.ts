@@ -166,7 +166,11 @@ function latestFailedAt(work: Doc<"jobs">[], deadlineAt: number) {
 function slotReplacementCandidate(work: Doc<"jobs">[], deadlineAt: number) {
   if (work.filter(j => j.contentWork!.deadlineAt === deadlineAt).length >= SLOT_MAX_JOBS) return null;
   const failed = latestFailedAt(work, deadlineAt);
-  return failed && autopilotReplaceable(failed) && !work.some(j => j.contentWork!.replacesJobId === failed._id) ? failed : null;
+  // P234: a replacement covers the failed job's slot only while it is still in that slot. One moved up into an earlier
+  // empty slot (P173) left this one with nothing (pentra.dev Oct 28 02:42Z: both waiting articles held back, the second
+  // slot's replacement moved up, and the second slot returned "content_failed_slot").
+  return failed && autopilotReplaceable(failed) && !work.some(j => j.contentWork!.replacesJobId === failed._id && j.contentWork!.deadlineAt === deadlineAt)
+    ? failed : null;
 }
 /** Autopilot chose this page improvement or refresh itself. Its failure never
  * holds the slot: nothing was published for it, so the slot gets a new

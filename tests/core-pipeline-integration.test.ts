@@ -5008,6 +5008,27 @@ test("P173 articles the nightly sweep holds back never read as a failing streak:
   assert.ok(waiting().every(j => held.some(h => h._id === j.contentWork.replacesJobId)), "each replaces a held-back article");
   f.assertOffline();
 });
+// P234 (Oct 28 2026): pentra.dev at 02:40Z: the sweep held back the second waiting article first, its slot got a new
+// one, then the plan audit held back the first; the new article moved up into the first slot (P173) but still named
+// the second slot's held-back job as the one it replaces, so the second slot was treated as replaced and got nothing.
+test("P234 a replacement that moved up to an earlier slot leaves its own slot open for a new article", async () => {
+  const { f, site, waiting, failCheck } = await p173TwoWaiting();
+  const [first, second] = waiting(), firstSlot = first.contentWork.deadlineAt, secondSlot = second.contentWork.deadlineAt;
+  const next = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  failCheck(second);
+  assert.deepEqual(await f.invoke("contentWork:retireDuplicateReadyWork", { siteId: site.id }), { retired: 1 });
+  await pumpUntil(f, () => waiting().length === 2, 200, f.now() + 11 * 3_600_000);
+  const replacement = waiting().find(j => j.contentWork.replacesJobId === second._id)!;
+  assert.equal(replacement.contentWork.deadlineAt, secondSlot, "the second slot's new article");
+  // Now the first is held back too: the second slot's new article moves up into the first slot.
+  failCheck(first);
+  assert.deepEqual(await f.invoke("contentWork:retireDuplicateReadyWork", { siteId: site.id }), { retired: 1 });
+  await pumpUntil(f, () => waiting().length === 2, 200, f.now() + 11 * 3_600_000);
+  assert.equal(f.get(replacement._id)!.contentWork.deadlineAt, firstSlot, "the new article moved up");
+  assert.deepEqual(waiting().map(j => j.contentWork.deadlineAt), [firstSlot, secondSlot], "both slots are covered");
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, next, "no slot was parked (missed)");
+  f.assertOffline();
+});
 test("P173 a held-back first article costs no slot: the next article moves up and its own slot gets a new one", async () => {
   const { f, site, waiting, failCheck } = await p173TwoWaiting();
   const [first, second] = waiting(), next = f.get(site.id)!.contentSchedule.nextDeadlineAt, after = second.contentWork.deadlineAt;
