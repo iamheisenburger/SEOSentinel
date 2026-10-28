@@ -91,6 +91,7 @@ export const signupFunnel = internalQuery({ args: { since: v.number() }, handler
   // P198: how far GitHub sites got through connecting, by presence only (never a value). New sites default to
   // GitHub, so "github" in publishMethods includes owners who never chose a platform: "connectStarted" tells them apart.
   const github = { sites: 0, connectStarted: 0, accountConnected: 0, repositoryChosen: 0, verified: 0 };
+  const firstArticleHours: number[] = [];
   const has = async (siteId: Id<"sites">, status: string) =>
     (await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", status)).take(1)).length > 0;
   for (const site of sites) {
@@ -122,7 +123,13 @@ export const signupFunnel = internalQuery({ args: { since: v.number() }, handler
       if (receipt?.method === "github" && receipt.status === "verified") github.verified++;
     }
     if ((await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", site._id)).take(1)).length) counts.workStarted++;
-    if (await has(site._id, "published")) counts.articlePublished++;
+    const published = await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", site._id).eq("status", "published")).take(20);
+    if (published.length) {
+      counts.articlePublished++;
+      // P239 (Oct 28 2026): V8 asks for the first article live within 24 hours; the hours from the site's creation only.
+      const times = published.flatMap(row => row.publishedAt ? [row.publishedAt] : []);
+      if (times.length) firstArticleHours.push(Math.round((Math.min(...times) - site._creationTime) / 360_000) / 10);
+    }
     else if (await has(site._id, "ready") || await has(site._id, "review")) counts.articleWaiting++;
   }
   // P202: accounts that opened the dashboard since then (Pentra records their contact) and how many never added a site.
@@ -135,7 +142,8 @@ export const signupFunnel = internalQuery({ args: { since: v.number() }, handler
   // and reason only, never an address, a site or an account.
   const outcomes = () => ({ pending: 0, sent: 0, skipped: 0, failed: 0, reasons: {} as Record<string, number> });
   // P210: the "your article is ready to read" emails too (per draft, a few a site at most).
-  const emails = { setupReminder: outcomes(), addWebsite: outcomes(), draftReady: outcomes() };
+  // P239: and the email telling the owner their first article is live.
+  const emails = { setupReminder: outcomes(), addWebsite: outcomes(), draftReady: outcomes(), firstArticle: outcomes() };
   const count = (into: ReturnType<typeof outcomes>, log: Doc<"customer_emails">) => {
     into[log.status]++;
     if (log.reason) into.reasons[log.reason] = (into.reasons[log.reason] ?? 0) + 1;
@@ -143,6 +151,8 @@ export const signupFunnel = internalQuery({ args: { since: v.number() }, handler
   for (const site of sites) {
     const log = await ctx.db.query("customer_emails").withIndex("by_site_kind_key", q => q.eq("siteId", site._id).eq("kind", "setup_reminder").eq("key", "first")).first();
     if (log) count(emails.setupReminder, log);
+    const first = await ctx.db.query("customer_emails").withIndex("by_site_kind_key", q => q.eq("siteId", site._id).eq("kind", "first_article").eq("key", "first")).first();
+    if (first) count(emails.firstArticle, first);
     for (const draft of await ctx.db.query("customer_emails").withIndex("by_site_kind_key", q => q.eq("siteId", site._id).eq("kind", "draft_ready")).take(20)) {
       count(emails.draftReady, draft);
     }
@@ -153,7 +163,7 @@ export const signupFunnel = internalQuery({ args: { since: v.number() }, handler
     emails.addWebsite[reminder.status]++;
     if (reminder.reason) emails.addWebsite.reasons[reminder.reason] = (emails.addWebsite.reasons[reminder.reason] ?? 0) + 1;
   }
-  return { since, ...counts, publishMethods, verifiedDestinations, github, contacts, emails };
+  return { since, ...counts, firstArticleHours: firstArticleHours.sort((a, b) => a - b), publishMethods, verifiedDestinations, github, contacts, emails };
 } });
 
 /** P191 (Oct 25 2026): why Autopilot's Related reading repair (P176/P180) left a

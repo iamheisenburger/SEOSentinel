@@ -9717,6 +9717,13 @@ test("D4 the owner gets one email, once, when the site's first article is live",
   assert.equal(f.tables.customer_emails.length, 1);
   f.setIdentity(owner);
   assert.deepEqual(await f.invoke("customerEmails:mine", {}), { email: "owner@reservoirnote.example", emailUpdates: true });
+  // P239 (Oct 28 2026): V8 (first article live within 24 hours, its email sent) is read from the funnel, counts only.
+  const funnel = await f.invoke("opsProbes:signupFunnel", { since: 0 });
+  const firstLive = Math.min(...f.tables.articles.filter(a => a.siteId === site.id && a.status === "published").map(a => a.publishedAt));
+  assert.deepEqual(funnel.firstArticleHours, [Math.round((firstLive - f.get(site.id)!._creationTime) / 360_000) / 10]);
+  assert.ok(funnel.firstArticleHours[0] > 0 && funnel.firstArticleHours[0] < 24, JSON.stringify(funnel.firstArticleHours));
+  assert.deepEqual(funnel.emails.firstArticle, { pending: 0, sent: 1, skipped: 0, failed: 0, reasons: {} });
+  assert.ok(!JSON.stringify(funnel).includes("reservoirnote"), "never an address");
   f.assertOffline();
 });
 
