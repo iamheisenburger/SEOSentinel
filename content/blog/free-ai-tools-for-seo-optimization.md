@@ -143,9 +143,9 @@ When steps 4 through 6 start to feel like the bottleneck rather than the ideas, 
 
 ## Related reading
 
-- [Free SEO Content Generator: How to Evaluate AI Tools for Your Content Workflow](/blog/free-seo-content-generator-evaluation-guide)
+- [AI Content Generator for SEO: Automated Article Writing That Ranks](/blog/ai-content-generator-seo-automated-article-writing)
 - [Free SEO Content Writing Software: What It Can and Cannot Do for Your Site](/blog/free-seo-content-writing-software)
-- [Automated Content Calendar Tools: Which One Scales Your SEO Output](/blog/automated-content-calendar-tools-comparison)
+- [SEO Content Calendar Tools for Small Teams: Pentra vs. Manual Planning](/blog/seo-content-calendar-tools-small-teams)
 
 ## Sources
 
