@@ -1,5 +1,5 @@
 "use node";
-import { action, internalAction } from "../_generated/server";
+import { action, internalAction, type ActionCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
@@ -8,7 +8,8 @@ import { contentConnectionHash, confirmedContentProfileHash, selectedGitHubPath,
   selectedUrl, selectedUrlMatches, classicHtmlMarkdown, assertUnprotectedPage, contentConsentToken } from "../lib/contentSelection";
 import { wordpressConditionalRequest } from "../lib/wordpressConditional";
 import { safeFetchPublicText } from "../lib/safeOutbound";
-import { verifyLivePublishedRevision } from "../lib/publishedRevision";
+import { verifyLiveCreatedArticle, verifyLivePublishedRevision } from "../lib/publishedRevision";
+import { verifyLivePublicationPage } from "../lib/publicationLive";
 import { verifyLiveCorrectionBody } from "../lib/publishedCorrection";
 import { renderSafePublicationHtml } from "../lib/safeMarkdownHtml";
 import { pentraOwnedMarkdown, pentraOnlyFileHistory, REFRESH_HISTORY_LIMIT } from "../lib/articleRefresh";
@@ -106,11 +107,41 @@ async function githubFileHistory(site: Doc<"sites">, path: string): Promise<unkn
   if (!response.ok) throw new Error(`GitHub file history unavailable (${response.status})`);
   return response.json();
 }
-export const adoptPublishedForRefreshInternal = internalAction({ args: { siteId: v.id("sites") }, handler: async (ctx, args): Promise<{ adopted: number; checked: number; retired?: number; repairAdopted?: number; renewed?: number }> => {
+/** P237 (Oct 28 2026): Pentra's published articles whose public URL was never checked (published before URL checks)
+ * get the same live check as a new publication, against the version their page serves now, before the adoption that
+ * needs a verified URL. At most LEGACY_URL_CHECKS a run, newest first; a page that fails is recorded as failed. */
+const LEGACY_URL_CHECKS = 10;
+async function verifyLegacyPublicUrls(ctx: ActionCtx, siteId: Id<"sites">): Promise<number> {
+  const context = await ctx.runQuery(internal.articles.legacyPublicUrlCandidates, { siteId, limit: LEGACY_URL_CHECKS });
+  if (!context) return 0;
+  let verified = 0;
+  for (const item of context.items) {
+    let status: "verified" | "failed" = "verified", error: string | undefined;
+    try {
+      const fetched = await safeFetchPublicText(item.publicUrl, { expectedHost: new URL(item.publicUrl).hostname, sameHostRedirects: true,
+        maxRedirects: 3, maxBytes: 1_000_000, timeoutMs: 15_000, allowedContentTypes: [/^text\/html(?:;|$)/i, /^application\/xhtml\+xml(?:;|$)/i],
+        headers: { "User-Agent": "Pentra/1.0 (public publication verifier)", Accept: "text/html,application/xhtml+xml", "Accept-Encoding": "identity" } });
+      if (context.growthFirst) verifyLiveCreatedArticle({ expectedUrl: item.publicUrl, fetchedUrl: fetched.url, html: fetched.text, article: item.served, siteBrand: context.siteBrand });
+      else verifyLivePublicationPage({ expectedUrl: item.publicUrl, fetchedUrl: fetched.url, html: fetched.text, title: item.served.title });
+    } catch (failure) {
+      status = "failed"; error = failure instanceof Error ? failure.message : "Public page verification failed";
+    }
+    try {
+      const recorded = await ctx.runMutation(internal.articles.recordPublicPublicationCheck, { siteId, articleId: item.articleId,
+        expectedContentHash: item.expectedContentHash, publicUrl: item.publicUrl, status, attempts: 1, ...(error ? { error } : {}) });
+      if (recorded.recorded && status === "verified") verified += 1;
+    } catch { /* the article changed meanwhile: it is looked at again tomorrow */ }
+  }
+  return verified;
+}
+
+export const adoptPublishedForRefreshInternal = internalAction({ args: { siteId: v.id("sites") }, handler: async (ctx, args): Promise<{ adopted: number; checked: number; retired?: number; repairAdopted?: number; renewed?: number; urlsVerified?: number }> => {
   // P209: Pentra's own articles enrolled under earlier business details follow the current ones first.
   const { renewed } = await ctx.runMutation(internal.selectedPages.renewManagedEnrollmentsInternal, { siteId: args.siteId });
+  // P237: articles published before URL checks get theirs first, so they can be adopted today.
+  const urlsVerified = await verifyLegacyPublicUrls(ctx, args.siteId);
   const context = await ctx.runQuery(internal.selectedPages.refreshAdoptionContext, { siteId: args.siteId });
-  if (!context) return { adopted: 0, checked: 0, ...(renewed ? { renewed } : {}) };
+  if (!context) return { adopted: 0, checked: 0, ...(renewed ? { renewed } : {}), ...(urlsVerified ? { urlsVerified } : {}) };
   let adopted = 0, retired = 0, repairAdopted = 0;
   for (const page of await ctx.runQuery(internal.selectedPages.refreshAdoptionsToRecheck, { siteId: args.siteId })) {
     let history: unknown;
@@ -140,7 +171,8 @@ export const adoptPublishedForRefreshInternal = internalAction({ args: { siteId:
   }
   // P192: pages adopted for the link-title repair get a repair pass now, not after the week's rest.
   if (repairAdopted > 0 || renewed > 0) await ctx.runMutation(internal.selectedPages.reopenRelatedRepair, { siteId: args.siteId });
-  return { adopted, checked: context.candidates.length, ...(retired ? { retired } : {}), ...(repairAdopted ? { repairAdopted } : {}), ...(renewed ? { renewed } : {}) };
+  return { adopted, checked: context.candidates.length, ...(retired ? { retired } : {}), ...(repairAdopted ? { repairAdopted } : {}), ...(renewed ? { renewed } : {}),
+    ...(urlsVerified ? { urlsVerified } : {}) };
 } });
 
 export const adoptPublishedForRefreshFleet = internalAction({ args: { cursor: v.optional(v.union(v.string(), v.null())) }, handler: async (ctx, { cursor }): Promise<{ sites: number }> => {

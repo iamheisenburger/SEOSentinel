@@ -8768,6 +8768,30 @@ test("P235 an article Pentra revised since publishing it is adopted: its file ca
   f.assertOffline();
 });
 
+// P237 (Oct 28 2026): 35 of LeadPilot's 117 published articles have no public URL recorded (published before URL checks),
+// and the adoption needs a verified one: their Related reading lists could not be repaired nor their pages refreshed.
+test("P237 an article published before URL checks gets its live check before the daily adoption", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const day = 86_400_000, site = await selectGrowth(f, 7 * day);
+  await pumpUntil(f, () => Boolean(f.tables.jobs?.some(j => j.contentWork?.stage === "verified")));
+  const created = f.tables.jobs.find(j => j.contentWork?.stage === "verified")!, article = f.get(created.articleId)!;
+  const expected = article.publicUrl;
+  delete f.tables.pages.find(p => p.editable?.managedArticleId === article._id)!.editable;
+  // As an article published before URL checks: no URL recorded on it or on its summary.
+  const summary = f.tables.article_summaries.find(row => row.articleId === article._id)!;
+  for (const row of [article, summary]) {
+    for (const key of ["publicUrl", "publicUrlStatus", "publicUrlVerifiedAt", "publicUrlLastCheckedAt", "publicUrlCheckAttempts"]) delete row[key];
+  }
+  const result = await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id });
+  assert.equal(result.urlsVerified, 1, JSON.stringify(result));
+  assert.equal(f.get(article._id)!.publicUrl, expected);
+  assert.equal(f.get(article._id)!.publicUrlStatus, "verified");
+  assert.equal(f.tables.article_summaries.find(row => row.articleId === article._id)!.publicUrlStatus, "verified", "the summary follows");
+  assert.equal((await f.invoke("actions/selectedPages:adoptPublishedForRefreshInternal", { siteId: site.id })).urlsVerified, undefined,
+    "a checked article is not checked again");
+  f.assertOffline();
+});
+
 test("A failed automatic refresh never holds its slot: the site keeps publishing new articles", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const day = 86_400_000, site = await selectGrowth(f, 7 * day);

@@ -101,7 +101,8 @@ import {
 } from "./lib/siteDomainBinding";
 import { PUBLISHED_REVISION_LEASE_MS } from "./lib/publishedRevision";
 import { contentJobUsesAllowance } from "./lib/contentUsage";
-import { servedDestinations } from "./lib/pentraConsolidation";
+import { servedDestinations, servedOnItsOwnUrl } from "./lib/pentraConsolidation";
+import { publicRevisionProjection } from "./lib/publicRevisionProjection";
 import {
   appendRelatedInternalLinks,
   publishedArticleInternalHref,
@@ -2332,6 +2333,30 @@ export const completePublication = internalMutation({
     );
   },
 });
+
+/** P237 (Oct 28 2026): Pentra's published articles whose public URL was never recorded (published before URL checks
+ * existed): 35 of LeadPilot's 117. The daily adoption needs a verified URL, so their Related reading lists could not be
+ * repaired nor their pages refreshed ("hire sales consultants" at position 11.9). Up to `limit`, newest first, each with
+ * the version its page serves now (Pentra's later revision, when one was delivered), which the live check compares. */
+export const legacyPublicUrlCandidates = internalQuery({ args: { siteId: v.id("sites"), limit: v.number() },
+  handler: async (ctx, { siteId, limit }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site || !siteExecutionActive(site)) return null;
+    const rows = (await ctx.db.query("article_summaries").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "published")).take(1001))
+      .filter((row) => !row.publicUrl && articleMatchesCurrentDomain(site, row) && servedOnItsOwnUrl(site.domain, row.slug))
+      .sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0)).slice(0, Math.max(0, Math.min(10, limit)));
+    const items = [];
+    for (const row of rows) {
+      const article = await ctx.db.get(row.articleId);
+      if (!article || article.siteId !== siteId || article.status !== "published" || article.publicUrl || !article.publishedContentHash ||
+        !article.publicationReceipt) continue;
+      const served = await publicRevisionProjection(ctx, site, article);
+      if (!served) continue;
+      items.push({ articleId: article._id, expectedContentHash: article.publishedContentHash, served,
+        publicUrl: publishedArticlePublicUrl({ domain: site.domain, urlStructure: site.urlStructure, slug: article.slug }) });
+    }
+    return { growthFirst: site.serviceMode === "growth_first", siteBrand: site.siteName, items };
+  } });
 
 export const recordPublicPublicationCheck = internalMutation({
   args: {
