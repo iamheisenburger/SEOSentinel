@@ -120,5 +120,4 @@ The main risk isn't the automation itself — it's not knowing whether a post is
 ## Related reading
 
 - [Automated SEO Workflow: From Crawling to Publishing — The Complete 8-Step Pipeline](/blog/automated-seo-workflow-complete-guide)
-- [SEO Content Calendar: How Often Should You Publish New Posts](/blog/how-often-publish-blog-posts-seo)
 - [How Often Should a Small Business Publish Blog Posts?](/blog/how-often-should-small-business-publish-blog-posts)
