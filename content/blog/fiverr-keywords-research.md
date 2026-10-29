@@ -120,5 +120,5 @@ For your website research process, the related guides below provide additional r
 ## Related reading
 
 - [Keyword Research for Content Creators: A Step-by-Step Guide](/blog/keyword-research-for-content-creators-guide)
-- [On Page Off Page SEO: The Complete Framework](/blog/on-page-off-page-seo-complete-framework)
-- [B2B SaaS Content Strategy for Ranking and Lead](/blog/b2b-saas-content-strategy-ranking-lead-generation)
+- [On-Page and Off-Page SEO: Complete Strategy Guide for Rankings](/blog/on-page-off-page-seo-strategy-guide)
+- [B2B SaaS Content Strategy for Ranking and Lead Generation: A Complete Guide](/blog/b2b-saas-content-strategy-ranking-lead-generation)
