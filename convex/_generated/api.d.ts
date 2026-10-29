@@ -70,6 +70,7 @@ import type * as lib_autopilotHealthDetail from "../lib/autopilotHealthDetail.js
 import type * as lib_autopilotReadiness from "../lib/autopilotReadiness.js";
 import type * as lib_autopilotRunLease from "../lib/autopilotRunLease.js";
 import type * as lib_autopilotRunOutcome from "../lib/autopilotRunOutcome.js";
+import type * as lib_blogListing from "../lib/blogListing.js";
 import type * as lib_cadenceLiveness from "../lib/cadenceLiveness.js";
 import type * as lib_cadenceMicroSeed from "../lib/cadenceMicroSeed.js";
 import type * as lib_cadenceMicroSeedSettlement from "../lib/cadenceMicroSeedSettlement.js";
@@ -298,6 +299,7 @@ declare const fullApi: ApiFromModules<{
   "lib/autopilotReadiness": typeof lib_autopilotReadiness;
   "lib/autopilotRunLease": typeof lib_autopilotRunLease;
   "lib/autopilotRunOutcome": typeof lib_autopilotRunOutcome;
+  "lib/blogListing": typeof lib_blogListing;
   "lib/cadenceLiveness": typeof lib_cadenceLiveness;
   "lib/cadenceMicroSeed": typeof lib_cadenceMicroSeed;
   "lib/cadenceMicroSeedSettlement": typeof lib_cadenceMicroSeedSettlement;

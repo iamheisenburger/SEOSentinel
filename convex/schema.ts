@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { publicationDeferralBoundaryValidator } from "./lib/publicationDeferral";
 import { publicationInventoryValidator } from "./lib/publicationEligibility";
+import { blogListingRow, blogSitemapRow } from "./lib/blogListing";
 
 export default defineSchema({
   sites: defineTable({
@@ -1186,6 +1187,14 @@ export default defineSchema({
 
   // Compact projection used by list/dashboard/cron flows. Article bodies stay
   // in `articles` and are only read when a single article is opened or edited.
+  // P241 (Oct 29 2026): a Pentra-hosted blog's listing and sitemap rows, refreshed every 3 hours (convex/blog.ts).
+  blog_listings: defineTable({
+    siteId: v.id("sites"),
+    listing: v.array(blogListingRow),
+    slugs: v.array(blogSitemapRow),
+    urlStructure: v.string(),
+    computedAt: v.number(),
+  }).index("by_site", ["siteId"]),
   article_summaries: defineTable({
     articleId: v.id("articles"),
     siteId: v.id("sites"),

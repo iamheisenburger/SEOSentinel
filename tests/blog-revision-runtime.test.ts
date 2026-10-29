@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
@@ -36,10 +37,14 @@ function fixture(summaryMode = false) {
   // Convex drops undefined fields. Do not let an in-memory spread hide that fact.
   const tables: Record<string, Row[]> = JSON.parse(JSON.stringify({ sites: [site], articles: [article], published_article_revisions: [revision],
     article_summaries: [{ ...article, _id: "summary", articleId: "article", articleCreatedAt: 800 }],
-    maintenance_state: summaryMode ? [{ key: "publication-integrity-v4", status: "completed" }] : [] }));
+    maintenance_state: summaryMode ? [{ key: "publication-integrity-v4", status: "completed" }] : [], blog_listings: [] }));
+  const reads: string[] = [];
   const ctx = { db: {
     get: async (id: string) => structuredClone(Object.values(tables).flat().find(row => row._id === id) ?? null),
+    insert: async (table: string, doc: Row) => { const _id = `${table}-${tables[table].length + 1}`; tables[table].push({ ...structuredClone(doc), _id }); return _id; },
+    replace: async (id: string, doc: Row) => { for (const rows of Object.values(tables)) { const at = rows.findIndex(row => row._id === id); if (at >= 0) rows[at] = { ...structuredClone(doc), _id: id }; } },
     query(table: string) {
+      reads.push(table);
       const conditions: Array<(row: Row) => boolean> = [];
       let descending = false;
       const range = { eq(key: string, value: unknown) { conditions.push(row => row[key] === value); return range; } };
@@ -53,7 +58,7 @@ function fixture(summaryMode = false) {
   } };
   const runtime = { exports: {} as Record<string, { _handler(ctx: unknown, args: unknown): Promise<Row> }> };
   runInNewContext(source, { module: runtime, exports: runtime.exports, require: createRequire(import.meta.url), URL, TextEncoder, TextDecoder });
-  return { tables, base, next, revision: tables.published_article_revisions[0],
+  return { tables, base, next, revision: tables.published_article_revisions[0], reads,
     run: (name: string, args: Row = {}) => runtime.exports[name]._handler(ctx, { domain: "example.org", slug: "workflow", ...args }) };
 }
 
@@ -230,7 +235,7 @@ test("P233 the listing and sitemap never read the revisions of a page consolidat
   const articles = [row("served", "automated-seo-workflow-complete-guide", 1000), row("merged", "how-to-automate-seo-workflow", 900)];
   const tables: Record<string, Row[]> = { sites: [site], articles, published_article_revisions: [],
     article_summaries: articles.map(a => ({ ...a, _id: `summary-${a._id}`, articleId: a._id, articleCreatedAt: a.createdAt })),
-    maintenance_state: [{ key: "publication-integrity-v4", status: "completed" }] };
+    maintenance_state: [{ key: "publication-integrity-v4", status: "completed" }], blog_listings: [] };
   const revisionReads: unknown[] = [];
   const ctx = { db: {
     get: async (id: string) => structuredClone(Object.values(tables).flat().find(r => r._id === id) ?? null),
@@ -255,3 +260,45 @@ test("P233 the listing and sitemap never read the revisions of a page consolidat
   assert.ok(revisionReads.length > 0, "the served page's revisions are still read");
   assert.ok(!revisionReads.includes("merged"), "the merged page's revisions are never read");
 });
+
+// P241 (Oct 29 2026): the sitemap (51.5 MB) and the listing (25.7 MB) were Convex's largest readers in the 24 hours to
+// Oct 29, computing every article's projection on every request; a 3-hourly refresh stores the rows once.
+const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
+test("P241 the refresh stores exactly the live listing and sitemap rows, and the queries then read only that document", async () => {
+  const f = fixture(true);
+  const listing = await f.run("listPublishedByDomain"), sitemap = await f.run("listPublishedSlugs");
+  assert.equal(listing.length, 1);
+  assert.deepEqual(plain(await f.run("refreshHostedBlogListings", { domains: ["example.org"] })), { refreshed: 1 });
+  const stored = f.tables.blog_listings[0];
+  assert.deepEqual(plain(stored.listing), plain(listing));
+  assert.deepEqual(plain(stored.slugs), plain(sitemap.articles));
+  assert.equal(stored.urlStructure, "/blog/[slug]");
+  f.reads.length = 0;
+  assert.deepEqual(plain(await f.run("listPublishedByDomain")), plain(listing));
+  assert.deepEqual(plain(await f.run("listPublishedSlugs")), plain(sitemap));
+  assert.deepEqual([...new Set(f.reads)].sort(), ["blog_listings", "sites"], "no article, summary or revision is read");
+  assert.deepEqual(plain(await f.run("refreshHostedBlogListings", { domains: ["example.org"] })), { refreshed: 1 });
+  assert.equal(f.tables.blog_listings.length, 1, "a refresh replaces the site's one document");
+  assert.deepEqual(plain(await f.run("refreshHostedBlogListings", { domains: ["no-such-site.example"] })), { refreshed: 0 });
+});
+
+test("P241 a stored listing older than 12 hours is never served: the live listing answers", async () => {
+  const f = fixture(true);
+  const listing = await f.run("listPublishedByDomain");
+  await f.run("refreshHostedBlogListings", { domains: ["example.org"] });
+  const stored = f.tables.blog_listings[0];
+  stored.listing = [{ ...stored.listing[0], title: "Stale stored title" }];
+  stored.slugs = [];
+  stored.computedAt = Date.now() - 13 * 3_600_000;
+  assert.deepEqual(plain(await f.run("listPublishedByDomain")), plain(listing));
+  assert.equal((await f.run("listPublishedSlugs")).articles.length, 1);
+  stored.computedAt = Date.now();
+  assert.equal((await f.run("listPublishedByDomain"))[0].title, "Stale stored title", "a current document is what is served");
+});
+
+test("P241 pentra.dev's listing is refreshed every 3 hours", () => {
+  const crons = readFileSync("convex/crons.ts", "utf8");
+  assert.match(crons, /crons\.interval\("hosted-blog-listings", \{ hours: 3 \}, internal\.blog\.refreshHostedBlogListings, \{\}\);/);
+  assert.match(readFileSync("convex/lib/blogListing.ts", "utf8"), /export const HOSTED_BLOG_DOMAINS: readonly string\[\] = \["pentra\.dev"\];/);
+});
+

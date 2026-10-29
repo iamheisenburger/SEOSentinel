@@ -189,5 +189,8 @@ crons.monthly("customer-monthly-report", { day: 3, hourUTC: 15, minuteUTC: 0 }, 
 crons.interval("customer-setup-reminders", { hours: 3 }, internal.customerEmails.noteSetupReminders, {});
 // P202: an account that signed up 20-72 hours ago and never added a website gets one email asking it to.
 crons.interval("customer-add-website-reminders", { hours: 3 }, internal.customerEmails.noteAddWebsiteReminders, {});
+// P241 (Oct 29 2026): pentra.dev's listing and sitemap rows are computed every 3 hours instead of on every /blog view and
+// every crawler's sitemap request (~2 MB of Convex reads each; convex/blog.ts refreshHostedBlogListings).
+crons.interval("hosted-blog-listings", { hours: 3 }, internal.blog.refreshHostedBlogListings, {});
 
 export default crons;

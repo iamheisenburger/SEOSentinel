@@ -1,9 +1,10 @@
-import { query } from "./_generated/server";
+import { internalMutation, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { publicRevisionProjection, projectPublicArticleRows } from "./lib/publicRevisionProjection";
 import { servedOnItsOwnUrl } from "./lib/pentraConsolidation";
+import { BLOG_LISTING_MAX_AGE_MS, HOSTED_BLOG_DOMAINS, type BlogListingRow, type BlogSitemapRow } from "./lib/blogListing";
 import {
   articleMatchesCurrentDomain,
   siteCanonicalDomain,
@@ -161,26 +162,53 @@ function servedRows<T extends { slug?: string }>(site: Doc<"sites">, rows: T[]):
   return rows.filter((row) => servedOnItsOwnUrl(site.domain, row.slug ?? ""));
 }
 
+/** The listing (the /blog index, related guides, the home page's latest guides) and the sitemap's rows, computed from
+ * every published article and its delivered revisions (one projection serves both). */
+async function livePublicRows(ctx: QueryCtx, site: Doc<"sites">): Promise<{ listing: BlogListingRow[]; slugs: BlogSitemapRow[] }> {
+  const useSummaries = await summariesAreComplete(ctx);
+  const published = useSummaries
+    ? await currentPublishedSummaries(ctx, site)
+    : await currentPublishedArticles(ctx, site);
+  const served = servedRows(site, [...published]);
+  const projected = await projectPublicArticleRows(ctx, site, served);
+  const listing = projected.map((a) => ({
+      _id: "articleId" in a ? a.articleId : a._id,
+      title: a.title,
+      slug: normalizeSlug(a.slug || ""),
+      metaDescription: a.metaDescription,
+      featuredImage: a.featuredImage,
+      readingTime: a.readingTime,
+      createdAt: a.publishedAt ?? ("articleCreatedAt" in a ? a.articleCreatedAt : a.createdAt),
+    }));
+  // The sitemap's lastmod is when the public page last changed: a delivered
+  // correction or improvement (projected with its delivery time), else its
+  // publication. Maintenance writes (live checks, the daily 12:30Z Search
+  // Console inspections) bumped every article's lastmod every day (Oct 21
+  // 2026), which teaches Google to ignore it on a site it already crawls rarely.
+  const unchanged = new Set<unknown>(served);
+  const slugs = projected.map((a) => {
+    const publishedAt = "articleId" in a ? a.publishedAt ?? a.articleCreatedAt : a.publishedAt ?? a.createdAt;
+    const deliveredAt = !unchanged.has(a) && "updatedAt" in a && typeof a.updatedAt === "number" ? a.updatedAt : 0;
+    return { slug: normalizeSlug(a.slug || ""), updatedAt: Math.max(deliveredAt, publishedAt ?? 0) };
+  });
+  return { listing, slugs };
+}
+
+/** P241 (Oct 29 2026): the stored listing and sitemap rows of a Pentra-hosted blog (convex/lib/blogListing.ts), when the
+ * 3-hourly refresh is current. One small document instead of every article and its revisions on each /blog view and
+ * each crawler's sitemap request; Convex serves it from its query cache between refreshes. */
+async function storedListing(ctx: QueryCtx, site: Doc<"sites">) {
+  const stored = await ctx.db.query("blog_listings").withIndex("by_site", (q) => q.eq("siteId", site._id)).first();
+  return stored && stored.computedAt > Date.now() - BLOG_LISTING_MAX_AGE_MS ? stored : null;
+}
+
 export const listPublishedByDomain = query({
   args: { domain: v.string() },
   handler: async (ctx, { domain }) => {
     const site = await findSiteByDomain(ctx, domain);
     if (!site) return [];
-
-    const useSummaries = await summariesAreComplete(ctx);
-    const published = useSummaries
-      ? await currentPublishedSummaries(ctx, site)
-      : await currentPublishedArticles(ctx, site);
-    const projected = await projectPublicArticleRows(ctx, site, servedRows(site, [...published]));
-    return projected.map((a) => ({
-        _id: "articleId" in a ? a.articleId : a._id,
-        title: a.title,
-        slug: normalizeSlug(a.slug || ""),
-        metaDescription: a.metaDescription,
-        featuredImage: a.featuredImage,
-        readingTime: a.readingTime,
-        createdAt: a.publishedAt ?? ("articleCreatedAt" in a ? a.articleCreatedAt : a.createdAt),
-      }));
+    const stored = await storedListing(ctx, site);
+    return stored ? stored.listing : (await livePublicRows(ctx, site)).listing;
   },
 });
 
@@ -190,27 +218,28 @@ export const listPublishedSlugs = query({
   handler: async (ctx, { domain }) => {
     const site = await findSiteByDomain(ctx, domain);
     if (!site) return { articles: [], urlStructure: "/blog/[slug]" };
+    const stored = await storedListing(ctx, site);
+    if (stored) return { articles: stored.slugs, urlStructure: stored.urlStructure };
+    return { articles: (await livePublicRows(ctx, site)).slugs, urlStructure: site.urlStructure ?? "/blog/[slug]" };
+  },
+});
 
-    const urlStructure = site.urlStructure ?? "/blog/[slug]";
-
-    const useSummaries = await summariesAreComplete(ctx);
-    const published = useSummaries
-      ? await currentPublishedSummaries(ctx, site)
-      : await currentPublishedArticles(ctx, site);
-    const served = servedRows(site, [...published]);
-    const projected = await projectPublicArticleRows(ctx, site, served);
-    // The sitemap's lastmod is when the public page last changed: a delivered
-    // correction or improvement (projected with its delivery time), else its
-    // publication. Maintenance writes (live checks, the daily 12:30Z Search
-    // Console inspections) bumped every article's lastmod every day (Oct 21
-    // 2026), which teaches Google to ignore it on a site it already crawls rarely.
-    const unchanged = new Set<unknown>(served);
-    const articles = projected.map((a) => {
-      const publishedAt = "articleId" in a ? a.publishedAt ?? a.articleCreatedAt : a.publishedAt ?? a.createdAt;
-      const deliveredAt = !unchanged.has(a) && "updatedAt" in a && typeof a.updatedAt === "number" ? a.updatedAt : 0;
-      return { slug: normalizeSlug(a.slug || ""), updatedAt: Math.max(deliveredAt, publishedAt ?? 0) };
-    });
-    return { articles, urlStructure };
+/** P241: every 3 hours (convex/crons.ts), each Pentra-hosted blog's listing and sitemap rows are computed once and stored. */
+export const refreshHostedBlogListings = internalMutation({
+  args: { domains: v.optional(v.array(v.string())) },
+  handler: async (ctx, { domains }) => {
+    let refreshed = 0;
+    for (const domain of domains ?? HOSTED_BLOG_DOMAINS) {
+      const site = await findSiteByDomain(ctx, domain);
+      if (!site) continue;
+      const row = { siteId: site._id, ...await livePublicRows(ctx, site), urlStructure: site.urlStructure ?? "/blog/[slug]",
+        computedAt: Date.now() };
+      const existing = await ctx.db.query("blog_listings").withIndex("by_site", (q) => q.eq("siteId", site._id)).first();
+      if (existing) await ctx.db.replace(existing._id, row);
+      else await ctx.db.insert("blog_listings", row);
+      refreshed++;
+    }
+    return { refreshed };
   },
 });
 
