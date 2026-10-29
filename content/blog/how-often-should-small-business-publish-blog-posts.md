@@ -96,5 +96,4 @@ If you've worked through the framework above and concluded that your real bottle
 
 ## Related reading
 
-- [SEO Content Calendar: How Often Should You Publish New Posts](/blog/how-often-publish-blog-posts-seo)
 - [Article Refresh Strategy: Complete Guide to Updating Old Content for Better Rankings](/blog/article-refresh-strategy-guide)
