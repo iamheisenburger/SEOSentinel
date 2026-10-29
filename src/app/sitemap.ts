@@ -2,6 +2,7 @@ import type { MetadataRoute } from "next";
 import { convexHttp } from "@/lib/convexHttpClient";
 import { api } from "../../convex/_generated/api";
 import { servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
+import { COMMITTED_BLOG_DOMAIN, listCommittedArticles } from "@/lib/committed-articles";
 
 // A build-time outage must not freeze an incomplete sitemap until redeploy.
 // Read current publication/domain state; never cache revoked URLs as truth.
@@ -23,8 +24,15 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${baseUrl}/contact`, changeFrequency: "monthly", priority: 0.5 },
   ];
 
-  // Dynamic blog posts from Convex
-  const result = await convexHttp.query(api.blog.listPublishedSlugs, { domain });
+  // Dynamic blog posts from Convex. P240 (Oct 29 2026): when Convex cannot be read, pentra.dev lists its committed
+  // articles (src/lib/committed-articles.ts) instead of answering 500.
+  let result: { urlStructure?: string; articles: { slug: string; updatedAt?: number }[] };
+  try {
+    result = await convexHttp.query(api.blog.listPublishedSlugs, { domain });
+  } catch (error) {
+    if (domain.replace(/^www\./, "") !== COMMITTED_BLOG_DOMAIN) throw error;
+    result = { urlStructure: "/blog/[slug]", articles: await listCommittedArticles() };
+  }
   const urlStructure = result.urlStructure ?? "/blog/[slug]";
 
   const blogPages = result.articles.filter((article: { slug: string }) => servedOnItsOwnUrl(domain, article.slug)).map((article: { slug: string; updatedAt?: number }) => {

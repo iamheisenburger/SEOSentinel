@@ -16,6 +16,7 @@ import { articleFaq } from "@/lib/article-faq";
 import { canonicalBlogHref, consolidatedTarget, servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
 import { relatedArticles } from "@/lib/related-articles";
 import { cachedPublishedListing } from "@/lib/published-listing";
+import { publishedOrCommitted } from "@/lib/committed-articles";
 
 export const dynamic = "force-dynamic";
 
@@ -49,8 +50,9 @@ const getRequestDomain = cache(async (): Promise<string> => {
   return "pentra.dev";
 });
 
+// P240 (Oct 29 2026): when Convex cannot be read, a pentra.dev article is served from its committed file, not a 500.
 const getPublishedArticle = cache(async (domain: string, slug: string) =>
-  convexHttp.query(api.blog.getPublishedBySlug, { domain, slug }),
+  publishedOrCommitted(domain, slug, () => convexHttp.query(api.blog.getPublishedBySlug, { domain, slug })),
 );
 
 // The listing behind "Related guides", read at most hourly per domain (P167).
