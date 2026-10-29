@@ -129,6 +129,6 @@ There's no verified universal interval. A reasonable practice is to re-run the a
 
 ## Related reading
 
-- [A Practical Guide to Autonomous Site Crawling and](/blog/autonomous-site-crawling-and-niche-detection-guide-edited)
-- [Product Marketing Content: A Practical System for Turning](/blog/product-marketing-content-system)
-- [B2B SaaS Content Strategy for Ranking and Lead](/blog/b2b-saas-content-strategy-ranking-lead-generation)
+- [A Practical Guide to Autonomous Site Crawling and Niche Detection](/blog/autonomous-site-crawling-and-niche-detection-guide-edited)
+- [Product Marketing Content: A Practical System for Turning Product Truth Into Buyer-Ready Pages](/blog/product-marketing-content-system)
+- [B2B SaaS Content Strategy for Ranking and Lead Generation: A Complete Guide](/blog/b2b-saas-content-strategy-ranking-lead-generation)
