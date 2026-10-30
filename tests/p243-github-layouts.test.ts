@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { appRoot, detectGithubLayout, layoutArticleLive, layoutConfigPaths, layoutSamplePaths, mdxSafeMarkdown, renderLayoutPost } from "../convex/lib/githubLayout.ts";
+import { appRoot, detectGithubLayout, layoutArticleLive, layoutConfigPaths, layoutSamplePaths, mdxSafeMarkdown, renderLayoutPost, urlStructureCandidates } from "../convex/lib/githubLayout.ts";
 import { publicationDeliveryConfig } from "../convex/lib/publicationArtifact.ts";
 
 const ASTRO_CONFIG = `import { defineCollection } from 'astro:content';
@@ -186,5 +186,27 @@ test("P252 a blog folder outside the usual places is found; docs and changelogs 
   assert.equal(detection.layout.urlStructure, "/blog/[slug]");
   const docsOnly = detectGithubLayout({ paths: ["next.config.js", "src/app/docs/[slug]/page.tsx", "content/docs/a.md", "content/docs/b.md"], files: {} });
   assert.equal(docsOnly.ok, false, "documentation is not a blog");
+});
+
+// P253 (Oct 30 2026): popular templates read through the GitHub API: AstroPaper names its folder through a constant,
+// AstroWind serves posts at /<slug> through a [...blog] route, jarv.is keeps posts in notes/.
+test("P253 a folder named through a constant, a notes folder, and URL structures tried until one serves a post", () => {
+  const astroPaperConfig = `import { glob } from "astro/loaders";\nexport const BLOG_PATH = "src/content/posts";\nconst posts = defineCollection({\n  loader: glob({ pattern: "**/[^_]*.{md,mdx}", base: \`./\${BLOG_PATH}\` }),\n});\nconst pages = defineCollection({ loader: glob({ pattern: "**/*.md", base: "./src/content/pages" }) });`;
+  const post = "---\ntitle: Adding new posts in AstroPaper theme\ndescription: Some rules\npubDatetime: 2022-09-23T15:22:00Z\n---\n\nBody";
+  const astroPaper = detectGithubLayout({ paths: ["astro.config.ts", "src/content.config.ts", "src/content/pages/about.md", "src/content/posts/adding-new-post.md",
+    "src/content/posts/how-to-configure.md", "src/content/posts/dynamic-og-images.md", "src/pages/posts/[...slug]/index.astro"],
+    files: { "src/content.config.ts": astroPaperConfig, "src/content/posts/adding-new-post.md": post, "src/content/posts/how-to-configure.md": post } });
+  assert.equal(astroPaper.ok && astroPaper.layout.postsDir, "src/content/posts", "the constant's folder, not the pages collection");
+  assert.equal(astroPaper.ok && astroPaper.layout.urlStructure, "/posts/[slug]/", "a directory route (posts/[...slug]/index.astro) counts");
+  const notes = detectGithubLayout({ paths: ["next.config.ts", "app/notes/[slug]/page.tsx", "notes/first-note.mdx", "notes/second-note.mdx"],
+    files: { "notes/first-note.mdx": post, "notes/second-note.mdx": post } });
+  assert.equal(notes.ok && notes.layout.postsDir, "notes");
+  assert.equal(notes.ok && notes.layout.urlStructure, "/notes/[slug]");
+  const astroWind = { version: 1 as const, framework: "astro" as const, postsDir: "src/data/post", fileName: "slug" as const, extension: ".md" as const,
+    fields: [], urlStructure: "/blog/[slug]/", sample: { path: "src/data/post/a.md", slug: "a", title: "A" } };
+  assert.deepEqual(urlStructureCandidates(astroWind), ["/blog/[slug]/", "/post/[slug]/", "/posts/[slug]/", "/articles/[slug]/", "/notes/[slug]/", "/[slug]/"]);
+  const detect = readFileSync("convex/githubLayoutDetect.ts", "utf8");
+  assert.match(detect, /for \(const structure of detection\.layout\.framework === "jekyll" \? \[\] : urlStructureCandidates\(detection\.layout\)\) \{/);
+  assert.match(detect, /const layout = served && served !== detection\.layout\.urlStructure \? \{ \.\.\.detection\.layout, urlStructure: served \} : detection\.layout;/);
 });
 

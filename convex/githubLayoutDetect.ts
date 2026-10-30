@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { detectGithubLayout, layoutConfigPaths, layoutSamplePaths, type GithubLayout } from "./lib/githubLayout";
+import { detectGithubLayout, layoutConfigPaths, layoutSamplePaths, urlStructureCandidates, type GithubLayout } from "./lib/githubLayout";
 
 /** P243 (Oct 30 2026): after a site's GitHub repository is verified, read the repository once and record where its own
  * blog keeps posts (convex/lib/githubLayout.ts), so articles land where the site shows them. A site that has published
@@ -78,19 +78,26 @@ export const detectSiteGithubLayout = internalAction({ args: { siteId: v.id("sit
     await fail(detection.reason, detection.detail);
     return { detected: false, reason: detection.reason };
   }
-  // The layout counts only when one of the site's own posts is live where the layout says posts are served.
-  const sampleUrl = `https://${context.domain.replace(/^https?:\/\//, "").replace(/\/$/, "")}${detection.layout.urlStructure.replace("[slug]", detection.layout.sample.slug)}`;
-  let live = false;
-  for (const url of [sampleUrl, sampleUrl.endsWith("/") ? sampleUrl.slice(0, -1) : `${sampleUrl}/`]) {
-    try {
-      const res = await fetch(url, { redirect: "follow", headers: { "User-Agent": "Pentra/1.0 (blog layout check)" } });
-      if (res.ok && visibleText(await res.text()).includes(detection.layout.sample.title.toLowerCase())) { live = true; break; }
-    } catch { /* next */ }
+  // The layout counts only when one of the site's own posts is live where the layout says posts are served. P253: when
+  // the routes don't say, the usual structures are tried in turn and the one that serves the post is kept.
+  const origin = `https://${context.domain.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
+  const sampleUrl = origin + detection.layout.urlStructure.replace("[slug]", detection.layout.sample.slug);
+  let served: string | null = null;
+  for (const structure of detection.layout.framework === "jekyll" ? [] : urlStructureCandidates(detection.layout)) {
+    const url = origin + structure.replace("[slug]", detection.layout.sample.slug);
+    for (const attempt of [url, url.endsWith("/") ? url.slice(0, -1) : `${url}/`]) {
+      try {
+        const res = await fetch(attempt, { redirect: "follow", headers: { "User-Agent": "Pentra/1.0 (blog layout check)" } });
+        if (res.ok && visibleText(await res.text()).includes(detection.layout.sample.title.toLowerCase())) { served = structure; break; }
+      } catch { /* next */ }
+    }
+    if (served) break;
   }
-  if (!live && detection.layout.framework !== "jekyll") {
+  if (!served && detection.layout.framework !== "jekyll") {
     await fail("sample_not_live", `Pentra found your posts in ${detection.layout.postsDir} but could not find "${detection.layout.sample.title}" at ${sampleUrl}.`);
     return { detected: false, reason: "sample_not_live" };
   }
-  await ctx.runMutation(internal.githubLayoutDetect.recordLayout, { siteId, repo: context.repo, layout: detection.layout });
-  return { detected: true, framework: detection.layout.framework };
+  const layout = served && served !== detection.layout.urlStructure ? { ...detection.layout, urlStructure: served } : detection.layout;
+  await ctx.runMutation(internal.githubLayoutDetect.recordLayout, { siteId, repo: context.repo, layout });
+  return { detected: true, framework: layout.framework };
 } });

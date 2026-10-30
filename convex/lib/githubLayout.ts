@@ -43,7 +43,7 @@ export function detectFramework(paths: string[]): GithubLayoutFramework | null {
   return null;
 }
 
-const BLOG_FOLDER = /^(?:blog|blogs|posts|articles|news|writing|journal|insights)$/i;
+const BLOG_FOLDER = /^(?:blog|blogs|posts|articles|news|writing|journal|insights|notes)$/i;
 const FIXED_POST_DIR = /^(?:_posts|posts|content\/(?:blog|posts|articles)|blog|src\/content\/blog|src\/posts|data\/(?:blog|posts)|src\/content\/[^/]+|src\/data\/[^/]+|content\/[^/]+)$/;
 /** Folders holding the framework's posts, the most-populated first. */
 export function postFolders(framework: GithubLayoutFramework, paths: string[], files: Record<string, string>): string[] {
@@ -54,7 +54,11 @@ export function postFolders(framework: GithubLayoutFramework, paths: string[], f
   else if (framework === "hugo") candidates = [...new Set(posts.filter(p => p.startsWith("content/")).map(p => p.split("/").slice(0, 2).join("/")))].filter(d => d.split("/").length === 2);
   else if (framework === "astro") {
     const config = files["src/content.config.ts"] ?? files["src/content.config.mjs"] ?? files["src/content/config.ts"] ?? "";
-    const bases = [...config.matchAll(/base:\s*["'`]\.?\/?([^"'`]+?)\/?["'`]/g)].map(m => m[1]);
+    // P253 (Oct 30 2026): AstroPaper names its folder through a constant (base: `./${BLOG_PATH}`, with
+    // export const BLOG_PATH = "src/content/posts"): simple string constants in the config resolve.
+    const constants = new Map([...config.matchAll(/(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*["'`]([^"'`$]+)["'`]/g)].map(m => [m[1], m[2]] as const));
+    const bases = [...config.matchAll(/base:\s*["'`]\.?\/?([^"'`]+?)\/?["'`]/g)]
+      .map(m => m[1].replace(/\$\{([A-Za-z_$][\w$]*)\}/g, (_, name: string) => constants.get(name) ?? "").replace(/^\.?\/+|\/+$/g, "")).filter(Boolean);
     candidates = bases.length ? bases : [...new Set(posts.filter(p => /^src\/(content|data)\/[^/]+\//.test(p)).map(p => p.split("/").slice(0, 3).join("/")))];
   } else {
     // P252 (Oct 30 2026): Next.js and Gatsby blogs keep posts wherever their loader reads them (openstatus:
@@ -140,7 +144,8 @@ const SLUG_PARAM = String.raw`\[\[?(?:\.\.\.)?slug\]\]?`;
 /** Where the framework serves a post, as a URL structure, from its routes (the action confirms it on an existing post). */
 export function urlStructureFor(framework: GithubLayoutFramework, postsDir: string, paths: string[]): string {
   if (framework === "astro") {
-    const segments = postRoute(routeSegments(paths, new RegExp(String.raw`^src/pages/(.*?)/?${SLUG_PARAM}\.(astro|md|mdx|ts|js)$`)), postsDir);
+    // P253: a directory route too (AstroPaper: src/pages/posts/[...slug]/index.astro).
+    const segments = postRoute(routeSegments(paths, new RegExp(String.raw`^src/pages/(.*?)/?${SLUG_PARAM}(?:/index)?\.(astro|md|mdx|ts|js)$`)), postsDir);
     return segments ? `/${segments.length ? segments.join("/") + "/" : ""}[slug]/` : "/blog/[slug]/";
   }
   if (framework === "nextjs") {
@@ -299,6 +304,15 @@ export function mdxSafeMarkdown(markdown: string): string {
       : part.replace(/<(https?:\/\/[^>\s]+)>/g, "[$1]($1)").replace(/[{}]/g, c => `\\${c}`).replace(/</g, "&lt;")).join(""));
   }
   return out.join("\n");
+}
+
+/** P253 (Oct 30 2026): where a site may serve its posts when its routes don't say (a parameter not named "slug", as in
+ * AstroWind's [...blog], or file-based routes): the detected structure first, then one named like the posts folder,
+ * then the usual ones. Detection keeps the first that serves one of the site's own posts. */
+export function urlStructureCandidates(layout: GithubLayout): string[] {
+  const slash = layout.framework === "nextjs" ? "" : "/", leaf = layout.postsDir.split("/").at(-1) ?? "";
+  return [...new Set([layout.urlStructure, ...[leaf, "blog", "posts", "post", "articles", "notes", ""]
+    .map(segment => `${segment ? `/${segment}` : ""}/[slug]${slash}`)])];
 }
 
 /** P244 (Oct 30 2026): a site whose own blog layout Pentra writes into renders the article with its own templates (page
