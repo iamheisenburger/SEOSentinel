@@ -100,11 +100,17 @@ export function normalizeEvidenceUrl(value: string): string | null {
  * one growing page (25 → 72 impressions a week, written in July) has a section for each of five tools it names.
  */
 const PRODUCT_KINDS = /\b(?:tools?|software|apps?|applications|platforms?|solutions|services|providers?|vendors?|plugins?|extensions|generators?|crms?)\b/i;
+/** P255 (Oct 30 2026): "nextjs blog template" asks for templates by name (the results page is template galleries and
+ * repositories; Pentra's test article named none). A template, theme, starter or boilerplate is a product only for
+ * software: "lead scoring template" asks for a document to fill in. */
+const SOFTWARE_STARTERS = /\b(?:templates?|themes?|starters?|starter kits?|boilerplates?)\b/i;
+const SOFTWARE_CONTEXT = /\b(?:next\.?js|astro|hugo|jekyll|gatsby|eleventy|11ty|wordpress|shopify|webflow|wix|squarespace|ghost|notion|figma|framer|react|vue|nuxt|svelte(?:kit)?|tailwind|bootstrap|html|css|website|landing page|saas|app|portfolio)\b/i;
 /** P236 (Oct 28 2026): a search for places to do something asks for them by name too. pentra.dev's Oct 29 article for
  * "where to promote blog posts after publishing" named none ("your own site", "communities", "partners"). */
 const PLACES = /\bwhere (?:to|can i|should i) (?:promote|share|post|publish|advertise|list|sell|submit|find|buy|hire)\b|\b(?:best|top|free)\s+(?:\w+\s+){0,3}(?:sites|websites|places|channels|communities|forums|directories|marketplaces|networks|newsletters|podcasts)\b|\b(?:sites|websites|places|channels|communities|forums|directories|marketplaces)\s+(?:to|for|like)\b/i;
 export function searchAsksForProducts(search: string | undefined): boolean {
-  return PRODUCT_KINDS.test(search ?? "") || PLACES.test(search ?? "");
+  const text = search ?? "";
+  return PRODUCT_KINDS.test(text) || PLACES.test(text) || (SOFTWARE_STARTERS.test(text) && SOFTWARE_CONTEXT.test(text));
 }
 
 /** The writer's rule for naming other companies and products, for this search. */
@@ -226,6 +232,17 @@ export function classifyEvidenceSource(value: string): EvidenceSourceQuality {
       tier: "official-doc",
       strictEligible: true,
       reason: "Official documentation or standards source.",
+    };
+  }
+
+  // P255: a code repository's own pages (its README and files) document that repository: the authority on what a
+  // template or starter includes. Its issues, pull requests and discussions are not.
+  if (host === "github.com" && /^\/[^/]+\/[^/]+(?:\/(?:tree|blob)\/[^?#]*)?\/?$/.test(parsed.pathname)) {
+    return {
+      url: normalized,
+      tier: "official-doc",
+      strictEligible: true,
+      reason: "A repository's own README and files: first-party documentation of that repository.",
     };
   }
 

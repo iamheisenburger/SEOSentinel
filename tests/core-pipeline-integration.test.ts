@@ -541,6 +541,19 @@ export async function selectGrowth(f: ReturnType<typeof setup>, intervalMs = 30 
   return site;
 }
 
+// P256 (Oct 30 2026): Cowork's fresh account read "This website is already connected to your account" for a site the
+// first test account had set up; the claim is another account's, so the message says so and what to do.
+test("P256 setting up a website another account already has says it belongs to another account", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await createEmptyContentSite(f), owner = f.get(site.id)!.userId;
+  const create = (user: string) => { f.setIdentity(user); return f.invoke("sites:upsert", { createOnly: true, contentSetup: true, domain: site.domain,
+    clerkUserId: user, siteName: "Another", siteSummary: "x", niche: "x", blogTheme: "x", targetAudienceSummary: "x", productUsage: "x",
+    language: "en", publishMethod: "github", autopilotEnabled: false, approvalRequired: true, inferToneNiche: false }); };
+  await assert.rejects(create("synthetic-second-account"), /already set up in another Pentra account\. If it's yours, sign in to that account/);
+  await assert.rejects(create(owner), /This website is already connected to your account/, "the same account still hears it is theirs");
+  f.assertOffline();
+});
+
 // Only the test-owned empty site is removed. Billing identity and GitHub OAuth
 // callbacks are synthetic; WordPress verifies against the real loopback core.
 export async function createEmptyContentSite(f: ReturnType<typeof setup>) {
@@ -2272,7 +2285,10 @@ test("SLC54 rejected owner drafts remain bounded and never restart or hide faile
   const before = structuredClone(site.contentSchedule), r = await f.invoke("contentWork:readiness", { siteId: site._id });
   const args = { siteId: site._id, reviewToken: r.reviewToken, requestKey: "owner-low-quality-draft", maximumMicroUsd: r.ownerDraft.maximumMicroUsd };
   const result = await f.invoke("contentWork:requestDraft", args);
+  const counted = (await f.invoke("contentWork:readiness", { siteId: site._id })).results.planUsedThisMonth;
   await pumpUntil(f, () => f.get(result.jobId)!.contentWork.stage === "failed");
+  // P255: a draft that never passed review stops counting toward the month at once, not at the next recount.
+  assert.equal((await f.invoke("contentWork:readiness", { siteId: site._id })).results.planUsedThisMonth, counted - 1);
   const job = f.get(result.jobId)!;
   // Owner requests keep the requested topic: no silent paid replacement.
   assert.equal(job.contentWork.revisions, 2); assert.equal(job.contentWork.replacements, 0);

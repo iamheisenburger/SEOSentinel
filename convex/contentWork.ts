@@ -1710,6 +1710,11 @@ async function reviseFailedWork(ctx: MutationCtx, site: Doc<"sites">, failed: Do
   await ctx.db.patch(failed._id, { status: "failed", contentWork: { ...cw, stage: "failed", failure: "bounded_content_quality_exhausted",
     checksVersion: CONTENT_CHECKS_VERSION }, updatedAt: Date.now() });
   await settleFailedContentWork(ctx, failed._id);
+  // P255 (Oct 30 2026): an owner's draft that ends without passing review uses none of the month's allowance
+  // (contentJobUsesAllowance), but the stored count waited for the next recount: the test account's free plan read "3 of
+  // 3, Limit Reached" with its last article spent on a draft that never passed. It follows at once now. (An Autopilot
+  // slot's count carries over to its replacement, so only owner drafts, which are never replaced, are taken off here.)
+  if (cw.ownerRequest && countsTowardMonthlyUsage(failed, usageMonthBounds().monthStart)) await refreshAccountUsage(ctx, site, -1);
   // The owner's draft is handed back with the checks' notes: they hear it's waiting.
   if (cw.ownerRequest && failed.articleId) await noteDraftReady(ctx, (await ctx.db.get(failed._id))!, Date.now());
   if (!cw.ownerRequest && cw.intent === "create") {

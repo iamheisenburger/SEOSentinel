@@ -3345,6 +3345,8 @@ function hostedPlatformConnection(
   return out;
 }
 
+export const ANOTHER_ACCOUNTS_SITE = "This website is already set up in another Pentra account. If it's yours, sign in to that account, or email pentrahelp@gmail.com and we'll move it to this one.";
+
 export const upsert = mutation({
   args: {
     id: v.optional(v.id("sites")),
@@ -3719,11 +3721,13 @@ export const upsert = mutation({
     const existing = domainClaim;
 
     if (existing?._id) {
+      // P256 (Oct 30 2026): Cowork's fresh account read "This website is already connected to your account" for a site
+      // another account had set up (iamheisenburger.github.io): ownership is checked first, and the message says what to do.
+      if (existing.userId !== userId) {
+        throw new Error(ANOTHER_ACCOUNTS_SITE);
+      }
       if (args.createOnly) {
         throw new Error("This website is already connected to your account");
-      }
-      if (existing.userId !== userId) {
-        throw new Error("This domain is already connected to another account");
       }
       if (existing.deletionStatus) {
         throw new Error("This domain is currently being deleted; wait for deletion to finish before reconnecting it");

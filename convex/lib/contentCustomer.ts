@@ -23,7 +23,8 @@ export function contentIssue(reason?: string) {
   if (reason === "content_provider_credit_unavailable") return "Pentra's generation service is interrupted. Our team must restore it; you do not need to fund a provider or change your plan. Your original delivery deadline and prior attempt remain visible.";
   if (/budget|funding|reservation|priced/i.test(reason)) return "Spending capacity is unavailable. Review billing and the retained spending commitments; no limit was raised.";
   if (/permission|source|revision|conflict|customer|binding|destination|profile|409|412/i.test(reason)) return "The page, permission, business profile or destination changed. Review the current source; customer edits will not be overwritten.";
-  if (/quality|audit|review|candidate|draft/i.test(reason)) return "Content did not pass the required review. Bounded retries remain visible; a failed slot is not silently replaced.";
+  // P255 (Oct 30 2026): Cowork's re-run found this message in internal jargon; customers read plain words.
+  if (/quality|audit|review|candidate|draft/i.test(reason)) return "This draft didn't pass Pentra's quality review, so it hasn't been published. Open it to read the reviewer's notes.";
   if (/verif|public|canonical|render|receipt/i.test(reason)) return "The live artifact is not yet verified. Pentra must reconcile the existing delivery before another write.";
   if (/entitlement|plan|billing/i.test(reason)) return "The current billing entitlement must be verified before work can continue.";
   return "This work needs reconciliation. Its original deadline, attempts and spending are retained. Contact support with the work reference.";

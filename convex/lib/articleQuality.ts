@@ -2086,9 +2086,33 @@ function listAfter(lines: string[], start: number): { count: number; numbers: nu
   return { count, numbers };
 }
 
+/** P255 (Oct 30 2026): a test article's generateMetadata example showed only its imports and its Props type (the
+ * documentation excerpt it was built from stopped before the function). A TypeScript or JavaScript example that imports
+ * and then declares nothing but types shows none of the code it introduces. A type-only snippet with no imports is fine. */
+const CODE_LANGUAGES = new Set(["ts", "tsx", "typescript", "js", "jsx", "javascript", "mjs", "cjs"]);
+export function codeExampleStopsShort(language: string, body: string): boolean {
+  if (!CODE_LANGUAGES.has(language.toLowerCase())) return false;
+  const lines = body.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map(line => line.replace(/\/\/.*$/, "").trim()).filter(Boolean);
+  let depth = 0, imports = 0;
+  for (const line of lines) {
+    if (depth === 0) {
+      if (/^import\b/.test(line)) imports++;
+      else if (!/^(?:export\s+)?(?:type|interface)\b/.test(line)) return false;
+    }
+    depth = Math.max(0, depth + (line.match(/[{([<]/g) ?? []).length - (line.match(/[})\]>]/g) ?? []).length);
+  }
+  return imports > 0;
+}
+
 export function readerVisibleDefects(markdown: string): string[] {
   const defects: string[] = [];
   const { prose } = markdownOutsideCode(markdown);
+  for (const block of markdown.matchAll(/^[ \t]*```([\w-]*)[^\n]*\n([\s\S]*?)^[ \t]*```[ \t]*$/gm)) {
+    if (codeExampleStopsShort(block[1] ?? "", block[2] ?? "")) {
+      defects.push("Reader-visible defect: a code example shows only its imports and types, not the code it introduces.");
+      break;
+    }
+  }
   for (const pattern of READER_VISIBLE_PIPELINE_TEXT) {
     const match = pattern.exec(prose);
     if (match) defects.push(`Reader-visible defect: pipeline text "${match[0]}" must not appear in an article.`);
