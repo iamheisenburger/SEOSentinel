@@ -1464,6 +1464,23 @@ export function unverifiedClaimsFromFactCheckNotes(notes: string | undefined): s
   return [...(notes ?? "").matchAll(/Unverified claim: «([^»]{12,2000})»/g)].map((match) => match[1].trim());
 }
 
+/** P257 (Oct 30 2026): what an owner is asked to check on a draft Pentra handed back: the fact check's unverified
+ * sentences, less the owner's own confirmed facts (every number in them is in the confirmed profile, or they are about
+ * the named product and state no number) and general advice (no number and no named country, agency, product or law).
+ * Cowork's fresh account saw its own pricing ("The free plan covers up to 5 invoices a month…") and "Contact information
+ * should include an email address that you actually monitor" listed as unsourced, which made a good draft look wrong. */
+export function statementsToCheck(article: { factCheckNotes?: string; productEvidenceSnapshot?: string }): string[] {
+  const profile = article.productEvidenceSnapshot ?? "";
+  const stated = profile ? quantityPhrases(profile) : new Set<string>();
+  return unverifiedClaimsFromFactCheckNotes(article.factCheckNotes).filter((sentence) => {
+    const claimed = quantityPhrases(sentence);
+    if (claimed.size > 0 && [...claimed].every((phrase) => stated.has(phrase))) return false;
+    if (claimed.size === 0 && profile && referencesNamedProduct(sentence, profile)) return false;
+    return claimed.size > 0 || /\d/.test(sentence) ||
+      sentence.split(/\s+/).slice(1).some((word) => /^[A-Z][A-Za-z]/.test(word.replace(/^[^A-Za-z]+/, "")));
+  });
+}
+
 const REWRITE_NEEDED_DEFECT = /^Reader-visible defect|^Autopilot edit pass|Material editorial defect|does not deterministically match preserved excerpt|cites \[\d+\]|cites missing source|inline citation|require at least two|^Article (?:is too thin|is overlong|body is missing|title is missing|contains)|^Meta (?:description|title)|^Title or meta description|Raw HTML|executable MDX|inline image|Featured image|YouTube|javascript URL|script tag|iframe|malformed|^Invalid/i;
 const EVIDENCE_DEFECT = /claim-to-evidence|claim ledger|claim-ledger|Evidence-required paragraph|Fact-check score is \d+|Editorial quality score is \d+(?:\.\d+)?; strict minimum|quantified outcome|operational claim|Uncited evidence defect|Unsupported claim \d+|deterministic evidence defect|Unverified claim/i;
 

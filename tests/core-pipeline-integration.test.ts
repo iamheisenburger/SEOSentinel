@@ -631,7 +631,8 @@ test("C4 an owner's search is measured as notes and written next; competitors an
   const add = (search: string) => f.invoke("contentWork:addOwnerSearch", { siteId: site.id, search });
   await assert.rejects(add("rivalflow alternatives"), /competitor list/);
   await assert.rejects(add("valves"), /two to eight words/);
-  await assert.rejects(add("Drip emitter cleaning"), /already has a page for “drip emitter cleaning”/);
+  // P257: an owner's search is compared with what each page is about (its title), so the refusal names the page's title.
+  await assert.rejects(add("Drip emitter cleaning"), /already has a page for “drip emitter cleaning”/i);
   const added = await add("  AquaPlan ALTERNATIVES ");
   assert.deepEqual({ ...added, topicId: undefined }, { topicId: undefined, existing: false, keyword: "aquaplan alternatives", articleType: "comparison" });
   const topic = f.get(added.topicId)!;
@@ -9531,6 +9532,41 @@ test("NEW-USER journeys: a free account reaches a first article on every support
 
 // P229 (Oct 27 2026): none of the 3 accounts that signed up since Oct 24 reached an article. Start in Review first wrote
 // nothing until the owner also asked for an article, so an owner who started saw an empty dashboard.
+// P257 (Oct 30 2026): Cowork's fresh account approved its first draft (a site whose owner pastes articles) and then
+// could not get a second: "Your existing draft request is retained", nothing written. An approved draft waiting to be
+// pasted held the one request a writing draft holds. Only a draft Pentra is still writing holds the next request.
+test("P257 after the first draft is approved, Generate writes a new one; only a draft still being written holds it", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = f.sites[0], owner = newFreeAccount(f);
+  f.tables.sites.splice(0); f.tables.pages.splice(0);
+  f.setIdentity(owner);
+  site.id = await f.invoke("sites:upsert", { createOnly: true, contentSetup: true, domain: site.domain, clerkUserId: owner,
+    siteName: "Harbor Family Clinic", siteSummary: "Local family medicine clinic", niche: "Local family medicine clinic", blogTheme: "Local family medicine clinic",
+    targetAudienceSummary: "Local patients choosing a clinic", productUsage: "Book appointments", anchorKeywords: slcBusinesses[0].keywords,
+    painPoints: slcBusinesses[0].keywords, language: "en", publishMethod: "manual", autopilotEnabled: false, approvalRequired: true, inferToneNiche: false });
+  f.get(site.id)!.planFeatures = [];
+  let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", ownerReviewedOnly: true, confirmBusinessProfile: true, reviewToken: r.reviewToken });
+  const drafts = () => f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.ownerRequest);
+  await pumpUntil(f, () => drafts().some(j => ["ready", "failed"].includes(j.contentWork.stage)));
+  const [first] = drafts();
+  assert.equal(first.contentWork.stage, "ready", diagnostic(f));
+  await f.invoke("articles:approve", { articleId: first.articleId });
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  assert.equal(r.ownerDraft.latest.approved, true);
+  assert.match(r.ownerDraft.latest.issue, /^Approved\. Publish it from the draft page/, "the approved draft no longer asks to be approved");
+  const ask = (key: string) => f.invoke("contentWork:requestDraft", { siteId: site.id, reviewToken: r.reviewToken, requestKey: key,
+    maximumMicroUsd: r.ownerDraft.maximumMicroUsd });
+  const second = await ask("p257-second-draft-request");
+  assert.equal(second.created, true, "an approved draft waiting to be pasted does not hold the next request");
+  assert.notEqual(second.jobId, first._id);
+  const third = await ask("p257-third-draft-request");
+  assert.deepEqual(third, { jobId: second.jobId, created: false }, "a draft Pentra is still writing holds the next request");
+  await pumpUntil(f, () => ["ready", "failed"].includes(f.get(second.jobId)!.contentWork.stage));
+  assert.equal(f.get(second.jobId)!.contentWork.stage, "ready", diagnostic(f));
+  f.setIdentity(null); f.assertOffline();
+});
+
 test("P229 Start in Review first writes the first article at once, and only ever the first", async t => {
   await t.test("paste_it_yourself", async () => {
     const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });

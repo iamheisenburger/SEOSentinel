@@ -76,9 +76,11 @@ export const HANDED_BACK_DRAFT = "Your draft is ready to read. Open it to see wh
 /** Where an owner's own draft stands, in plain words; null leaves a terminal failure to its own message (contentIssue).
  * Cowork's fresh account read "This draft didn't pass Pentra's quality review" on its first article while Pentra was
  * still revising it, and the finished draft read as a failure. A draft with text is a draft to read. */
-export function ownerDraftNote(stage: string, failure: string | undefined, hasArticle: boolean): string | null {
+export function ownerDraftNote(stage: string, failure: string | undefined, hasArticle: boolean, articleStatus?: string): string | null {
   if (stage === "prepare" || stage === "review") return "Pentra is researching and writing this draft. It's usually ready to read within a few minutes.";
   if (stage === "review_failed") return "Pentra is revising this draft before you read it.";
+  // P257: after Approve it said "Approve it when you're happy with it" (Cowork's re-run, item 5).
+  if (stage === "ready" && articleStatus === "ready") return "Approved. Publish it from the draft page whenever you're ready.";
   if (stage === "ready") return "Your draft is ready to read. Approve it when you're happy with it.";
   if (stage === "publish" || stage === "verify") return "Publishing your approved draft.";
   if (stage === "verified") return "Published and live on your site.";

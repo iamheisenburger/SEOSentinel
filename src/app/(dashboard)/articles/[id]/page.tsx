@@ -5,8 +5,8 @@ import { ConvexError } from "convex/values";
 import { api } from "../../../../../convex/_generated/api";
 import { manualPublicationBlocker } from "../../../../../convex/lib/manualPublication";
 import { publicationArtifactHash } from "../../../../../convex/lib/publicationArtifact";
-import { ownerWaivableIssue, unverifiedClaimsFromFactCheckNotes } from "../../../../../convex/lib/articleQuality";
-import { plainReviewNotes, sourcingLine, unsourcedIssue } from "../../../../../convex/lib/plainReviewNotes";
+import { ownerWaivableIssue, statementsToCheck } from "../../../../../convex/lib/articleQuality";
+import { plainReviewNotes, sourcingLine } from "../../../../../convex/lib/plainReviewNotes";
 import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -410,8 +410,9 @@ export default function ArticleDetailPage() {
   const handedBack = article.status !== "published" &&
     contentReadiness?.ownerDraft.latest?.articleId === articleId && contentReadiness.ownerDraft.latest.stage === "failed";
   const acceptNotes = !plainApproveAllowed && handedBack && blockingGateIssues.length === 0;
-  const unsourced = handedBack ? unverifiedClaimsFromFactCheckNotes(article.factCheckNotes) : [];
-  const unsourcedNoted = handedBack && (unsourced.length > 0 || gateIssues.some(unsourcedIssue));
+  // P257: only statements worth checking (statementsToCheck): not the owner's own confirmed facts, not general advice.
+  const unsourced = handedBack ? statementsToCheck(article) : [];
+  const unsourcedNoted = unsourced.length > 0;
   const approveHint = plainApproveAllowed || acceptNotes ? null
     : handedBack ? "One thing needs fixing before this draft can publish. See “Before you publish” below."
     : "Pentra is still checking this draft. You can read it now; Approve appears when the check is done.";

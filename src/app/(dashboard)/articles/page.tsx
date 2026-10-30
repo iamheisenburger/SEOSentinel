@@ -129,7 +129,8 @@ export default function ArticlesPage() {
         const result = await requestDraft({ siteId: site._id, requestKey: request.key,
           reviewToken: readiness.reviewToken, maximumMicroUsd: readiness.ownerDraft.maximumMicroUsd, topicId: selectedTopic });
         draftRequestKey.current = null;
-        setStatus(result.created ? "Draft requested. Pentra researches, writes and checks it, usually within a few minutes; then you review it and publish." : "Your existing draft request is retained. Open it below to check progress.");
+        // P257 (Oct 30 2026): only a draft Pentra is still writing holds the next one (convex/contentWork.ts, OWNER_DRAFT_WRITING_STAGES).
+        setStatus(result.created ? "Draft requested. Pentra researches, writes and checks it, usually within a few minutes; then you review it and publish." : "Pentra is still writing your current draft. Request the next one when it's ready, usually within a few minutes.");
       } else {
         await queueArticle({ siteId: site._id, topicId: selectedTopic });
         setStatus("Article queued.");
@@ -199,9 +200,13 @@ export default function ArticlesPage() {
             : "Generate a researched draft for your review. Nothing publishes until you approve it."}</p>
           {allowance ? <p>Each new draft uses 1 of your {allowance.limit} articles this month ({allowance.used} used). Editing a draft and requesting review again is free.</p>
             : readiness.ownerDraft.maximumMicroUsd != null && <p>Counts toward your monthly article allowance.</p>}
+          {/* P257 (Oct 30 2026): after a change to the business details or the connection, Generate is refused until the owner
+              confirms the change; this says where (Cowork: "Nothing says what to do to clear it"). */}
+          {readiness.bindingCurrent === false && <p role="alert" className="text-[#F59E0B]">Your business details or website connection changed since you started.{" "}
+            <Link className="underline" href="/settings#changed-content-setup">Confirm the changed setup in Settings</Link> to keep getting drafts.</p>}
           {/* P256 (Oct 30 2026): the latest draft by its title and in plain words, never a review stage or a failure. */}
           {readiness.ownerDraft.latest && <p role="status">Latest draft{readiness.ownerDraft.latest.title ? <>, “{readiness.ownerDraft.latest.title}”</> : null}: {readiness.ownerDraft.latest.issue}
-            {readiness.ownerDraft.latest.articleId && <> <Link className="underline" href={`/articles/${readiness.ownerDraft.latest.articleId}`}>{readiness.ownerDraft.latest.readable ? "Read it now" : "Open draft"}</Link></>}
+            {readiness.ownerDraft.latest.articleId && <> <Link className="underline" href={`/articles/${readiness.ownerDraft.latest.articleId}`}>{readiness.ownerDraft.latest.readable && !readiness.ownerDraft.latest.approved ? "Read it now" : "Open draft"}</Link></>}
           </p>}
         </section>
       )}

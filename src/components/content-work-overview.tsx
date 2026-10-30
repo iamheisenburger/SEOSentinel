@@ -57,11 +57,11 @@ function FirstDraft({ siteId, reviewToken, maximumMicroUsd }: { siteId: Id<"site
 /** P256 (Oct 30 2026): a Review-first owner's latest draft, to read from the overview. Cowork's fresh account wrote its
  * first article, which then appeared on no card while the overview offered "Write my first article" again. */
 const OPEN_DRAFT_STAGES = ["prepare", "review", "review_failed", "publish", "verify"];
-function LatestDraft({ latest }: { latest: { articleId?: string | null; title?: string | null; readable?: boolean; issue?: string | null } }) {
+function LatestDraft({ latest }: { latest: { articleId?: string | null; title?: string | null; readable?: boolean; approved?: boolean; issue?: string | null } }) {
   const href = latest.readable && latest.articleId ? `/articles/${latest.articleId}` : null;
   return <div className="space-y-1 text-[14px]">
     <p className="text-[#F7F8F8]">{href ? <Link className="hover:text-[#0EA5E9]" href={href}>{latest.title ?? "Your draft"}</Link> : latest.title ?? "Your draft"}</p>
-    <p className="text-[12px] text-[#8A8F98]">{latest.issue}{href && <> · <Link className="text-[#0EA5E9] hover:underline" href={href}>Read it now</Link></>}</p>
+    <p className="text-[12px] text-[#8A8F98]">{latest.issue}{href && <> · <Link className="text-[#0EA5E9] hover:underline" href={href}>{latest.approved ? "Open it" : "Read it now"}</Link></>}</p>
     <p className={BODY}>Request more drafts from <Link className="text-[#0EA5E9] hover:underline" href="/articles">Articles</Link>. Nothing publishes until you approve it.</p>
   </div>;
 }
@@ -328,7 +328,9 @@ function UpcomingTopics({ siteId, autopilot, order }: { siteId: Id<"sites">; aut
   return <section className={CARD} aria-labelledby="upcoming-topics-heading">
     <h2 id="upcoming-topics-heading" className={H2}>Coming up next</h2>
     {topics === undefined ? <p className={BODY}>Loading…</p> : next.length === 0
-      ? <p className={BODY}>Pentra is researching topics your customers search for. They&apos;ll appear here.</p>
+      // P257 (Oct 30 2026): topic research runs for Autopilot only; a Review-first site read "researching" for good.
+      ? <p className={BODY}>{autopilot ? "Pentra is researching topics your customers search for. They'll appear here."
+          : "Pentra picks each draft's topic from your business details when you ask for one. Add a search below to choose it yourself."}</p>
       : <ol className="space-y-2 text-[14px]">{next.map((t, n) => <li key={t._id} className="flex gap-3">
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#0EA5E9]/10 text-[12px] font-semibold text-[#0EA5E9]">{n + 1}</span>
           <span><span className="text-[#F7F8F8]">{topicTitle(t.label)}</span>{sameWords(topicTitle(t.label), t.primaryKeyword) ? null

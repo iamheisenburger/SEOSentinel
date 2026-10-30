@@ -1262,7 +1262,9 @@ export const readiness = query({
         latest: latestOwnerJob ? { jobId: latestOwnerJob._id, articleId: latestOwnerJob.articleId, stage: latestOwnerJob.contentWork!.stage,
           title: latestOwnerSummary?.siteId === siteId ? latestOwnerSummary.title || null : null,
           readable: ownerDraftReadable(latestOwnerJob.contentWork!.stage, latestOwnerJob.contentWork!.failure, Boolean(latestOwnerJob.articleId)),
-          issue: ownerDraftNote(latestOwnerJob.contentWork!.stage, latestOwnerJob.contentWork!.failure, Boolean(latestOwnerJob.articleId)) ??
+          approved: latestOwnerSummary?.siteId === siteId && latestOwnerSummary.status === "ready",
+          issue: ownerDraftNote(latestOwnerJob.contentWork!.stage, latestOwnerJob.contentWork!.failure, Boolean(latestOwnerJob.articleId),
+            latestOwnerSummary?.siteId === siteId ? latestOwnerSummary.status : undefined) ??
             contentIssue(latestOwnerJob.contentWork!.failure),
         } : null },
       results: { live: liveSummaries.length + pastedLive.size, planUsedThisMonth: usedThisMonth,
@@ -1417,6 +1419,11 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
   if (pages.length > LIMIT) throw new Error("Existing page inventory is incomplete");
   const pageCoverage = pages.filter(p => pageMatchesCurrentDomain(site, p) && !["", "/", "/index"].includes(p.slug))
     .flatMap(p => [...(p.keywords ?? []), ...(p.title ? [p.title] : [])].map(primaryKeyword => ({ primaryKeyword })));
+  // P257 (Oct 30 2026): what each page is about by its title alone, for an owner's own search. Cowork's "how to follow up
+  // on an unpaid invoice" was refused because the invoice article listed "unpaid invoice follow-up" among its keywords
+  // for one section; a page of its own on that search doesn't compete with it.
+  const titleCoverage = pages.filter(p => pageMatchesCurrentDomain(site, p) && !["", "/", "/index"].includes(p.slug) && p.title)
+    .map(p => ({ primaryKeyword: p.title! }));
   for (const status of ["ready", "published", "rejected"]) {
     const summaries = await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", site._id).eq("status", status)).take(LIMIT + 1);
     if (summaries.length > LIMIT) throw new Error("Published intent inventory is incomplete");
@@ -1425,6 +1432,7 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
       // Never replay that intent as a "fresh" replacement after reconfirmation.
       if (status === "rejected" && !row.publicationAttemptedAt) continue;
       pageCoverage.push(...[...(row.metaKeywords ?? []), row.title].map(primaryKeyword => ({ primaryKeyword })));
+      if (row.title) titleCoverage.push({ primaryKeyword: row.title });
     }
   }
   const fit = (t: { primaryKeyword: string; label: string }) => evaluateTopicBusinessFit({ keyword: t.primaryKeyword, label: t.label, ...signals }).eligible;
@@ -1452,7 +1460,7 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
   const searched = (t: Doc<"topic_clusters">) => searchedWithin(t, difficultyCeiling);
   // The order Autopilot writes in (convex/lib/topicOrder.ts), shown on the dashboard too (P212).
   planned.sort(compareTopics({ difficultyCeiling, authority: storedTenantAuthority(site) ?? null }));
-  return { topics, pageCoverage, fit, competitors, planned, searched };
+  return { topics, pageCoverage, titleCoverage, fit, competitors, planned, searched };
 }
 /** P211 (Oct 26 2026): the business's own pages by title (its service and product pages, posts it wrote) for the copy
  * checks, so Pentra never writes an article that competes with one. Word matching above reads their words; the
@@ -1520,12 +1528,19 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
   return (await ctx.db.get(id))!;
 }
 
+/** P257 (Oct 30 2026): the stages in which Pentra is still writing an owner's draft (its paid work is open). Only such a
+ * draft holds the owner's next request. A written draft waiting for the owner (to read, approve, paste or publish) held it
+ * too, so Cowork's fresh account could not get a second article after approving its first: "Your existing draft request
+ * is retained", and nothing was written. The month's allowance still bounds how many drafts an owner gets. */
+const OWNER_DRAFT_WRITING_STAGES: readonly string[] = ["prepare", "review", "review_failed"];
+const ownerDraftWriting = (j: Doc<"jobs">) => Boolean(j.contentWork?.ownerRequest && j.contentWork.retiredAt === undefined &&
+  OWNER_DRAFT_WRITING_STAGES.includes(j.contentWork.stage));
+
 /** One new owner-requested draft (not an edit of an existing one): the plan's monthly allowance, a topic, a funded
- * hold, then the priced worker. A draft the owner already has in progress is returned instead of a second one. */
+ * hold, then the priced worker. A draft Pentra is still writing is returned instead of a second one. */
 async function admitFreshOwnerDraft(ctx: MutationCtx, site: Doc<"sites">, schedule: NonNullable<Doc<"sites">["contentSchedule"]>,
   jobs: Doc<"jobs">[], args: { requestKey: string; maximumMicroUsd?: number; topicId?: Id<"topic_clusters"> }) {
-  const outstanding = jobs.find(j => j.contentWork?.ownerRequest && j.contentWork.retiredAt === undefined &&
-    !["verified", "failed"].includes(j.contentWork.stage));
+  const outstanding = jobs.find(ownerDraftWriting);
   if (outstanding) return { jobId: outstanding._id, created: false };
   const pricing = await pricingConfiguration(ctx, site);
   // The owner's screen names the price it asks for; Start in Review first asks for the current one.
@@ -1604,7 +1619,7 @@ export const requestDraft = mutation({
       !contentConnectionComplete(site) || (!pasteDestination(site) && !publisherDestinationReceiptVerified({ site })) ||
       !await contentEntitlementAuthorized(ctx, site)) throw new ConvexError("Confirm your business, website connection and billing in Settings first");
     if (args.reviewToken !== contentConsentToken(site) || schedule.profileHash !== confirmedContentProfileHash(site) ||
-      schedule.connectionHash !== contentConnectionHash(site)) throw new ConvexError("Business or destination changed; review Settings first");
+      schedule.connectionHash !== contentConnectionHash(site)) throw new ConvexError("Your business details or website connection changed since you started. Open Settings, tick the box under “Review changed setup” and press Confirm changed setup; then request the draft again.");
     if (!/^[a-zA-Z0-9-]{16,80}$/.test(args.requestKey)) throw new ConvexError("Invalid draft request reference");
     const jobs = await jobsForSite(ctx, site._id);
     const same = jobs.find(j => j.contentWork?.ownerRequest?.userId === site.userId && j.contentWork?.ownerRequest?.key === args.requestKey);
@@ -1634,8 +1649,7 @@ export const requestDraft = mutation({
         (!metadata || (metadata.title === source.title && metadata.metaTitle === source.metaTitle && metadata.metaDescription === source.metaDescription))))) {
       throw new ConvexError("This draft changed, is still processing, or cannot be edited safely. Refresh before saving.");
     }
-    const outstanding = jobs.find(j => j.contentWork?.ownerRequest && j.contentWork.retiredAt === undefined &&
-      j._id !== (args.edit ? sourceJob?._id : undefined) && !["verified", "failed"].includes(j.contentWork.stage));
+    const outstanding = jobs.find(j => ownerDraftWriting(j) && j._id !== (args.edit ? sourceJob?._id : undefined));
     if (args.edit && outstanding) throw new ConvexError("Finish the other draft request before submitting edits");
     if (outstanding) return { jobId: outstanding._id, created: false };
     const pricing = await pricingConfiguration(ctx, site);
@@ -1899,9 +1913,9 @@ export const addOwnerSearch = mutation({ args: { siteId: v.id("sites"), search: 
     if (namesCompetitor(keyword, competitorNamesFor(site))) {
       throw new ConvexError("That search names a company on your competitor list, which Pentra's articles never mention. Remove it from the list in Settings first if you want this page.");
     }
-    const { topics, pageCoverage } = await eligiblePlannedTopics(ctx, site);
+    const { topics, titleCoverage } = await eligiblePlannedTopics(ctx, site);
     const proposal = { primaryKeyword: keyword, label: keyword.replace(/^./, c => c.toUpperCase()) };
-    const page = pageCoverage.find(c => c.primaryKeyword && contentIntentConflicts(proposal, c));
+    const page = titleCoverage.find(c => c.primaryKeyword && contentIntentConflicts(proposal, c));
     if (page) throw new ConvexError(`Your site already has a page for “${page.primaryKeyword}”, published or ready to publish, and a second page would compete with it.`);
     const same = topics.find(t => t.primaryKeyword === keyword) ?? topics.find(t => contentIntentConflicts(proposal, t));
     if (same?.status === "used") throw new ConvexError("Pentra has already written an article for this search.");

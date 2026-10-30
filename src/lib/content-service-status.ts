@@ -21,7 +21,7 @@ export function contentServiceStatus(state: ServiceState | null | undefined) {
     owner_reviewed: "Owner-reviewed drafts", active: "Schedule active", ready: "Ready — schedule not active", preparing: "Preparing — not active" }[status];
   // Sites set up through the Autopilot / Review-first choice get plain labels.
   const simple = Boolean(state?.autopilot?.selectable && (state?.schedule?.autopilotSelected || state?.schedule?.ownerReviewedOnly));
-  const simpleLabel = { loading: label, legacy: label, changed: "Setup changed — check settings", failed: "Needs your review",
+  const simpleLabel = { loading: label, legacy: label, changed: "Setup changed — confirm it in Settings", failed: "Needs your review",
     paused: "Paused", owner_reviewed: "Review first", active: "Autopilot on", ready: "Autopilot starting", preparing: "Autopilot starting" }[status];
   const operable = !!state && !state.schedule?.ownerReviewedOnly && state.bindingCurrent !== false && !!state.entitlement && !state.approvalRequired && status !== "failed";
   return { status, label: simple ? simpleLabel : label, systemFailure,
