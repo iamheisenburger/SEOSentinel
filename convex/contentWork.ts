@@ -2592,6 +2592,10 @@ export const advance = internalMutation({
       const prepareAt = Math.min(nextMonthStart, slotAt - SLOT_PREP_LEAD_MS);
       if (slotAt >= nextMonthStart && Date.now() < prepareAt) {
         await ctx.scheduler.runAt(prepareAt, internal.autopilot.dispatchSiteFollowup, { siteId, trigger: "content_work", reason: "next_month_slot" });
+        // P254 (Oct 30 2026): the buffer is as full as this month allows, so the work a full buffer starts runs here too.
+        // The Related reading and stock-clause repairs (P176/P250) start only from a full buffer: LeadPilot's pass waited
+        // for November with its next month's slot held.
+        if (relatedRepairAllowed(site, Date.now())) await ctx.scheduler.runAfter(0, internal.contentImprovements.requestRelatedReadingRepair, { siteId });
         return { scheduled: 0, mode: "buffer_full", eligibleAt: prepareAt };
       }
     }

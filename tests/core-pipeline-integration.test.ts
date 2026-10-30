@@ -1553,6 +1553,30 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     assert.equal(await storedUsageMatchesLive(f, site.id), 1, "October counts only its own article");
     f.assertOffline();
   });
+  // P254 (Oct 30 2026): with the next month's slot held (P248), a site's buffer showed one waiting article at a month's
+  // end, and the repair chain, started only from a full buffer, waited for the new month (LeadPilot, Oct 30).
+  await t.test("a_held_next_month_slot_still_starts_the_repair_chain", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const site = await selectGrowth(f);
+    Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+    f.setTime(Date.UTC(2026, 8, 30, 19));
+    f.get(site.id)!.contentSchedule.nextDeadlineAt = Date.UTC(2026, 8, 30, 20);
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_fill");
+    const firstJob = f.tables.jobs.find(j => j.contentWork)!;
+    Object.assign(firstJob, { status: "done" }); firstJob.contentWork.stage = "ready";
+    f.get(site.id)!.contentSchedule.active = true;
+    // Its slot moves to 07:00 tomorrow, so the next one (Oct 2) is next month's and a repair is allowed (6 h from a slot).
+    const shift = 11 * 3_600_000;
+    f.get(site.id)!.contentSchedule.nextDeadlineAt += shift;
+    Object.assign(firstJob.contentWork, { deadlineAt: firstJob.contentWork.deadlineAt + shift, windowStartAt: firstJob.contentWork.windowStartAt + shift, windowWakeId: undefined });
+    const booked = () => f.tables._scheduled_functions.filter(s => s.name === "contentImprovements:requestRelatedReadingRepair" && s.state.kind === "pending").length;
+    const before = booked();
+    const held = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal(held.mode, "buffer_full", JSON.stringify(held));
+    assert.equal(f.tables.jobs.filter(j => j.contentWork).length, 1, "October's second slot still waits for October");
+    assert.equal(booked(), before + 1, "the repair chain starts now, not in the new month");
+    f.assertOffline();
+  });
   await t.test("dashboard_shows_the_stored_monthly_usage", async () => {
     const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
     const site = await selectGrowth(f);
