@@ -131,4 +131,4 @@ There's no verified universal interval. A reasonable practice is to re-run the a
 
 - [A Practical Guide to Autonomous Site Crawling and Niche Detection](/blog/autonomous-site-crawling-and-niche-detection-guide-edited)
 - [Product Marketing Content: A Practical System for Turning Product Truth Into Buyer-Ready Pages](/blog/product-marketing-content-system)
-- [B2B SaaS Content Strategy for Ranking and Lead Generation: A Complete Guide](/blog/b2b-saas-content-strategy-ranking-lead-generation)
+- [SaaS Keyword Research: Start From Buyer Problems, Not Product Terms](/blog/saas-keyword-research)
