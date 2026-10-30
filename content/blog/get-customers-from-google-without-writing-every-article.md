@@ -120,6 +120,6 @@ That depends on the fact-checking step behind it. A schedule with a real, indepe
 
 ## Related reading
 
-- [Article Refresh Strategy: Complete Guide to Updating Old Content for Better Rankings](/blog/article-refresh-strategy-guide)
-- [How to Detect Ranking Drops in SEO: A Complete Monitoring Guide](/blog/how-to-detect-ranking-drops-seo)
-- [Automated SEO Workflow: From Crawling to Publishing — The Complete 8-Step Pipeline](/blog/automated-seo-workflow-complete-guide)
+- [A Practical Guide to Improving Pages Close to Page One](/blog/improving-pages-close-to-page-one)
+- [Ranking Optimization: A Decision Worksheet for Search Visibility](/blog/ranking-optimization-decision-system)
+- [Intelligent Content Automation: What It Actually Means and How the Loop Works](/blog/intelligent-content-automation)
