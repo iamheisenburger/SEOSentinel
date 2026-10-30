@@ -21,7 +21,9 @@ export function autopilotPublicationConsented(site: {
 }
 
 /** Fact-check findings a preserved source or the confirmed profile can
- * settle: the sentence cites a source, states a number, or names the product.
+ * settle: the sentence cites a source, states a number, names the product, or
+ * quotes or cites a person (P258, Arshad's cost rule: the one check looks for
+ * made-up statistics, wrong product facts and invented people or quotes).
  * A general statement without any of these is advice or opinion under rule 2a. */
 export function checkableFactCheckFindings(findings: readonly string[], productName: string): string[] {
   const product = productName.trim();
@@ -29,7 +31,8 @@ export function checkableFactCheckFindings(findings: readonly string[], productN
     ? new RegExp(`\\b${product.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i")
     : null;
   return [...new Set(findings.map((finding) => finding.trim()).filter(Boolean))].filter((finding) =>
-    /\[\d+(?:\s*,\s*\d+)*\]/.test(finding) || /\d/.test(finding.replace(/https?:\/\/\S+/g, " ")) || (named?.test(finding) ?? false));
+    /\[\d+(?:\s*,\s*\d+)*\]/.test(finding) || /\d/.test(finding.replace(/https?:\/\/\S+/g, " ")) || (named?.test(finding) ?? false) ||
+    /[“"][^”"]{8,}[”"]/.test(finding) || /\b(?:said|says|told|according to|wrote|writes)\b/i.test(finding));
 }
 
 /** Gate message that sends a first review with checkable findings through

@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { publicationDeferralBoundaryValidator } from "./lib/publicationDeferral";
 import { publicationInventoryValidator } from "./lib/publicationEligibility";
 import { blogListingRow, blogSitemapRow } from "./lib/blogListing";
+import { serpBriefValidator } from "./lib/serpBrief";
 
 export default defineSchema({
   sites: defineTable({
@@ -820,6 +821,8 @@ export default defineSchema({
     recommendedArticleType: v.optional(v.string()), // SERP-based recommendation
     paaQuestions: v.optional(v.array(v.string())), // People Also Ask questions
     serpTopUrls: v.optional(v.array(v.string())), // normalized by the overlap gate
+    // P258: what Google showed for this search when Pentra first wrote it (convex/lib/serpBrief.ts), kept for 30 days.
+    serpBrief: v.optional(serpBriefValidator),
     volumeTrend: v.optional(v.array(v.number())), // last 12 months search volume
     searchDemandSource: v.optional(v.string()),
     searchDemandMeasuredAt: v.optional(v.number()),

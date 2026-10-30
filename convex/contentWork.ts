@@ -152,7 +152,11 @@ function autopilotReplaceable(job: Doc<"jobs">) {
   const cw = job.contentWork;
   // P204: a replacement that Pentra itself held back (a copy of a live page, a reader check added since) is replaceable
   // once more; any other failed replacement is not. SLOT_MAX_JOBS bounds a slot's jobs either way.
+  // P259 (Oct 30 2026), Arshad's cost rule: an article that failed its checks after its one rewrite is held, never
+  // regenerated, so its slot gets no replacement. A slot whose ready article the nightly sweep held back (a copy of a
+  // live page, a reader check added since) or whose writing never ran still gets one new article, written once.
   return Boolean(cw && cw.stage === "failed" && !cw.ownerRequest && cw.retiredAt === undefined &&
+    cw.failure !== "bounded_content_quality_exhausted" &&
     (!cw.replacesJobId || HELD_BACK_FAILURES.has(cw.failure ?? "")) &&
     (cw.intent === "create" ? autopilotSkippableFailure(job) : automaticImprovement(cw)));
 }
@@ -1703,52 +1707,35 @@ export const requestDraft = mutation({
   },
 });
 
+/** Arshad's cost rule (Oct 30 2026, P258): an article is researched (3 to 5 real sources), written once, checked once
+ * for objective errors and gets at most one rewrite. If it still fails it is held (Autopilot) or handed to its owner as a
+ * draft with the doubtful lines marked; it is never regenerated. Each rewrite cost as much as the first writing
+ * ($0.06 of a $0.12 draft), and a draft that failed twice was followed by a whole new draft on another topic: pentra.dev
+ * paid for 13 drafts to publish 7 in the week to Oct 30. */
+export const MAX_CONTENT_REWRITES = 1;
+
 async function reviseFailedWork(ctx: MutationCtx, site: Doc<"sites">, failed: Doc<"jobs">): Promise<CadenceScheduleResult> {
   const cw = failed.contentWork!;
-  if (cw.revisions < 2) {
+  // The one rewrite is spent only on an objective problem: a draft whose open points are all notes (rule 2a: scores, the
+  // claim audit) goes to its owner as it is (Autopilot seals such a draft itself in contentWorkCompleted).
+  const draft = failed.articleId ? await ctx.db.get(failed.articleId) : null;
+  const notesOnly = Boolean(draft && draft.siteId === site._id && (draft.publicationGateIssues ?? []).length > 0 &&
+    draft.publicationGateIssues!.every(issue => ownerWaivableIssue(issue, draft)) && readerVisibleIssues(draft).length === 0);
+  if (cw.revisions < MAX_CONTENT_REWRITES && !notesOnly) {
     await ctx.db.patch(failed._id, { status: "pending", workerAttempts: (failed.workerAttempts ?? 0) + 1,
       payload: { ...failed.payload, qualityRetry: true, articleId: failed.articleId, bufferFill: true },
       contentWork: { ...cw, stage: "review", revisions: cw.revisions + 1 }, updatedAt: Date.now() });
     return { scheduled: 1, mode: "quality_revision", activeJobId: failed._id };
   }
-  // Review settlement may return the original topic to "planned". Its mutable
-  // status must not let a supposedly distinct replacement buy the same intent.
-  const discardedIntents: { primaryKeyword: string; label?: string }[] = [];
-  for (const articleId of [...cw.discardedArticleIds, ...(failed.articleId ? [failed.articleId] : [])]) {
-    const article = await ctx.db.get(articleId);
-    if (!article || article.siteId !== site._id) throw new Error("Replacement article binding changed");
-    discardedIntents.push({ primaryKeyword: article.title });
-    const topic = article.topicId ? await ctx.db.get(article.topicId) : null;
-    if (topic && topic.siteId === site._id) discardedIntents.push({ primaryKeyword: topic.primaryKeyword, label: topic.label });
-  }
-  // An owner asked for this draft: hand back the best version with the
-  // reviewer's notes instead of silently spending on a different topic.
-  const replacement = cw.replacements === 0 && !cw.ownerRequest
-    ? await chooseTopic(ctx, site, undefined, discardedIntents) : null;
-  if (replacement && failed.articleId) {
-    // P181 (Oct 25 2026): the replacement is a new draft and gets the one
-    // bounded rewrite a first review sends a draft through (the Autopilot edit
-    // pass). It inherited the first draft's spent revisions, so a replacement
-    // whose first review had a checkable finding failed without its rewrite.
-    await ctx.db.patch(failed._id, { status: "pending", articleId: undefined, reservationId: undefined,
-      workerAttempts: (failed.workerAttempts ?? 0) + 1,
-      payload: { ...(cw.ownerRequest ? { manual: true } : {}), topicId: replacement._id, bufferFill: true, options: { includeImages: false, includeYouTube: false } },
-      contentWork: { ...cw, intent: "create", targetPageId: undefined, baseRevision: undefined, permissionVersion: undefined,
-        opportunity: undefined, revisionId: undefined, editTarget: undefined, stage: "prepare", replacements: 1, revisions: Math.min(cw.revisions, 1),
-        discardedArticleIds: [...cw.discardedArticleIds, failed.articleId] }, updatedAt: Date.now() });
-    // A page improvement that becomes a new article now counts toward the month.
-    if (cw.intent !== "create") await refreshAccountUsage(ctx, site, 1);
-    await ctx.db.patch(replacement._id, { status: "queued", updatedAt: Date.now() });
-    return { scheduled: 1, mode: "buffer_fill", activeJobId: failed._id };
-  }
+  // Held, never regenerated: no replacement draft on another topic (the cost rule above).
   await ctx.db.patch(failed._id, { status: "failed", contentWork: { ...cw, stage: "failed", failure: "bounded_content_quality_exhausted",
     checksVersion: CONTENT_CHECKS_VERSION }, updatedAt: Date.now() });
   await settleFailedContentWork(ctx, failed._id);
-  // P255 (Oct 30 2026): an owner's draft that ends without passing review uses none of the month's allowance
+  // P255 (Oct 30 2026): a draft that ends without passing review uses none of the month's allowance
   // (contentJobUsesAllowance), but the stored count waited for the next recount: the test account's free plan read "3 of
-  // 3, Limit Reached" with its last article spent on a draft that never passed. It follows at once now. (An Autopilot
-  // slot's count carries over to its replacement, so only owner drafts, which are never replaced, are taken off here.)
-  if (cw.ownerRequest && countsTowardMonthlyUsage(failed, usageMonthBounds().monthStart)) await refreshAccountUsage(ctx, site, -1);
+  // 3, Limit Reached" with its last article spent on a draft that never passed. It follows at once now. P258: Autopilot
+  // slots too, now that a held slot has no replacement to carry its count.
+  if (countsTowardMonthlyUsage(failed, usageMonthBounds().monthStart)) await refreshAccountUsage(ctx, site, -1);
   // The owner's draft is handed back with the checks' notes: they hear it's waiting.
   if (cw.ownerRequest && failed.articleId) await noteDraftReady(ctx, (await ctx.db.get(failed._id))!, Date.now());
   if (!cw.ownerRequest && cw.intent === "create") {

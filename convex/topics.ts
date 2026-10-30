@@ -3,6 +3,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { SERP_BRIEF_MAX_AGE_MS, serpBriefValidator } from "./lib/serpBrief";
 import {
   coveredIntentTopics,
   filterNonCannibalizingIntentTopics,
@@ -1255,6 +1256,17 @@ export const removeUsed = mutation({
     return { deleted, protectedCheckpoints };
   },
 });
+
+/** P258 (Oct 30 2026): keeps a topic's first SERP brief (a stale one is replaced) and returns the one stored, so every
+ * run and revision of an article sees the same results (convex/lib/serpBrief.ts). */
+export const recordSerpBrief = internalMutation({ args: { topicId: v.id("topic_clusters"), brief: serpBriefValidator },
+  handler: async (ctx, { topicId, brief }) => {
+    const topic = await ctx.db.get(topicId);
+    if (!topic) return null;
+    if (topic.serpBrief && brief.observedAt - topic.serpBrief.observedAt < SERP_BRIEF_MAX_AGE_MS) return topic.serpBrief;
+    await ctx.db.patch(topicId, { serpBrief: brief, updatedAt: Date.now() });
+    return brief;
+  } });
 
 export const updateSEOMetrics = internalMutation({
   args: {

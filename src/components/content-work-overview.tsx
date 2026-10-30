@@ -138,7 +138,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
           <span className="flex items-center gap-1.5 text-[12px] text-[#8A8F98]">{plain && <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${w.stage === "ready" ? "bg-[#4CB782]" : "bg-[#0EA5E9]"}`} />}{stageLabel(w.stage)}{simple ? (w.stage === "ready" ? ` · goes live ${friendlyTime(w.deadlineAt, zone)}` : "") : ` · due ${shownTime(w.deadlineAt, zone)}`}
             {plain && readyToRead(w) && <> · <Link className="text-[#0EA5E9] hover:underline" href={`/articles/${w.articleId}`}>Read it now</Link></>}</span></li>)}</ul>}
         {heldBack.length > 0 && <div className="mt-3 space-y-1.5" aria-label="Held back drafts">
-          <p className="text-[12px] text-[#8A8F98]">Held back, not published: these drafts didn&apos;t pass Pentra&apos;s quality review (facts, sources and editing), so Pentra moved on to another topic. Held-back drafts don&apos;t count toward your monthly articles.</p>
+          <p className="text-[12px] text-[#8A8F98]">Held back, not published: these drafts had a problem Pentra&apos;s one rewrite couldn&apos;t fix (a number, product fact or quote it couldn&apos;t back up), so they weren&apos;t published and your schedule continued with the next article. Held-back drafts don&apos;t count toward your monthly articles.</p>
           <ul className="space-y-1 text-[13px]">{heldBack.map(w => <li key={w.jobId}><Link className="text-[#0EA5E9] hover:underline" href={`/articles/${w.articleId}`}>{w.title ? topicTitle(w.title) : "Held-back draft"}</Link><span className="text-[#62666D]"> · see the reviewer&apos;s notes</span></li>)}</ul>
         </div>}
       </section>

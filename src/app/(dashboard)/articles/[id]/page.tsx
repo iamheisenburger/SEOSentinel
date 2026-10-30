@@ -6,7 +6,7 @@ import { api } from "../../../../../convex/_generated/api";
 import { manualPublicationBlocker } from "../../../../../convex/lib/manualPublication";
 import { publicationArtifactHash } from "../../../../../convex/lib/publicationArtifact";
 import { ownerWaivableIssue, statementsToCheck } from "../../../../../convex/lib/articleQuality";
-import { plainReviewNotes, sourcingLine } from "../../../../../convex/lib/plainReviewNotes";
+import { markDoubtfulLines, plainReviewNotes, sourcingLine } from "../../../../../convex/lib/plainReviewNotes";
 import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -413,6 +413,8 @@ export default function ArticleDetailPage() {
   // P257: only statements worth checking (statementsToCheck): not the owner's own confirmed facts, not general advice.
   const unsourced = handedBack ? statementsToCheck(article) : [];
   const unsourcedNoted = unsourced.length > 0;
+  // P258: the doubtful lines are marked in the draft itself (display only; copies and publishing use the article's text).
+  const previewMarkdown = unsourcedNoted ? markDoubtfulLines(article.markdown, unsourced) : article.markdown;
   const approveHint = plainApproveAllowed || acceptNotes ? null
     : handedBack ? "One thing needs fixing before this draft can publish. See “Before you publish” below."
     : "Pentra is still checking this draft. You can read it now; Approve appears when the check is done.";
@@ -1112,6 +1114,7 @@ export default function ArticleDetailPage() {
         <section role="note" aria-label="Before you publish" className="rounded-lg border border-[#F59E0B]/20 bg-[#F59E0B]/[0.05] p-3 space-y-2 text-sm">
           <p className="font-medium text-[#F7F8F8]">Before you publish</p>
           {unsourcedNoted && <p className="text-[#F7F8F8]">{sourcingLine(article.sources ?? [], unsourced.length)}</p>}
+          {unsourced.length > 0 && <p className="text-[#8A8F98]">They&apos;re highlighted in the draft below.</p>}
           {unsourced.length > 0 && <details className="text-[#8A8F98]"><summary className="cursor-pointer">Show the statements to check</summary>
             <ul className="mt-1 list-disc space-y-1 pl-5">{unsourced.slice(0, 12).map((claim, index) => <li key={index}>{claim}</li>)}</ul></details>}
           {blockingGateIssues.length > 0 && <>
@@ -1196,7 +1199,7 @@ export default function ArticleDetailPage() {
             rehypePlugins={[rehypeSlug, rehypeRaw]}
             components={markdownComponents}
           >
-            {article.markdown}
+            {previewMarkdown}
           </ReactMarkdown>
         </div>
       ) : (
@@ -1237,7 +1240,7 @@ export default function ArticleDetailPage() {
               rehypePlugins={[rehypeSlug, rehypeRaw]}
               components={brandedComponents}
             >
-              {article.markdown}
+              {previewMarkdown}
             </ReactMarkdown>
           </div>
         </div>

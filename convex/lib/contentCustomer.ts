@@ -11,8 +11,8 @@ import { HANDED_BACK_DRAFT } from "./plainReviewNotes";
 export function contentIssue(reason?: string) {
   if (!reason) return null;
   if (reason === "owner_rejected_draft") return "You declined this draft. It will not publish. You can request a new draft; previous work and spending remain recorded.";
-  if (reason === "duplicate_intent") return "This draft repeated a page your site already has, so it wasn't published: two pages on one search compete with each other. Pentra wrote this slot about a new topic instead.";
-  if (reason === "reader_visible_defect") return "This draft didn't pass a reader check Pentra added after it was written, so it wasn't published. Pentra wrote a new article for this slot.";
+  if (reason === "duplicate_intent") return "This draft repeated a page your site already has, so it wasn't published: two pages on one search compete with each other. Your schedule continues with the next article.";
+  if (reason === "reader_visible_defect") return "This draft didn't pass a reader check Pentra added after it was written, so it wasn't published. Your schedule continues with the next article.";
   if (reason === "owner_edited_draft") return "A separately reviewed edit replaces this draft. The original content and spending remain in history.";
   if (reason === "bounded_content_quality_exhausted") return HANDED_BACK_DRAFT;
   if (reason === "content_provider_unavailable") return "The writing service was busy through every retry. Nothing was written or published; Autopilot tries again automatically and the missed slot stays on record.";

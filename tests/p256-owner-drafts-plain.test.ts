@@ -84,8 +84,8 @@ test("P256 the overview shows a Review-first owner's latest draft with Read it n
   assert.doesNotMatch(overview, /"Revision needed"|"Quality review"/);
 });
 
-test("P256 research makes one more bounded pass for primary sources when it keeps fewer than two", () => {
-  assert.equal(PRIMARY_PASS_BELOW, 2);
+test("P256 research makes one more bounded pass for primary sources when it keeps fewer than three (P259)", () => {
+  assert.equal(PRIMARY_PASS_BELOW, 3, "P259, Arshad's cost rule: research gathers 3 to 5 real sources");
   const request = primarySourcesRequest({ label: "What Should a Freelance Invoice Include?", primaryKeyword: "what should a freelance invoice include",
     targetCountry: "US, UK", siteName: "Madman Invoice", avoidHosts: sourceHosts(["https://www.freshbooks.com/hub/invoicing/x", "https://quickbooks.intuit.com/r/y",
       "https://www.freshbooks.com/hub/z"]) });

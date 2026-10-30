@@ -191,6 +191,7 @@ import type * as lib_schedulerTopicReadiness from "../lib/schedulerTopicReadines
 import type * as lib_searchPerformance from "../lib/searchPerformance.js";
 import type * as lib_seoGrowth from "../lib/seoGrowth.js";
 import type * as lib_serpAttainability from "../lib/serpAttainability.js";
+import type * as lib_serpBrief from "../lib/serpBrief.js";
 import type * as lib_siteDomainBinding from "../lib/siteDomainBinding.js";
 import type * as lib_siteHealth from "../lib/siteHealth.js";
 import type * as lib_siteJobActivity from "../lib/siteJobActivity.js";
@@ -426,6 +427,7 @@ declare const fullApi: ApiFromModules<{
   "lib/searchPerformance": typeof lib_searchPerformance;
   "lib/seoGrowth": typeof lib_seoGrowth;
   "lib/serpAttainability": typeof lib_serpAttainability;
+  "lib/serpBrief": typeof lib_serpBrief;
   "lib/siteDomainBinding": typeof lib_siteDomainBinding;
   "lib/siteHealth": typeof lib_siteHealth;
   "lib/siteJobActivity": typeof lib_siteJobActivity;

@@ -2,7 +2,9 @@
  * source. Research cited 8 pages, 6 of them vendor blogs that strict evidence cannot use, so the article's US half had
  * nothing behind it. When the first pass keeps fewer than two readable sources, one more bounded pass asks for primary
  * sources only and names the sites already found unusable. More sources, not more checks. */
-export const PRIMARY_PASS_BELOW = 2;
+// P258 (Oct 30 2026), Arshad's cost rule: research gathers 3 to 5 real sources before writing.
+export const PRIMARY_PASS_BELOW = 3;
+export const MAX_RESEARCH_SOURCES = 5;
 export const PRIMARY_PASS_SEARCHES = 4;
 
 export function primarySourcesRequest(args: { label: string; primaryKeyword: string; secondaryKeywords?: string[];

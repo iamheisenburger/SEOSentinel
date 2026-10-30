@@ -92,3 +92,18 @@ export function ownerDraftNote(stage: string, failure: string | undefined, hasAr
 /** An owner's draft that has text to read: ready, or handed back with what to check. */
 export const ownerDraftReadable = (stage: string, failure: string | undefined, hasArticle: boolean) =>
   hasArticle && (stage === "ready" || (stage === "failed" && failure === "bounded_content_quality_exhausted"));
+
+/** P258 (Oct 30 2026), Arshad's cost rule: a draft that still has doubtful lines after its one rewrite is shown to its
+ * owner with those lines marked, never rewritten again. Display only: copies and publication use the article's own text. */
+export const DOUBTFUL_LINE_TITLE = "Not matched to a source yet: check it before you publish";
+export function markDoubtfulLines(markdown: string, statements: readonly string[]): string {
+  let out = markdown;
+  for (const statement of statements) {
+    const text = statement.trim();
+    if (text.length < 12) continue;
+    const at = out.indexOf(text);
+    if (at < 0 || out.lastIndexOf("<mark", at) > out.lastIndexOf("</mark>", at)) continue;
+    out = `${out.slice(0, at)}<mark title="${DOUBTFUL_LINE_TITLE}">${text}</mark>${out.slice(at + text.length)}`;
+  }
+  return out;
+}

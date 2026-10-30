@@ -1,7 +1,8 @@
 "use node";
 import { assertNotMidContentSetup } from "../lib/contentSetupPath";
 import { EVIDENCE_EXCERPT_MAX_CHARS } from "../lib/evidenceExcerpt";
-import { PRIMARY_PASS_BELOW, PRIMARY_PASS_SEARCHES, primarySourcesRequest, sourceHosts } from "../lib/researchPasses";
+import { MAX_RESEARCH_SOURCES, PRIMARY_PASS_BELOW, PRIMARY_PASS_SEARCHES, primarySourcesRequest, sourceHosts } from "../lib/researchPasses";
+import { type SerpBrief, serpArticleType, serpBriefFromAnalysis, serpBriefPrompt, serpBriefUsable } from "../lib/serpBrief";
 import { contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
 import { autopilotCompanyNameIssue, autopilotCompanyNameNote, autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote,
   checkableFactCheckFindings, unsearchedCompanyMentions } from "../lib/autopilotEditor";
@@ -4339,6 +4340,7 @@ async function handleArticle(
   const researchQualityNotes: string[] = [];
 
   // ── Step 0: SERP Analysis + Article Type Selection (graceful degradation) ──
+  let serpBrief: SerpBrief | undefined;
   let serpPaaQuestions: string[] = [];
   let serpDifficulty: string | undefined;
   let serpRecommendedType: string | undefined;
@@ -4388,6 +4390,25 @@ async function handleArticle(
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown";
       console.error(`SERP analysis failed (continuing with default type): ${msg}`);
+    }
+  } else if (topic && topicId && !selectedWork && contentProviderActive()) {
+    // P258 (Oct 30 2026): drafts under the content provider never saw what Google shows for their search (the step above
+    // runs on the old pipeline only): Cowork's "nextjs blog template" draft named no template while the results list
+    // templates. The results are read once per topic and kept, so retries and revisions see the same ones.
+    try {
+      const locationCode = mapCountryToLocation(site.targetCountry), languageCode = site.language ?? "en";
+      let brief: SerpBrief | null | undefined = (topic as { serpBrief?: SerpBrief }).serpBrief;
+      if (!serpBriefUsable(brief, Date.now(), locationCode, languageCode)) {
+        const { analyzeSERP } = await import("./seoData");
+        const fresh = serpBriefFromAnalysis(await analyzeSERP(topic.primaryKeyword, locationCode, languageCode), Date.now(), locationCode, languageCode);
+        brief = fresh ? await ctx.runMutation(internal.topics.recordSerpBrief, { topicId, brief: fresh }) : null;
+      }
+      if (serpBriefUsable(brief, Date.now(), locationCode, languageCode)) {
+        serpBrief = brief;
+        serpRecommendedType = serpArticleType(brief.format, searchAsksForProducts(topic.primaryKeyword));
+      }
+    } catch (err) {
+      console.error(`SERP brief unavailable (writing without it): ${err instanceof Error ? err.message : "unknown"}`);
     }
   }
 
@@ -4595,7 +4616,7 @@ async function handleArticle(
         }
       }
       const { strict, accepted, readable } = kept;
-      researchSources = readable.slice(0, 8);
+      researchSources = readable.slice(0, MAX_RESEARCH_SOURCES);
       if (strict.rejected.length) researchQualityNotes.push(`Excluded ${strict.rejected.length} secondary or vendor-authored source(s) from strict evidence.`);
       // What the research produced, always (P144, Oct 21 2026: about half of
       // the owner sites' drafts since Oct 19 kept no source, and nothing said why).
@@ -4804,7 +4825,9 @@ async function handleArticle(
     `- Do not create sections for keyword variants, featured snippets, AI Overviews, entity counts, or search-engine extraction patterns.`,
     `- Make the page worth citing through original usefulness, transparent evidence, and clear first-party mechanics rather than formatting tricks.`,
     `- A People Also Ask question is optional context, not a mandatory heading. Include one only when it is relevant, evidence-supported, and not already answered.`,
-    serpPaaQuestions.length > 0
+    // P258: what Google shows for this search, when it was read (convex/lib/serpBrief.ts).
+    serpBrief ? serpBriefPrompt(serpBrief)
+    : serpPaaQuestions.length > 0
       ? [
           `OPTIONAL PEOPLE ALSO ASK CONTEXT:`,
           `Use only questions that materially improve this article; do not include all of them by default:`,
@@ -4828,7 +4851,7 @@ async function handleArticle(
     `- HYPOTHETICALS: Label invented examples explicitly as hypothetical and never present their details or results as evidence.`,
     // P249: a how-to about software showed no code at all; the reader left for a tutorial that does.
     `- CODE AND SETTINGS: When the article teaches a task in software and the preserved excerpts show the exact API, option, file name or command, include a short code, configuration or command example built only from what the excerpts show, in a fenced code block. Never invent an API, option, flag or version. Show a whole example: never one that stops after its imports or types; when the excerpts show only part of the code, describe that step in words instead.`,
-    `- PRACTICAL VALUE: Give the reader a concrete answer and a useful next step: an evidence-grounded explanation, a decision framework with explicit trade-offs, or a reader-run check with inputs and observable results. Give a framework you propose as plain advice ("a simple way to decide is..."), never as an industry standard, and never add a sentence saying it is a recommendation rather than a standard. Never write about your sources, research or drafting process in the article (no "no external sources were verified for this draft", "the documentation we can verify", "the excerpt is truncated" or "the supplied evidence"); when a limitation matters, tell the reader what to check (for example "check the vendor's current documentation for the full list"). Never contrast your advice with the sources or say which parts are or are not from them (no "not figures from the sources", "rather than a rule from the sources", "source-specified" or "the sources do not give"): cite a sourced fact with its number and state everything else as plain advice. Do not claim uniqueness, competitor inferiority, or guaranteed traffic.`,
+    `- PRACTICAL VALUE: Give the reader a concrete answer and a useful next step: an evidence-grounded explanation, a decision framework with explicit trade-offs, or a reader-run check with inputs and observable results. Give a framework you propose as plain advice ("a simple way to decide is..."), never as an industry standard, and never add a sentence saying it is a recommendation rather than a standard. Never write about your sources, research or drafting process in the article (no "no external sources were verified for this draft", "the documentation we can verify", "the excerpt is truncated" or "the supplied evidence"). Give the specific answer (the name, number, step, setting or code) from the sources; when the sources don't give it, leave the point out. Never send the reader to "check the documentation", "consult the official docs" or "consult a professional" in place of an answer, and never add hedging filler or boilerplate disclaimers. Never contrast your advice with the sources or say which parts are or are not from them (no "not figures from the sources", "rather than a rule from the sources", "source-specified" or "the sources do not give"): cite a sourced fact with its number and state everything else as plain advice. Do not claim uniqueness, competitor inferiority, or guaranteed traffic.`,
     `- COMPARISONS: A documented capability does not establish that competing tools lack it or that it produces better results. Omit unsupported superlatives and comparative outcome claims. Where useful, propose a conditional test the reader can evaluate using their own data.`,
     // P231: a search for a kind of product names the products (convex/lib/sourceQuality.ts otherCompaniesRule).
     otherCompaniesRule(topic?.primaryKeyword),
