@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { detectGithubLayout, renderLayoutPost } from "../convex/lib/githubLayout.ts";
+import { detectGithubLayout, layoutArticleLive, renderLayoutPost } from "../convex/lib/githubLayout.ts";
 import { publicationDeliveryConfig } from "../convex/lib/publicationArtifact.ts";
 
 const ASTRO_CONFIG = `import { defineCollection } from 'astro:content';
@@ -82,3 +82,14 @@ test("P243 the publisher writes in the detected layout, detection follows GitHub
   assert.match(setup, />Review and paste instead<\/button>/);
   assert.match(setup, /const ready = state\.destination\.verified && state\.entitlement && !noBlog;/);
 });
+
+// P244: a stock Next.js blog sets its own <title> and description, so the exact renderer check failed a live article.
+test("P244 an article on a site's own blog layout is live when its page shows the article's opening words", () => {
+  const markdown = "Competitive keyword research is the process of finding which searches other sites already win, then deciding.\n\n## Next";
+  const page = "<html><head><title>Competitive Keyword Research | Next.js Blog Example</title></head><body><article><h1>Competitive Keyword Research</h1>" +
+    "<div><p>Competitive keyword research is the process of finding which searches other sites already win, then deciding.</p></div></article></body></html>";
+  assert.equal(layoutArticleLive(page, markdown), true);
+  assert.equal(layoutArticleLive(page.replace("Competitive keyword research is the process", "Something else entirely is"), markdown), false);
+  assert.match(readFileSync("convex/publisher.ts", "utf8"), /if \(site\.serviceMode === "growth_first" && site\.githubLayout\) \{\n        if \(!layoutArticleLive\(fetched\.text, article\.markdown\)\)/);
+});
+

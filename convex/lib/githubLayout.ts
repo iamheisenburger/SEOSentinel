@@ -183,3 +183,19 @@ export function renderLayoutPost(layout: GithubLayout, post: { slug: string; tit
   lines.push(`pentraDeliveryKey: ${JSON.stringify(post.deliveryKey)}`);
   return { path: `${layout.postsDir}/${name}`, content: `---\n${lines.join("\n")}\n---\n\n${post.markdown.trim()}\n` };
 }
+
+/** P244 (Oct 30 2026): a site whose own blog layout Pentra writes into renders the article with its own templates (page
+ * title, description, Markdown renderer, typography), so the exact renderer check Pentra uses for pages it formats
+ * itself cannot apply. The article counts as live when its URL serves its title (checked by the caller) and the opening
+ * words of its first paragraph. */
+export function layoutArticleLive(html: string, markdown: string): boolean {
+  const visible = (text: string) => text.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ")
+    .replace(/&#x27;|&#39;|&rsquo;|&lsquo;|[\u2018\u2019]/g, "'").replace(/&quot;|&ldquo;|&rdquo;|[\u201c\u201d]/g, '"')
+    .replace(/&amp;/g, "&").replace(/&nbsp;|&#160;/g, " ").replace(/[\u2013\u2014]/g, "-").replace(/\s+/g, " ").trim().toLowerCase();
+  const paragraph = markdown.split(/\n\s*\n/).map(p => p.trim()).find(p => p && !/^(#|>|\||-|\*|\d+\.|!\[|```|<)/.test(p));
+  if (!paragraph) return false;
+  const plain = visible(paragraph.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[*_`]/g, ""));
+  const opening = plain.split(" ").slice(0, 10).join(" ");
+  return opening.length > 20 && visible(html).includes(opening);
+}
+

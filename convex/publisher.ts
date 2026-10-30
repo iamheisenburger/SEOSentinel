@@ -1,5 +1,5 @@
 "use node";
-import { renderLayoutPost, type GithubLayout } from "./lib/githubLayout";
+import { layoutArticleLive, renderLayoutPost, type GithubLayout } from "./lib/githubLayout";
 import { ownerPublicationAuthorized } from "./lib/manualPublication";
 import { verifyLiveCreatedArticle, verifyLiveSelectedRestoration } from "./lib/publishedRevision";
 import { wordpressConditionalRequest, wordpressConditionalReceipt, preserveWordPressReviewedText } from "./lib/wordpressConditional";
@@ -3161,7 +3161,11 @@ export const verifyPublicPublicationInternal = internalAction({
         html: fetched.text,
         title: article.title,
       });
-      if (site.serviceMode === "growth_first") verifyLiveCreatedArticle({ expectedUrl: publicUrl, fetchedUrl: fetched.url, html: fetched.text, article, siteBrand: site.siteName });
+      // P244: a site whose own blog layout Pentra writes into renders the article with its own templates: it is live when
+      // its URL serves the title (above) and the opening of its first paragraph; other sites keep the exact renderer check.
+      if (site.serviceMode === "growth_first" && site.githubLayout) {
+        if (!layoutArticleLive(fetched.text, article.markdown)) throw new Error("The public page does not show the article's opening text");
+      } else if (site.serviceMode === "growth_first") verifyLiveCreatedArticle({ expectedUrl: publicUrl, fetchedUrl: fetched.url, html: fetched.text, article, siteBrand: site.siteName });
       const recorded = await ctx.runMutation(
         internal.articles.recordPublicPublicationCheck,
         {

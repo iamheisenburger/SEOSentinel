@@ -203,7 +203,7 @@ function FeatureRows() {
 
 const PLATFORMS = [
   { name: "WordPress", how: "Install the free Pentra plugin. Articles publish automatically and are confirmed live." },
-  { name: "GitHub sites", how: "Sites whose blog shows Markdown files from a content/blog folder. Pentra commits each article. Astro, Jekyll and Hugo layouts are being added." },
+  { name: "GitHub sites", how: "Next.js, Astro, Hugo and Jekyll blogs with Markdown posts. Pentra writes each article the way your blog keeps its posts and commits it." },
   { name: "Shopify, Webflow and Ghost", how: "Connect through the platform's official API in a few minutes. Articles publish to your blog automatically and are confirmed live." },
   { name: "Any other platform", how: "Wix, Squarespace and others. Pentra writes, you paste, and Pentra checks the page is live." },
   { name: "Google Search Console", how: "Clicks and positions for every page, so you see what each article and improvement changed." },
@@ -236,7 +236,7 @@ const faqs = [
   },
   {
     q: "Which websites does Pentra work with?",
-    a: "WordPress sites (with the free Pentra publisher plugin), Shopify stores, Webflow CMS sites, Ghost sites, and sites whose blog shows Markdown files from a content/blog folder in a GitHub repository (Astro, Jekyll and Hugo layouts are being added). On Wix, Squarespace or any other platform, Pentra researches and writes each article, you paste it into your blog, and Pentra checks it is live (automatic publishing there is coming soon).",
+    a: "WordPress sites (with the free Pentra publisher plugin), Shopify stores, Webflow CMS sites, Ghost sites, and Next.js, Astro, Hugo and Jekyll blogs that keep Markdown posts in a GitHub repository. On Wix, Squarespace or any other platform, Pentra researches and writes each article, you paste it into your blog, and Pentra checks it is live (automatic publishing there is coming soon).",
   },
   {
     q: "Is Autopilot safe for my brand?",

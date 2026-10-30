@@ -14,14 +14,14 @@ import {
 const platforms = [
   {
     id: "github",
-    name: "GitHub (a Markdown blog in content/blog)",
+    name: "GitHub (Next.js, Astro, Hugo or Jekyll Markdown blog)",
     icon: GitBranch,
     color: "#F7F8F8",
     steps: [
-      "Pentra commits each article to content/blog/[slug].md in your repository",
-      "Your site must already show Markdown posts from that folder (title, description and date in the frontmatter)",
+      "Pentra reads your repository and finds where your blog keeps its Markdown posts",
+      "Each article is written there the same way as your own posts (file name and frontmatter)",
       "Your site's normal build picks up each new file",
-      "Astro, Jekyll, Hugo and other blog layouts are being added; until then, choose Review first and paste",
+      "No Markdown blog yet? Pentra writes each article for you to review and paste",
     ],
   },
   {

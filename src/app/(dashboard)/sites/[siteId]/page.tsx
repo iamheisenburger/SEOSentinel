@@ -1394,7 +1394,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
                 {PLATFORM_CHOICES.map(([value, label]) => (
                   <button key={value} onClick={() => choose(value)} className={PLATFORM_CHOICE_CLS}>{label}</button>
                 ))}
-                <button onClick={connectGithub} className={PLATFORM_CHOICE_CLS}>GitHub (a Markdown blog in content/blog)</button>
+                <button onClick={connectGithub} className={PLATFORM_CHOICE_CLS}>GitHub (Next.js, Astro, Hugo or Jekyll blog)</button>
                 <button onClick={() => choose("manual")} className={PLATFORM_CHOICE_CLS}>Something else: paste the articles yourself</button>
               </div>
             </div>
