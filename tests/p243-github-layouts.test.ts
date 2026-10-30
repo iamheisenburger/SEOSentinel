@@ -91,7 +91,8 @@ test("P244 an article on a site's own blog layout is live when its page shows th
     "<div><p>Competitive keyword research is the process of finding which searches other sites already win, then deciding.</p></div></article></body></html>";
   assert.equal(layoutArticleLive(page, markdown), true);
   assert.equal(layoutArticleLive(page.replace("Competitive keyword research is the process", "Something else entirely is"), markdown), false);
-  assert.match(readFileSync("convex/publisher.ts", "utf8"), /if \(site\.serviceMode === "growth_first" && site\.githubLayout\) \{\n        if \(!layoutArticleLive\(fetched\.text, article\.markdown\)\)/);
+  // P258: hosted platforms (Webflow, Shopify, Ghost) take the same check.
+  assert.match(readFileSync("convex/publisher.ts", "utf8"), /if \(site\.serviceMode === "growth_first" && \(site\.githubLayout \|\| isApiCmsMethod\(site\.publishMethod\)\)\) \{\n        if \(!layoutArticleLive\(fetched\.text, article\.markdown\)\)/);
 });
 
 // P248 (Oct 30 2026): a Next.js blog whose posts come from Sanity (or another headless CMS) has no posts in the repository;

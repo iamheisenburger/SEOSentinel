@@ -3163,7 +3163,10 @@ export const verifyPublicPublicationInternal = internalAction({
       });
       // P244: a site whose own blog layout Pentra writes into renders the article with its own templates: it is live when
       // its URL serves the title (above) and the opening of its first paragraph; other sites keep the exact renderer check.
-      if (site.serviceMode === "growth_first" && site.githubLayout) {
+      // P258 (Oct 30 2026): so does a hosted platform (Webflow, Shopify, Ghost), which renders the post in its own template.
+      // Pentra's Webflow test post was live (200, title and opening shown) but its page has no single canonical link, so
+      // the exact check would never have marked it live. The platform's item receipt proves the exact write.
+      if (site.serviceMode === "growth_first" && (site.githubLayout || isApiCmsMethod(site.publishMethod))) {
         if (!layoutArticleLive(fetched.text, article.markdown)) throw new Error("The public page does not show the article's opening text");
       } else if (site.serviceMode === "growth_first") verifyLiveCreatedArticle({ expectedUrl: publicUrl, fetchedUrl: fetched.url, html: fetched.text, article, siteBrand: site.siteName });
       const recorded = await ctx.runMutation(
