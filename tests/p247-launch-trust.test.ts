@@ -88,3 +88,12 @@ test("P247 the article page shows one plain fact-check line, never the checker's
   assert.match(article, /const factCheckLine = article\.publicationGateStatus !== "passed" \? null/);
   assert.match(article, /Checked before publishing: every statistic appears in its cited source/);
 });
+
+// P248: Cowork's review of recent pentra.dev posts: a "Fact-checked" badge on posts with zero sources, and no author.
+test("P248 a post names who published it and claims a source check only when it cites sources", () => {
+  const page = read("src/app/blog/[slug]/page.tsx");
+  assert.doesNotMatch(page, /factCheckScore > 80/);
+  assert.match(page, /\{article\.sources && article\.sources\.length > 0 && \(/);
+  assert.match(page, /<span className="text-\[#8A8F98\]">By \{publisherName\}<\/span>/);
+});
+

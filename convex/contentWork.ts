@@ -2580,6 +2580,21 @@ export const advance = internalMutation({
         return { scheduled: 0, mode: "content_failure_backoff", eligibleAt: wakeAt };
       }
     }
+    // P248 (Oct 30 2026): a slot in a later month is prepared when that month begins (or SLOT_PREP_LEAD_MS before the
+    // slot, if sooner), so its article counts toward the month it publishes in. A new free-plan site read "2 of 3
+    // articles used" on its first day: Autopilot prepares two slots ahead, and the second (a week later, in November)
+    // was started, and counted, in October. The next article (nothing waiting) is never held back. The shorter of the
+    // stored and the plan's interval places the slot no later than admission would, so a slot this defers is surely
+    // in the later month.
+    if (waiting.length > 0) {
+      const { nextMonthStart } = usageMonthBounds();
+      const slotAt = schedule.nextDeadlineAt + waiting.length * Math.min(schedule.intervalMs, (await accountPlan(ctx, site)).autopilotIntervalMs);
+      const prepareAt = Math.min(nextMonthStart, slotAt - SLOT_PREP_LEAD_MS);
+      if (slotAt >= nextMonthStart && Date.now() < prepareAt) {
+        await ctx.scheduler.runAt(prepareAt, internal.autopilot.dispatchSiteFollowup, { siteId, trigger: "content_work", reason: "next_month_slot" });
+        return { scheduled: 0, mode: "buffer_full", eligibleAt: prepareAt };
+      }
+    }
     const pricing = await pricingConfiguration(ctx, site);
     if (!pricing) return { scheduled: 0, mode: "content_pricing_unavailable" };
     // A replacement slot is always a new article, never another improvement.

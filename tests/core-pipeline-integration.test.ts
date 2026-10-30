@@ -1523,6 +1523,36 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     assert.deepEqual(f.tables.account_content_usage, stored, "an unchanged count is not rewritten");
     f.assertOffline();
   });
+  // P248 (Oct 30 2026): a new free-plan site read "2 of 3 articles used" on its first day: the second slot, a week later
+  // in the next month, was prepared and counted in the first.
+  await t.test("a_later_months_slot_is_prepared_and_counted_in_that_month", async () => {
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+    const entitlement = f.tables.account_plan_entitlements.find(e => e.userId === f.get(f.sites[0].id)!.userId)!;
+    Object.assign(entitlement, { planFeatures: ["max_sites_1", "max_articles_3"], maxSites: 1, maxArticles: 3 });
+    f.get(f.sites[0].id)!.planFeatures = ["max_sites_1", "max_articles_3"];
+    const site = await selectGrowth(f);
+    Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+    f.setTime(Date.UTC(2026, 8, 30, 23));
+    // The next article (nothing prepared yet) is never held back: its slot is just after midnight.
+    f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 80 * 60_000;
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_fill");
+    const firstJob = f.tables.jobs.find(j => j.contentWork)!;
+    Object.assign(firstJob, { status: "done" }); firstJob.contentWork.stage = "ready";
+    f.get(site.id)!.contentSchedule.active = true;
+    assert.equal(f.get(site.id)!.contentSchedule.intervalMs, 86_400_000, "a daily pace: the second slot is Oct 2");
+    const september = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal(september.mode, "buffer_full", JSON.stringify(september));
+    assert.equal(september.eligibleAt, Date.UTC(2026, 9, 1), "prepared when October begins");
+    assert.equal(f.tables.jobs.filter(j => j.contentWork).length, 1, "October's second article is not started in September");
+    f.setTime(Date.UTC(2026, 9, 1, 0, 1));
+    const october = await f.invoke("contentWork:advance", { siteId: site.id });
+    assert.equal(october.mode, "buffer_fill", JSON.stringify(october));
+    const jobs = f.tables.jobs.filter(j => j.contentWork);
+    assert.equal(jobs.length, 2);
+    assert.equal(jobs[1].contentWork.deadlineAt, Date.UTC(2026, 9, 2, 0, 20));
+    assert.equal(await storedUsageMatchesLive(f, site.id), 1, "October counts only its own article");
+    f.assertOffline();
+  });
   await t.test("dashboard_shows_the_stored_monthly_usage", async () => {
     const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
     const site = await selectGrowth(f);
@@ -5930,7 +5960,10 @@ test("SLC38 original independent hold funds a recovered delivery and refill acro
     f.setIdentity(f.owner); await f.invoke("publisher:reverifyGithubConnectionInternal", { siteId: job.siteId });
     await f.invoke("contentWork:confirmCreditRestoration", creditConfirmation(f, job._id));
     await f.invoke("contentWork:control", await ownerCreditRetry(f, job._id));
-    await pumpUntil(f, () => f.get(job._id)!.contentWork.stage === "verified" && f.tables.jobs.filter(j => j.siteId === job.siteId && j.contentWork?.stage === "ready").length === 2, 240, restoredAt + 300_000);
+    // P248 (Oct 30 2026): a refill whose slot falls in a later month is prepared when that month begins (it counts toward
+    // the month it publishes in): restored on Sep 12, the second refill (a November slot) is prepared on Oct 1.
+    const refillBy = restoredAt < Date.UTC(2026, 9, 1) ? Date.UTC(2026, 9, 1, 0, 5) : restoredAt + 300_000;
+    await pumpUntil(f, () => f.get(job._id)!.contentWork.stage === "verified" && f.tables.jobs.filter(j => j.siteId === job.siteId && j.contentWork?.stage === "ready").length === 2, 240, refillBy);
     const c = f.get(job._id)!.contentWork;
     assert.equal(c.deadlineAt, job.contentWork.deadlineAt); assert.ok(c.publishedAt > c.deadlineAt);
     assert.equal(JSON.stringify(f.get(job.providerSpendReservationId)), hold); assert.equal(JSON.stringify(f.get(f.args.authorizationId)), grant);

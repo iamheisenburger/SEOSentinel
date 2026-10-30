@@ -93,3 +93,20 @@ test("P244 an article on a site's own blog layout is live when its page shows th
   assert.match(readFileSync("convex/publisher.ts", "utf8"), /if \(site\.serviceMode === "growth_first" && site\.githubLayout\) \{\n        if \(!layoutArticleLive\(fetched\.text, article\.markdown\)\)/);
 });
 
+// P248 (Oct 30 2026): a Next.js blog whose posts come from Sanity (or another headless CMS) has no posts in the repository;
+// a commit there would never show, so setup names the CMS and offers review and paste.
+test("P248 a blog whose posts come from a headless CMS is named, never connected", () => {
+  const pkg = (deps: Record<string, string>) => JSON.stringify({ name: "site", dependencies: { next: "15.0.0", ...deps } });
+  const sanity = detectGithubLayout({ paths: ["next.config.js", "package.json", "app/blog/[slug]/page.tsx", "sanity.config.ts"], files: { "package.json": pkg({ "next-sanity": "9.0.0" }) } });
+  assert.equal(!sanity.ok && sanity.reason, "headless_cms");
+  assert.equal(!sanity.ok && sanity.detail, "Your blog's posts come from Sanity, not from files in this repository, so Pentra can't publish them automatically yet.");
+  const contentful = detectGithubLayout({ paths: ["package.json", "src/pages/blog.tsx"], files: { "package.json": pkg({ contentful: "10.0.0" }) } });
+  assert.equal(!contentful.ok && contentful.reason, "headless_cms", "no framework config, but the CMS is still named");
+  assert.equal(detectGithubLayout({ paths: ["next.config.js", "package.json"], files: { "package.json": pkg({}) } }).ok, false);
+  assert.equal((detectGithubLayout({ paths: ["next.config.js", "package.json"], files: { "package.json": pkg({}) } }) as { reason: string }).reason, "no_posts");
+  const withPosts = { ...STARTERS.nextjs, files: { ...STARTERS.nextjs.files, "package.json": pkg({ "@sanity/client": "6.0.0" }) } };
+  assert.equal(detectGithubLayout(withPosts).ok, true, "Markdown posts in the repository still win");
+  assert.match(readFileSync("convex/githubLayoutDetect.ts", "utf8"), /"src\/content\/config\.ts", "package\.json"\]\) \{/);
+  assert.match(readFileSync("src/components/pentra-setup-choice.tsx", "utf8"), /\{noBlog\.reason === "headless_cms" \? noBlog\.detail : <>We couldn&apos;t find/);
+});
+

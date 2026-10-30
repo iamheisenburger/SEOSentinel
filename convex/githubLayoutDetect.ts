@@ -66,7 +66,8 @@ export const detectSiteGithubLayout = internalAction({ args: { siteId: v.id("sit
   }
   const files: Record<string, string> = {};
   const framework = detectFramework(paths);
-  for (const config of ["src/content.config.ts", "src/content.config.mjs", "src/content/config.ts"]) {
+  // P248: package.json names a headless CMS when the blog's posts live there instead of in the repository.
+  for (const config of ["src/content.config.ts", "src/content.config.mjs", "src/content/config.ts", "package.json"]) {
     if (paths.includes(config)) try { files[config] = await githubText(token, owner, repo, config, context.branch); } catch { /* optional */ }
   }
   const folder = framework ? postFolders(framework, paths, files)[0] : undefined;

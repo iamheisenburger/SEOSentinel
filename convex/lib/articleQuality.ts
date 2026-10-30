@@ -2045,6 +2045,10 @@ const READER_VISIBLE_PIPELINE_TEXT: RegExp[] = [
   // say is the pipeline talking, not guidance for the reader.
   /\b(?:not|rather than)\s+(?:an?\s+)?(?:figures?|numbers?|rules?|data|facts?|requirements?|guidance|thresholds?|values?)\s+(?:taken\s+)?(?:from|in|given by|stated in)\s+the\s+(?:cited\s+|listed\s+|extension\s+|above\s+)?sources?\b/i,
   /\bsource-(?:specified|stated|backed|derived|given)\b/i,
+  // P248 (Oct 30 2026): the writer was told to label proposed frameworks "as recommendations, not established industry
+  // facts", and 4 of pentra.dev's 34 live articles said so in one stock sentence ("The framework is the author's
+  // recommendation, not an industry standard"). Cowork's launch audit read it as boilerplate.
+  /\brecommendations?,?\s+(?:not|rather than)\s+(?:an?\s+)?(?:industry|official|universal|established|formal)\s+(?:standards?|rules?|benchmarks?|requirements?|best[- ]practices?|facts?)\b/i,
   /\bthe\s+(?:cited\s+|listed\s+|above\s+)?sources?\s+(?:do|does|did)\s*(?:not|n't)\s+(?:give|say|state|specify|provide|cover|offer|mention|include|list)\b/i,
   // P168 (Oct 23 2026): told to leave out the company behind a cited help page
   // (P162), a LeadPilot draft wrote "That documentation says a lead is ..." and

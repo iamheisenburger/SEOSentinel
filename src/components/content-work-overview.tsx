@@ -54,6 +54,7 @@ function FirstDraft({ siteId, reviewToken, maximumMicroUsd }: { siteId: Id<"site
   </div>;
 }
 
+const readyToRead = (w: { stage: string; articleId?: string | null }): w is { stage: string; articleId: string } => w.stage === "ready" && Boolean(w.articleId);
 export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
   const state = useVisibleQuery(api.contentWork.readiness, { siteId });
   if (!state || state.siteId !== siteId) return <p className={BODY}>Loading your content service…</p>;
@@ -109,15 +110,19 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
         {s?.ownerReviewedOnly && !upcoming.length && !published.length && typeof state.ownerDraft?.maximumMicroUsd === "number"
           ? <FirstDraft siteId={siteId} reviewToken={state.reviewToken} maximumMicroUsd={state.ownerDraft.maximumMicroUsd} />
           : s?.ownerReviewedOnly ? <p className={BODY}>Request, review and publish from <Link className="text-[#0EA5E9] hover:underline" href="/articles">Articles</Link>. Nothing publishes automatically.</p>
-          : simple ? <p className={BODY}>{upcoming.length ? "Pentra is preparing your next articles."
+          : simple ? <p className={BODY}>{upcoming.length ? (published.length ? "Pentra is preparing your next articles."
+              : "Read your first article here as soon as it's ready. It goes live on your site at the time shown.")
             : quotaUsed ? <>You&apos;ve used all {planPerMonth} articles in your plan this month{s ? <>, so the next one starts {when(s.nextDeadlineAt)}</> : null}. <Link className="text-[#0EA5E9] hover:underline" href="/upgrade">Upgrade for more articles</Link>.</>
             : "Pentra will start preparing your next article shortly."}</p>
           : <p className={BODY}>{delivery.label}. Articles ready to publish: {state.complete ? `${state.ready} of 2` : "unknown (history incomplete)"}.</p>}
         {s && !s.ownerReviewedOnly && !simple && <p className={BODY}>Next delivery due: {shownTime(s.nextDeadlineAt, zone)} ({zone}). {s.nextDeadlineAt < state.funding.checkedAt && <span role="alert" className="text-[#F59E0B]">Overdue. The missed deadline stays on record.</span>}</p>}
         {!upcoming.length && !s?.ownerReviewedOnly && !simple && <p className={BODY}>No upcoming item is prepared yet.</p>}
         {upcoming.length > 0 && <ul className="divide-y divide-white/[0.06] text-[14px]">{upcoming.map(w => <li key={w.jobId} className={plain && w.title ? "space-y-1 py-2.5" : "flex items-center justify-between gap-3 py-2"}>
-          {plain && w.title ? <p className="text-[#F7F8F8]">{topicTitle(w.title)}</p> : <span className="text-[#F7F8F8]">{workLabel(w)}</span>}
-          <span className="flex items-center gap-1.5 text-[12px] text-[#8A8F98]">{plain && <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${w.stage === "ready" ? "bg-[#4CB782]" : "bg-[#0EA5E9]"}`} />}{stageLabel(w.stage)}{simple ? (w.stage === "ready" ? ` · goes live ${friendlyTime(w.deadlineAt, zone)}` : "") : ` · due ${shownTime(w.deadlineAt, zone)}`}</span></li>)}</ul>}
+          {/* P248 (Oct 30 2026): a new user's first article was ready minutes after Start but only said "goes live" two hours
+              later, so the first session ended with nothing to read. A ready article opens from here. */}
+          {plain && w.title ? <p className="text-[#F7F8F8]">{readyToRead(w) ? <Link className="hover:text-[#0EA5E9]" href={`/articles/${w.articleId}`}>{topicTitle(w.title)}</Link> : topicTitle(w.title)}</p> : <span className="text-[#F7F8F8]">{workLabel(w)}</span>}
+          <span className="flex items-center gap-1.5 text-[12px] text-[#8A8F98]">{plain && <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${w.stage === "ready" ? "bg-[#4CB782]" : "bg-[#0EA5E9]"}`} />}{stageLabel(w.stage)}{simple ? (w.stage === "ready" ? ` · goes live ${friendlyTime(w.deadlineAt, zone)}` : "") : ` · due ${shownTime(w.deadlineAt, zone)}`}
+            {plain && readyToRead(w) && <> · <Link className="text-[#0EA5E9] hover:underline" href={`/articles/${w.articleId}`}>Read it now</Link></>}</span></li>)}</ul>}
         {heldBack.length > 0 && <div className="mt-3 space-y-1.5" aria-label="Held back drafts">
           <p className="text-[12px] text-[#8A8F98]">Held back, not published: these drafts didn&apos;t pass Pentra&apos;s quality review (facts, sources and editing), so Pentra moved on to another topic. Held-back drafts don&apos;t count toward your monthly articles.</p>
           <ul className="space-y-1 text-[13px]">{heldBack.map(w => <li key={w.jobId}><Link className="text-[#0EA5E9] hover:underline" href={`/articles/${w.articleId}`}>{w.title ? topicTitle(w.title) : "Held-back draft"}</Link><span className="text-[#62666D]"> · see the reviewer&apos;s notes</span></li>)}</ul>

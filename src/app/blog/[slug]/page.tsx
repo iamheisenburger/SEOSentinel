@@ -362,6 +362,8 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
         </h1>
 
         <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-white/[0.06] pb-8 text-[13px] text-[#62666D]">
+          {/* P248 (Oct 30 2026): no post named who published it (Cowork's launch audit); the schema already did. */}
+          <span className="text-[#8A8F98]">By {publisherName}</span>
           <span className="flex items-center gap-1.5">
             <Calendar className="h-3.5 w-3.5" />
             {format(new Date(article.createdAt), "MMMM d, yyyy")}
@@ -372,10 +374,12 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
               {article.readingTime} min read
             </span>
           )}
-          {article.factCheckScore && article.factCheckScore > 80 && (
+          {/* P248: "Fact-checked" showed from the model's own score, on posts that cite no source at all. The badge now
+              says what Autopilot's publication check establishes: each statistic appears in the source it cites. */}
+          {article.sources && article.sources.length > 0 && (
             <span className="flex items-center gap-1.5 text-[#4CB782]">
               <CheckCircle2 className="h-3.5 w-3.5" />
-              Fact-checked
+              {article.sources.length} {article.sources.length === 1 ? "source" : "sources"} checked
             </span>
           )}
         </div>

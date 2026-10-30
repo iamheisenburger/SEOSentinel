@@ -86,7 +86,7 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
         {" "}Pentra writes your first article as soon as you press Start, and you paste it into your site (Review first). Connect your website later to publish automatically.</li>}
       {step(state.entitlement, "Plan active", <Link className="ml-1 underline" href="/settings/billing">Check billing</Link>)}
       {noBlog && <li role="status" className="space-y-2 rounded-lg border border-[#F59E0B]/30 bg-[#F59E0B]/[0.06] p-3 text-[#F7F8F8]">
-        <p>We couldn&apos;t find a Markdown blog in your repository that Pentra can publish to automatically.{noBlog.reason === "no_posts" ? " Your site doesn't show Markdown posts yet." : ""} {noBlog.detail}</p>
+        <p>{noBlog.reason === "headless_cms" ? noBlog.detail : <>We couldn&apos;t find a Markdown blog in your repository that Pentra can publish to automatically.{noBlog.reason === "no_posts" ? " Your site doesn't show Markdown posts yet." : ""} {noBlog.detail}</>}</p>
         <p className="text-[#8A8F98]">Pentra can write each article for you to review and paste into your site, and publish automatically once your blog is set up.</p>
         <p className="flex flex-wrap gap-3"><button type="button" className="underline disabled:opacity-50" disabled={busy} onClick={usePaste}>Review and paste instead</button>
           <Link className="underline" href={`/sites/${state.siteId}?tab=settings`}>Try another repository</Link></p>

@@ -25,7 +25,7 @@ export type GithubLayout = {
 export type RepoSnapshot = { paths: string[]; files: Record<string, string> };
 export type LayoutDetection =
   | { ok: true; layout: GithubLayout; sampleUrls: string[] }
-  | { ok: false; reason: "no_posts" | "mdx_only" | "unsupported"; detail: string };
+  | { ok: false; reason: "no_posts" | "mdx_only" | "unsupported" | "headless_cms"; detail: string };
 
 const MARKDOWN = /\.(md|markdown|mdx)$/i;
 const IGNORED = /(^|\/)(node_modules|\.git|\.github|vendor|public|dist|build|out|\.next|_site|resources|themes)\//;
@@ -126,11 +126,34 @@ export function urlStructureFor(framework: GithubLayoutFramework, postsDir: stri
   return "/blog/[slug]/"; // Jekyll: each post carries its own permalink (renderLayoutPost)
 }
 
+/** P248 (Oct 30 2026): many Next.js and Gatsby blogs load their posts from a headless CMS, not from files in the
+ * repository, so a commit would never show. The CMS is named from the site's own package.json. */
+const HEADLESS_CMS: [RegExp, string][] = [
+  [/^(sanity|next-sanity|@sanity\/client)$/, "Sanity"], [/^(contentful|@contentful\/rich-text-react-renderer)$/, "Contentful"],
+  [/^(@notionhq\/client|notion-client|react-notion-x|notion-to-md)$/, "Notion"], [/^@tryghost\/(content|admin)-api$/, "Ghost"],
+  [/^@prismicio\/(client|next|react)$/, "Prismic"], [/^(@storyblok\/(react|js)|storyblok-js-client)$/, "Storyblok"],
+  [/^(react-datocms|@datocms\/cma-client)$/, "DatoCMS"], [/^(payload|@payloadcms\/next)$/, "Payload"],
+  [/^@faustwp\/(core|cli)$/, "WordPress (headless)"], [/^@builder\.io\/(react|sdk)$/, "Builder.io"],
+  [/^@directus\/sdk$/, "Directus"], [/^(contentstack|@contentstack\/delivery-sdk)$/, "Contentstack"],
+  [/^@strapi\/(client|strapi)$/, "Strapi"], [/^@hubspot\/api-client$/, "HubSpot"],
+];
+export function headlessCms(packageJson: string | undefined): string | null {
+  if (!packageJson) return null;
+  try {
+    const pkg = JSON.parse(packageJson) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+    const names = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+    return HEADLESS_CMS.find(([re]) => names.some(name => re.test(name)))?.[1] ?? null;
+  } catch { return null; }
+}
+
 export function detectGithubLayout(snapshot: RepoSnapshot): LayoutDetection {
   const framework = detectFramework(snapshot.paths);
-  if (!framework) return { ok: false, reason: "unsupported", detail: "No Astro, Hugo, Jekyll, Next.js or Gatsby configuration was found." };
+  const cms = headlessCms(snapshot.files["package.json"]);
+  const fromCms = (name: string): LayoutDetection => ({ ok: false, reason: "headless_cms",
+    detail: `Your blog's posts come from ${name}, not from files in this repository, so Pentra can't publish them automatically yet.` });
+  if (!framework) return cms ? fromCms(cms) : { ok: false, reason: "unsupported", detail: "No Astro, Hugo, Jekyll, Next.js or Gatsby configuration was found." };
   const folders = postFolders(framework, snapshot.paths, snapshot.files);
-  if (!folders.length) return { ok: false, reason: "no_posts", detail: "No Markdown blog posts were found in the repository." };
+  if (!folders.length) return cms ? fromCms(cms) : { ok: false, reason: "no_posts", detail: "No Markdown blog posts were found in the repository." };
   const postsDir = folders[0];
   const inDir = snapshot.paths.filter(p => p.startsWith(postsDir + "/") && MARKDOWN.test(p) && !IGNORED.test(p) &&
     (!NOT_A_POST.test(p) || /\/index\.(md|mdx)$/i.test(p) && p.split("/").length === postsDir.split("/").length + 2));
