@@ -14,7 +14,9 @@ export const layoutContext = internalQuery({ args: { siteId: v.id("sites") }, ha
   const layout = site.githubLayout as (GithubLayout & { repo?: string }) | undefined;
   return { hasPublished: published.length > 0, domain: site.domain, repo: site.repoOwner && site.repoName ? `${site.repoOwner}/${site.repoName}` : null,
     branch: site.repoDefaultBranch ?? null, publishMethod: site.publishMethod ?? "github", layoutRepo: layout?.repo ?? null,
-    failureAt: site.githubLayoutFailure?.at ?? null };
+    // P257 (Oct 30 2026): the pause between checks applies to the same repository only. Cowork switched from a Contentful
+    // template to its Jekyll blog within 10 minutes, the new repository was never read, and the Contentful message stayed.
+    failureAt: site.githubLayoutFailure && site.githubLayoutFailure.repo === `${site.repoOwner}/${site.repoName}` ? site.githubLayoutFailure.at : null };
 } });
 
 export const recordLayout = internalMutation({ args: { siteId: v.id("sites"), repo: v.string(), layout: v.optional(v.any()),
@@ -27,7 +29,7 @@ export const recordLayout = internalMutation({ args: { siteId: v.id("sites"), re
     await ctx.db.patch(siteId, { githubLayout: { ...layout, repo }, githubLayoutFailure: undefined,
       urlStructure: (layout as GithubLayout).urlStructure, updatedAt: Date.now() });
   } else if (failure) {
-    await ctx.db.patch(siteId, { githubLayout: undefined, githubLayoutFailure: { ...failure, at: Date.now() }, updatedAt: Date.now() });
+    await ctx.db.patch(siteId, { githubLayout: undefined, githubLayoutFailure: { ...failure, repo, at: Date.now() }, updatedAt: Date.now() });
   }
   return { recorded: true };
 } });

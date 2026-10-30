@@ -16,7 +16,7 @@ export const money = (value: number | null) => value === null ? "Unknown" : `$${
 export const shownTime = (value: number, zone = "UTC") => new Intl.DateTimeFormat("en", { timeZone: zone, dateStyle: "medium", timeStyle: "long" }).format(value);
 export const fundingCopy = { available: "Internal capacity currently available; every paid admission rechecks it.", blocked: "Admission blocked by the existing spending or entitlement guards.", unknown: "Funding readiness unknown. No extra spending is authorized.", unconfigured: "Provider pricing is not configured. Preparation is not funded." };
 export const workLabel = (w: { intent: string; operation?: string }) => w.operation === "rollback" ? "Rollback" : w.operation === "factual_correction" ? "Factual correction" : w.operation === "technical_repair" ? "Broken-link repair" : w.operation === "reader_text_repair" ? "Wording repair" : w.operation === "related_reading_titles" ? "Link title repair" : w.intent === "improve" ? "Page improvement" : "New article";
-export const stageLabel = (stage: string) => ({ prepare: "Preparing", review: "Quality review", review_failed: "Revision needed", ready: "Reviewed and ready", publish: "Publishing", verify: "Checking the live page", verified: "Live and verified", failed: "Needs your review" }[stage] ?? "State needs review");
+export const stageLabel = (stage: string) => ({ prepare: "Preparing", review: "Checking facts and sources", review_failed: "Pentra is revising it", ready: "Reviewed and ready", publish: "Publishing", verify: "Checking the live page", verified: "Live and verified", failed: "Needs your review" }[stage] ?? "State needs review");
 
 /** Friendly date for customers: "Thu, Sep 25, 6:19 PM". */
 export const friendlyTime = (value: number, zone = viewerZone()) =>
@@ -51,6 +51,18 @@ function FirstDraft({ siteId, reviewToken, maximumMicroUsd }: { siteId: Id<"site
       className="rounded-lg bg-[#0EA5E9] px-3.5 py-2 text-[14px] font-medium text-white transition hover:bg-[#0EA5E9]/90 disabled:opacity-60">
       {busy ? "Starting…" : "Write my first article"}</button>
     {message && <p role="status" className={BODY}>{message}</p>}
+  </div>;
+}
+
+/** P256 (Oct 30 2026): a Review-first owner's latest draft, to read from the overview. Cowork's fresh account wrote its
+ * first article, which then appeared on no card while the overview offered "Write my first article" again. */
+const OPEN_DRAFT_STAGES = ["prepare", "review", "review_failed", "publish", "verify"];
+function LatestDraft({ latest }: { latest: { articleId?: string | null; title?: string | null; readable?: boolean; issue?: string | null } }) {
+  const href = latest.readable && latest.articleId ? `/articles/${latest.articleId}` : null;
+  return <div className="space-y-1 text-[14px]">
+    <p className="text-[#F7F8F8]">{href ? <Link className="hover:text-[#0EA5E9]" href={href}>{latest.title ?? "Your draft"}</Link> : latest.title ?? "Your draft"}</p>
+    <p className="text-[12px] text-[#8A8F98]">{latest.issue}{href && <> · <Link className="text-[#0EA5E9] hover:underline" href={href}>Read it now</Link></>}</p>
+    <p className={BODY}>Request more drafts from <Link className="text-[#0EA5E9] hover:underline" href="/articles">Articles</Link>. Nothing publishes until you approve it.</p>
   </div>;
 }
 
@@ -107,7 +119,9 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
     <div className="grid gap-4 md:grid-cols-2 md:items-start">
       <div className="space-y-4">
       <section className={CARD}><h2 className={H2}>Upcoming work</h2>
-        {s?.ownerReviewedOnly && !upcoming.length && !published.length && typeof state.ownerDraft?.maximumMicroUsd === "number"
+        {s?.ownerReviewedOnly && state.ownerDraft?.latest && (state.ownerDraft.latest.readable || OPEN_DRAFT_STAGES.includes(state.ownerDraft.latest.stage))
+          ? <LatestDraft latest={state.ownerDraft.latest} />
+          : s?.ownerReviewedOnly && !upcoming.length && !published.length && typeof state.ownerDraft?.maximumMicroUsd === "number"
           ? <FirstDraft siteId={siteId} reviewToken={state.reviewToken} maximumMicroUsd={state.ownerDraft.maximumMicroUsd} />
           : s?.ownerReviewedOnly ? <p className={BODY}>Request, review and publish from <Link className="text-[#0EA5E9] hover:underline" href="/articles">Articles</Link>. Nothing publishes automatically.</p>
           : simple ? <p className={BODY}>{upcoming.length ? (published.length ? "Pentra is preparing your next articles."

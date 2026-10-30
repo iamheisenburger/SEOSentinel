@@ -77,14 +77,17 @@ test("P247 homepage claims are true as written, the typo is gone, and each publi
 
 test("P247 Settings keeps the platform chosen at setup and names the folder Pentra writes to; /articles matches Autopilot", () => {
   const settings = read("src/app/(dashboard)/sites/[siteId]/page.tsx");
-  assert.match(settings, /\{site\.githubLayout\?\.postsDir \?\? githubContentFolder\(site\.urlStructure\)\}\//);
+  // P257: the folder Pentra found in the current repository; a site that already publishes keeps its folder.
+  assert.match(settings, /\{site\.githubBlog\?\.state === "detected" \? site\.githubBlog\.postsDir : githubContentFolder\(site\.urlStructure\)\}\//);
   assert.match(settings, />Connect GitHub<\/button>/);
   assert.match(read("src/app/(dashboard)/articles/page.tsx"), /readiness\.autopilot\?\.on \? "Autopilot publishes your scheduled articles\./);
 });
 
 test("P247 the article page shows one plain fact-check line, never the checker's notes or score", () => {
   const article = read("src/app/(dashboard)/articles/[id]/page.tsx");
-  assert.doesNotMatch(article, /Fact-check score \{|Fact-Check Notes|factCheckNotes/);
+  assert.doesNotMatch(article, /Fact-check score \{|Fact-Check Notes|\{article\.factCheckNotes\}/);
+  // P256: the notes are read only for the draft's own sentences the check could not source, never shown themselves.
+  assert.equal(article.match(/factCheckNotes/g)?.length, article.match(/unverifiedClaimsFromFactCheckNotes\(article\.factCheckNotes\)/g)?.length);
   assert.match(article, /const factCheckLine = article\.publicationGateStatus !== "passed" \? null/);
   assert.match(article, /Checked before publishing: every statistic appears in its cited source/);
 });

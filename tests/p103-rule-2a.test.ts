@@ -82,7 +82,7 @@ test("product claims: numbers about the customer's product must be in the confir
 // go uncited. When it failed on an unrelated sentence, pentra.dev's own
 // confirmed facts ("a pace from 1 to 21 articles a week", "3 articles a month")
 // held 2 of 3 drafts. Under rule 2a the ledger is a note for Autopilot; the
-// confirmed profile is the evidence. Owner review keeps its bar.
+// confirmed profile is the evidence. P256 (Oct 30 2026): owner review follows the same rule.
 test("P114 Autopilot accepts uncited product quantities the confirmed profile states; anything else still blocks", async () => {
   const { evaluatePublicationQuality, ownerWaivableIssue } = await import("../convex/lib/articleQuality.ts");
   const profile = "Name: Pentra\n\nDomain: pentra.dev\n\nPricing: 3 articles/month free tier (no credit card required).\n\n" +
@@ -94,9 +94,8 @@ test("P114 Autopilot accepts uncited product quantities the confirmed profile st
   const product = "You then choose Autopilot or Review first, and a pace from 1 to 21 articles a week. Pentra has a free plan with 3 articles a month and no credit card required.";
   const issue = uncitedIssue(draft(product));
   assert.ok(issue, "the strict gate still reports the uncited quantities");
-  assert.equal(ownerWaivableIssue(issue!, draft(product), "autopilot"), true, "confirmed product facts pass although the ledger failed");
-  assert.equal(ownerWaivableIssue(issue!, draft(product), "owner"), false, "owner review keeps its bar");
-  assert.equal(ownerWaivableIssue(issue!, draft(product, "not-the-hash"), "autopilot"), false, "an unverifiable profile proves nothing");
+  assert.equal(ownerWaivableIssue(issue!, draft(product)), true, "confirmed product facts pass although the ledger failed (Autopilot and, since P256, the owner)");
+  assert.equal(ownerWaivableIssue(issue!, draft(product, "not-the-hash")), false, "an unverifiable profile proves nothing");
   for (const [markdown, why] of [
     [`${product} Teams that publish weekly increase sign-ups by 40%.`, "a third-party statistic in the same paragraph"],
     [`${product}\n\nOther tools increase sign-ups by 40%.`, "a third-party statistic in another paragraph"],
@@ -105,7 +104,7 @@ test("P114 Autopilot accepts uncited product quantities the confirmed profile st
   ] as const) {
     const article = draft(markdown), found = uncitedIssue(article);
     assert.ok(found, why);
-    assert.equal(ownerWaivableIssue(found!, article, "autopilot"), false, why);
+    assert.equal(ownerWaivableIssue(found!, article), false, why);
   }
 });
 

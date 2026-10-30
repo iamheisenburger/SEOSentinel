@@ -1249,8 +1249,10 @@ test("SLC58 public customer pricing runs beside a scoped owner validation grant 
   f.assertOffline();
 });
 
-test("SLC59 owners can accept style-only reviewer notes on the exact draft; factual failures still block", async t => {
-  for (const scenario of ["style_only", "factual"] as const) await t.test(scenario, async () => {
+// P256 (Oct 30 2026): rule 2a for the owner too. Scores and the claim audit are notes the owner's Approve accepts on the
+// exact draft (Cowork's fresh account could not approve a first draft at editorial 62); an objective problem still blocks.
+test("SLC59 owners approve a draft whose open points are notes, at any score; an objective problem still blocks", async t => {
+  for (const scenario of ["notes_only", "objective"] as const) await t.test(scenario, async () => {
     const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
     const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
     f.setIdentity(saved.userId);
@@ -1263,30 +1265,63 @@ test("SLC59 owners can accept style-only reviewer notes on the exact draft; fact
     await pumpUntil(f, () => ["ready", "failed"].includes(f.get(requested.jobId)!.contentWork.stage));
     const job = f.get(requested.jobId)!, article = f.get(job.articleId)!;
     assert.equal(job.contentWork.stage, "ready", diagnostic(f));
-    // Reproduce the production outcome: a clean fact check, editorial 84, no claim ledger.
+    // Reproduce the production outcome: low scores and no claim ledger (Cowork's first draft: editorial 62, fact 78).
     Object.assign(article, { status: "review", publicationGateStatus: "blocked", auditedContentHash: undefined,
-      editorialQualityScore: 84, claimEvidenceStatus: undefined, factCheckScore: scenario === "factual" ? 60 : 92 });
+      editorialQualityScore: 62, claimEvidenceStatus: undefined, factCheckScore: 60,
+      ...(scenario === "objective" ? { markdown: `${article.markdown}\n\nThe preserved excerpts confirm every step above.\n` } : {}) });
     Object.assign(job, { status: "failed" }); job.contentWork = { ...job.contentWork, stage: "failed", failure: "bounded_content_quality_exhausted", approvedArtifactHash: undefined };
     const hash = publicationArtifactHash(f.get(job.articleId)! as never);
     await assert.rejects(f.invoke("articles:acceptOwnerReviewNotes", { articleId: job.articleId, artifactHash: "stale" }), /changed/);
-    if (scenario === "factual") {
-      await assert.rejects(f.invoke("articles:acceptOwnerReviewNotes", { articleId: job.articleId, artifactHash: hash }), /Fact-check score is 60/);
+    if (scenario === "objective") {
+      await assert.rejects(f.invoke("articles:acceptOwnerReviewNotes", { articleId: job.articleId, artifactHash: hash }),
+        /Fix this first: Text meant for Pentra, not readers, appears in the article/);
       assert.equal(f.get(job.articleId)!.status, "review");
       await assert.rejects(f.invoke("actions/pipeline:publishApproved", { siteId: site.id, articleId: job.articleId }));
       assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 0);
       return;
     }
     const accepted = await f.invoke("articles:acceptOwnerReviewNotes", { articleId: job.articleId, artifactHash: hash });
-    assert.equal(accepted.accepted, 2);
+    assert.equal(accepted.accepted, 3);
     assert.equal(f.get(job.articleId)!.status, "ready");
-    assert.deepEqual(f.get(job.articleId)!.ownerQualityWaiver.issues.sort(), [
-      "Editorial quality score is 84; strict minimum is 85.", "Strict publication requires a completed claim-to-evidence audit."]);
+    assert.deepEqual(f.get(job.articleId)!.ownerQualityWaiver.issues.sort(), ["Editorial quality score is 62; strict minimum is 85.",
+      "Fact-check score is 60; strict minimum is 85.", "Strict publication requires a completed claim-to-evidence audit."]);
     assert.equal(f.repositories.get(site.name.toLowerCase())!.writes, 0, "acceptance alone never publishes");
     await f.invoke("actions/pipeline:publishApproved", { siteId: site.id, articleId: job.articleId });
     await pumpUntil(f, () => f.get(job.articleId)!.publicUrlStatus === "verified");
     assert.equal(f.get(requested.jobId)!.contentWork.stage, "verified");
     f.assertOffline();
   });
+});
+
+// P257 (Oct 30 2026): Cowork's fresh account picked a Contentful template, then its Jekyll blog: the Contentful message
+// stayed (the new repository was never read: the 10-minute pause between checks spanned repositories), Settings said
+// content/blog, and Start did nothing.
+test("P257 a repository's blog result belongs to that repository: switching clears it, and Start says why it can't start", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  const repo = `${saved.repoOwner}/${saved.repoName}`;
+  await f.invoke("githubLayoutDetect:recordLayout", { siteId: site.id, repo, failure: { reason: "headless_cms",
+    detail: "Your blog's posts come from Contentful, not from files in this repository, so Pentra can't publish them automatically yet." } });
+  assert.equal(f.get(site.id)!.githubLayoutFailure.repo, repo, "a failure names its repository");
+  let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  assert.match(r.destination.layoutFailure.detail, /Contentful/);
+  assert.equal((await f.invoke("sites:get", { siteId: site.id })).githubBlog.state, "failed");
+  await assert.rejects(f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true,
+    reviewToken: r.reviewToken, autopilot: true }), /Contentful.*Choose Review and paste instead, or try another repository in Settings\./);
+  assert.notEqual((await f.invoke("githubLayoutDetect:layoutContext", { siteId: site.id })).failureAt, null, "the same repository waits between checks");
+  // Another repository: nothing read from the old one is shown or used, and the new one is read at once.
+  await f.invoke("sites:upsert", { id: site.id, domain: saved.domain, publishMethod: "github", repoOwner: saved.repoOwner, repoName: `${saved.repoName}-blog` });
+  assert.equal(f.get(site.id)!.githubLayoutFailure, undefined);
+  assert.equal((await f.invoke("githubLayoutDetect:layoutContext", { siteId: site.id })).failureAt, null);
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  assert.equal(r.destination.layoutFailure, null);
+  assert.equal((await f.invoke("sites:get", { siteId: site.id })).githubBlog.state, "unchecked", "never content/blog for a repository Pentra never read");
+  // A result recorded for another repository never shows for this one.
+  f.get(site.id)!.githubLayoutFailure = { reason: "headless_cms", detail: "Contentful", at: f.now(), repo };
+  assert.equal((await f.invoke("contentWork:readiness", { siteId: site.id })).destination.layoutFailure, null);
+  assert.equal((await f.invoke("githubLayoutDetect:layoutContext", { siteId: site.id })).failureAt, null);
+  f.setIdentity(null); f.assertOffline();
 });
 
 test("SLC61 new customers choose Autopilot with a plan-derived rhythm and can switch to Review first and back", async () => {
@@ -1947,7 +1982,9 @@ test("P144 a draft records what its research produced, including an official pag
   await pumpUntil(f, () => f.tables.jobs.some(j => j.siteId === site.id && ["ready", "failed"].includes(j.contentWork?.stage)), 200, START + 6 * 3_600_000);
   const job = f.tables.jobs.find(j => j.siteId === site.id && j.articleId && ["ready", "failed"].includes(j.contentWork?.stage))!;
   const notes: string[] = f.get(job.articleId)!.editorialQualityNotes ?? [];
-  assert.ok(notes.includes("Research: 1 search, 2 cited pages; kept 1 (1 without a readable excerpt)."), JSON.stringify(notes));
+  // P256: one source kept, so one more pass looks for primary sources (this fixture returns the same pages, counted once).
+  assert.ok(notes.includes("Research: 2 searches, 2 cited pages; kept 1 (1 without a readable excerpt)."), JSON.stringify(notes));
+  assert.ok(f.get(job._id)!.contentWork.providerCalls.some((c: { logicalKey: string }) => c.logicalKey.endsWith(":web_research:primary")));
   f.assertOffline();
 });
 
@@ -2300,6 +2337,40 @@ test("SLC54 rejected owner drafts remain bounded and never restart or hide faile
   await f.invoke("contentWork:advanceOwnerDraft", { jobId: job._id });
   assert.deepEqual(f.get(job._id), snapshot); assert.equal(f.modelCalls.length, calls);
   assert.deepEqual(f.get(site._id)!.contentSchedule, before); f.assertOffline();
+});
+
+// P256 (Oct 30 2026): Cowork's fresh account: the first draft came back held behind scores (editorial 62) and its owner
+// could not approve it, though Cowork judged it publishable. Rule 2a now covers the owner too.
+test("P256 a draft Pentra hands back reads as ready to read, its owner approves it, and it counts once approved", async () => {
+  const f = await scopedPricingFixture({}, {}, { quality: "low" }), site = f.get(f.sites[0].id)!;
+  for (const s of f.sites.slice(0, 2)) f.get(s.id)!.contentSchedule.paused = true;
+  f.setIdentity(site.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site._id });
+  const result = await f.invoke("contentWork:requestDraft", { siteId: site._id, reviewToken: r.reviewToken, requestKey: "p256-handed-back",
+    maximumMicroUsd: r.ownerDraft.maximumMicroUsd });
+  const counted = (await f.invoke("contentWork:readiness", { siteId: site._id })).results.planUsedThisMonth;
+  await pumpUntil(f, () => f.get(result.jobId)!.contentWork.stage === "failed");
+  let after = await f.invoke("contentWork:readiness", { siteId: site._id });
+  assert.equal(after.results.planUsedThisMonth, counted - 1, "a handed-back draft uses none of the month's articles");
+  assert.equal(after.ownerDraft.latest.readable, true);
+  assert.ok(after.ownerDraft.latest.title, "the overview names the draft");
+  assert.match(after.ownerDraft.latest.issue, /^Your draft is ready to read\./);
+  assert.doesNotMatch(after.ownerDraft.latest.issue, /didn't pass|score|minimum|reviewer/i);
+  const article = f.get(f.get(result.jobId)!.articleId)!;
+  assert.ok(article.publicationGateIssues.some((issue: string) => /^Editorial quality score is \d+; strict minimum is 85\.$/.test(issue)), diagnostic(f));
+  // The low-quality fixture also cites a source it never lists: an objective problem, which still blocks, in plain words.
+  await assert.rejects(f.invoke("articles:acceptOwnerReviewNotes", { articleId: article._id, artifactHash: publicationArtifactHash(article as never) }),
+    /^ConvexError: Fix this first: (?!.*(?:score|minimum))/);
+  const live = f.get(article._id)!;
+  live.markdown = live.markdown.replace(/ ?\[\d+\]/g, "");
+  const accepted = await f.invoke("articles:acceptOwnerReviewNotes", { articleId: article._id, artifactHash: publicationArtifactHash(f.get(article._id)! as never) });
+  assert.ok(accepted.accepted > 0);
+  assert.equal(f.get(article._id)!.status, "ready");
+  after = await f.invoke("contentWork:readiness", { siteId: site._id });
+  assert.equal(after.results.planUsedThisMonth, counted, "approved, the draft is a delivered article and counts at once");
+  assert.equal(after.ownerDraft.latest.stage, "ready");
+  assert.equal(f.repositories.get(f.sites[0].name.toLowerCase())!.writes, 0, "approval alone never publishes");
+  f.assertOffline();
 });
 
 test("SLC54 owner work rechecks current authority before a provider call", async t => {
@@ -9976,7 +10047,7 @@ test("P210 the owner hears when the article they asked for is ready to read, unl
   assert.deepEqual([notes.job.contentWork.stage, notes.job.contentWork.failure], ["failed", "bounded_content_quality_exhausted"], diagnostic(notes.f));
   notes.f.setTime(sendAt(notes.f, notes.log._id));
   assert.deepEqual(await notes.f.invoke("customerEmails:send", { logId: notes.log._id }), { status: "sent" });
-  assert.match(String(notes.f.opsEmails.at(-1)!.text), /Pentra's checks left a few notes on it/);
+  assert.match(String(notes.f.opsEmails.at(-1)!.text), /A few statements in it may not be backed by a source yet\. The page shows which/);
   f.assertOffline(); g.assertOffline(); notes.f.assertOffline();
 });
 

@@ -106,6 +106,7 @@ import type * as lib_expectedClickSkipReceipt from "../lib/expectedClickSkipRece
 import type * as lib_expectedClickSkipReceiptStore from "../lib/expectedClickSkipReceiptStore.js";
 import type * as lib_fetchPage from "../lib/fetchPage.js";
 import type * as lib_finalArticleReview from "../lib/finalArticleReview.js";
+import type * as lib_githubBlogState from "../lib/githubBlogState.js";
 import type * as lib_githubLayout from "../lib/githubLayout.js";
 import type * as lib_githubRepositories from "../lib/githubRepositories.js";
 import type * as lib_growthLoopContracts from "../lib/growthLoopContracts.js";
@@ -159,6 +160,7 @@ import type * as lib_outreachTargetLive from "../lib/outreachTargetLive.js";
 import type * as lib_ownerSearch from "../lib/ownerSearch.js";
 import type * as lib_pastedPublication from "../lib/pastedPublication.js";
 import type * as lib_pentraConsolidation from "../lib/pentraConsolidation.js";
+import type * as lib_plainReviewNotes from "../lib/plainReviewNotes.js";
 import type * as lib_planCandidateCheckpoint from "../lib/planCandidateCheckpoint.js";
 import type * as lib_planProviderBudget from "../lib/planProviderBudget.js";
 import type * as lib_planProviderReservation from "../lib/planProviderReservation.js";
@@ -180,6 +182,7 @@ import type * as lib_publishedCorrection from "../lib/publishedCorrection.js";
 import type * as lib_publishedRevision from "../lib/publishedRevision.js";
 import type * as lib_publisherProvisioning from "../lib/publisherProvisioning.js";
 import type * as lib_researchGrouping from "../lib/researchGrouping.js";
+import type * as lib_researchPasses from "../lib/researchPasses.js";
 import type * as lib_researchSeeds from "../lib/researchSeeds.js";
 import type * as lib_revisionArtifact from "../lib/revisionArtifact.js";
 import type * as lib_safeMarkdownHtml from "../lib/safeMarkdownHtml.js";
@@ -338,6 +341,7 @@ declare const fullApi: ApiFromModules<{
   "lib/expectedClickSkipReceiptStore": typeof lib_expectedClickSkipReceiptStore;
   "lib/fetchPage": typeof lib_fetchPage;
   "lib/finalArticleReview": typeof lib_finalArticleReview;
+  "lib/githubBlogState": typeof lib_githubBlogState;
   "lib/githubLayout": typeof lib_githubLayout;
   "lib/githubRepositories": typeof lib_githubRepositories;
   "lib/growthLoopContracts": typeof lib_growthLoopContracts;
@@ -391,6 +395,7 @@ declare const fullApi: ApiFromModules<{
   "lib/ownerSearch": typeof lib_ownerSearch;
   "lib/pastedPublication": typeof lib_pastedPublication;
   "lib/pentraConsolidation": typeof lib_pentraConsolidation;
+  "lib/plainReviewNotes": typeof lib_plainReviewNotes;
   "lib/planCandidateCheckpoint": typeof lib_planCandidateCheckpoint;
   "lib/planProviderBudget": typeof lib_planProviderBudget;
   "lib/planProviderReservation": typeof lib_planProviderReservation;
@@ -412,6 +417,7 @@ declare const fullApi: ApiFromModules<{
   "lib/publishedRevision": typeof lib_publishedRevision;
   "lib/publisherProvisioning": typeof lib_publisherProvisioning;
   "lib/researchGrouping": typeof lib_researchGrouping;
+  "lib/researchPasses": typeof lib_researchPasses;
   "lib/researchSeeds": typeof lib_researchSeeds;
   "lib/revisionArtifact": typeof lib_revisionArtifact;
   "lib/safeMarkdownHtml": typeof lib_safeMarkdownHtml;

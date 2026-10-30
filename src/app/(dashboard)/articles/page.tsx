@@ -14,7 +14,6 @@ import { format, formatDistanceToNow } from "date-fns";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { ArticleProgress } from "@/components/ui/article-progress";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
-import { stageLabel } from "@/components/content-work-overview";
 import { useActiveSite } from "@/contexts/site-context";
 import { Zap } from "lucide-react";
 import { manualPublicationBlocker } from "../../../../convex/lib/manualPublication";
@@ -200,8 +199,9 @@ export default function ArticlesPage() {
             : "Generate a researched draft for your review. Nothing publishes until you approve it."}</p>
           {allowance ? <p>Each new draft uses 1 of your {allowance.limit} articles this month ({allowance.used} used). Editing a draft and requesting review again is free.</p>
             : readiness.ownerDraft.maximumMicroUsd != null && <p>Counts toward your monthly article allowance.</p>}
-          {readiness.ownerDraft.latest && <p role="status">Latest draft: {stageLabel(readiness.ownerDraft.latest.stage).toLowerCase()}. {readiness.ownerDraft.latest.issue}
-            {readiness.ownerDraft.latest.articleId && <> <Link className="underline" href={`/articles/${readiness.ownerDraft.latest.articleId}`}>Open draft</Link></>}
+          {/* P256 (Oct 30 2026): the latest draft by its title and in plain words, never a review stage or a failure. */}
+          {readiness.ownerDraft.latest && <p role="status">Latest draft{readiness.ownerDraft.latest.title ? <>, “{readiness.ownerDraft.latest.title}”</> : null}: {readiness.ownerDraft.latest.issue}
+            {readiness.ownerDraft.latest.articleId && <> <Link className="underline" href={`/articles/${readiness.ownerDraft.latest.articleId}`}>{readiness.ownerDraft.latest.readable ? "Read it now" : "Open draft"}</Link></>}
           </p>}
         </section>
       )}

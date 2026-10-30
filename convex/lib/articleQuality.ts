@@ -100,32 +100,34 @@ export const AUTOPILOT_ACCEPTANCE = "pentra-autopilot";
 export const CONTENT_CHECKS_VERSION = 1;
 const UNCITED_QUANTITY_ISSUE = /^\d+ quantified outcome or operational claim\(s\) lack an inline citation\.$/;
 export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number; claimEvidenceStatus?: string; markdown?: string } &
-  Partial<Pick<PublicationArticle, "claimEvidence" | "productEvidenceSnapshot" | "productEvidenceHash">>, actor: "owner" | "autopilot" = "owner"): boolean {
-  // Rule 2a (P114, Oct 20 2026): the claim ledger is a note for Autopilot. Its
-  // confirmation was the only way a product quantity could go uncited, so when
-  // it failed on an unrelated sentence, pentra.dev's own confirmed facts ("a
-  // pace from 1 to 21 articles a week", "3 articles a month") held 2 of 3
-  // drafts. Autopilot accepts uncited quantities only when the confirmed
-  // profile states every one of them; any other quantity still blocks.
-  if (actor === "autopilot" && UNCITED_QUANTITY_ISSUE.test(issue) && article.markdown !== undefined) {
+  Partial<Pick<PublicationArticle, "claimEvidence" | "productEvidenceSnapshot" | "productEvidenceHash">>): boolean {
+  // Rule 2a, for Autopilot and for the owner alike. P256 (Oct 30 2026): Review-first drafts kept the old bar (scores of
+  // 70 or more), so Cowork's fresh account could not approve its first article, which Cowork judged publishable: an
+  // editorial score of 62 and a 98-character search description held it. The owner who reads the draft was held to a
+  // stricter bar than Autopilot, which publishes unread. LLM scores, the claim ledger and the description's length are
+  // notes for both; the objective checks (reader-visible defects, numbers missing from their source or from the
+  // confirmed profile, broken markup) still block both.
+  //
+  // P114 (Oct 20 2026): the claim ledger's confirmation was the only way a product quantity could go uncited, so when
+  // it failed on an unrelated sentence, pentra.dev's own confirmed facts ("a pace from 1 to 21 articles a week", "3
+  // articles a month") held 2 of 3 drafts. Uncited quantities are accepted only when the confirmed profile states
+  // every one of them; any other quantity still blocks.
+  if (UNCITED_QUANTITY_ISSUE.test(issue) && article.markdown !== undefined) {
     const uncited = uncitedEvidenceRequiredParagraphs(article.markdown, article);
     return uncited.length > 0 && uncited.every((paragraph) =>
       firstPartyQuantitiesStated(paragraph, article.productEvidenceSnapshot, article.productEvidenceHash));
   }
-  const editorial = /^Editorial quality score is (\d+); strict minimum is 85\.$/.exec(issue);
-  // The editorial score is the reviewer's judgement of style, not a fact
-  // check. Owner decision (Sep 25, Oct 14 2026): it must not throw away
-  // drafts and their spend; the owner may accept 70+.
-  if (editorial) return actor === "autopilot" || Number(editorial[1]) >= 70;
+  // Owner decision Oct 19 2026: re-reviewing an identical draft moved its fact score from 100 to 0, so a model's
+  // score is a note, never a gate.
+  if (/^Editorial quality score is \d+(?:\.\d+)?; strict minimum is 85\.$/.test(issue)) return true;
+  if (/^Fact-check score is \d+; strict minimum is 85\.$/.test(issue)) return true;
+  if (issue === "Strict publication requires a completed claim-to-evidence audit.") return true;
   if (issue === PENDING_INTERNAL_LINK_ISSUE) return true;
-  const factual = /^Fact-check score is (\d+); strict minimum is 85\.$/.exec(issue);
-  if (factual) return actor === "autopilot" || Number(factual[1]) >= 70;
-  if (issue === "Strict publication requires a completed claim-to-evidence audit.") {
-    if (actor === "autopilot") return true;
-    return (article.factCheckScore ?? 0) >= 70;
-  }
+  // A 98-character description is a fine search snippet; the 100-character floor is a preference, not a defect.
+  if (issue === META_DESCRIPTION_SHORT_ISSUE) return true;
   return false;
 }
+export const META_DESCRIPTION_SHORT_ISSUE = "Meta description is too short for a useful search snippet (minimum 100 characters).";
 
 export type OwnerQualityWaiver = { artifactHash: string; issues: string[]; acceptedAt: number; userId: string };
 
@@ -2292,7 +2294,7 @@ export function evaluatePublicationQuality(
       issues.push(`Meta title is ${article.metaTitle.length} characters; maximum is 65.`);
     }
     if ((article.metaDescription?.trim().length ?? 0) < 100) {
-      issues.push("Meta description is too short for a useful search snippet (minimum 100 characters).");
+      issues.push(META_DESCRIPTION_SHORT_ISSUE);
     } else if (!/[.!?]$/.test(article.metaDescription!.trim())) {
       issues.push("Meta description must end as a complete sentence.");
     } else if (
@@ -2509,8 +2511,7 @@ export function evaluatePublicationQuality(
     try { exact = publicationArtifactHash(article as never) === waiver.artifactHash; } catch { exact = false; }
     if (exact) {
       for (let index = issues.length - 1; index >= 0; index--) {
-        if (waiver.issues.includes(issues[index]) &&
-          ownerWaivableIssue(issues[index], article, waiver.userId === AUTOPILOT_ACCEPTANCE ? "autopilot" : "owner")) {
+        if (waiver.issues.includes(issues[index]) && ownerWaivableIssue(issues[index], article)) {
           warnings.push(`${waiver.userId === AUTOPILOT_ACCEPTANCE ? "Autopilot" : "Owner"} accepted reviewer note: ${issues[index]}`);
           issues.splice(index, 1);
         }

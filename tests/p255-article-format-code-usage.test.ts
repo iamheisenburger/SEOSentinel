@@ -38,5 +38,6 @@ test("P255 a code example that stops after its imports and types is a reader-vis
 test("P255 a draft that didn't pass review reads in plain words", () => {
   const customer = readFileSync("convex/lib/contentCustomer.ts", "utf8");
   assert.doesNotMatch(customer, /Bounded retries remain visible/);
-  assert.match(customer, /This draft didn't pass Pentra's quality review, so it hasn't been published\. Open it to read the reviewer's notes\./);
+  // P256: plain, and not framed as a failure.
+  assert.match(customer, /This draft isn't ready to publish yet\. Open it to read it and see what to check\./);
 });

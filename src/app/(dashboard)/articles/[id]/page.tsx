@@ -5,7 +5,8 @@ import { ConvexError } from "convex/values";
 import { api } from "../../../../../convex/_generated/api";
 import { manualPublicationBlocker } from "../../../../../convex/lib/manualPublication";
 import { publicationArtifactHash } from "../../../../../convex/lib/publicationArtifact";
-import { ownerWaivableIssue } from "../../../../../convex/lib/articleQuality";
+import { ownerWaivableIssue, unverifiedClaimsFromFactCheckNotes } from "../../../../../convex/lib/articleQuality";
+import { plainReviewNotes, sourcingLine, unsourcedIssue } from "../../../../../convex/lib/plainReviewNotes";
 import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -399,22 +400,21 @@ export default function ArticleDetailPage() {
   const faqCount = faqSchema ? (faqSchema.mainEntity as unknown[] | undefined)?.length ?? 0 : 0;
   const hasHowTo = schemas.some((s) => s["@type"] === "HowTo");
 
-  // A draft that failed the strict publication check is never approved with
-  // the plain Approve button on owner-reviewed sites: fixes are needed first,
-  // and when only notes the owner may accept remain, "Accept notes and approve
-  // for publishing" (which re-runs the check) is the only approve action.
+  // P256 (Oct 30 2026): rule 2a for the owner too. Scores, the claim audit and a short search description are notes,
+  // so a draft Pentra handed back is approved with the one Approve button, which accepts those notes on this exact
+  // version (the server re-runs every check). Only an objective problem, in plain words below, needs a fix first.
   // Legacy sites keep their existing approve-then-quality-review flow.
   const gateIssues = article.publicationGateStatus === "passed" ? [] : article.publicationGateIssues ?? [];
-  const blockingGateIssues = gateIssues.filter((issue) => !ownerWaivableIssue(issue, article, "owner"));
+  const blockingGateIssues = gateIssues.filter((issue) => !ownerWaivableIssue(issue, article));
   const plainApproveAllowed = gateIssues.length === 0 || (site != null && site.serviceMode !== "growth_first");
-  const reviewerNotesShown = gateIssues.length > 0 && article.status !== "published" &&
+  const handedBack = article.status !== "published" &&
     contentReadiness?.ownerDraft.latest?.articleId === articleId && contentReadiness.ownerDraft.latest.stage === "failed";
-  const approveHint = plainApproveAllowed ? null
-    : blockingGateIssues.length > 0
-      ? `This draft needs fixes before it can be approved.${reviewerNotesShown ? " See the reviewer notes below." : ""}`
-      : reviewerNotesShown
-        ? "Read the reviewer notes below. You can accept them to approve this draft."
-        : "This draft has not passed review yet, so it cannot be approved.";
+  const acceptNotes = !plainApproveAllowed && handedBack && blockingGateIssues.length === 0;
+  const unsourced = handedBack ? unverifiedClaimsFromFactCheckNotes(article.factCheckNotes) : [];
+  const unsourcedNoted = handedBack && (unsourced.length > 0 || gateIssues.some(unsourcedIssue));
+  const approveHint = plainApproveAllowed || acceptNotes ? null
+    : handedBack ? "One thing needs fixing before this draft can publish. See “Before you publish” below."
+    : "Pentra is still checking this draft. You can read it now; Approve appears when the check is done.";
   // P247 (Oct 30 2026): the article page showed "Fact-check score 83/100" and the fact checker's own paragraph ("Recommend
   // the author verify ... before publication") on an article Autopilot then published. The model's score and notes are
   // notes for Pentra, never blockers (rule 2a); the customer sees what the publication checks established, in one line.
@@ -427,10 +427,11 @@ export default function ArticleDetailPage() {
   const handleApprove = async () => {
     setActionBusy(true);
     try {
-      await approveArticle({ articleId });
+      if (acceptNotes) await acceptOwnerReviewNotes({ articleId, artifactHash: publicationArtifactHash(article) });
+      else await approveArticle({ articleId });
       setLinkStatus("Article approved. Ready to publish.");
     } catch (err: unknown) {
-      setLinkStatus(err instanceof Error ? err.message : "Approve failed");
+      setLinkStatus(err instanceof ConvexError && typeof err.data === "string" ? err.data : err instanceof Error ? err.message : "Approve failed");
     } finally {
       setActionBusy(false);
     }
@@ -585,7 +586,7 @@ export default function ArticleDetailPage() {
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
               {(article.status === "draft" || article.status === "review") && (
                 <>
-                  {plainApproveAllowed && (
+                  {(plainApproveAllowed || acceptNotes) && (
                     <Button
                       size="sm"
                       onClick={handleApprove}
@@ -1104,41 +1105,27 @@ export default function ArticleDetailPage() {
         </p>
       )}
 
+      {/* P256 (Oct 30 2026): a draft Pentra handed back reads as a draft: one plain line on what backs it and what isn't
+          sourced, never a score or a check's name. Only an objective problem asks for a fix before Approve. */}
+      {handedBack && (unsourcedNoted || blockingGateIssues.length > 0) && (
+        <section role="note" aria-label="Before you publish" className="rounded-lg border border-[#F59E0B]/20 bg-[#F59E0B]/[0.05] p-3 space-y-2 text-sm">
+          <p className="font-medium text-[#F7F8F8]">Before you publish</p>
+          {unsourcedNoted && <p className="text-[#F7F8F8]">{sourcingLine(article.sources ?? [], unsourced.length)}</p>}
+          {unsourced.length > 0 && <details className="text-[#8A8F98]"><summary className="cursor-pointer">Show the statements to check</summary>
+            <ul className="mt-1 list-disc space-y-1 pl-5">{unsourced.slice(0, 12).map((claim, index) => <li key={index}>{claim}</li>)}</ul></details>}
+          {blockingGateIssues.length > 0 && <>
+            <p className="font-medium text-[#F59E0B]">Fix this first, in Edit this draft below. Pentra checks the new version.</p>
+            <ul className="list-disc space-y-1 pl-5 text-[#F7F8F8]">{plainReviewNotes(blockingGateIssues).slice(0, 8).map((note, index) => <li key={index}>{note}</li>)}</ul>
+          </>}
+        </section>
+      )}
+
       {/* View mode toggle */}
       {contentReadiness?.ownerDraft.latest?.articleId === articleId &&
         ["ready", "failed"].includes(contentReadiness.ownerDraft.latest.stage) && article.status !== "published" && (
         <section aria-label="Edit draft" className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5 space-y-3">
           <h2 className="text-sm font-semibold text-[#F7F8F8]">Edit this draft</h2>
           <p className="text-sm text-[#8A8F98]">Edits create a new version for review; the original stays in your history. Review may correct unsupported claims. Nothing publishes without your approval.</p>
-          {contentReadiness.ownerDraft.latest.stage === "failed" && (article.publicationGateIssues?.length ?? 0) > 0 && (() => {
-            const issues = article.publicationGateIssues!;
-            const mustFix = issues.filter(issue => !ownerWaivableIssue(issue, article, "owner"));
-            const styleNotes = issues.filter(issue => ownerWaivableIssue(issue, article, "owner"));
-            return <div role="note" aria-label="Reviewer notes" className="rounded-lg border border-[#F59E0B]/20 bg-[#F59E0B]/[0.05] p-3 space-y-2">
-              {mustFix.length > 0 && <>
-                <p className="text-sm font-medium text-[#F59E0B]">Fix these before requesting review</p>
-                <ul className="list-disc space-y-1 pl-5 text-sm text-[#F7F8F8]">{mustFix.slice(0, 12).map((issue, index) => <li key={index}>{issue}</li>)}</ul>
-              </>}
-              {styleNotes.length > 0 && <>
-                <p className="text-sm font-medium text-[#F59E0B]">{mustFix.length ? "Notes you can accept" : article.claimEvidenceStatus === "failed" ? "You can accept these reviewer notes after checking the draft:" : "No specific errors are listed. You can accept these reviewer notes after reading the draft:"}</p>
-                <ul className="list-disc space-y-1 pl-5 text-sm text-[#F7F8F8]">{styleNotes.map((issue, index) => <li key={index}>{issue}</li>)}</ul>
-                {article.claimEvidenceStatus === "failed" && styleNotes.includes("Strict publication requires a completed claim-to-evidence audit.") &&
-                  <p className="text-sm text-[#F59E0B]">The reviewer could not match every claim to a source. Check each number and specific claim against its source before accepting.</p>}
-              </>}
-              {mustFix.length === 0 && styleNotes.length > 0 && !editing && <div className="space-y-1">
-                <Button size="sm" loading={actionBusy} onClick={async () => {
-                  setActionBusy(true); setLinkStatus("Accepting reviewer notes…");
-                  try {
-                    await acceptOwnerReviewNotes({ articleId, artifactHash: publicationArtifactHash(article) });
-                    setLinkStatus("Accepted. Use Publish Now to publish this exact version.");
-                  } catch (error) {
-                    setLinkStatus(error instanceof ConvexError && typeof error.data === "string" ? error.data : "Could not accept these notes. Refresh and try again.");
-                  } finally { setActionBusy(false); }
-                }}>Accept notes and approve for publishing</Button>
-                <p className="text-xs text-[#8A8F98]">Approves this exact version as it is. You can still edit instead. Nothing publishes until you press Publish Now.</p>
-              </div>}
-            </div>;
-          })()}
           {editing ? <>
             {([['title', 'Article title', 200], ['metaTitle', 'Search title', 60], ['metaDescription', 'Search description', 155]] as const).map(([field, label, limit]) => <label key={field} className="block text-sm text-[#F7F8F8]">{label}
               <input aria-label={label} value={editing[field]} maxLength={limit} disabled={editBusy}

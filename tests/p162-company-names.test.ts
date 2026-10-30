@@ -40,7 +40,7 @@ test("sentences naming a cited company the search does not name are found; named
 test("the edit pass is raised, never waived, and tells the rewrite what to keep", () => {
   const issue = autopilotCompanyNameIssue(3);
   assert.equal(issue, "Autopilot edit pass: 3 sentence(s) name a company the search does not name.");
-  assert.equal(ownerWaivableIssue(issue, { markdown: "" }, "autopilot"), false);
+  assert.equal(ownerWaivableIssue(issue, { markdown: "" }), false);
   assert.match(autopilotCompanyNameNote("salesforce", "Salesforce describes it [1]."),
     /^Rewrite without naming Salesforce, which the search does not name: «Salesforce describes it \[1\]\.»\. Keep the fact and its citation/);
 });

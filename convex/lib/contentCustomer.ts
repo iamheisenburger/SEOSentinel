@@ -5,6 +5,7 @@ import { readProviderBudgetAuthorization, providerBudgetMonth, ordinaryProviderR
 import { inspectSharedProviderBudget, providerAccountMonthlyCeilingMicroUsd, providerReservationConsumedMicroUsd,
   providerAccountDailyCeilingMicroUsd } from "./providerSpendReservation";
 import { internalContentProcessingError } from "./contentAudit";
+import { HANDED_BACK_DRAFT } from "./plainReviewNotes";
 
 // Browser-facing copy is selected, never raw exception/provider payload text.
 export function contentIssue(reason?: string) {
@@ -13,7 +14,7 @@ export function contentIssue(reason?: string) {
   if (reason === "duplicate_intent") return "This draft repeated a page your site already has, so it wasn't published: two pages on one search compete with each other. Pentra wrote this slot about a new topic instead.";
   if (reason === "reader_visible_defect") return "This draft didn't pass a reader check Pentra added after it was written, so it wasn't published. Pentra wrote a new article for this slot.";
   if (reason === "owner_edited_draft") return "A separately reviewed edit replaces this draft. The original content and spending remain in history.";
-  if (reason === "bounded_content_quality_exhausted") return "Your draft is ready for your review. Open it to see the reviewer's notes: if only style notes remain you can accept them and publish; otherwise fix the flagged points and request review. Nothing was published.";
+  if (reason === "bounded_content_quality_exhausted") return HANDED_BACK_DRAFT;
   if (reason === "content_provider_unavailable") return "The writing service was busy through every retry. Nothing was written or published; Autopilot tries again automatically and the missed slot stays on record.";
   if (reason === "content_provider_request_rejected") return "The writing service refused this request before writing anything, so nothing was written, charged or published. Our team has been alerted; Autopilot continues with the next slot and this missed slot stays on record.";
   if (reason === "content_provider_result_ambiguous_reconciliation_required") return "The writing service did not confirm its answer. Nothing was published and the call is never repeated; Autopilot continues with the next slot, and this attempt and its spending stay on record.";
@@ -24,7 +25,8 @@ export function contentIssue(reason?: string) {
   if (/budget|funding|reservation|priced/i.test(reason)) return "Spending capacity is unavailable. Review billing and the retained spending commitments; no limit was raised.";
   if (/permission|source|revision|conflict|customer|binding|destination|profile|409|412/i.test(reason)) return "The page, permission, business profile or destination changed. Review the current source; customer edits will not be overwritten.";
   // P255 (Oct 30 2026): Cowork's re-run found this message in internal jargon; customers read plain words.
-  if (/quality|audit|review|candidate|draft/i.test(reason)) return "This draft didn't pass Pentra's quality review, so it hasn't been published. Open it to read the reviewer's notes.";
+  // P256: and not as a failure: a new user's first draft was told it had failed review while it was a draft to read.
+  if (/quality|audit|review|candidate|draft/i.test(reason)) return "This draft isn't ready to publish yet. Open it to read it and see what to check.";
   if (/verif|public|canonical|render|receipt/i.test(reason)) return "The live artifact is not yet verified. Pentra must reconcile the existing delivery before another write.";
   if (/entitlement|plan|billing/i.test(reason)) return "The current billing entitlement must be verified before work can continue.";
   return "This work needs reconciliation. Its original deadline, attempts and spending are retained. Contact support with the work reference.";

@@ -1,6 +1,7 @@
 "use node";
 import { assertNotMidContentSetup } from "../lib/contentSetupPath";
 import { EVIDENCE_EXCERPT_MAX_CHARS } from "../lib/evidenceExcerpt";
+import { PRIMARY_PASS_BELOW, PRIMARY_PASS_SEARCHES, primarySourcesRequest, sourceHosts } from "../lib/researchPasses";
 import { contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
 import { autopilotCompanyNameIssue, autopilotCompanyNameNote, autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote,
   checkableFactCheckFindings, unsearchedCompanyMentions } from "../lib/autopilotEditor";
@@ -4566,19 +4567,40 @@ async function handleArticle(
         firstPartyProducts: namedProducts,
       });
       const competitorDomains = (site.competitors ?? []).map((c: string) => c.replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase());
-      const candidates = found.sources.filter(source => !competitorDomains.some(d => source.url.toLowerCase().includes(d)));
-      const strict = strictEvidenceSources(candidates, { firstPartyProducts: namedProducts });
-      const accepted = strict.accepted.map(source => {
-        const excerpt = (source.excerpt ?? source.excerpts.join(" … ")).slice(0, EVIDENCE_EXCERPT_MAX_CHARS);
-        return { url: source.url, title: readableSourceTitle(source.title, source.url), excerpt, contentHash: sha256Hex(excerpt), capturedAt: contentProviderPromptTime() };
-      });
-      const readable = accepted.filter(source => source.excerpt.length >= 160);
+      const notCompetitor = (source: { url: string }) => !competitorDomains.some(d => source.url.toLowerCase().includes(d));
+      const keep = (pool: typeof found.sources) => {
+        const strict = strictEvidenceSources(pool, { firstPartyProducts: namedProducts });
+        const accepted = strict.accepted.map(source => {
+          const excerpt = (source.excerpt ?? source.excerpts.join(" … ")).slice(0, EVIDENCE_EXCERPT_MAX_CHARS);
+          return { url: source.url, title: readableSourceTitle(source.title, source.url), excerpt, contentHash: sha256Hex(excerpt), capturedAt: contentProviderPromptTime() };
+        });
+        return { strict, accepted, readable: accepted.filter(source => source.excerpt.length >= 160) };
+      };
+      let candidates = found.sources.filter(notCompetitor), searches = found.searches, cited = found.sources.length;
+      let kept = keep(candidates);
+      // P256 (Oct 30 2026): one more bounded pass for primary sources when the first kept fewer than two (lib/researchPasses).
+      if (kept.readable.length < PRIMARY_PASS_BELOW) {
+        try {
+          const more = await contentResearchCall({ ...primarySourcesRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword,
+            secondaryKeywords: topic.secondaryKeywords, targetCountry: site.targetCountry, siteName: site.siteName ?? site.domain,
+            avoidHosts: sourceHosts(kept.strict.rejected.map(({ source }) => source.url)) }),
+            maxUses: PRIMARY_PASS_SEARCHES, firstPartyProducts: namedProducts, pass: "primary" });
+          const seen = new Set(found.sources.map(source => source.url));
+          const added = more.sources.filter(source => !seen.has(source.url));
+          candidates = [...candidates, ...added.filter(notCompetitor)];
+          searches += more.searches; cited += added.length;
+          kept = keep(candidates);
+        } catch (err) {
+          researchQualityNotes.push(`Primary-source research pass unavailable: ${err instanceof Error ? err.message.slice(0, 200) : "unknown"}`);
+        }
+      }
+      const { strict, accepted, readable } = kept;
       researchSources = readable.slice(0, 8);
       if (strict.rejected.length) researchQualityNotes.push(`Excluded ${strict.rejected.length} secondary or vendor-authored source(s) from strict evidence.`);
       // What the research produced, always (P144, Oct 21 2026: about half of
       // the owner sites' drafts since Oct 19 kept no source, and nothing said why).
-      researchQualityNotes.push(researchOutcomeNote({ searches: found.searches, cited: found.sources.length,
-        competitor: found.sources.length - candidates.length, secondary: strict.rejected.length,
+      researchQualityNotes.push(researchOutcomeNote({ searches, cited,
+        competitor: cited - candidates.length, secondary: strict.rejected.length,
         unreadable: accepted.length - readable.length, kept: researchSources.length }));
       researchContext = researchSources.length ? [
         "Strict evidence mode is active. Only the preserved source excerpts below may support external factual claims.",
@@ -4586,7 +4608,7 @@ async function handleArticle(
         ...researchSources.map((source, index) =>
           `[${index + 1}] ${source.title ?? "Untitled source"}\nURL: ${source.url}\nCONTENT HASH: ${source.contentHash}\nEXCERPT: ${source.excerpt}`),
       ].join("\n\n").slice(0, 30000) : "";
-      console.log(`Autopilot research: ${found.searches} searches, ${found.sources.length} cited pages, ${researchSources.length} strict sources`);
+      console.log(`Autopilot research: ${searches} searches, ${cited} cited pages, ${researchSources.length} strict sources`);
     } catch (err) {
       researchQualityNotes.push(`Web research unavailable for this article: ${err instanceof Error ? err.message.slice(0, 200) : "unknown"}`);
       console.error(`Autopilot web research failed (continuing without): ${err instanceof Error ? err.message : "unknown"}`);
@@ -7265,8 +7287,11 @@ async function reviewExistingArticleHandler(
     // body in one checkpointed call; the exact audit below reviews it as usual.
     // An owner's own title and metadata are never rewritten.
     let reviewMetadata = { title: article.title, metaTitle: article.metaTitle ?? article.title, metaDescription: article.metaDescription ?? "" };
-    const metadataDefects = storedDefects.filter((note) =>
-      /^(?:Remaining )?Material editorial defect\b[^:]*:/i.test(note) && /\bmeta(?:data|[ -]?titles?|[ -]?descriptions?)\b|\btitles?\b/i.test(note));
+    // P256 (Oct 30 2026): and when the publication check flagged the search title or description (the fresh account's
+    // first draft kept a 98-character description through both revisions, since only reviewer notes triggered this).
+    const metadataDefects = [...storedDefects.filter((note) =>
+      /^(?:Remaining )?Material editorial defect\b[^:]*:/i.test(note) && /\bmeta(?:data|[ -]?titles?|[ -]?descriptions?)\b|\btitles?\b/i.test(note)),
+      ...(article.publicationGateIssues ?? []).filter((issue) => /^Meta (?:description|title)\b/.test(issue))];
     if (contentProviderMayRepairDraft() && incrementRevision && metadataDefects.length > 0) {
       const rewritten = await generateFinalMetadata({
         title: article.title,
@@ -7988,7 +8013,7 @@ async function reviewExistingArticleHandler(
     // only after a passing review, so accepted drafts went live without any:
     // add them now, before that seal. A link failure never holds the draft.
     if (!readyForPublication && autopilotEditor && targetAlignmentPassed &&
-      preLinkIssues.every((issue) => ownerWaivableIssue(issue, qualityCandidate, "autopilot"))) {
+      preLinkIssues.every((issue) => ownerWaivableIssue(issue, qualityCandidate))) {
       try { await handleLinks(ctx, siteId, articleId); }
       catch (error) { console.warn(`Internal links not added to ${articleId}: ${error instanceof Error ? error.message : "unknown"}`); }
     }

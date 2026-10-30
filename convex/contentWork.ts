@@ -28,6 +28,8 @@ import { PUBLISHED_REVISION_LEASE_MS } from "./lib/publishedRevision";
 import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
 import { contentConnectionHash, confirmedContentProfileHash, contentConnectionComplete, contentConsentToken, pasteDestination } from "./lib/contentSelection";
 import { contentFunding, contentIssue } from "./lib/contentCustomer";
+import { ownerDraftNote, ownerDraftReadable } from "./lib/plainReviewNotes";
+import { currentGithubBlog } from "./lib/githubBlogState";
 import { assertSafeImprovement } from "./lib/contentSelection";
 import { authorizedWorkPage, chooseImprovement, contentWorkConnection, enrollVerifiedCreation, renewManagedEnrollments } from "./selectedPages";
 import { noteDraftReady, noteFirstArticleLive } from "./customerEmails";
@@ -379,6 +381,13 @@ async function refreshAccountUsage(ctx: MutationCtx, site: Doc<"sites">, added =
   const siteIds = (await ctx.db.query("sites").withIndex("by_user", q => q.eq("userId", site.userId!)).take(LIMIT)).map(owned => owned._id);
   await ctx.scheduler.runAt(dueAt, internal.contentWork.recountAccountUsageStep, { userId: site.userId, monthStart, siteIds,
     siteIndex: 0, cursor: null, used: 0, candidates: [], replaced: [] });
+}
+/** P256 (Oct 30 2026): an owner who approves a draft Pentra handed back (which gave its article back to the month)
+ * makes it a delivered article, so it counts again at once. */
+export async function countAcceptedOwnerDraft(ctx: MutationCtx, site: Doc<"sites">, before: Doc<"jobs">, after: Doc<"jobs">) {
+  const { monthStart } = usageMonthBounds();
+  const delta = Number(countsTowardMonthlyUsage(after, monthStart)) - Number(countsTowardMonthlyUsage(before, monthStart));
+  if (delta) await refreshAccountUsage(ctx, site, delta);
 }
 const USAGE_RECOUNT_DEBOUNCE_MS = 5 * 60_000;
 /** Job documents per recount page: each is at most 1 MB, so a page stays far
@@ -990,21 +999,25 @@ export const selectServiceMode = mutation({
       await ctx.db.patch(site._id, { serviceMode: "legacy_articles", contentSchedule: { ...site.contentSchedule!, active: false, paused: true }, updatedAt: Date.now() });
       return { changed: true, status: "completed" as const, issues: [] as SetupIssue[] };
     }
+    // P257 (Oct 30 2026): Start's reasons reach the owner (a plain Error reached the browser as a generic failure).
     if (!args.confirmBusinessProfile || !site.siteSummary?.trim() || !site.targetAudienceSummary?.trim() ||
-      (!site.contentSetupRequestedAt && !contentAnalysisMatchesCurrentDomain(site))) throw new Error("Confirm the current business and audience first");
-    if (args.reviewToken !== contentConsentToken(site)) throw new Error("Saved business or destination changed. Review the current values before confirming.");
+      (!site.contentSetupRequestedAt && !contentAnalysisMatchesCurrentDomain(site))) throw new ConvexError("Confirm your business details above first.");
+    if (args.reviewToken !== contentConsentToken(site)) throw new ConvexError("Your business details or website connection changed. Refresh the page and confirm them again.");
     const timezone = args.timezone ?? "UTC";
-    try { new Intl.DateTimeFormat("en", { timeZone: timezone }).format(); } catch { throw new Error("Choose a valid timezone"); }
+    try { new Intl.DateTimeFormat("en", { timeZone: timezone }).format(); } catch { throw new ConvexError("Choose a valid time zone."); }
     if (!contentConnectionComplete(site)) {
-      throw new Error("Connect a supported website destination first");
+      throw new ConvexError("Connect your website first, or choose to paste the articles yourself.");
     }
     // Other platforms (paste your own) are Review first only: Pentra never publishes there.
-    if (pasteDestination(site) && !args.ownerReviewedOnly) throw new Error("Autopilot needs a connected website (WordPress, Shopify, Webflow, Ghost or GitHub). Choose Review first.");
+    if (pasteDestination(site) && !args.ownerReviewedOnly) throw new ConvexError("Autopilot needs a connected website (WordPress, Shopify, Webflow, Ghost or GitHub). Choose Review first.");
     if (!pasteDestination(site)) contentWorkConnection(site);
-    if (args.ownerReviewedOnly && !pasteDestination(site) && !publisherDestinationReceiptVerified({ site })) throw new Error("Verify the exact website connection first");
+    // P257: the repository's blog is one Pentra can't publish to (the block was in the browser only, and silent).
+    const blog = currentGithubBlog(site);
+    if (blog.failure) throw new ConvexError(`${blog.failure.detail} Choose Review and paste instead, or try another repository in Settings.`);
+    if (args.ownerReviewedOnly && !pasteDestination(site) && !publisherDestinationReceiptVerified({ site })) throw new ConvexError("Verify your website connection in Settings first.");
     if (!args.ownerReviewedOnly && (!Number.isSafeInteger(args.intervalMs) || args.intervalMs! < CONTENT_DELIVERY_WINDOW_MS ||
       !Number.isSafeInteger(args.firstDeadlineAt) || args.firstDeadlineAt! < Date.now() + CONTENT_DELIVERY_WINDOW_MS)) throw new Error("Choose a future fixed delivery window and interval");
-    if (!(await contentEntitlementAuthorized(ctx, site))) throw new Error("Current plan entitlement is required");
+    if (!(await contentEntitlementAuthorized(ctx, site))) throw new ConvexError("Check your plan in Billing first.");
     await ctx.db.patch(site._id, { serviceMode: "growth_first", ...(args.ownerReviewedOnly ? { approvalRequired: true, autopilotEnabled: false } : args.authorizeAutomaticPublication === true ? {
       approvalRequired: false, autopilotEnabled: true, autopilotRolloutMode: "warm",
     } : {}), contentSchedule: {
@@ -1217,14 +1230,18 @@ export const readiness = query({
       const title = article?.siteId === siteId ? article.title : topic?.siteId === siteId ? topic.label : undefined;
       if (title) upcomingTitles.set(j._id, title);
     }
+    // P256 (Oct 30 2026): the owner's latest own draft, with its title, so the overview shows it to read (the fresh
+    // account's first draft was on no dashboard card, and the overview offered "Write my first article" again).
+    const latestOwnerJob = jobs.filter(j => j.contentWork?.ownerRequest).sort((a, b) => b.createdAt - a.createdAt)[0];
+    const latestOwnerSummary = latestOwnerJob?.articleId ? await articleSummary(ctx, latestOwnerJob.articleId) : null;
     const usedThisMonth = await displayedAccountUsage(ctx, site);
     return { siteId, setupPending: Boolean(site.contentSetupRequestedAt && !site.serviceMode), serviceMode: site.serviceMode ?? "legacy_articles", reviewToken: contentConsentToken(site),
       profile: { name: site.siteName ?? site.domain, summary: site.siteSummary ?? "", audience: site.targetAudienceSummary ?? "", productUsage: site.productUsage ?? "", offerings: site.keyFeatures ?? [], questions: site.painPoints ?? [] },
       destination: { kind: site.publishMethod ?? "manual", domain: site.domain, repository: site.publishMethod === "github" ? `${site.repoOwner ?? ""}/${site.repoName ?? ""}` : null,
         branch: site.repoDefaultBranch ?? null, contentDirectory: directory, verified,
         // P243: the site's own blog layout read from the repository, or why it could not be (plain words for the setup screen).
-        layout: site.githubLayout ? { framework: String((site.githubLayout as { framework?: string }).framework ?? ""), postsDir: String((site.githubLayout as { postsDir?: string }).postsDir ?? "") } : null,
-        layoutFailure: site.githubLayoutFailure ? { reason: site.githubLayoutFailure.reason, detail: site.githubLayoutFailure.detail } : null },
+        // P257: only what was read from the current repository (lib/githubBlogState).
+        layout: currentGithubBlog(site).layout, layoutFailure: currentGithubBlog(site).failure },
       // The dashboard asks owners to connect it: improvements and results need it.
       searchConsole: { connected: gscConnectionMatchesCurrentDomain(site) },
       entitlement: await contentEntitlementAuthorized(ctx, site), enabled: Boolean(site.autopilotEnabled), approvalRequired: Boolean(site.approvalRequired),
@@ -1242,9 +1259,12 @@ export const readiness = query({
         adoptable: Boolean(site.serviceMode === "growth_first" && s && !s.autopilotSelectedAt && !s.ownerReviewedOnly) },
       ownerDraft: { maximumMicroUsd: pricing?.budgetMicroUsd ?? null,
         allowance: pricing ? await ownerDraftAllowance(ctx, site, Boolean(pricing.validationAuthorizationId), usedThisMonth) : null,
-        latest: jobs.filter(j => j.contentWork?.ownerRequest).sort((a, b) => b.createdAt - a.createdAt).slice(0, 1).map(j => ({
-          jobId: j._id, articleId: j.articleId, stage: j.contentWork!.stage, issue: contentIssue(j.contentWork!.failure),
-        }))[0] ?? null },
+        latest: latestOwnerJob ? { jobId: latestOwnerJob._id, articleId: latestOwnerJob.articleId, stage: latestOwnerJob.contentWork!.stage,
+          title: latestOwnerSummary?.siteId === siteId ? latestOwnerSummary.title || null : null,
+          readable: ownerDraftReadable(latestOwnerJob.contentWork!.stage, latestOwnerJob.contentWork!.failure, Boolean(latestOwnerJob.articleId)),
+          issue: ownerDraftNote(latestOwnerJob.contentWork!.stage, latestOwnerJob.contentWork!.failure, Boolean(latestOwnerJob.articleId)) ??
+            contentIssue(latestOwnerJob.contentWork!.failure),
+        } : null },
       results: { live: liveSummaries.length + pastedLive.size, planUsedThisMonth: usedThisMonth,
         liveThisMonth: liveSummaries.filter(row => (row.publishedAt ?? 0) >= monthStart).length + [...pastedLive.values()].filter(p => p.publishedAt >= monthStart).length },
       published: [...publishedRows.map(a => ({ articleId: a.articleId, title: a.title || a.slug || "Article", publishedAt: a.publishedAt ?? null,
@@ -2765,7 +2785,7 @@ export async function contentWorkCompleted(ctx: MutationCtx, job: Doc<"jobs">, r
   // reviews. Their objective checks still block, and the deterministic
   // improvement check below still proves only the new section changed.
   const autopilotAcceptable = !rejectionIssues?.length ||
-    rejectionIssues.every(issue => ownerWaivableIssue(issue, article!, "autopilot"));
+    rejectionIssues.every(issue => ownerWaivableIssue(issue, article!));
   if (stage === "review_failed" && !cw.ownerRequest && (cw.intent === "create" || automaticImprovement(cw)) && autopilotAcceptable) {
     const site = await ctx.db.get(job.siteId!);
     const topic = article.topicId ? await ctx.db.get(article.topicId) : null;

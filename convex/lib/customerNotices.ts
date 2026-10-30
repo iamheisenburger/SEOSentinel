@@ -105,7 +105,8 @@ export function draftReadyEmail(input: { domain: string; title: string; articleI
     `"${input.title}"`,
     `https://pentra.dev/articles/${input.articleId}`,
     "",
-    input.notes ? "Pentra's checks left a few notes on it. Read them on that page: edit the draft, or accept the notes, before you approve it."
+    // P256 (Oct 30 2026): one Approve; the page says in one line what isn't backed by a source yet.
+    input.notes ? "A few statements in it may not be backed by a source yet. The page shows which, so you can check them before you approve it."
       : "It was written from the business details you confirmed and checked against its sources.",
     "",
     input.paste ? "Nothing goes live until you paste it into your site. Then give Pentra the article's address on that page, and Pentra checks that it's live."

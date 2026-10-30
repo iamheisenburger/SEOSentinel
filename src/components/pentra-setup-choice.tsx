@@ -45,7 +45,9 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
   // ready), and a site on a platform Pentra doesn't publish to could not start at
   // all. Start now says what is missing, and such a site can start by pasting.
   const missing = !state.destination.verified ? "Connect your website, or choose to paste articles yourself, to start."
-    : !state.entitlement ? "Check your plan in Billing to start." : null;
+    : !state.entitlement ? "Check your plan in Billing to start."
+    // P257 (Oct 30 2026): Start was disabled with no word when Pentra found no blog it can publish to in the repository.
+    : noBlog ? "Pentra can't publish to this repository's blog (see above). Choose Review and paste instead, or try another repository." : null;
   const usePaste = async () => {
     setBusy(true); setError("");
     try { await updateSite({ siteId: state.siteId, publishMethod: "manual" }); }

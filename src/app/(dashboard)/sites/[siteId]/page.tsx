@@ -1243,7 +1243,13 @@ function ConnectionSection({ site }: { site: SiteView }) {
               {isGithub && site.repoOwner && !editing && (
                 <>
                   <p className="text-[12px] text-[#62666D] font-mono">{site.repoOwner}/{site.repoName}</p>
-                  <p className="text-[11px] text-[#62666D]">Articles are saved as Markdown files in <span className="font-mono">{site.githubLayout?.postsDir ?? githubContentFolder(site.urlStructure)}/</span>{site.repoDefaultBranch ? <> on <span className="font-mono">{site.repoDefaultBranch}</span></> : null}.</p>
+                  {/* P257 (Oct 30 2026): the folder Pentra found in this repository, why it can't publish there, or that it
+                      hasn't checked yet; never content/blog for a repository it never read. */}
+                  {site.githubBlog?.state === "failed"
+                    ? <p role="status" className="text-[11px] text-[#F59E0B]">{site.githubBlog.detail} Choose another repository with Edit, or switch to Copy &amp; Paste.</p>
+                    : site.githubBlog?.state === "unchecked"
+                      ? <p className="text-[11px] text-[#62666D]">{connectionVerified ? "Pentra is checking where this repository's blog keeps its posts…" : "Pentra checks where this repository's blog keeps its posts when you press Verify repository."}</p>
+                      : <p className="text-[11px] text-[#62666D]">Articles are saved as Markdown files in <span className="font-mono">{site.githubBlog?.state === "detected" ? site.githubBlog.postsDir : githubContentFolder(site.urlStructure)}/</span>{site.repoDefaultBranch ? <> on <span className="font-mono">{site.repoDefaultBranch}</span></> : null}.</p>}
                 </>
               )}
               {isWp && site.wpUrl && !editing && (
@@ -1427,7 +1433,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
           )}
 
           {!editing && connectionError && <p role="alert" className="text-[12px] text-[#F87171]">{connectionError}</p>}
-          {!editing && connectionVerified && <p role="status" className="text-[12px] text-[#4ADE80]">Pentra can reach your repository. Nothing was published.</p>}
+          {!editing && connectionVerified && site.githubBlog?.state !== "failed" && <p role="status" className="text-[12px] text-[#4ADE80]">Pentra can reach your repository. Nothing was published.</p>}
 
           {isWp && (() => {
             const ok = !!site.publicationAdapterVerified;

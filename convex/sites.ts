@@ -1,3 +1,4 @@
+import { currentGithubBlog, githubBlogNote } from "./lib/githubBlogState";
 import { readPublicationBufferSummaries, publicationInventoryProvesMinimum } from "./lib/publicationEligibility";
 import {
   internalMutation,
@@ -918,6 +919,10 @@ function clearStaleGitHubBranch(
     // Only the trusted OAuth connection path can restore this value after it
     // verifies the repository metadata with GitHub.
     patch.repoDefaultBranch = undefined;
+    // P257 (Oct 30 2026): what Pentra read from the previous repository (its blog layout, or why it had none) is stale;
+    // verifying the new repository reads it afresh.
+    patch.githubLayout = undefined;
+    patch.githubLayoutFailure = undefined;
   }
 }
 
@@ -1648,7 +1653,12 @@ export const get = query({
     try {
       const site = await requireSiteOwner(ctx, siteId);
       if (site.deletionStatus) return null;
-      return sanitizeSiteForClient(site);
+      // P257 (Oct 30 2026): Settings says where articles go in the repository, or honestly that Pentra couldn't check; it
+      // said content/blog for a new Jekyll blog it had never read.
+      const blog = currentGithubBlog(site);
+      const published = site.publishMethod === "github" && !blog.layout && !blog.failure
+        ? await ctx.db.query("article_summaries").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "published")).take(1) : [];
+      return { ...sanitizeSiteForClient(site), githubBlog: githubBlogNote(site, published.length > 0) };
     } catch {
       return null;
     }

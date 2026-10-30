@@ -148,14 +148,16 @@ export type ContentResearchResult = {
  * evidence is replayed from the receipt on retry instead of being refetched. */
 export async function contentResearchCall(args: { system: string; userMessage: string; maxUses: number; maxTokens?: number;
   /** Products a comparison search names: their own pages are fetched as evidence too (P160). */
-  firstPartyProducts?: string[] }): Promise<ContentResearchResult> {
+  firstPartyProducts?: string[];
+  /** P256: the second, primary-sources-only pass has its own receipt (its key keeps ":web_research:"). */
+  pass?: "primary" }): Promise<ContentResearchResult> {
   const s = scope.getStore();
   if (!s?.job.contentWork) throw new Error("Missing content provider scope");
   const cw = s.job.contentWork, p = cw.pricing;
   const maxUses = Math.max(1, Math.min(5, Math.floor(args.maxUses)));
   // Revisions of the same draft reuse its research receipt (same request, cached);
   // a replacement topic researches afresh.
-  const logicalKey = `${cw.replacements}:${s.phase}:web_research`;
+  const logicalKey = `${cw.replacements}:${s.phase}:web_research${args.pass ? `:${args.pass}` : ""}`;
   const request = { model: p.model, max_tokens: Math.min(args.maxTokens ?? 4000, 8000), system: args.system,
     messages: [{ role: "user" as const, content: args.userMessage }],
     tools: [{ type: "web_search_20250305" as const, name: "web_search" as const, max_uses: maxUses }] };

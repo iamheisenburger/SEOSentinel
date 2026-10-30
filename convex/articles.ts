@@ -52,7 +52,6 @@ import {
 import {
   clampMetaDescription,
   evaluatePublicationQuality,
-  AUTOPILOT_ACCEPTANCE,
   ownerWaivableIssue,
   readerVisibleIssues,
   repairDanglingStructuredIntroductions,
@@ -78,7 +77,9 @@ import {
   cadenceMicroSeedLegacyAnchorReceiptEligible,
 } from "./lib/cadenceMicroSeed";
 import { jobAuthorizedForExecution } from "./lib/jobRollout";
-import { contentWorkVerified } from "./contentWork";
+import { contentWorkVerified, countAcceptedOwnerDraft } from "./contentWork";
+import { pasteDestination } from "./lib/contentSelection";
+import { plainReviewNotes } from "./lib/plainReviewNotes";
 import { assertPublicationJobClaim, publicationContentionUntil, publicationJobClaimValidator } from "./lib/publicationDeferral";
 import {
   executionLeasePredatesPlanTransition,
@@ -3264,8 +3265,7 @@ export async function sealAcceptedReviewNotes(ctx: MutationCtx, site: Doc<"sites
   const deliveryConfig = publicationDeliveryConfig(site);
   const candidate = { ...article, publicationConfigHash: publicationDeliveryConfigHash(deliveryConfig), ownerQualityWaiver: undefined };
   const review = evaluatePublicationQuality(candidate, "strict");
-  const actor = acceptedBy === AUTOPILOT_ACCEPTANCE ? "autopilot" as const : "owner" as const;
-  const waivable = review.issues.filter(issue => ownerWaivableIssue(issue, candidate, actor));
+  const waivable = review.issues.filter(issue => ownerWaivableIssue(issue, candidate));
   // Rule 2a: what a reader would see or be misled by is never accepted.
   const blocking = [...review.issues.filter(issue => !waivable.includes(issue)), ...readerVisibleIssues(candidate)];
   if (blocking.length > 0) return { sealed: false as const, blocking, waivable };
@@ -3295,8 +3295,10 @@ export const acceptOwnerReviewNotes = mutation({
     await requireArticleOwner(ctx, article);
     const site = (await ctx.db.get(article.siteId))!;
     assertNotPublishing(article);
+    // P256 (Oct 30 2026): a site whose owner pastes articles approves the same way (Cowork's fresh account could not
+    // approve its first draft at all); the approved draft is then pasted and its live page checked as usual.
     if (article.status === "published" || article.publicationAttemptedAt || article.publicationReceipt ||
-      article.publicationOutcomeUnverifiedAt || !(["github", "wordpress"].includes(site.publishMethod ?? "") || isApiCmsMethod(site.publishMethod))) {
+      article.publicationOutcomeUnverifiedAt || !(["github", "wordpress"].includes(site.publishMethod ?? "") || isApiCmsMethod(site.publishMethod) || pasteDestination(site))) {
       throw new ConvexError("This draft cannot be accepted for publication here.");
     }
     if (publicationArtifactHash(article) !== artifactHash) throw new ConvexError("This draft changed. Refresh before accepting it.");
@@ -3311,10 +3313,12 @@ export const acceptOwnerReviewNotes = mutation({
         : j.contentWork.intent === "create" && !site.contentSchedule?.autopilotSelectedAt));
     if (!job?.contentWork || jobs.length > 20) throw new ConvexError("Only a reviewed draft for this site can be accepted.");
     const result = await sealAcceptedReviewNotes(ctx, site, article, site.userId!);
-    if (!result.sealed && result.blocking.length > 0) throw new ConvexError(`Fix these before publishing: ${result.blocking.join(" ")}`);
+    if (!result.sealed && result.blocking.length > 0) throw new ConvexError(`Fix this first: ${plainReviewNotes(result.blocking).join(" ")}`);
     if (!result.sealed) throw new ConvexError("There are no reviewer notes to accept on this draft.");
     await ctx.db.patch(job._id, { status: "done", contentWork: { ...job.contentWork, stage: "ready",
       failure: undefined, approvedArtifactHash: result.hash }, updatedAt: now() });
+    // The draft was given back to the month's allowance when Pentra handed it back; approved, it is delivered.
+    await countAcceptedOwnerDraft(ctx, site, job, (await ctx.db.get(job._id))!);
     return { accepted: result.waivable.length, artifactHash: result.hash };
   },
 });
