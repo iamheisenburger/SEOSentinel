@@ -11,7 +11,6 @@ const navLinks = [
   { label: "How it works", href: "/#pipeline" },
   { label: "Pricing", href: "/#pricing" },
   { label: "FAQ", href: "/#faq" },
-  { label: "Free SEO check", href: "/check" },
   { label: "Blog", href: "/blog" },
   { label: "Contact", href: "/contact" },
 ];

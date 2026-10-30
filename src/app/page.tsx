@@ -326,7 +326,6 @@ function Footer() {
             <a href="#pricing" className={link}>Pricing</a>
             <a href="#faq" className={link}>FAQ</a>
             <Link href="/blog" className={link}>Blog</Link>
-            <Link href="/check" className={link}>Free SEO check</Link>
           </div>
           <div className="flex flex-col gap-3">
             <span className="text-[12px] font-medium text-[#62666D]">Company</span>

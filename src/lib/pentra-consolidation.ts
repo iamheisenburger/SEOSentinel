@@ -3,5 +3,5 @@
  * convex/lib/pentraConsolidation.ts (P217), so Convex's link selection reads
  * the same consolidation the site serves.
  */
-export { PENTRA_CONSOLIDATED, PENTRA_DOMAIN, canonicalBlogHref, consolidatedTarget, servedDestinations, servedOnItsOwnUrl }
+export { PENTRA_CONSOLIDATED, PENTRA_DOMAIN, PENTRA_RETIRED, canonicalBlogHref, consolidatedTarget, retiredArticle, retiredHref, servedDestinations, servedOnItsOwnUrl }
   from "../../convex/lib/pentraConsolidation.ts";

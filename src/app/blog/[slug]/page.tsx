@@ -13,7 +13,7 @@ import { LandingNav } from "@/components/layout/landing-nav";
 import { convexHttp } from "@/lib/convexHttpClient";
 import "./article-content.css";
 import { articleFaq } from "@/lib/article-faq";
-import { canonicalBlogHref, consolidatedTarget, servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
+import { canonicalBlogHref, consolidatedTarget, retiredArticle, retiredHref, servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
 import { relatedArticles } from "@/lib/related-articles";
 import { cachedPublishedListing } from "@/lib/published-listing";
 import { publishedOrCommitted } from "@/lib/committed-articles";
@@ -165,6 +165,7 @@ function MarkdownRenderer({ markdown, domain, slug }: { markdown: string; domain
             // one that would then point at this page stays plain text (P193).
             const target = href ? canonicalBlogHref(domain, href) : href;
             if (target !== href && target === `/blog/${slug}`) return <>{children}</>;
+            if (href && retiredHref(domain, href)) return <>{children}</>;
             const safe = target?.startsWith("/") || target?.startsWith("https://");
             return safe ? <a href={target}>{children}</a> : <>{children}</>;
           },
@@ -193,6 +194,7 @@ export async function generateMetadata({
   const [{ slug }, domain] = await Promise.all([params, getRequestDomain()]);
   const merged = consolidatedTarget(domain, slug);
   if (merged) permanentRedirect(`/blog/${merged}`);
+  if (retiredArticle(domain, slug)) return { title: "Article not found", robots: { index: false, follow: false } };
   const article = await getPublishedArticle(domain, slug);
 
   if (!article) {
@@ -237,6 +239,8 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
   // A consolidated duplicate on pentra.dev permanently points to its group's article.
   const merged = consolidatedTarget(domain, slug);
   if (merged) permanentRedirect(`/blog/${merged}`);
+  // P246: a retired article (invented quotes or wrong prices from the old engine) is gone.
+  if (retiredArticle(domain, slug)) notFound();
   const article = await getPublishedArticle(domain, slug);
   if (!article) notFound();
 

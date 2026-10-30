@@ -148,9 +148,18 @@ export function consolidatedTarget(domain: string, slug: string): string | null 
   return Object.prototype.hasOwnProperty.call(PENTRA_CONSOLIDATED, clean) ? PENTRA_CONSOLIDATED[clean] : null;
 }
 
-/** True when an article is still served on its own URL (not consolidated away). */
+/** P246 (Oct 30 2026): pentra.dev articles the old engine wrote that put words in real people's mouths or misstate
+ * Pentra's prices. /blog/saas-seo-without-team quoted "Lily Ray, Head of SEO, Pentra" (a real SEO professional, never
+ * Pentra staff), an invented Brian Dean quote and "$10,000-$30,000 annually". A retired article answers 404 and leaves
+ * the listing, the sitemap and every related-reading list; a link to it reads as plain text. */
+export const PENTRA_RETIRED: ReadonlySet<string> = new Set(["saas-seo-without-team"]);
+export function retiredArticle(domain: string, slug: string): boolean {
+  return normalizeHost(domain) === PENTRA_DOMAIN && PENTRA_RETIRED.has(slug.trim().replace(/^\/+|\/+$/g, "").replace(/^blog\//, ""));
+}
+
+/** True when an article is still served on its own URL (not consolidated away or retired). */
 export function servedOnItsOwnUrl(domain: string, slug: string): boolean {
-  return consolidatedTarget(domain, slug) === null;
+  return consolidatedTarget(domain, slug) === null && !retiredArticle(domain, slug);
 }
 
 /** A link inside an article body, pointed straight at the article a consolidated
@@ -166,5 +175,11 @@ export function canonicalBlogHref(domain: string, href: string): string {
  * a link to it read as the merged page's title on the page it now leads to: 45 Related reading links on 19 of
  * pentra.dev's live pages, 10 lists linking one page twice. New links go to pages served on their own URL only. */
 export function servedDestinations<T extends { href: string }>(domain: string, destinations: T[]): T[] {
-  return destinations.filter(destination => canonicalBlogHref(domain, destination.href) === destination.href);
+  return destinations.filter(destination => canonicalBlogHref(domain, destination.href) === destination.href && !retiredHref(domain, destination.href));
+}
+
+/** P246: a link to a retired pentra.dev article. */
+export function retiredHref(domain: string, href: string): boolean {
+  const match = /^(?:https:\/\/(?:www\.)?pentra\.dev)?\/blog\/([a-z0-9-]+)\/?(?:[?#].*)?$/i.exec(href.trim());
+  return Boolean(match && retiredArticle(domain, match[1].toLowerCase()));
 }
