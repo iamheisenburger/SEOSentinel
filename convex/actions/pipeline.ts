@@ -1,5 +1,6 @@
 "use node";
 import { assertNotMidContentSetup } from "../lib/contentSetupPath";
+import { EVIDENCE_EXCERPT_MAX_CHARS } from "../lib/evidenceExcerpt";
 import { contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
 import { autopilotCompanyNameIssue, autopilotCompanyNameNote, autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote,
   checkableFactCheckFindings, unsearchedCompanyMentions } from "../lib/autopilotEditor";
@@ -4545,6 +4546,9 @@ async function handleArticle(
           "government (.gov), academic (.edu, journals, PubMed, arXiv), standards bodies, and official documentation",
           "(for example Google Search Central for search topics). For how a software category or platform works, the vendor's own help centre or product documentation",
           "(docs, help, support, learn or knowledge-base pages) counts as official documentation. Avoid blogs, vendor marketing, forums, social media and news aggregators.",
+          // P249 (Oct 30 2026): a test article on building a Markdown blog in Next.js kept one source and named no API ("check
+          // the current Next.js documentation"): the specifics a reader needs were never in the evidence.
+          "When the topic is about using a specific software product, framework or platform (for example Next.js, WordPress or Google Search Console), search its official documentation first and cite the pages that show the exact features, settings, APIs, file names or commands the article needs.",
           "Then write a short research brief of the facts most useful to the article, citing the page each fact comes from. Quote only what the sources say; do not add facts of your own.",
         ].join(" "),
         userMessage: [
@@ -4557,14 +4561,15 @@ async function handleArticle(
           // P231: the article names the products a search for a kind of product asks for, so research finds them.
           !namedProducts.length && searchAsksForProducts(topic.primaryKeyword) ? `This search asks for specific options (“${topic.primaryKeyword}”). Find the products, services or places a reader would compare or use and, for facts about each one, its own documentation or help pages.` : "",
         ].filter(Boolean).join("\n"),
-        maxUses: 3,
+        // P249: five searches (was three) so a how-to finds the documentation pages it needs, not one overview.
+        maxUses: 5,
         firstPartyProducts: namedProducts,
       });
       const competitorDomains = (site.competitors ?? []).map((c: string) => c.replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase());
       const candidates = found.sources.filter(source => !competitorDomains.some(d => source.url.toLowerCase().includes(d)));
       const strict = strictEvidenceSources(candidates, { firstPartyProducts: namedProducts });
       const accepted = strict.accepted.map(source => {
-        const excerpt = (source.excerpt ?? source.excerpts.join(" … ")).slice(0, 2500);
+        const excerpt = (source.excerpt ?? source.excerpts.join(" … ")).slice(0, EVIDENCE_EXCERPT_MAX_CHARS);
         return { url: source.url, title: readableSourceTitle(source.title, source.url), excerpt, contentHash: sha256Hex(excerpt), capturedAt: contentProviderPromptTime() };
       });
       const readable = accepted.filter(source => source.excerpt.length >= 160);
@@ -4799,6 +4804,8 @@ async function handleArticle(
       : "",
     `- NUMERIC CLAIMS: Every operational number, range, timeline, threshold, duration, score, volume, percentage, or price must come directly from supplied evidence. Cite external evidence using its matching numbered citation. First-party product facts are supported by the unnumbered product snapshot; never invent a citation for it. Otherwise remove the number.`,
     `- HYPOTHETICALS: Label invented examples explicitly as hypothetical and never present their details or results as evidence.`,
+    // P249: a how-to about software showed no code at all; the reader left for a tutorial that does.
+    `- CODE AND SETTINGS: When the article teaches a task in software and the preserved excerpts show the exact API, option, file name or command, include a short code, configuration or command example built only from what the excerpts show, in a fenced code block. Never invent an API, option, flag or version.`,
     `- PRACTICAL VALUE: Give the reader a concrete answer and a useful next step: an evidence-grounded explanation, a decision framework with explicit trade-offs, or a reader-run check with inputs and observable results. Give a framework you propose as plain advice ("a simple way to decide is..."), never as an industry standard, and never add a sentence saying it is a recommendation rather than a standard. Never write about your sources, research or drafting process in the article (no "no external sources were verified for this draft", "the documentation we can verify", "the excerpt is truncated" or "the supplied evidence"); when a limitation matters, tell the reader what to check (for example "check the vendor's current documentation for the full list"). Never contrast your advice with the sources or say which parts are or are not from them (no "not figures from the sources", "rather than a rule from the sources", "source-specified" or "the sources do not give"): cite a sourced fact with its number and state everything else as plain advice. Do not claim uniqueness, competitor inferiority, or guaranteed traffic.`,
     `- COMPARISONS: A documented capability does not establish that competing tools lack it or that it produces better results. Omit unsupported superlatives and comparative outcome claims. Where useful, propose a conditional test the reader can evaluate using their own data.`,
     // P231: a search for a kind of product names the products (convex/lib/sourceQuality.ts otherCompaniesRule).

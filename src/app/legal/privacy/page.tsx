@@ -82,10 +82,14 @@ export default function PrivacyPolicyPage() {
             <li><strong className="text-[#F7F8F8]">Convex</strong> — database and backend infrastructure</li>
             <li><strong className="text-[#F7F8F8]">Vercel</strong> — website hosting</li>
             <li><strong className="text-[#F7F8F8]">Stripe</strong> — payment processing (via Clerk)</li>
+            <li><strong className="text-[#F7F8F8]">DataForSEO</strong> — Google search data (monthly searches, competition, rankings and results pages) for your site&apos;s searches and for the free SEO check</li>
+            <li><strong className="text-[#F7F8F8]">Resend</strong> — sending account emails (setup reminders, article and monthly notices)</li>
+            <li><strong className="text-[#F7F8F8]">GitHub</strong> — publishing articles to a repository you connect</li>
             <li><strong className="text-[#F7F8F8]">Google Workspace and Gmail APIs</strong> — only to provide mailbox features that you connect and explicitly request</li>
             <li><strong className="text-[#F7F8F8]">Inbound email relay provider</strong> — only to receive message-specific outreach replies and routed delivery-status notices, discard attachments/content under the audited retention configuration, and deliver signed receiving-only events to Pentra</li>
           </ul>
           <p>We do not sell your personal data to third parties.</p>
+          <p>The free SEO check needs no account. It stores the website address you enter and its result for 7 days, so you can share the result&apos;s link; anyone with the link can see that result.</p>
 
           <h2>4. Google API Limited Use</h2>
           <p>Pentra&apos;s use and transfer to any other app of information received from Google APIs adheres to the Google API Services User Data Policy, including its Limited Use requirements. Google Workspace and Gmail user data, including data derived from it, is used only to provide or improve the specific user-facing mailbox feature you request. It is never used to train, retrain, or improve a generalized or non-personalized AI or machine-learning model, and it is not used for advertising, profiling, credit decisions, or sale.</p>

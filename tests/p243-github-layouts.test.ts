@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { detectGithubLayout, layoutArticleLive, renderLayoutPost } from "../convex/lib/githubLayout.ts";
+import { detectGithubLayout, layoutArticleLive, mdxSafeMarkdown, renderLayoutPost } from "../convex/lib/githubLayout.ts";
 import { publicationDeliveryConfig } from "../convex/lib/publicationArtifact.ts";
 
 const ASTRO_CONFIG = `import { defineCollection } from 'astro:content';
@@ -57,8 +57,9 @@ test("P243 a repository Pentra cannot publish to says why in plain words", () =>
   assert.deepEqual(detectGithubLayout({ paths: ["index.html", "style.css"], files: {} }).ok, false);
   const none = detectGithubLayout({ paths: ["next.config.js", "src/app/page.tsx"], files: {} });
   assert.equal(!none.ok && none.reason, "no_posts");
+  // P249: an MDX-only blog is written in MDX (it was "mdx_only" until then).
   const mdx = detectGithubLayout({ paths: ["next.config.js", "posts/a.mdx", "posts/b.mdx"], files: { "posts/a.mdx": "---\ntitle: A\n---\nx" } });
-  assert.equal(!mdx.ok && mdx.reason, "mdx_only");
+  assert.equal(mdx.ok && mdx.layout.extension, ".mdx");
 });
 
 test("P243 a site without a detected layout keeps today's exact delivery config (pentra.dev and LeadPilot)", () => {
@@ -108,5 +109,24 @@ test("P248 a blog whose posts come from a headless CMS is named, never connected
   assert.equal(detectGithubLayout(withPosts).ok, true, "Markdown posts in the repository still win");
   assert.match(readFileSync("convex/githubLayoutDetect.ts", "utf8"), /"src\/content\/config\.ts", "package\.json"\]\) \{/);
   assert.match(readFileSync("src/components/pentra-setup-choice.tsx", "utf8"), /\{noBlog\.reason === "headless_cms" \? noBlog\.detail : <>We couldn&apos;t find/);
+});
+
+// P249 (Oct 30 2026): the most-used Next.js blog template (tailwind-nextjs-starter-blog) keeps its posts as MDX in
+// data/blog; Pentra refused it ("Your posts are MDX files"). It now writes an MDX post whose body MDX compiles.
+test("P249 an MDX-only blog gets an MDX post with its own frontmatter and a body MDX compiles", () => {
+  const post = `---\ntitle: 'Release of Tailwind Nextjs Starter Blog v2.0'\ndate: '2023-08-05'\nlastmod: '2023-08-05'\ntags: ['next-js', 'tailwind']\ndraft: false\nsummary: 'Release of Tailwind Nextjs Starter Blog template v2.0'\nimages: ['/static/images/twitter-card.png']\nauthors: ['default']\nlayout: PostBanner\n---\n\nBody`;
+  const detection = detectGithubLayout({ paths: ["next.config.js", "package.json", "app/blog/[...slug]/page.tsx", "data/blog/release-of-tailwind-nextjs-starter-blog-v2.0.mdx", "data/blog/code-sample.mdx"],
+    files: { "data/blog/release-of-tailwind-nextjs-starter-blog-v2.0.mdx": post, "data/blog/code-sample.mdx": post } });
+  assert.ok(detection.ok, JSON.stringify(detection));
+  assert.equal(detection.layout.postsDir, "data/blog");
+  assert.equal(detection.layout.urlStructure, "/blog/[slug]");
+  const file = renderLayoutPost(detection.layout, { ...ARTICLE, markdown: "Costs fell {sharply} for sites < 50 pages, see <https://example.com/a>.\n\n<div style=\"padding:1px\"><iframe src=\"https://www.youtube.com/embed/x\"></iframe></div>\n\n```ts\nconst a = { b: 1 } < 2;\n```\n\nUse `{ slug }` here." });
+  assert.equal(file.path, "data/blog/competitive-keyword-research-method.mdx");
+  assert.match(file.content, /^title: "Competitive Keyword Research"\ndate: "2026-10-30T09:37:00\.000Z"\nlastmod: "2026-10-30T09:37:00\.000Z"\ntags: \[\]\ndraft: false\nsummary: "A method"\nimages: \['\/static\/images\/twitter-card\.png'\]\nauthors: \['default'\]\nlayout: PostBanner/m);
+  assert.match(file.content, /Costs fell \\\{sharply\\\} for sites &lt; 50 pages, see \[https:\/\/example\.com\/a\]\(https:\/\/example\.com\/a\)\./);
+  assert.doesNotMatch(file.content, /<iframe|<div/, "a raw HTML block is left out");
+  assert.match(file.content, /```ts\nconst a = \{ b: 1 \} < 2;\n```/, "code is untouched");
+  assert.match(file.content, /Use `\{ slug \}` here\./, "inline code is untouched");
+  assert.equal(mdxSafeMarkdown("Plain text stays plain."), "Plain text stays plain.");
 });
 

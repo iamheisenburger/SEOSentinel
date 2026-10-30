@@ -9,6 +9,7 @@ import { sha256Hex } from "../lib/publicationArtifact";
 import { isProviderCreditRefusal, isProviderRequestRefusal, validProviderRequestId } from "../lib/contentProviderRefusal";
 import { auditResultHash, clarifiableContentAudit, contradictoryContentAudit, semanticAuditPrompt, SEMANTIC_AUDIT_SUFFIX } from "../lib/contentAudit";
 import { classifyEvidenceSource, firstPartyProductPage } from "../lib/sourceQuality";
+import { excerptLimit, pageExcerpt } from "../lib/evidenceExcerpt";
 import { safeFetchPublicText } from "../lib/safeOutbound";
 import { promptRates } from "../lib/promptRates";
 
@@ -241,19 +242,15 @@ export async function withPreservedExcerpts(result: ContentResearchResult,
   const sources = [];
   for (const source of result.sources) {
     let excerpt = source.excerpts.join(" … ");
-    if ((classifyEvidenceSource(source.url).strictEligible || firstPartyProductPage(source.url, firstPartyProducts)) &&
-      sources.filter(s => s.excerpt !== s.excerpts.join(" … ")).length < 6) {
+    // P249: official documentation keeps a wider passage around each cited quote (pageExcerpt).
+    const quality = classifyEvidenceSource(source.url), firstParty = firstPartyProductPage(source.url, firstPartyProducts);
+    const docs = quality.tier === "official-doc" || firstParty;
+    if ((quality.strictEligible || firstParty) && sources.filter(s => s.excerpt !== s.excerpts.join(" … ")).length < 6) {
       try {
-        const page = plainPageText((await fetchText(source.url)).text);
-        const windows: string[] = [];
-        for (const quote of source.excerpts) {
-          const probe = quote.slice(0, 60).toLowerCase(), at = page.toLowerCase().indexOf(probe);
-          if (at >= 0) windows.push(page.slice(Math.max(0, at - 300), Math.min(page.length, at + quote.length + 300)).trim());
-        }
-        excerpt = (windows.length ? windows.join(" … ") : excerpt).slice(0, 2500);
+        excerpt = pageExcerpt(plainPageText((await fetchText(source.url)).text), source.excerpts, docs) ?? excerpt;
       } catch { /* Unreachable page: keep only the API-attributed quotes. */ }
     }
-    sources.push({ ...source, excerpt: excerpt.slice(0, 2500) });
+    sources.push({ ...source, excerpt: excerpt.slice(0, excerptLimit(docs)) });
   }
   return { ...result, sources };
 }

@@ -96,6 +96,7 @@ import type * as lib_customerEmail from "../lib/customerEmail.js";
 import type * as lib_customerNotices from "../lib/customerNotices.js";
 import type * as lib_dataForSeoAccountBalance from "../lib/dataForSeoAccountBalance.js";
 import type * as lib_dataForSeoLocale from "../lib/dataForSeoLocale.js";
+import type * as lib_evidenceExcerpt from "../lib/evidenceExcerpt.js";
 import type * as lib_expectedClickBackfillFleet from "../lib/expectedClickBackfillFleet.js";
 import type * as lib_expectedClickDemandBackfill from "../lib/expectedClickDemandBackfill.js";
 import type * as lib_expectedClickEvidenceBackfill from "../lib/expectedClickEvidenceBackfill.js";
@@ -327,6 +328,7 @@ declare const fullApi: ApiFromModules<{
   "lib/customerNotices": typeof lib_customerNotices;
   "lib/dataForSeoAccountBalance": typeof lib_dataForSeoAccountBalance;
   "lib/dataForSeoLocale": typeof lib_dataForSeoLocale;
+  "lib/evidenceExcerpt": typeof lib_evidenceExcerpt;
   "lib/expectedClickBackfillFleet": typeof lib_expectedClickBackfillFleet;
   "lib/expectedClickDemandBackfill": typeof lib_expectedClickDemandBackfill;
   "lib/expectedClickEvidenceBackfill": typeof lib_expectedClickEvidenceBackfill;

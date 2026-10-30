@@ -15,7 +15,7 @@ export type GithubLayout = {
   framework: GithubLayoutFramework;
   postsDir: string;
   fileName: "slug" | "date-slug" | "slug-index";
-  extension: ".md" | ".markdown";
+  extension: ".md" | ".markdown" | ".mdx";
   fields: GithubLayoutField[];
   /** Where a post is served, as a URL structure ("/blog/[slug]/"). */
   urlStructure: string;
@@ -158,10 +158,12 @@ export function detectGithubLayout(snapshot: RepoSnapshot): LayoutDetection {
   const inDir = snapshot.paths.filter(p => p.startsWith(postsDir + "/") && MARKDOWN.test(p) && !IGNORED.test(p) &&
     (!NOT_A_POST.test(p) || /\/index\.(md|mdx)$/i.test(p) && p.split("/").length === postsDir.split("/").length + 2));
   const markdownOnly = inDir.filter(p => !/\.mdx$/i.test(p));
-  if (!markdownOnly.length && framework !== "astro") return { ok: false, reason: "mdx_only", detail: "Your posts are MDX files; Pentra writes plain Markdown." };
+  // P249 (Oct 30 2026): a blog that keeps only MDX posts (the Tailwind Next.js starter, many Gatsby blogs) gets MDX files
+  // whose body MDX compiles (mdxSafeMarkdown); its posts' YAML frontmatter is mirrored as for Markdown.
+  const mdx = !markdownOnly.length && framework !== "astro";
   const indexStyle = inDir.every(p => /\/index\.(md|mdx|markdown)$/i.test(p) && p.split("/").length === postsDir.split("/").length + 2);
   const dated = inDir.every(p => /\/\d{4}-\d{2}-\d{2}-[^/]+$/.test(p));
-  const extension = inDir.filter(p => /\.markdown$/i.test(p)).length > inDir.length / 2 ? ".markdown" : ".md";
+  const extension = mdx ? ".mdx" : inDir.filter(p => /\.markdown$/i.test(p)).length > inDir.length / 2 ? ".markdown" : ".md";
   const samples = inDir.filter(p => snapshot.files[p]).sort().reverse().slice(0, 3);
   const fields = mirroredFields(samples.map(p => snapshot.files[p]));
   if (!fields || !samples.length) return { ok: false, reason: "no_posts", detail: "The posts found have no frontmatter Pentra can follow." };
@@ -204,7 +206,26 @@ export function renderLayoutPost(layout: GithubLayout, post: { slug: string; tit
     lines.push(`${field.key}: ${value}`);
   }
   lines.push(`pentraDeliveryKey: ${JSON.stringify(post.deliveryKey)}`);
-  return { path: `${layout.postsDir}/${name}`, content: `---\n${lines.join("\n")}\n---\n\n${post.markdown.trim()}\n` };
+  const body = layout.extension === ".mdx" ? mdxSafeMarkdown(post.markdown.trim()) : post.markdown.trim();
+  return { path: `${layout.postsDir}/${name}`, content: `---\n${lines.join("\n")}\n---\n\n${body}\n` };
+}
+
+/** P249 (Oct 30 2026): Markdown that MDX compiles. MDX reads `{` and `}` as code and `<` as a component tag, and a
+ * malformed one fails the site's whole build. Outside fenced and inline code they are escaped, an autolink becomes a
+ * plain link, and a raw HTML block (an embedded video) is left out. */
+export function mdxSafeMarkdown(markdown: string): string {
+  const out: string[] = [];
+  let fence: string | null = null, htmlBlock = false;
+  for (const line of markdown.split("\n")) {
+    const opener = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (fence) { out.push(line); if (opener && opener[1][0] === fence[0] && opener[1].length >= fence.length) fence = null; continue; }
+    if (opener) { fence = opener[1]; out.push(line); continue; }
+    if (htmlBlock) { if (!line.trim()) { htmlBlock = false; out.push(line); } continue; }
+    if (/^\s*<(?!https?:\/\/)[A-Za-z!\/]/.test(line)) { htmlBlock = true; continue; }
+    out.push(line.split(/(`+[^`]*`+)/).map((part, i) => i % 2 ? part
+      : part.replace(/<(https?:\/\/[^>\s]+)>/g, "[$1]($1)").replace(/[{}]/g, c => `\\${c}`).replace(/</g, "&lt;")).join(""));
+  }
+  return out.join("\n");
 }
 
 /** P244 (Oct 30 2026): a site whose own blog layout Pentra writes into renders the article with its own templates (page
