@@ -152,6 +152,19 @@ export function relatedReadingRepairProposal(markdown: string, titleByHref: Map<
   }
   return changed && repaired.length > 0 ? { before, replacement: repaired.join("\n") } : null;
 }
+/** P250 (Oct 30 2026): until P248 the writer was told to label a framework it proposes "as recommendations, not
+ * established industry facts", and 10 of the owner sites' live pages say so in one stock clause ("The method is a
+ * recommendation, not an industry standard, and ..."): pipeline text since P248. The repair deletes only that contrast
+ * clause, so the advice around it stays word for word and nothing is added; readerTextRepair then proves it. */
+const STOCK_CONTRAST = /(\brecommendations?),?\s+(?:not|rather than)\s+(?:an?\s+)?(?:industry|official|universal|established|formal)\s+(?:standards?|rules?|benchmarks?|requirements?|best[- ]practices?|facts?)(?=[\s,.;:!?)]|$)/gi;
+export function stockDisclaimerRepairProposal(markdown: string): { before: string; replacement: string } | null {
+  for (const block of markdown.split(/\n\s*\n/).map(part => part.trim())) {
+    if (!block || /\n/.test(block) || /^(?:#|[-*+]\s|\d+[.)]\s|>|\||```|<)/.test(block) || pipelineText(block).length === 0) continue;
+    const replacement = block.replace(STOCK_CONTRAST, "$1");
+    if (replacement !== block && pipelineText(replacement).length === 0) return { before: block, replacement };
+  }
+  return null;
+}
 const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const plain = (s: string) => !/[\n\[\]`#*<>|{}]|https?:/i.test(s);
 
@@ -222,7 +235,7 @@ export const RELATED_REPAIR_SLOT_LEAD_MS = 6 * 3_600_000, RELATED_REPAIR_SPACING
 /** P220 (Oct 26 2026): the rules the link repair runs by. A change to them (2, P218: links to consolidated pages)
  * makes every page due once more: a pass records the rules it started under, and a site whose last finished pass
  * ran under earlier rules runs a fresh one, instead of resting a week with pages passed under the old rules. */
-export const RELATED_REPAIR_VERSION = 3; // 3: P221 (a title cut after a dropped leading question word)
+export const RELATED_REPAIR_VERSION = 4; // 3: P221 (a title cut after a dropped leading question word); 4: P250 (the stock disclaimer)
 export function relatedRepairAllowed(site: Doc<"sites">, now: number): boolean {
   const s = site.contentSchedule;
   return Boolean(s && site.serviceMode === "growth_first" && site.autopilotEnabled && s.autopilotSelectedAt && s.autopublishConsentAt &&

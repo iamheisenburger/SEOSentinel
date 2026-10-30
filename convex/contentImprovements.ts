@@ -13,7 +13,7 @@ import { archiveConsumedImprovementArtifact } from "./articles";
 import type { Doc, Id } from "./_generated/dataModel";
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDomainBinding";
 import { pagePath, planCorrectiveChange, RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_SPACING_MS, RELATED_REPAIR_VERSION, relatedReadingHrefs, relatedReadingRepairProposal, relatedRepairAllowed,
-  verifyCorrectivePatch } from "./lib/contentCorrection";
+  stockDisclaimerRepairProposal, verifyCorrectivePatch } from "./lib/contentCorrection";
 import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
 import { canonicalBlogHref, consolidates, servedOnItsOwnUrl } from "./lib/pentraConsolidation";
 import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
@@ -148,6 +148,7 @@ async function insertCorrectionJob(ctx: MutationCtx, site: Doc<"sites">, args: {
  * A page left for its unfinished work is looked at again a day later. */
 const RELATED_REPAIR_SCAN = 20;
 const RELATED_REPAIR_REASON = "Autopilot completes Related reading link titles it cut at its old 8-word limit, and points links to consolidated pages at the page they now lead to.";
+const STOCK_DISCLAIMER_REASON = "Autopilot removes the stock clause its writer added before P248 (\"a recommendation, not an industry standard\").";
 /** The titles of the published articles a Related reading list links, by href. */
 async function relatedReadingTitles(ctx: MutationCtx, site: Doc<"sites">, hrefs: string[]) {
   const titles = new Map<string, string>();
@@ -180,11 +181,13 @@ export const requestRelatedReadingRepair = internalMutation({ args: { siteId: v.
     if (!e?.active || e.kind !== "github" || e.profileHash !== confirmedContentProfileHash(site) || e.connectionHash !== contentConnectionHash(site) ||
       schedule.profileHash !== e.profileHash || schedule.connectionHash !== e.connectionHash) continue;
     const hrefs = relatedReadingHrefs(e.markdown);
-    if (!hrefs.length) continue;
     // P218: the titles of the pages consolidated links now lead to, too.
     const finals = consolidates(site.domain) ? hrefs.map(href => canonicalBlogHref(site.domain, href)) : [];
-    const proposal = relatedReadingRepairProposal(e.markdown, await relatedReadingTitles(ctx, site, [...hrefs, ...finals]), relatedReadingTitle,
-      { domain: site.domain, selfHref: pagePath(page) });
+    const related = hrefs.length ? relatedReadingRepairProposal(e.markdown, await relatedReadingTitles(ctx, site, [...hrefs, ...finals]), relatedReadingTitle,
+      { domain: site.domain, selfHref: pagePath(page) }) : null;
+    // P250: a page whose links are whole may still carry the writer's stock disclaimer from before P248.
+    const stock = related ? null : stockDisclaimerRepairProposal(e.markdown);
+    const proposal = related ?? stock;
     if (!proposal) continue;
     // A page whose own work is unfinished (a refresh waiting for its slot) keeps
     // its source: the repair would make that work's exact base stale.
@@ -192,10 +195,11 @@ export const requestRelatedReadingRepair = internalMutation({ args: { siteId: v.
     if (last && !["verified", "failed"].includes(last.contentWork?.stage ?? "")) { retryAt ??= now + RELATED_REPAIR_RETRY_MS; continue; }
     let jobId: Id<"jobs">;
     try {
-      const patch = planCorrectiveChange(site, page, { kind: "related_reading_titles", before: proposal.before,
-        replacement: proposal.replacement, reason: RELATED_REPAIR_REASON });
+      const patch = planCorrectiveChange(site, page, { kind: stock ? "reader_text_repair" : "related_reading_titles", before: proposal.before,
+        replacement: proposal.replacement, reason: stock ? STOCK_DISCLAIMER_REASON : RELATED_REPAIR_REASON });
       jobId = await insertCorrectionJob(ctx, site, { pageId: page._id, baseRevision: e.sourceRevision, permissionVersion: e.version, patch, observedAt: now },
-        { opportunity: "Autopilot completes its own cut Related reading titles; not scheduled SEO delivery or growth", wake: "related_reading_repair" });
+        { opportunity: stock ? "Autopilot removes its own stock disclaimer from a live page; not scheduled SEO delivery or growth"
+          : "Autopilot completes its own cut Related reading titles; not scheduled SEO delivery or growth", wake: "related_reading_repair" });
     } catch { continue; } // a layout the exact path cannot map: the page keeps its titles
     await ctx.db.patch(siteId, { contentSchedule: { ...schedule, relatedRepairCursor: page._creationTime, relatedRepairAt: now,
       relatedRepairRetryAt: retryAt, relatedRepairPassVersion: passVersion }, updatedAt: now });

@@ -20,7 +20,7 @@ const MAILTO = `mailto:${EMAIL}?subject=${encodeURIComponent("Pentra beta")}&bod
 )}`;
 
 const GET = [
-  ["Starter free for 60 days", "10 articles a month on 1 website. No card needed, and nothing is charged when the beta ends."],
+  ["Starter free for 60 days", "10 articles a month on 1 website. No card needed, and nothing is charged when the beta ends: after 60 days you keep the free plan (3 articles a month) unless you choose a paid one."],
   ["The whole system, on Autopilot", "Keyword research, writing from your confirmed facts, every statistic checked against its source, and publishing to your site on the schedule you pick."],
   ["A direct line to the founder", "Tell us what's wrong and we fix it. Your feedback decides what Pentra builds next."],
 ] as const;
