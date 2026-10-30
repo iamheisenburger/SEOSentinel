@@ -96,4 +96,4 @@ If you've worked through the framework above and concluded that your real bottle
 
 ## Related reading
 
-- [Article Refresh Strategy: Complete Guide to Updating Old Content for Better Rankings](/blog/article-refresh-strategy-guide)
+- [A Practical Guide to Improving Pages Close to Page One](/blog/improving-pages-close-to-page-one)
