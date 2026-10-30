@@ -43,6 +43,8 @@ export function detectFramework(paths: string[]): GithubLayoutFramework | null {
   return null;
 }
 
+const BLOG_FOLDER = /^(?:blog|blogs|posts|articles|news|writing|journal|insights)$/i;
+const FIXED_POST_DIR = /^(?:_posts|posts|content\/(?:blog|posts|articles)|blog|src\/content\/blog|src\/posts|data\/(?:blog|posts)|src\/content\/[^/]+|src\/data\/[^/]+|content\/[^/]+)$/;
 /** Folders holding the framework's posts, the most-populated first. */
 export function postFolders(framework: GithubLayoutFramework, paths: string[], files: Record<string, string>): string[] {
   const posts = paths.filter(p => MARKDOWN.test(p) && !IGNORED.test(p));
@@ -54,8 +56,18 @@ export function postFolders(framework: GithubLayoutFramework, paths: string[], f
     const config = files["src/content.config.ts"] ?? files["src/content.config.mjs"] ?? files["src/content/config.ts"] ?? "";
     const bases = [...config.matchAll(/base:\s*["'`]\.?\/?([^"'`]+?)\/?["'`]/g)].map(m => m[1]);
     candidates = bases.length ? bases : [...new Set(posts.filter(p => /^src\/(content|data)\/[^/]+\//.test(p)).map(p => p.split("/").slice(0, 3).join("/")))];
-  } else candidates = ["_posts", "posts", "content/blog", "content/posts", "content/articles", "blog", "src/content/blog", "src/posts", "data/blog", "data/posts"];
-  return candidates.map(dir => ({ dir, n: count(dir) })).filter(c => c.n > 0).sort((a, b) => b.n - a.n).map(c => c.dir);
+  } else {
+    // P252 (Oct 30 2026): Next.js and Gatsby blogs keep posts wherever their loader reads them (openstatus:
+    // src/content/pages/blog, midday: src/app/updates/posts); any folder named like a blog with two or more posts counts.
+    const named = [...new Set(posts.map(p => p.split("/").slice(0, -1).join("/")).flatMap(dir => {
+      const parts = dir.split("/"), at = parts.findIndex(part => BLOG_FOLDER.test(part));
+      return at >= 0 && !parts.some(part => /^(?:docs?|documentation|changelogs?|releases?)$/i.test(part)) ? [parts.slice(0, at + 1).join("/")] : [];
+    }))];
+    candidates = [...new Set(["_posts", "posts", "content/blog", "content/posts", "content/articles", "blog", "src/content/blog", "src/posts", "data/blog", "data/posts",
+      ...named])];
+  }
+  return candidates.map(dir => ({ dir, n: count(dir) })).filter(c => c.n > 0 && (c.n >= 2 || !c.dir.includes("/") || FIXED_POST_DIR.test(c.dir)))
+    .sort((a, b) => b.n - a.n).map(c => c.dir);
 }
 
 /** One post's frontmatter: its top-level keys in order, each with its raw YAML block. Hugo's TOML (+++) is converted for
@@ -109,17 +121,32 @@ export function mirroredFields(posts: string[]): GithubLayoutField[] | null {
   return fields;
 }
 
+/** P252 (Oct 30 2026): the URL segments in front of a post route's slug parameter. Next.js route groups ("(marketing)")
+ * never appear in the URL; a route with another dynamic segment ("[lang]") cannot name one URL, so it is left out.
+ * shadcn-ui/taxonomy serves content/blog posts at app/(marketing)/blog/[...slug] and had been read as /(docs)/guides. */
+function routeSegments(paths: string[], re: RegExp): string[][] {
+  return paths.map(p => re.exec(p)).filter((m): m is RegExpExecArray => Boolean(m))
+    .map(m => m[1].split("/").filter(Boolean).filter(segment => !/^\(.*\)$/.test(segment)))
+    .filter(segments => segments.every(segment => !/^\[.*\]$/.test(segment)));
+}
+/** The route serving the posts folder: the one named like it ("blog" for content/blog), then a usual blog name, then any. */
+function postRoute(candidates: string[][], postsDir: string): string[] | undefined {
+  const leaf = (postsDir.split("/").at(-1) ?? "").toLowerCase(), last = (segments: string[]) => (segments.at(-1) ?? "").toLowerCase();
+  return candidates.find(segments => last(segments) === leaf) ??
+    candidates.find(segments => ["blog", "posts", "articles", "news", "writing", "journal", "insights", "updates"].includes(last(segments))) ?? candidates[0];
+}
+const SLUG_PARAM = String.raw`\[\[?(?:\.\.\.)?slug\]\]?`;
+
 /** Where the framework serves a post, as a URL structure, from its routes (the action confirms it on an existing post). */
 export function urlStructureFor(framework: GithubLayoutFramework, postsDir: string, paths: string[]): string {
-  const route = (re: RegExp) => paths.map(p => re.exec(p)).find(Boolean);
   if (framework === "astro") {
-    const m = route(/^src\/pages\/(.*?)\/?\[(?:\.\.\.)?slug\]\.(astro|md|mdx|ts|js)$/);
-    return m ? `/${m[1] ? m[1] + "/" : ""}[slug]/` : "/blog/[slug]/";
+    const segments = postRoute(routeSegments(paths, new RegExp(String.raw`^src/pages/(.*?)/?${SLUG_PARAM}\.(astro|md|mdx|ts|js)$`)), postsDir);
+    return segments ? `/${segments.length ? segments.join("/") + "/" : ""}[slug]/` : "/blog/[slug]/";
   }
   if (framework === "nextjs") {
-    const m = route(/^(?:src\/)?app\/(.*?)\/?\[(?:\.\.\.)?slug\]\/page\.(tsx|ts|jsx|js|mdx)$/) ??
-      route(/^(?:src\/)?pages\/(.*?)\/?\[(?:\.\.\.)?slug\]\.(tsx|ts|jsx|js|mdx)$/);
-    return m ? `/${m[1] ? m[1] + "/" : ""}[slug]` : "/blog/[slug]";
+    const segments = postRoute([...routeSegments(paths, new RegExp(String.raw`^(?:src/)?app/(.*?)/?${SLUG_PARAM}/page\.(tsx|ts|jsx|js|mdx)$`)),
+      ...routeSegments(paths, new RegExp(String.raw`^(?:src/)?pages/(.*?)/?${SLUG_PARAM}\.(tsx|ts|jsx|js|mdx)$`))], postsDir);
+    return segments ? `/${segments.length ? segments.join("/") + "/" : ""}[slug]` : "/blog/[slug]";
   }
   if (framework === "hugo") return `/${postsDir.split("/").slice(1).join("/")}/[slug]/`;
   if (framework === "gatsby") return "/[slug]/";
@@ -146,7 +173,53 @@ export function headlessCms(packageJson: string | undefined): string | null {
   } catch { return null; }
 }
 
+/** P252 (Oct 30 2026): a monorepo keeps its site in a folder (Turborepo's apps/web or apps/www, or web/, site/,
+ * marketing/): the folder holding a framework's config is the site's root and its posts are found inside it. The
+ * repository root wins when it holds the site itself; null when no folder does. */
+const SITE_FOLDER = /^(?:apps\/[^/]+|web|www|site|website|marketing|frontend|landing|blog)$/;
+const within = (paths: string[], dir: string) => paths.filter(p => p.startsWith(dir + "/")).map(p => p.slice(dir.length + 1));
+const relativeFiles = (files: Record<string, string>, dir: string) =>
+  Object.fromEntries(Object.entries(files).filter(([path]) => path.startsWith(dir + "/")).map(([path, text]) => [path.slice(dir.length + 1), text]));
+/** Several apps (midday: apps/dashboard and apps/website): the one whose blog holds the most posts, then the one named
+ * like a website. */
+const SITE_NAME_ORDER = ["website", "www", "web", "marketing", "site", "landing", "blog", "frontend"];
+export function appRoot(paths: string[]): string | null {
+  if (detectFramework(paths)) return "";
+  const dirs = [...new Set(paths.map(p => p.split("/").slice(0, -1).join("/")).filter(dir => SITE_FOLDER.test(dir)))]
+    .filter(dir => detectFramework(within(paths, dir)));
+  const posts = (dir: string) => {
+    const rel = within(paths, dir), folder = postFolders(detectFramework(rel)!, rel, {})[0];
+    return folder ? rel.filter(p => p.startsWith(folder + "/") && MARKDOWN.test(p)).length : 0;
+  };
+  const rank = (dir: string) => { const at = SITE_NAME_ORDER.indexOf(dir.split("/").at(-1)!.toLowerCase()); return at < 0 ? SITE_NAME_ORDER.length : at; };
+  return dirs.map(dir => ({ dir, n: posts(dir), r: rank(dir) })).sort((a, b) => b.n - a.n || a.r - b.r || a.dir.localeCompare(b.dir))[0]?.dir ?? null;
+}
+/** What detection reads first: Astro's content config and package.json (P248's CMS check), in the site's folder. */
+export function layoutConfigPaths(paths: string[]): string[] {
+  const root = appRoot(paths) ?? "";
+  return ["src/content.config.ts", "src/content.config.mjs", "src/content/config.ts", "package.json"]
+    .map(file => root ? `${root}/${file}` : file).filter(file => paths.includes(file));
+}
+/** Then up to three of the newest posts in the folder those point to. */
+export function layoutSamplePaths(paths: string[], files: Record<string, string>): string[] {
+  const root = appRoot(paths);
+  if (root === null) return [];
+  const rel = root ? within(paths, root) : paths, framework = detectFramework(rel)!;
+  const folder = postFolders(framework, rel, root ? relativeFiles(files, root) : files)[0];
+  if (!folder) return [];
+  const prefix = root ? `${root}/${folder}/` : `${folder}/`;
+  return paths.filter(p => p.startsWith(prefix) && MARKDOWN.test(p)).sort().reverse().slice(0, 3);
+}
+
 export function detectGithubLayout(snapshot: RepoSnapshot): LayoutDetection {
+  const root = appRoot(snapshot.paths);
+  if (!root) return detectSiteLayout(snapshot);
+  const inner = detectSiteLayout({ paths: within(snapshot.paths, root), files: relativeFiles(snapshot.files, root) });
+  return inner.ok ? { ...inner, layout: { ...inner.layout, postsDir: `${root}/${inner.layout.postsDir}`,
+    sample: { ...inner.layout.sample, path: `${root}/${inner.layout.sample.path}` } } } : inner;
+}
+
+function detectSiteLayout(snapshot: RepoSnapshot): LayoutDetection {
   const framework = detectFramework(snapshot.paths);
   const cms = headlessCms(snapshot.files["package.json"]);
   const fromCms = (name: string): LayoutDetection => ({ ok: false, reason: "headless_cms",

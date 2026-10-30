@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { detectFramework, detectGithubLayout, postFolders, type GithubLayout } from "./lib/githubLayout";
+import { detectGithubLayout, layoutConfigPaths, layoutSamplePaths, type GithubLayout } from "./lib/githubLayout";
 
 /** P243 (Oct 30 2026): after a site's GitHub repository is verified, read the repository once and record where its own
  * blog keeps posts (convex/lib/githubLayout.ts), so articles land where the site shows them. A site that has published
@@ -65,16 +65,13 @@ export const detectSiteGithubLayout = internalAction({ args: { siteId: v.id("sit
     return { detected: false };
   }
   const files: Record<string, string> = {};
-  const framework = detectFramework(paths);
-  // P248: package.json names a headless CMS when the blog's posts live there instead of in the repository.
-  for (const config of ["src/content.config.ts", "src/content.config.mjs", "src/content/config.ts", "package.json"]) {
-    if (paths.includes(config)) try { files[config] = await githubText(token, owner, repo, config, context.branch); } catch { /* optional */ }
+  // P248: package.json names a headless CMS when the blog's posts live there instead of in the repository. P252: in a
+  // monorepo, the configs and posts are read in the site's own folder (apps/web, www, ...).
+  for (const config of layoutConfigPaths(paths)) {
+    try { files[config] = await githubText(token, owner, repo, config, context.branch); } catch { /* optional */ }
   }
-  const folder = framework ? postFolders(framework, paths, files)[0] : undefined;
-  if (folder) {
-    for (const post of paths.filter((p) => p.startsWith(folder + "/") && /\.(md|markdown|mdx)$/i.test(p)).sort().reverse().slice(0, 3)) {
-      try { files[post] = await githubText(token, owner, repo, post, context.branch); } catch { /* skipped */ }
-    }
+  for (const post of layoutSamplePaths(paths, files)) {
+    try { files[post] = await githubText(token, owner, repo, post, context.branch); } catch { /* skipped */ }
   }
   const detection = detectGithubLayout({ paths, files });
   if (!detection.ok) {

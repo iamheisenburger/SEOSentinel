@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { detectGithubLayout, layoutArticleLive, mdxSafeMarkdown, renderLayoutPost } from "../convex/lib/githubLayout.ts";
+import { appRoot, detectGithubLayout, layoutArticleLive, layoutConfigPaths, layoutSamplePaths, mdxSafeMarkdown, renderLayoutPost } from "../convex/lib/githubLayout.ts";
 import { publicationDeliveryConfig } from "../convex/lib/publicationArtifact.ts";
 
 const ASTRO_CONFIG = `import { defineCollection } from 'astro:content';
@@ -107,7 +107,8 @@ test("P248 a blog whose posts come from a headless CMS is named, never connected
   assert.equal((detectGithubLayout({ paths: ["next.config.js", "package.json"], files: { "package.json": pkg({}) } }) as { reason: string }).reason, "no_posts");
   const withPosts = { ...STARTERS.nextjs, files: { ...STARTERS.nextjs.files, "package.json": pkg({ "@sanity/client": "6.0.0" }) } };
   assert.equal(detectGithubLayout(withPosts).ok, true, "Markdown posts in the repository still win");
-  assert.match(readFileSync("convex/githubLayoutDetect.ts", "utf8"), /"src\/content\/config\.ts", "package\.json"\]\) \{/);
+  assert.match(readFileSync("convex/lib/githubLayout.ts", "utf8"), /\["src\/content\.config\.ts", "src\/content\.config\.mjs", "src\/content\/config\.ts", "package\.json"\]/);
+  assert.match(readFileSync("convex/githubLayoutDetect.ts", "utf8"), /for \(const config of layoutConfigPaths\(paths\)\) \{/);
   assert.match(readFileSync("src/components/pentra-setup-choice.tsx", "utf8"), /\{noBlog\.reason === "headless_cms" \? noBlog\.detail : <>We couldn&apos;t find/);
 });
 
@@ -128,5 +129,62 @@ test("P249 an MDX-only blog gets an MDX post with its own frontmatter and a body
   assert.match(file.content, /```ts\nconst a = \{ b: 1 \} < 2;\n```/, "code is untouched");
   assert.match(file.content, /Use `\{ slug \}` here\./, "inline code is untouched");
   assert.equal(mdxSafeMarkdown("Plain text stays plain."), "Plain text stays plain.");
+});
+
+// P252 (Oct 30 2026): shadcn-ui/taxonomy serves its content/blog posts at app/(marketing)/blog/[...slug]; Pentra read the
+// first post route it met, /(docs)/guides/[slug], so every article would have been checked at a URL that does not exist.
+test("P252 a post route's URL leaves out route groups and other dynamic segments and matches the posts folder", () => {
+  const post = "---\ntitle: Preview Mode for Static Generation\ndescription: How to preview.\ndate: \"2023-01-02\"\nauthors:\n  - shadcn\n---\n\nBody";
+  const taxonomy = { paths: ["next.config.mjs", "package.json", "app/(docs)/docs/[[...slug]]/page.tsx", "app/(docs)/guides/[...slug]/page.tsx",
+    "app/(marketing)/blog/[...slug]/page.tsx", "app/(marketing)/page.tsx", "content/blog/preview-mode-headless-cms.mdx", "content/blog/server-client-components.mdx",
+    "content/guides/build-blog-using-contentlayer-mdx.mdx", "content/docs/index.mdx"],
+    files: { "content/blog/preview-mode-headless-cms.mdx": post, "content/blog/server-client-components.mdx": post } };
+  const detection = detectGithubLayout(taxonomy);
+  assert.ok(detection.ok, JSON.stringify(detection));
+  assert.equal(detection.layout.postsDir, "content/blog");
+  assert.equal(detection.layout.urlStructure, "/blog/[slug]");
+  const i18n = detectGithubLayout({ ...STARTERS.nextjs, paths: [...STARTERS.nextjs.paths.filter(p => !p.includes("[slug]")), "src/app/[lang]/posts/[slug]/page.tsx"] });
+  assert.equal(i18n.ok && i18n.layout.urlStructure, "/blog/[slug]", "a route under [lang] names no single URL: the default, which the live check confirms or refuses");
+  const astro = detectGithubLayout({ ...STARTERS.astro, paths: [...STARTERS.astro.paths, "src/pages/docs/[...slug].astro"] });
+  assert.equal(astro.ok && astro.layout.urlStructure, "/blog/[slug]/", "the route named like the posts folder wins over another route");
+});
+
+// P252: a monorepo (Turborepo's apps/web) keeps the site and its blog in a folder; Pentra looked only at the repository
+// root and offered paste.
+test("P252 a monorepo's site folder is found and its posts are written there", () => {
+  const post = "---\ntitle: \"Launch notes\"\ndescription: \"What shipped\"\ndate: \"2026-09-01\"\n---\n\nBody";
+  const repo = { paths: ["package.json", "turbo.json", "packages/ui/index.ts", "apps/docs/README.md", "apps/web/next.config.js", "apps/web/package.json",
+    "apps/web/app/(marketing)/blog/[slug]/page.tsx", "apps/web/content/blog/launch-notes.md", "apps/web/content/blog/pricing-update.md"],
+    files: { "apps/web/content/blog/launch-notes.md": post, "apps/web/content/blog/pricing-update.md": post } };
+  assert.equal(appRoot(repo.paths), "apps/web");
+  assert.deepEqual(layoutConfigPaths(repo.paths), ["apps/web/package.json"]);
+  assert.deepEqual(layoutSamplePaths(repo.paths, {}), ["apps/web/content/blog/pricing-update.md", "apps/web/content/blog/launch-notes.md"]);
+  const detection = detectGithubLayout(repo);
+  assert.ok(detection.ok, JSON.stringify(detection));
+  assert.equal(detection.layout.postsDir, "apps/web/content/blog");
+  assert.equal(detection.layout.urlStructure, "/blog/[slug]");
+  assert.equal(renderLayoutPost(detection.layout, ARTICLE).path, "apps/web/content/blog/competitive-keyword-research-method.md");
+  assert.equal(appRoot(STARTERS.nextjs.paths), "", "a site at the repository root stays there");
+  assert.equal(appRoot(["apps/dashboard/next.config.js", "apps/dashboard/src/app/page.tsx", "apps/website/next.config.mjs",
+    "apps/website/src/app/updates/posts/a.mdx", "apps/website/src/app/updates/posts/b.mdx"]), "apps/website", "the app with the blog, not the dashboard");
+  const sanity = detectGithubLayout({ paths: ["package.json", "apps/www/next.config.mjs", "apps/www/package.json", "apps/www/app/blog/[slug]/page.tsx"],
+    files: { "apps/www/package.json": JSON.stringify({ dependencies: { next: "15.0.0", "next-sanity": "9.0.0" } }) } });
+  assert.equal(!sanity.ok && sanity.reason, "headless_cms", "the CMS check reads the site folder's package.json");
+});
+
+// P252: real monorepos keep posts outside the usual folders (openstatus: apps/web/src/content/pages/blog; midday:
+// apps/website/src/app/updates/posts); a folder named like a blog with two or more posts counts, never docs or changelogs.
+test("P252 a blog folder outside the usual places is found; docs and changelogs never are", () => {
+  const post = "---\ntitle: \"2026 roadmap\"\ndescription: \"What comes next\"\npublishedAt: \"2026-01-01\"\n---\n\nBody";
+  const openstatus = { paths: ["package.json", "apps/web/next.config.js", "apps/web/package.json", "apps/web/src/app/(landing)/blog/[slug]/page.tsx",
+    "apps/web/src/content/pages/blog/2026-roadmap.mdx", "apps/web/src/content/pages/blog/2023-year-review.mdx", "apps/web/src/content/pages/changelog/a.mdx",
+    "apps/web/src/content/pages/changelog/b.mdx", "apps/web/src/content/pages/changelog/c.mdx", "apps/docs/content/docs/x.mdx"],
+    files: { "apps/web/src/content/pages/blog/2026-roadmap.mdx": post, "apps/web/src/content/pages/blog/2023-year-review.mdx": post } };
+  const detection = detectGithubLayout(openstatus);
+  assert.ok(detection.ok, JSON.stringify(detection));
+  assert.equal(detection.layout.postsDir, "apps/web/src/content/pages/blog", "the blog, though the changelog has more files");
+  assert.equal(detection.layout.urlStructure, "/blog/[slug]");
+  const docsOnly = detectGithubLayout({ paths: ["next.config.js", "src/app/docs/[slug]/page.tsx", "content/docs/a.md", "content/docs/b.md"], files: {} });
+  assert.equal(docsOnly.ok, false, "documentation is not a blog");
 });
 
