@@ -10,12 +10,14 @@ const page = readFileSync("src/app/(dashboard)/sites/[siteId]/page.tsx", "utf8")
 
 test("a new site with nothing connected is asked where its website runs before anything says GitHub", () => {
   assert.match(page, /const choosingPlatform = Boolean\(site\.contentSetupRequestedAt\) && method === "github" && !hasGithubToken && !site\.repoOwner && !editing;/);
-  assert.match(page, /\{choosingPlatform \? "Not connected yet" : labels\[method\] \|\| method\}/, "the heading doesn't claim GitHub");
+  // P247: setup always asks first (P213), so the heading names the owner's own choice and Settings doesn't ask again.
+  assert.match(page, /\{choosingPlatform \? "GitHub · not connected yet" : labels\[method\] \|\| method\}/);
   assert.match(page, /\{isGithub && !choosingPlatform && \(/, "the GitHub status box waits for the choice");
-  assert.match(page, /<p className="[^"]*">Where does your website run\?<\/p>/);
+  assert.doesNotMatch(page, /aria-label="Where does your website run\?"|>Where does your website run\?</);
+  assert.match(page, /<p className="[^"]*">Not on GitHub\?<\/p>/, "the other platforms stay one click away");
   const choices = /const PLATFORM_CHOICES[^=]*= (\[[^\n]*\]);/.exec(page)?.[1] ?? "";
   for (const platform of ["wordpress", "shopify", "webflow", "ghost"]) assert.ok(choices.includes(`"${platform}"`), platform);
-  assert.match(page, /<button onClick=\{connectGithub\} className=\{PLATFORM_CHOICE_CLS\}>GitHub \(Next\.js, Astro, Hugo or Jekyll blog\)<\/button>/);
+  assert.match(page, /<button onClick=\{connectGithub\} className=\{PLATFORM_CHOICE_CLS\}>Connect GitHub<\/button>/);
   assert.match(page, /<button onClick=\{\(\) => choose\("manual"\)\} className=\{PLATFORM_CHOICE_CLS\}>Something else: paste the articles yourself<\/button>/);
   assert.match(page, /const choose = \(value: string\) => \{ setConnectionError\(null\); setConnectionVerified\(false\); setMethod\(value\); setEditing\(true\); \};/,
     "a choice opens that platform's connection form");

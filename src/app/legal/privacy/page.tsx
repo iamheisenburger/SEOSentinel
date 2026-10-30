@@ -1,4 +1,5 @@
 import { Metadata } from "next";
+import { pageSocial } from "@/lib/page-social";
 import Link from "next/link";
 import { Radar, ArrowLeft } from "lucide-react";
 
@@ -6,6 +7,7 @@ export const metadata: Metadata = {
   title: "Privacy Policy",
   description: "Pentra privacy policy. How we collect, use, and protect your data.",
   alternates: { canonical: "https://pentra.dev/legal/privacy" },
+  ...pageSocial("Pentra Privacy Policy", "Pentra privacy policy. How we collect, use, and protect your data.", "https://pentra.dev/legal/privacy"),
 };
 
 export default function PrivacyPolicyPage() {

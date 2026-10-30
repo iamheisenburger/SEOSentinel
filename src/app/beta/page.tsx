@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageSocial } from "@/lib/page-social";
 import Link from "next/link";
 import { ArrowRight, Check, Radar } from "lucide-react";
 import { LandingNav } from "@/components/layout/landing-nav";
@@ -8,6 +9,7 @@ export const metadata: Metadata = {
   description:
     "Pentra is opening to 10 businesses: the Starter plan free for 60 days (10 researched, fact-checked articles a month on Autopilot) in exchange for honest feedback.",
   alternates: { canonical: "https://pentra.dev/beta" },
+  ...pageSocial("Pentra founding beta", "Pentra is opening to 10 businesses: the Starter plan free for 60 days (10 researched, fact-checked articles a month on Autopilot) in exchange for honest feedback.", "https://pentra.dev/beta"),
 };
 
 const WRAP = "mx-auto w-full max-w-[1000px] px-6";
@@ -19,7 +21,7 @@ const MAILTO = `mailto:${EMAIL}?subject=${encodeURIComponent("Pentra beta")}&bod
 
 const GET = [
   ["Starter free for 60 days", "10 articles a month on 1 website. No card needed, and nothing is charged when the beta ends."],
-  ["The whole system, on Autopilot", "Keyword research, writing from your confirmed facts, an independent fact check and publishing to your site on the schedule you pick."],
+  ["The whole system, on Autopilot", "Keyword research, writing from your confirmed facts, every statistic checked against its source, and publishing to your site on the schedule you pick."],
   ["A direct line to the founder", "Tell us what's wrong and we fix it. Your feedback decides what Pentra builds next."],
 ] as const;
 
@@ -30,8 +32,8 @@ const ASK = [
 ] as const;
 
 const FIT = [
-  "Your site runs on WordPress, Shopify, Webflow or Ghost, or has a Next.js, Astro, Hugo or Jekyll blog with Markdown posts in a GitHub repository. On other platforms Pentra writes and you paste.",
-  "You sell a real product or service and want more customers from Google and AI answers.",
+  "Your site has a Next.js, Astro, Hugo, Jekyll or Gatsby blog with Markdown posts in a GitHub repository. On any other platform Pentra writes each article and you paste it.",
+  "You sell a real product or service and want more customers from Google.",
   "You can give SEO time. New articles usually take weeks to months to rank. In 60 days you'll see the full system working and early Search Console data, not a guaranteed traffic spike.",
 ] as const;
 

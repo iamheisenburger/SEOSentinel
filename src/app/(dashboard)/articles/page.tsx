@@ -196,7 +196,8 @@ export default function ArticlesPage() {
 
       {readiness?.ownerDraft && (
         <section aria-label="Owner-requested draft" className="rounded-lg border border-white/[0.06] p-4 text-sm">
-          <p>Generate a researched draft for your review. Nothing publishes until you approve it.</p>
+          <p>{readiness.autopilot?.on ? "Autopilot publishes your scheduled articles. Want one more? Generate a researched draft for your review: it publishes only after you approve it."
+            : "Generate a researched draft for your review. Nothing publishes until you approve it."}</p>
           {allowance ? <p>Each new draft uses 1 of your {allowance.limit} articles this month ({allowance.used} used). Editing a draft and requesting review again is free.</p>
             : readiness.ownerDraft.maximumMicroUsd != null && <p>Counts toward your monthly article allowance.</p>}
           {readiness.ownerDraft.latest && <p role="status">Latest draft: {stageLabel(readiness.ownerDraft.latest.stage).toLowerCase()}. {readiness.ownerDraft.latest.issue}

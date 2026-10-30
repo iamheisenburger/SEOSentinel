@@ -84,7 +84,7 @@ export function addWebsiteEmail(): { subject: string; text: string } {
     "",
     "What's left: add your website's address in your dashboard: https://pentra.dev/dashboard",
     "",
-    "Pentra then reads what your business sells and you choose how it publishes: to your site directly (WordPress, Shopify, Webflow, Ghost or GitHub), or you paste the articles in yourself.",
+    "Pentra then reads what your business sells and you choose how it publishes: to your site directly (a Next.js, Astro, Hugo, Jekyll or Gatsby blog on GitHub; WordPress, Shopify, Webflow and Ghost are in beta), or you paste the articles in yourself.",
     "",
     "If something in setup didn't work, reply to this email and tell us where it stopped.",
     "",

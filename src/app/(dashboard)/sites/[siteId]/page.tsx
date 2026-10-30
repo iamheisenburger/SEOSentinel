@@ -57,7 +57,7 @@ type SiteView = NonNullable<FunctionReturnType<typeof api.sites.get>>;
 
 const TONE_OPTIONS = ["professional", "friendly", "casual", "authoritative"];
 // P201: where a new site's owner starts connecting (GitHub and paste have their own buttons).
-const PLATFORM_CHOICES: Array<[string, string]> = [["wordpress", "WordPress"], ["shopify", "Shopify"], ["webflow", "Webflow"], ["ghost", "Ghost"]];
+const PLATFORM_CHOICES: Array<[string, string]> = [["wordpress", "WordPress (beta)"], ["shopify", "Shopify (beta)"], ["webflow", "Webflow (beta)"], ["ghost", "Ghost (beta)"]];
 const PLATFORM_CHOICE_CLS = "rounded-lg border border-white/[0.1] bg-[#0E0F11] px-3 py-1.5 text-[12px] font-medium text-[#D0D6E0] transition hover:border-[#0EA5E9]/50 hover:text-[#F7F8F8]";
 // P200: what the repository step says when there is nothing to pick.
 const GITHUB_LIST_FAILED = "Pentra couldn't list your GitHub repositories. Reconnect GitHub and try again, or type the repository below.";
@@ -1153,7 +1153,9 @@ function ConnectionSection({ site }: { site: SiteView }) {
   // and stopped here: with no repository to pick, the page showed only two empty boxes.
   const [repoListError, setRepoListError] = useState<string | null>(null);
   // P201: a site set up through the content service with nothing connected yet first says where it runs. New sites
-  // default to GitHub, and one of the first real signups stopped inside GitHub's step.
+  // default to GitHub, and one of the first real signups stopped inside GitHub's step. P247: setup now always asks
+  // (nothing is preselected, P213), so GitHub here was the owner's own choice: Settings offers Connect GitHub, with the
+  // other platforms one click away, instead of asking "Where does your website run?" a second time.
   const choosingPlatform = Boolean(site.contentSetupRequestedAt) && method === "github" && !hasGithubToken && !site.repoOwner && !editing;
   const choose = (value: string) => { setConnectionError(null); setConnectionVerified(false); setMethod(value); setEditing(true); };
   // Connect opens GitHub in a small window; a blocked window used to fail with no message.
@@ -1237,11 +1239,11 @@ function ConnectionSection({ site }: { site: SiteView }) {
               <MethodIcon className="h-5 w-5 text-[#0EA5E9]" />
             </div>
             <div className="flex-1">
-              <p className="text-[14px] font-medium text-[#F7F8F8]">{choosingPlatform ? "Not connected yet" : labels[method] || method}</p>
+              <p className="text-[14px] font-medium text-[#F7F8F8]">{choosingPlatform ? "GitHub · not connected yet" : labels[method] || method}</p>
               {isGithub && site.repoOwner && !editing && (
                 <>
                   <p className="text-[12px] text-[#62666D] font-mono">{site.repoOwner}/{site.repoName}</p>
-                  <p className="text-[11px] text-[#62666D]">Articles are saved as Markdown files in <span className="font-mono">{githubContentFolder(site.urlStructure)}/</span>{site.repoDefaultBranch ? <> on <span className="font-mono">{site.repoDefaultBranch}</span></> : null}.</p>
+                  <p className="text-[11px] text-[#62666D]">Articles are saved as Markdown files in <span className="font-mono">{site.githubLayout?.postsDir ?? githubContentFolder(site.urlStructure)}/</span>{site.repoDefaultBranch ? <> on <span className="font-mono">{site.repoDefaultBranch}</span></> : null}.</p>
                 </>
               )}
               {isWp && site.wpUrl && !editing && (
@@ -1269,10 +1271,10 @@ function ConnectionSection({ site }: { site: SiteView }) {
                   className={inputCls}
                 >
                   <option value="github">GitHub</option>
-                  <option value="wordpress" disabled={!fullManagedBetaEnabled && !contentWordPress && method !== "wordpress"}>WordPress · Needs the Pentra plugin</option>
-                  <option value="shopify" disabled={!hostedAllowed && method !== "shopify"}>Shopify · store blog</option>
-                  <option value="webflow" disabled={!hostedAllowed && method !== "webflow"}>Webflow · CMS collection</option>
-                  <option value="ghost" disabled={!hostedAllowed && method !== "ghost"}>Ghost · Admin API</option>
+                  <option value="wordpress" disabled={!fullManagedBetaEnabled && !contentWordPress && method !== "wordpress"}>WordPress (beta) · Needs the Pentra plugin</option>
+                  <option value="shopify" disabled={!hostedAllowed && method !== "shopify"}>Shopify (beta) · store blog</option>
+                  <option value="webflow" disabled={!hostedAllowed && method !== "webflow"}>Webflow (beta) · CMS collection</option>
+                  <option value="ghost" disabled={!hostedAllowed && method !== "ghost"}>Ghost (beta) · Admin API</option>
                   <option value="webhook" disabled={!fullManagedBetaEnabled && method !== "webhook"}>Signed webhook · Beta</option>
                   <option value="manual">Copy &amp; Paste</option>
                 </select>
@@ -1388,13 +1390,16 @@ function ConnectionSection({ site }: { site: SiteView }) {
           )}
 
           {choosingPlatform && (
-            <div role="group" aria-label="Where does your website run?" className="flex flex-col gap-2 rounded-lg border border-[#0EA5E9]/[0.2] bg-[#0EA5E9]/[0.04] p-4">
-              <p className="text-[13px] font-medium text-[#F7F8F8]">Where does your website run?</p>
+            <div role="group" aria-label="Connect GitHub" className="flex flex-col gap-2 rounded-lg border border-[#0EA5E9]/[0.2] bg-[#0EA5E9]/[0.04] p-4">
+              <p className="text-[13px] font-medium text-[#F7F8F8]">Connect the GitHub repository your Next.js, Astro, Hugo, Jekyll or Gatsby blog builds from.</p>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={connectGithub} className={PLATFORM_CHOICE_CLS}>Connect GitHub</button>
+              </div>
+              <p className="text-[12px] text-[#8A8F98]">Not on GitHub?</p>
               <div className="flex flex-wrap gap-2">
                 {PLATFORM_CHOICES.map(([value, label]) => (
                   <button key={value} onClick={() => choose(value)} className={PLATFORM_CHOICE_CLS}>{label}</button>
                 ))}
-                <button onClick={connectGithub} className={PLATFORM_CHOICE_CLS}>GitHub (Next.js, Astro, Hugo or Jekyll blog)</button>
                 <button onClick={() => choose("manual")} className={PLATFORM_CHOICE_CLS}>Something else: paste the articles yourself</button>
               </div>
             </div>

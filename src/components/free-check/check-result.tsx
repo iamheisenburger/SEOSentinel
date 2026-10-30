@@ -217,7 +217,7 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
       <p className="mt-1.5 text-[14px] leading-relaxed text-[#C9CDD6]">
         {view.totalMissed > 0 && "Set up your site and Pentra starts with these searches, checked against the business facts you confirm. "}
         Pentra learns what you sell, writes a fact-checked article for {view.totalMissed > 0 ? "each search" : "searches your customers make"}, publishes it to your site
-        (WordPress, Shopify, Webflow, Ghost or GitHub, or you paste it in), and improves the pages closest to page one.
+        (a Next.js, Astro, Hugo, Jekyll or Gatsby blog on GitHub, or you paste it in), and improves the pages closest to page one.
         You see the results in your own Search Console data.
       </p>
       <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-3">

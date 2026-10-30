@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageSocial } from "@/lib/page-social";
 import Link from "next/link";
 import { LandingNav } from "@/components/layout/landing-nav";
 import { FreeCheckForm } from "@/components/free-check/check-form";
@@ -7,6 +8,7 @@ export const metadata: Metadata = {
   title: "Free SEO checker: the Google searches your site is missing",
   description: "Free SEO checker: see the real Google searches your customers make that your website has no page for, the ones you're close on, and the basics Google needs. No signup.",
   alternates: { canonical: "https://pentra.dev/check" },
+  ...pageSocial("Free SEO checker | Pentra", "See the real Google searches your customers make that your website has no page for. No signup.", "https://pentra.dev/check"),
 };
 
 const WRAP = "mx-auto w-full max-w-[1100px] px-6";
@@ -29,7 +31,7 @@ const FAQ = [
   ["Where do the numbers come from?", "Monthly searches and competition come from Google data through DataForSEO, for the country your website targets. Pentra never invents a search: every one has measured demand."],
   ["Does it work for a local business?", "Yes. When your homepage shows you serve particular cities or areas, Pentra checks the searches that name them, like \"ac repair austin\", because a country-wide search isn't your customers' and isn't one a local page can win."],
   ["What does competition mean?", "How hard it is to reach Google's first page for a search, on a 0 to 100 scale. The check shows searches up to 30, which a smaller website can realistically win with one good page."],
-  ["What happens if I sign up?", "Pentra starts with the missed searches from your check, checked against the business facts you confirm. It learns what you sell, writes fact-checked articles for those searches and publishes them to your site (WordPress, Shopify, Webflow, Ghost or GitHub, or you paste them in). Then it improves the pages closest to page one. The free plan includes 3 articles a month, with no credit card."],
+  ["What happens if I sign up?", "Pentra starts with the missed searches from your check, checked against the business facts you confirm. It learns what you sell, writes fact-checked articles for those searches and publishes them to your site (a Next.js, Astro, Hugo, Jekyll or Gatsby blog on GitHub, or you paste them in). Then it improves the pages closest to page one. The free plan includes 3 articles a month, with no credit card."],
   ["Does the check change my website?", "No. It only reads your public pages, the way Google does."],
 ] as const;
 

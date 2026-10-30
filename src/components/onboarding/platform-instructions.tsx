@@ -14,7 +14,7 @@ import {
 const platforms = [
   {
     id: "github",
-    name: "GitHub (Next.js, Astro, Hugo or Jekyll Markdown blog)",
+    name: "GitHub (Next.js, Astro, Hugo, Jekyll or Gatsby Markdown blog)",
     icon: GitBranch,
     color: "#F7F8F8",
     steps: [

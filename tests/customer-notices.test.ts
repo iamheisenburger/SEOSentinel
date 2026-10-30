@@ -8,7 +8,7 @@ test("the add-your-website email says what's left, where, and how to turn emails
   assert.equal(email.subject, "Add your website to start Pentra");
   assert.match(email.text, /^You created a Pentra account, but you haven't added your website yet\./);
   assert.match(email.text, /What's left: add your website's address in your dashboard: https:\/\/pentra\.dev\/dashboard/);
-  assert.match(email.text, /WordPress, Shopify, Webflow, Ghost or GitHub\), or you paste the articles in yourself\./);
+  assert.match(email.text, /\(a Next\.js, Astro, Hugo, Jekyll or Gatsby blog on GitHub; WordPress, Shopify, Webflow and Ghost are in beta\), or you paste the articles in yourself\./);
   assert.match(email.text, /reply to this email and tell us where it stopped/);
   assert.match(email.text, /turn these emails off in Settings: https:\/\/pentra\.dev\/settings$/);
 });

@@ -8,9 +8,9 @@ import { useAuth } from "@clerk/nextjs";
 const allFeatures = [
   "Autopilot or review-first publishing",
   "Written from your confirmed facts",
-  "Independent fact-check review",
+  "Statistic and price checks before publishing",
   "Improves pages near page one",
-  "WordPress, Shopify, Webflow, Ghost and GitHub publishing",
+  "Publishing to Next.js, Astro, Hugo, Jekyll and Gatsby blogs on GitHub",
   "Search Console reporting",
   "Weekly site health check",
 ];

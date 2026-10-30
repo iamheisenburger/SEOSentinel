@@ -42,7 +42,7 @@ function Hero() {
         </Link>
         <h1 className="animate-fade-in-up mt-6 max-w-[15ch] text-[clamp(2.6rem,6.4vw,5rem)] font-semibold leading-[1.02] tracking-[-0.04em] [text-wrap:balance]"
           style={{ animationDelay: "0.05s" }}>
-          More customers from Google and AI answers.
+          More customers from Google.
         </h1>
         <p className="animate-fade-in-up mt-6 max-w-[40rem] text-[17px] leading-relaxed text-[#8A8F98] md:text-[19px] [text-wrap:pretty]" style={{ animationDelay: "0.12s" }}>
           Pentra learns what you sell, researches what your customers search for, and publishes fact-checked
@@ -82,7 +82,7 @@ function Proof() {
 
 const PILLARS = [
   { title: "Fact-checked, never invented", desc: "Every article is written from the business facts you confirmed. Statistics must appear in the source they cite, and prices and plans must match your confirmed facts, or the article isn't published." },
-  { title: "Published, then confirmed live", desc: "Pentra publishes to WordPress, Shopify, Webflow, Ghost or your GitHub site, then opens the real page to confirm the exact article is live." },
+  { title: "Published, then confirmed live", desc: "Pentra commits each article to your blog's GitHub repository the way your own posts are kept, then opens the real page to confirm it is live." },
   { title: "Measured in your own data", desc: "Clicks and positions come from your Google Search Console, before and after every article and every improvement." },
 ];
 
@@ -124,7 +124,7 @@ function Statement() {
 
 const STEPS = [
   ["Add your website", "Pentra reads your homepage and suggests your business facts and your booking or signup page. You confirm them."],
-  ["Connect it once", "WordPress with the Pentra plugin, Shopify, Webflow, Ghost, a GitHub-based site, or paste-it-yourself on any other platform. Plus Google Search Console."],
+  ["Connect it once", "Your Next.js, Astro, Hugo, Jekyll or Gatsby blog on GitHub, or paste-it-yourself on any other platform. Plus Google Search Console."],
   ["Choose Autopilot or Review first", "Pick a pace from 1 to 21 articles a week, or approve every article yourself."],
   ["Pentra does the work", "Research, writing, fact check, publishing and a live-page check, for every article, on schedule."],
   ["It keeps improving what works", "Pages sitting just off page one are improved first, and a weekly health check catches what stops Google showing you."],
@@ -163,8 +163,8 @@ function HowItWorks() {
 /* ─── Feature rows ─────────────────────────────── */
 
 const ROWS = [
-  { label: "01 · Accuracy", title: "No invented facts.", body: "Most AI writers make up statistics. Pentra writes from the business facts you confirm and the searches your customers make, A draft with a statistic its source doesn't contain, or a price or plan you didn't confirm, is never published, and a sentence a source contradicts is rewritten first.",
-    points: ["Written only from business facts you confirmed", "Every statistic checked against its source", "Independent fact check before anything goes live"], panel: <SourcesPanel /> },
+  { label: "01 · Accuracy", title: "No invented facts.", body: "Most AI writers make up statistics. Pentra writes from the business facts you confirm and the searches your customers make. A draft with a statistic its source doesn't contain, or a price or plan you didn't confirm, is never published, and a sentence a source contradicts is rewritten first.",
+    points: ["Written only from business facts you confirmed", "Every statistic checked against its source", "Prices and plans only as you confirmed them"], panel: <SourcesPanel /> },
   { label: "02 · Improve", title: "Pages close to page one come first.", body: "The fastest traffic is on pages Google already shows at positions 4 to 20. Pentra finds them in your Search Console, answers the searches they appear for, and measures what changed.",
     points: ["Uses your own Search Console data", "Answers the exact searches a page appears for", "Before and after clicks for every change"], panel: <RankingsPanel /> },
   { label: "03 · Answers", title: "Written for Google and for AI answers.", body: "Each section answers its question in the first line and stands on its own, the way Google and AI assistants quote pages. Every article ends with a short FAQ built from the questions your customers really ask, and one clear next step to your booking or signup page.",
@@ -202,10 +202,8 @@ function FeatureRows() {
 /* ─── Where it publishes ───────────────────────── */
 
 const PLATFORMS = [
-  { name: "WordPress", how: "Install the free Pentra plugin. Articles publish automatically and are confirmed live." },
-  { name: "GitHub sites", how: "Next.js, Astro, Hugo and Jekyll blogs with Markdown posts. Pentra writes each article the way your blog keeps its posts and commits it." },
-  { name: "Shopify, Webflow and Ghost", how: "Connect through the platform's official API in a few minutes. Articles publish to your blog automatically and are confirmed live." },
-  { name: "Any other platform", how: "Wix, Squarespace and others. Pentra writes, you paste, and Pentra checks the page is live." },
+  { name: "GitHub blogs", how: "Next.js, Astro, Hugo, Jekyll and Gatsby blogs with Markdown posts. Pentra writes each article the way your blog keeps its posts, commits it and confirms the page is live." },
+  { name: "Any other platform", how: "WordPress, Shopify, Webflow, Wix, Squarespace and others. Pentra writes each article, you paste it, and Pentra checks the page is live." },
   { name: "Google Search Console", how: "Clicks and positions for every page, so you see what each article and improvement changed." },
 ];
 
@@ -236,7 +234,7 @@ const faqs = [
   },
   {
     q: "Which websites does Pentra work with?",
-    a: "WordPress sites (with the free Pentra publisher plugin), Shopify stores, Webflow CMS sites, Ghost sites, and Next.js, Astro, Hugo and Jekyll blogs that keep Markdown posts in a GitHub repository. On Wix, Squarespace or any other platform, Pentra researches and writes each article, you paste it into your blog, and Pentra checks it is live (automatic publishing there is coming soon).",
+    a: "Next.js, Astro, Hugo, Jekyll and Gatsby blogs that keep Markdown posts in a GitHub repository: Pentra publishes there itself. On WordPress, Shopify, Webflow, Wix, Squarespace or any other platform, Pentra researches and writes each article, you paste it into your blog, and Pentra checks it is live (automatic publishing there is coming soon: WordPress, Shopify, Webflow and Ghost are in beta while we test them on live sites).",
   },
   {
     q: "Is Autopilot safe for my brand?",
@@ -352,13 +350,13 @@ const organizationSchema = {
   applicationCategory: "BusinessApplication",
   operatingSystem: "Web",
   description:
-    "Autopilot SEO: Pentra researches, writes, fact-checks and publishes articles to your WordPress, Shopify, Webflow, Ghost or GitHub-based site on a schedule, improves pages near page one, and reports Search Console results.",
+    "Autopilot SEO: Pentra researches, writes, fact-checks and publishes articles to your Next.js, Astro, Hugo, Jekyll or Gatsby blog on a schedule, improves pages near page one, and reports Search Console results.",
   offers: { "@type": "AggregateOffer", lowPrice: "0", highPrice: "199", priceCurrency: "USD", offerCount: "4" },
   featureList: [
     "Articles written only from confirmed business facts",
-    "Independent fact-check review",
+    "Statistic and price checks before publishing",
     "Autopilot or review-first publishing",
-    "WordPress, Shopify, Webflow, Ghost and GitHub publishing with receipts",
+    "Publishing to Next.js, Astro, Hugo, Jekyll and Gatsby blogs on GitHub, with receipts",
     "Improvement of pages already ranking",
     "Live-page verification",
     "Google Search Console reporting",

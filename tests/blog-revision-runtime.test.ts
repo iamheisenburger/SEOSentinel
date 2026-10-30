@@ -232,7 +232,7 @@ test("P233 the listing and sitemap never read the revisions of a page consolidat
   const site: Row = { _id: "site", domain: "pentra.dev", publishMethod: "github", repoOwner: "owner", repoName: "repo", repoDefaultBranch: "main" };
   const row = (id: string, slug: string, at: number) => ({ _id: id, siteId: "site", status: "published", title: slug, slug, metaDescription: "d",
     readingTime: 3, publishedAt: at, createdAt: at });
-  const articles = [row("served", "automated-seo-workflow-complete-guide", 1000), row("merged", "how-to-automate-seo-workflow", 900)];
+  const articles = [row("served", "publish-blog-posts-wordpress-nextjs-automatically", 1000), row("merged", "auto-posting-wordpress-methods-and-checks", 900)];
   const tables: Record<string, Row[]> = { sites: [site], articles, published_article_revisions: [],
     article_summaries: articles.map(a => ({ ...a, _id: `summary-${a._id}`, articleId: a._id, articleCreatedAt: a.createdAt })),
     maintenance_state: [{ key: "publication-integrity-v4", status: "completed" }], blog_listings: [] };
@@ -255,8 +255,8 @@ test("P233 the listing and sitemap never read the revisions of a page consolidat
   const slugs = (await runtime.exports.listPublishedSlugs._handler(ctx, { domain: "pentra.dev" })).articles.map((a: Row) => a.slug);
   const listed = (await runtime.exports.listPublishedByDomain._handler(ctx, { domain: "pentra.dev" }) as unknown as Row[]).map(a => a.slug);
   // Arrays made inside the VM have another realm's prototype: compare their contents.
-  assert.equal(slugs.join(","), "automated-seo-workflow-complete-guide");
-  assert.equal(listed.join(","), "automated-seo-workflow-complete-guide");
+  assert.equal(slugs.join(","), "publish-blog-posts-wordpress-nextjs-automatically");
+  assert.equal(listed.join(","), "publish-blog-posts-wordpress-nextjs-automatically");
   assert.ok(revisionReads.length > 0, "the served page's revisions are still read");
   assert.ok(!revisionReads.includes("merged"), "the merged page's revisions are never read");
 });

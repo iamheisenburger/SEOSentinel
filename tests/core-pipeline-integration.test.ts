@@ -8212,7 +8212,7 @@ test("P225 the plan audit and research list only articles served on their own UR
   const site = await selectGrowth(f, 8 * 3_600_000), saved = f.get(site.id)!;
   Object.assign(saved.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
   const merged = "How to Automate Your SEO Workflow", kept = "Automated SEO Workflow: The Complete Pipeline";
-  for (const [slug, title] of [["how-to-automate-seo-workflow", merged], ["automated-seo-workflow-complete-guide", kept]]) {
+  for (const [slug, title] of [["auto-posting-wordpress-methods-and-checks", merged], ["publish-blog-posts-wordpress-nextjs-automatically", kept]]) {
     f.add("article_summaries", { articleId: `articles:${slug}`, siteId: site.id, status: "published", slug, title,
       canonicalDomain: saved.canonicalDomain ?? saved.domain, domainRevision: saved.canonicalDomainRevision ?? 0,
       publishedAt: f.now(), articleCreatedAt: f.now() });

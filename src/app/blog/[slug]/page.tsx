@@ -192,9 +192,9 @@ export async function generateMetadata({
   params,
 }: BlogPostPageProps): Promise<Metadata> {
   const [{ slug }, domain] = await Promise.all([params, getRequestDomain()]);
+  if (retiredArticle(domain, slug)) return { title: "Article not found", robots: { index: false, follow: false } };
   const merged = consolidatedTarget(domain, slug);
   if (merged) permanentRedirect(`/blog/${merged}`);
-  if (retiredArticle(domain, slug)) return { title: "Article not found", robots: { index: false, follow: false } };
   const article = await getPublishedArticle(domain, slug);
 
   if (!article) {
@@ -236,11 +236,12 @@ export async function generateMetadata({
 
 export default async function BlogPost({ params }: BlogPostPageProps) {
   const [{ slug }, domain] = await Promise.all([params, getRequestDomain()]);
+  // P246: a retired article (invented quotes or wrong prices from the old engine) is gone. P247: so is a duplicate that
+  // pointed to one, checked first so it never redirects to a missing page.
+  if (retiredArticle(domain, slug)) notFound();
   // A consolidated duplicate on pentra.dev permanently points to its group's article.
   const merged = consolidatedTarget(domain, slug);
   if (merged) permanentRedirect(`/blog/${merged}`);
-  // P246: a retired article (invented quotes or wrong prices from the old engine) is gone.
-  if (retiredArticle(domain, slug)) notFound();
   const article = await getPublishedArticle(domain, slug);
   if (!article) notFound();
 

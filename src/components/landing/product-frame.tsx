@@ -51,7 +51,7 @@ export function ProductFrame() {
             <span className="h-2.5 w-2.5 rounded-full bg-white/[0.12]" />
             <span className="h-2.5 w-2.5 rounded-full bg-white/[0.12]" />
           </div>
-          <span className="truncate text-[11px] text-[#62666D]">pentra.dev/dashboard · Example workspace, illustrative data</span>
+          <span className="truncate text-[11px] text-[#62666D]">pentra.dev/dashboard · Example workspace, sample numbers (not a customer)</span>
         </div>
 
         <div className="grid md:grid-cols-[188px_1fr]">

@@ -30,7 +30,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Pentra — Autopilot SEO for your website",
     description:
-      "Autopilot SEO: researched, fact-checked articles published to your WordPress, Shopify, Webflow, Ghost or GitHub-based site on a schedule, with Search Console reporting.",
+      "Autopilot SEO: researched, fact-checked articles published to your Next.js, Astro, Hugo, Jekyll or Gatsby blog on a schedule, or written for you to paste anywhere else, with Search Console reporting.",
     url: "https://pentra.dev",
     siteName: "Pentra",
     locale: "en_US",
@@ -41,7 +41,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Pentra — Autopilot SEO for your website",
     description:
-      "Autopilot SEO: researched, fact-checked articles published to your WordPress, Shopify, Webflow, Ghost or GitHub-based site on a schedule, with Search Console reporting.",
+      "Autopilot SEO: researched, fact-checked articles published to your Next.js, Astro, Hugo, Jekyll or Gatsby blog on a schedule, or written for you to paste anywhere else, with Search Console reporting.",
     images: ["/og.png"],
   },
   robots: {

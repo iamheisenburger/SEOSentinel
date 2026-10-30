@@ -1,4 +1,5 @@
 import { Metadata } from "next";
+import { pageSocial } from "@/lib/page-social";
 import Link from "next/link";
 import { Radar, ArrowLeft } from "lucide-react";
 
@@ -6,6 +7,7 @@ export const metadata: Metadata = {
   title: "Terms of Service",
   description: "Pentra terms of service. Rules and guidelines for using our platform.",
   alternates: { canonical: "https://pentra.dev/legal/terms" },
+  ...pageSocial("Pentra Terms of Service", "Pentra terms of service. Rules and guidelines for using our platform.", "https://pentra.dev/legal/terms"),
 };
 
 export default function TermsOfServicePage() {

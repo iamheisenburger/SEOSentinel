@@ -50,24 +50,6 @@ import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 const REVIEWED_AMBIGUITY_CONFIRMATION =
   "ABANDON UNVERIFIED DELIVERY AND RETAIN AUDIT";
 
-// Reviewer notes can carry instructions and bookkeeping meant for Pentra's own
-// review steps. Hide those sentences from the owner at display time only; the
-// stored notes are unchanged.
-const INTERNAL_REVIEW_NOTE =
-  /exact[- ]artifact|review override|returned unchanged|input (?:article|markdown)|artifact ?hash|\bartifacts?\b|deterministic|bounded remediation|confidenceScore|materialDefects/i;
-
-function customerReviewNotes(notes: string | undefined): string {
-  if (!notes) return "";
-  if (/^\s*(?:final|post-editorial) fact check failed:/i.test(notes)) {
-    return "The final fact check did not finish for this draft.";
-  }
-  return notes
-    .split(/(?<=[.!?])\s+/)
-    .filter((sentence) => sentence.trim() && !INTERNAL_REVIEW_NOTE.test(sentence))
-    .join(" ")
-    .trim();
-}
-
 // Slugs may be stored with or without a leading slash; show exactly one.
 function displayPath(slug: string): string {
   return `/${slug.replace(/^\/+/, "")}`;
@@ -433,7 +415,14 @@ export default function ArticleDetailPage() {
       : reviewerNotesShown
         ? "Read the reviewer notes below. You can accept them to approve this draft."
         : "This draft has not passed review yet, so it cannot be approved.";
-  const reviewNotes = customerReviewNotes(article.factCheckNotes);
+  // P247 (Oct 30 2026): the article page showed "Fact-check score 83/100" and the fact checker's own paragraph ("Recommend
+  // the author verify ... before publication") on an article Autopilot then published. The model's score and notes are
+  // notes for Pentra, never blockers (rule 2a); the customer sees what the publication checks established, in one line.
+  // A draft those checks hold back says why in the approve hint and the reviewer notes.
+  const sourceCount = article.sources?.length ?? 0;
+  const factCheckLine = article.publicationGateStatus !== "passed" ? null : sourceCount > 0
+    ? `Checked before publishing: every statistic appears in its cited source (${sourceCount} source${sourceCount === 1 ? "" : "s"}), and product facts match what you confirmed.`
+    : "Checked before publishing: product facts match what you confirmed.";
 
   const handleApprove = async () => {
     setActionBusy(true);
@@ -878,20 +867,6 @@ export default function ArticleDetailPage() {
             </span>
           </>
         )}
-        {article.factCheckScore != null && (
-          <>
-            <span className="text-[11px] text-white/[0.1]">·</span>
-            <span className={`text-[11px] font-medium ${
-              article.factCheckScore >= 90
-                ? "text-[#22C55E]"
-                : article.factCheckScore >= 70
-                  ? "text-[#F59E0B]"
-                  : "text-[#EF4444]"
-            }`}>
-              Fact-check score {article.factCheckScore}/100
-            </span>
-          </>
-        )}
         {(article as any).contentScore != null && (
           <>
             <span className="text-[11px] text-white/[0.1]">·</span>
@@ -1123,19 +1098,10 @@ export default function ArticleDetailPage() {
         </div>
       )}
 
-      {/* Fact-check notes */}
-      {reviewNotes && (
-        <div className="rounded-lg border border-white/[0.06] bg-[#0E0F11] px-4 py-3">
-          <div className="flex items-center gap-2 mb-1.5">
-            <ShieldCheck className="h-3.5 w-3.5 text-[#0EA5E9]" />
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-[#62666D]">
-              Fact-Check Notes
-            </span>
-          </div>
-          <p className="text-[13px] text-[#8A8F98] leading-relaxed">
-            {reviewNotes}
-          </p>
-        </div>
+      {factCheckLine && (
+        <p role="note" aria-label="Fact check" className="flex items-center gap-2 text-[13px] text-[#8A8F98]">
+          <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-[#0EA5E9]" />{factCheckLine}
+        </p>
       )}
 
       {/* View mode toggle */}

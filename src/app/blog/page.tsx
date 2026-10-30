@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageSocial } from "@/lib/page-social";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { Clock, ArrowRight } from "lucide-react";
@@ -16,8 +17,9 @@ export async function generateMetadata(): Promise<Metadata> {
   const domain = await requestDomain();
   return {
     title: "SEO and content guides",
-    description: "Practical guides on SEO, content and winning customers from Google and AI answers, written and fact-checked by Pentra.",
+    description: "Practical guides on SEO, content and winning customers from Google, written and fact-checked by Pentra.",
     alternates: { canonical: `https://${domain}/blog` },
+    ...pageSocial("SEO and content guides", "Practical guides on SEO, content and winning customers from Google, written and fact-checked by Pentra.", `https://${domain}/blog`),
   };
 }
 
@@ -58,7 +60,7 @@ export default async function BlogIndex() {
           SEO and content guides
         </h1>
         <p className="mt-5 max-w-[38rem] text-[17px] leading-relaxed text-[#8A8F98]">
-          Practical guides on SEO, content and getting customers from Google and AI answers. Every article is
+          Practical guides on SEO, content and getting customers from Google. Every article is
           written, fact-checked and published by Pentra.
         </p>
 

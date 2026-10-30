@@ -137,11 +137,11 @@ export function ContentStart() {
         <select className="block w-full rounded-lg border border-white/[0.1] bg-[#08090A] px-3 py-2.5 text-[14px] text-[#F7F8F8] focus:border-white/30 focus:outline-none"
           aria-label="Content publishing destination" value={adapter} onChange={e => { setAdapter(e.target.value); setConfirmed(false); }}>
           <option value="" disabled>Choose where your website runs</option>
-          <option value="wordpress">WordPress · install the Pentra publisher plugin</option>
-          <option value="shopify">Shopify · publishes to your store&apos;s blog</option>
-          <option value="webflow">Webflow · publishes to your CMS blog collection</option>
-          <option value="ghost">Ghost · publishes posts through the Admin API</option>
-          <option value="github">GitHub · a Next.js, Astro, Hugo or Jekyll blog with Markdown posts</option>
+          <option value="github">GitHub · a Next.js, Astro, Hugo, Jekyll or Gatsby blog with Markdown posts</option>
+          <option value="wordpress">WordPress (beta) · install the Pentra publisher plugin</option>
+          <option value="shopify">Shopify (beta) · publishes to your store&apos;s blog</option>
+          <option value="webflow">Webflow (beta) · publishes to your CMS blog collection</option>
+          <option value="ghost">Ghost (beta) · publishes posts through the Admin API</option>
           <option value="manual">Another platform (Wix, Squarespace…) · you paste articles in</option>
         </select></label>
       {!adapter && <p className={HELP}>Choose the platform your website runs on. Not sure? Choose “Another platform”: Pentra writes each article and you paste it into your site.</p>}

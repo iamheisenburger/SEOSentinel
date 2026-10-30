@@ -16,7 +16,7 @@
  */
 export const PENTRA_DOMAIN = "pentra.dev";
 
-export const PENTRA_CONSOLIDATED: Readonly<Record<string, string>> = Object.freeze({
+const MERGED_BEFORE_P247: Readonly<Record<string, string>> = Object.freeze({
   // Refreshing and updating old posts
   "how-to-refresh-blog-posts-for-seo": "article-refresh-strategy-guide",
   "content-refresh-seo-automated-strategy": "article-refresh-strategy-guide",
@@ -148,13 +148,59 @@ export function consolidatedTarget(domain: string, slug: string): string | null 
   return Object.prototype.hasOwnProperty.call(PENTRA_CONSOLIDATED, clean) ? PENTRA_CONSOLIDATED[clean] : null;
 }
 
+/** P247 (Oct 30 2026): every post the old engine (Mar-Sep, before evidence rules) wrote that pentra.dev still served.
+ * Read as a prospect would (Cowork's launch audit), they carry unsourced numbers ("94% fact-check accuracy", "$50K-$120K
+ * a writer"), Pentra prices that were never true ("paid tier $199-800/month", "unlimited articles") and citations to
+ * "Pentra.com". Each now redirects to the newer article on the same question, and so does every page that pointed to it
+ * (one hop). The two with the most impressions had 274 and 153 in 30 days and no clicks. Articles stay stored. */
+const SUPERSEDED_P247: Readonly<Record<string, string>> = Object.freeze({
+  "12-month-seo-content-calendar-autopilot": "how-often-should-small-business-publish-blog-posts",
+  "seo-content-calendar-tools-small-teams": "how-often-should-small-business-publish-blog-posts",
+  "ai-content-generator-seo-automated-article-writing": "ai-blog-post-generator-what-it-does-and-how-to-use-one",
+  "ai-content-generator-vs-manual-writing-rankings": "is-ai-written-content-safe-for-seo",
+  "ai-seo-content-generator-vs-manual-writing": "is-ai-written-content-safe-for-seo",
+  "ai-seo-tools-comparison-guide": "free-ai-tools-for-seo-optimization",
+  "best-free-seo-tools-for-small-teams": "free-ai-tools-for-seo-optimization",
+  "ai-website-crawling-niche-detection-guide": "niche-detection-practical-guide",
+  "website-crawling-for-seo-guide": "autonomous-site-crawling-and-niche-detection-guide-edited",
+  "website-crawling-keyword-research-guide": "find-keywords-new-website-can-rank-for",
+  "article-refresh-strategy-guide": "improving-pages-close-to-page-one",
+  "automate-keyword-research-seo": "keywords-for-research-how-to-find-search-terms",
+  "keyword-research-for-content-creators-guide": "keywords-for-research-how-to-find-search-terms",
+  "keyword-clustering-strategy-organize-by-intent": "keywords-for-research-how-to-find-search-terms",
+  "automated-seo-workflow-complete-guide": "intelligent-content-automation",
+  "content-pipeline-optimization-checklist-topic-to-publishing": "intelligent-content-automation",
+  "autonomous-publishing-saves-time": "get-customers-from-google-without-writing-every-article",
+  "scale-blog-output-without-hiring-writers": "get-customers-from-google-without-writing-every-article",
+  "b2b-saas-content-strategy-ranking-lead-generation": "saas-keyword-research",
+  "best-seo-monitoring-tools-small-teams": "weekly-website-seo-health-checks",
+  "fact-check-ai-generated-content-verification-framework": "seo-writer-ai-what-it-does-and-how-to-check-output-2",
+  "fact-checking-ai-generated-content-framework": "seo-writer-ai-what-it-does-and-how-to-check-output-2",
+  "how-long-does-seo-take-timeline": "increase-seo-ranking",
+  "on-page-off-page-seo-strategy-guide": "increase-seo-ranking",
+  "how-to-detect-ranking-drops-seo": "ranking-optimization-decision-system",
+  "how-to-detect-seo-content-gaps-website": "competitive-keyword-research-method",
+  "keyword-gap-analysis-find-content-opportunities": "competitive-keyword-research-method",
+});
+
+/** duplicate slug → the article it now redirects to, always one hop: a page that pointed to a superseded article goes
+ * straight to that article's successor. */
+export const PENTRA_CONSOLIDATED: Readonly<Record<string, string>> = Object.freeze(Object.fromEntries(
+  [...Object.entries(MERGED_BEFORE_P247), ...Object.entries(SUPERSEDED_P247)].map(([from, to]) => [from, SUPERSEDED_P247[to] ?? to])));
+
 /** P246 (Oct 30 2026): pentra.dev articles the old engine wrote that put words in real people's mouths or misstate
  * Pentra's prices. /blog/saas-seo-without-team quoted "Lily Ray, Head of SEO, Pentra" (a real SEO professional, never
  * Pentra staff), an invented Brian Dean quote and "$10,000-$30,000 annually". A retired article answers 404 and leaves
- * the listing, the sitemap and every related-reading list; a link to it reads as plain text. */
-export const PENTRA_RETIRED: ReadonlySet<string> = new Set(["saas-seo-without-team"]);
+ * the listing, the sitemap and every related-reading list; a link to it reads as plain text. P247: so do the old-engine
+ * posts no newer article answers (video marketing, backlinks, landing-page URLs, an ROI calculator, B2B case studies). */
+export const PENTRA_RETIRED: ReadonlySet<string> = new Set(["saas-seo-without-team", "b2b-case-study-best-practices",
+  "best-practices-video-marketing-seo-optimized", "build-backlinks-automatically-proven-methods",
+  "landing-page-url-best-practices-seo-structure", "seo-roi-calculator-content-automation-cost"]);
 export function retiredArticle(domain: string, slug: string): boolean {
-  return normalizeHost(domain) === PENTRA_DOMAIN && PENTRA_RETIRED.has(slug.trim().replace(/^\/+|\/+$/g, "").replace(/^blog\//, ""));
+  if (normalizeHost(domain) !== PENTRA_DOMAIN) return false;
+  const clean = slug.trim().replace(/^\/+|\/+$/g, "").replace(/^blog\//, "");
+  // P247: a duplicate that redirected to a retired article is retired with it, never a redirect to a missing page.
+  return PENTRA_RETIRED.has(clean) || (Object.prototype.hasOwnProperty.call(PENTRA_CONSOLIDATED, clean) && PENTRA_RETIRED.has(PENTRA_CONSOLIDATED[clean]));
 }
 
 /** True when an article is still served on its own URL (not consolidated away or retired). */

@@ -11,12 +11,13 @@ test("pentra.dev consolidation: one hop to a served article, never a chain or a 
     assert.match(from, /^[a-z0-9-]+$/); assert.match(to, /^[a-z0-9-]+$/);
     assert.equal(PENTRA_CONSOLIDATED[to], undefined, `${to} must be served, not redirected again`);
   }
-  assert.equal(consolidatedTarget("pentra.dev", "keyword-clustering-explained"), "keyword-clustering-strategy-organize-by-intent");
-  assert.equal(consolidatedTarget("www.pentra.dev", "/keyword-clustering-explained/"), "keyword-clustering-strategy-organize-by-intent");
+  // P247: the old-engine survivor these pointed to is superseded by a newer article; the duplicates go straight there.
+  assert.equal(consolidatedTarget("pentra.dev", "keyword-clustering-explained"), "keywords-for-research-how-to-find-search-terms");
+  assert.equal(consolidatedTarget("www.pentra.dev", "/keyword-clustering-explained/"), "keywords-for-research-how-to-find-search-terms");
   assert.equal(consolidatedTarget("leadpilot.chat", "keyword-clustering-explained"), null, "customer sites are never affected");
   assert.equal(consolidatedTarget("pentra.dev", "niche-detection-practical-guide"), null);
   assert.equal(consolidatedTarget("pentra.dev", "constructor"), null);
-  assert.equal(servedOnItsOwnUrl("pentra.dev", "keyword-clustering-strategy-organize-by-intent"), true);
+  assert.equal(servedOnItsOwnUrl("pentra.dev", "keywords-for-research-how-to-find-search-terms"), true);
 });
 
 test("consolidated slugs redirect permanently and leave the sitemap, the blog index and the homepage", () => {
@@ -35,15 +36,16 @@ test("P193: copies Google skipped and pages it never showed join the page Google
   assert.equal(to("keyword-research-digital-marketing-channel-routing"), "digital-marketing-keyword-guide");
   assert.equal(to("international-keyword-research"), "localized-keyword-research-2");
   assert.equal(to("automatic-content-creation"), "intelligent-content-automation");
-  assert.equal(to("automate-seo-article-writing-at-scale"), "automated-seo-workflow-complete-guide");
-  // A round-1 survivor Google never showed now points on, and its round-1 duplicates follow it directly.
-  assert.equal(to("when-update-blog-posts-seo-rankings"), "article-refresh-strategy-guide");
-  assert.equal(to("when-to-refresh-old-blog-posts"), "article-refresh-strategy-guide");
-  assert.equal(to("monitor-seo-rankings-automatically"), "best-seo-monitoring-tools-small-teams");
-  assert.equal(to("free-seo-content-generator-evaluation-guide"), "ai-content-generator-seo-automated-article-writing");
-  for (const shown of ["automated-seo-workflow-complete-guide", "digital-marketing-keyword-guide", "localized-keyword-research-2",
-    "intelligent-content-automation", "how-to-detect-ranking-drops-seo", "best-seo-monitoring-tools-small-teams", "seo-content-calendar-tools-small-teams",
-    "article-refresh-strategy-guide", "publish-blog-posts-wordpress-nextjs-automatically"]) {
+  // A round-1 survivor Google never showed now points on, and its round-1 duplicates follow it directly. P247: the
+  // old-engine survivors are superseded by newer articles on the same question, still one hop.
+  assert.equal(to("automate-seo-article-writing-at-scale"), "intelligent-content-automation");
+  assert.equal(to("when-update-blog-posts-seo-rankings"), "improving-pages-close-to-page-one");
+  assert.equal(to("when-to-refresh-old-blog-posts"), "improving-pages-close-to-page-one");
+  assert.equal(to("monitor-seo-rankings-automatically"), "weekly-website-seo-health-checks");
+  assert.equal(to("free-seo-content-generator-evaluation-guide"), "ai-blog-post-generator-what-it-does-and-how-to-use-one");
+  for (const shown of ["digital-marketing-keyword-guide", "localized-keyword-research-2", "intelligent-content-automation",
+    "ranking-optimization-decision-system", "weekly-website-seo-health-checks", "how-often-should-small-business-publish-blog-posts",
+    "improving-pages-close-to-page-one", "publish-blog-posts-wordpress-nextjs-automatically"]) {
     assert.equal(servedOnItsOwnUrl("pentra.dev", shown), true, shown);
   }
   // Recent articles Google indexed, or has not had 14 days to judge, keep their own URLs.
@@ -58,18 +60,18 @@ test("P193: copies Google skipped and pages it never showed join the page Google
 // Before Publishing?" went live; neither has been shown since. Two pages answering one question become one again.
 test("P227: two pages answering one question become one, in one hop", () => {
   const to = (slug: string) => consolidatedTarget("pentra.dev", slug);
-  assert.equal(to("how-to-fact-check-ai-generated-articles"), "fact-check-ai-generated-content-verification-framework");
+  assert.equal(to("how-to-fact-check-ai-generated-articles"), "seo-writer-ai-what-it-does-and-how-to-check-output-2", "P247: superseded");
   assert.equal(to("how-often-publish-blog-posts-seo"), "how-often-should-small-business-publish-blog-posts");
   // The page that pointed to the calendar article goes straight to its new destination.
   assert.equal(to("saas-blog-publishing-frequency-rankings"), "how-often-should-small-business-publish-blog-posts");
-  for (const kept of ["fact-check-ai-generated-content-verification-framework", "how-often-should-small-business-publish-blog-posts",
-    "website-crawling-keyword-research-guide", "website-crawling-for-seo-guide", "get-customers-from-google-without-writing-every-article",
+  for (const kept of ["seo-writer-ai-what-it-does-and-how-to-check-output-2", "how-often-should-small-business-publish-blog-posts",
+    "find-keywords-new-website-can-rank-for", "get-customers-from-google-without-writing-every-article",
     "writing-every-article-yourself-practical-guide"]) assert.equal(servedOnItsOwnUrl("pentra.dev", kept), true, kept);
 });
 
 test("P193: links inside an article go straight to the consolidated article; any other link is untouched", () => {
   assert.equal(canonicalBlogHref("pentra.dev", "/blog/auto-posting-wordpress-methods-and-checks"), "/blog/publish-blog-posts-wordpress-nextjs-automatically");
-  assert.equal(canonicalBlogHref("pentra.dev", "https://pentra.dev/blog/when-update-blog-posts-seo/"), "/blog/article-refresh-strategy-guide");
+  assert.equal(canonicalBlogHref("pentra.dev", "https://pentra.dev/blog/when-update-blog-posts-seo/"), "/blog/improving-pages-close-to-page-one");
   assert.equal(canonicalBlogHref("www.pentra.dev", "https://www.pentra.dev/blog/international-keyword-research#steps"), "/blog/localized-keyword-research-2");
   assert.equal(canonicalBlogHref("pentra.dev", "/blog/saas-keyword-research"), "/blog/saas-keyword-research");
   assert.equal(canonicalBlogHref("pentra.dev", "https://example.com/blog/international-keyword-research"), "https://example.com/blog/international-keyword-research");
