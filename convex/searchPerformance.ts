@@ -27,6 +27,7 @@ import {
   siteExecutionAuthorized,
 } from "./lib/planSiteAllowance";
 import { v } from "convex/values";
+import { clickZoneFromRows } from "./lib/internalLinks";
 import {
   articleMatchesCurrentDomain,
   collectCurrentDomainPublishedSummariesSince,
@@ -151,6 +152,16 @@ async function requireSiteOwner(ctx: QueryCtx, siteId: Id<"sites">) {
  * are safer and more specific seeds than generic industry vocabulary. The
  * query is internal-only and returns no OAuth credentials or raw site config.
  */
+/** P251 (Oct 30 2026): each page's impressions and average position over the last 28 days, for the internal links of the
+ * next article (lib/internalLinks.ts clickZoneFromRows). One read per article written; an unconnected site gets none. */
+export const pageClickZoneInternal = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!siteExecutionActive(site) || !gscConnectionMatchesCurrentDomain(site) || !(site.gscDateEpochs ?? []).length) return [];
+  const cutoff = new Date(Date.now() - 28 * 86_400_000).toISOString().split("T")[0];
+  const { rows } = await takeCurrentGscQueryRows(ctx, site, DISCOVERY_GSC_READ_LIMIT, { startDate: cutoff });
+  return [...clickZoneFromRows(rows)].map(([path, page]) => ({ path, ...page }));
+} });
+
 export const getDiscoverySignalsInternal = internalQuery({
   args: {
     siteId: v.id("sites"),

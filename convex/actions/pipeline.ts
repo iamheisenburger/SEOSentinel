@@ -30,7 +30,7 @@ import {
   preferredInternalLinkAnchorCandidates,
   publishedArticleInternalHref,
   relatedReadingTitle,
-  selectRelatedInternalLinks,
+  selectRelatedInternalLinks, type ClickZone,
   stripGeneratedInternalLinks,
   validateInternalLinkSuggestions,
 } from "../lib/internalLinks";
@@ -6008,11 +6008,15 @@ async function handleLinks(
         href: preferredDestination.href,
       }
     : undefined;
+  // P251: the site's pages near the click zone (Search Console, 28 days) come first among articles about as related.
+  const clickZone: ClickZone = new Map((await ctx.runQuery(internal.searchPerformance.pageClickZoneInternal, { siteId }).catch(() => []))
+    .map((page: { path: string; position: number; impressions: number }) => [page.path, { position: page.position, impressions: page.impressions }]));
   const siblingLinks = selectRelatedInternalLinks({
     currentTitle: article.title,
     currentKeywords: article.metaKeywords,
     destinations: relatedArticles,
     limit: 3,
+    clickZone,
   });
   const pageLinks = selectRelatedInternalLinks({
     currentTitle: article.title,

@@ -14,6 +14,33 @@ export type RelatedInternalDestination = {
   keywords?: string[];
 };
 
+/** P251 (Oct 30 2026): the pages Google already shows near the click zone (average position 4-30 over 28 days, with real
+ * impressions) gain most from one more internal link: LeadPilot's sales-lead-scoring-system-2 sits at 16 and
+ * lead-scoring-solutions at 30, and links went by topic alone. Among destinations about as related, they come first;
+ * a page unrelated to the article never gets a link for its position. By path ("/blog/slug"). */
+export type ClickZone = Map<string, { position: number; impressions: number }>;
+export const CLICK_ZONE = { minPosition: 4, maxPosition: 30, minImpressions: 10 } as const;
+const zonePath = (url: string) => {
+  try { return new URL(url, "https://site.invalid").pathname.replace(/\/+$/, "") || "/"; } catch { return url; }
+};
+/** Search Console rows (page, impressions, average position) into each page's impressions and impression-weighted
+ * average position. */
+export function clickZoneFromRows(rows: Array<{ page?: string; impressions: number; position: number }>): ClickZone {
+  const sums = new Map<string, { impressions: number; weighted: number }>();
+  for (const row of rows) {
+    if (!row.page || !(row.impressions > 0) || !(row.position > 0)) continue;
+    const path = zonePath(row.page), sum = sums.get(path) ?? { impressions: 0, weighted: 0 };
+    sum.impressions += row.impressions; sum.weighted += row.position * row.impressions;
+    sums.set(path, sum);
+  }
+  return new Map([...sums].map(([path, sum]) => [path, { impressions: sum.impressions, position: sum.weighted / sum.impressions }]));
+}
+function clickZonePosition(zone: ClickZone | undefined, href: string): number | null {
+  const page = zone?.get(zonePath(href));
+  return page && page.impressions >= CLICK_ZONE.minImpressions && page.position >= CLICK_ZONE.minPosition &&
+    page.position <= CLICK_ZONE.maxPosition ? page.position : null;
+}
+
 type MarkdownNode = {
   type: string;
   value?: string;
@@ -226,6 +253,8 @@ export function selectRelatedInternalLinks(args: {
   currentKeywords?: string[];
   destinations: RelatedInternalDestination[];
   limit?: number;
+  /** P251: pages near the click zone come first among destinations about as related. */
+  clickZone?: ClickZone;
 }): InternalLink[] {
   const wanted = relatedTokens(
     [args.currentTitle, ...(args.currentKeywords ?? [])].join(" "),
@@ -251,7 +280,8 @@ export function selectRelatedInternalLinks(args: {
         destination.title,
         destination.keywords,
       )[0];
-      return { destination, anchor, score };
+      const zone = clickZonePosition(args.clickZone, destination.href);
+      return { destination, anchor, score, rank: score + (zone === null ? 0 : 1), zone: zone ?? Infinity };
     })
     .filter(
       (candidate): candidate is typeof candidate & { anchor: string } =>
@@ -259,7 +289,7 @@ export function selectRelatedInternalLinks(args: {
     )
     .sort(
       (a, b) =>
-        b.score - a.score || a.destination.href.localeCompare(b.destination.href),
+        b.rank - a.rank || a.zone - b.zone || a.destination.href.localeCompare(b.destination.href),
     )
     .slice(0, boundedLimit)
     .map(({ destination, anchor }) => ({
