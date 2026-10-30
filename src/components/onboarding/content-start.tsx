@@ -141,11 +141,11 @@ export function ContentStart() {
           <option value="shopify">Shopify · publishes to your store&apos;s blog</option>
           <option value="webflow">Webflow · publishes to your CMS blog collection</option>
           <option value="ghost">Ghost · publishes posts through the Admin API</option>
-          <option value="github">GitHub · plain Markdown/MDX (Next.js, Astro, Hugo…)</option>
+          <option value="github">GitHub · a blog that shows Markdown files from content/blog</option>
           <option value="manual">Another platform (Wix, Squarespace…) · you paste articles in</option>
         </select></label>
       {!adapter && <p className={HELP}>Choose the platform your website runs on. Not sure? Choose “Another platform”: Pentra writes each article and you paste it into your site.</p>}
-      {adapter === "github" && <p className={HELP}>Pentra commits each article as a Markdown/MDX file to your site&apos;s repository. You&apos;ll connect GitHub in the next step.</p>}
+      {adapter === "github" && <p className={HELP}>Pentra commits each article to <code>content/blog/&lt;slug&gt;.md</code> in your site&apos;s repository, so your site must already show Markdown posts from that folder. Astro, Jekyll, Hugo and other blog layouts are being added: until then, choose “Another platform” and Pentra writes each article for you to paste. You&apos;ll connect GitHub in the next step.</p>}
       {adapter === "manual" && <p className={HELP}>Pentra researches, writes and fact-checks every article for you to review; you paste each one into your site&apos;s blog and Pentra confirms it&apos;s live.</p>}
       {isApiCmsMethod(adapter) && <p className={HELP}>Pentra publishes each article to your {CMS_PLATFORM_LABELS[adapter]} {adapter === "shopify" ? "store's blog" : adapter === "webflow" ? "CMS blog collection" : "site"} through {CMS_PLATFORM_LABELS[adapter]}&apos;s official API, then checks it&apos;s live. You&apos;ll connect it in the next step (about 3 minutes).</p>}
       {adapter === "wordpress" && <p className={HELP}><a className="font-medium text-[#0EA5E9] hover:underline" href="/pentra-wordpress-plugin.zip" download>Download the Pentra WordPress plugin (ZIP)</a>. In WordPress go to Plugins → Add New → Upload Plugin, choose the ZIP and activate it. You&apos;ll connect it in the next step.</p>}

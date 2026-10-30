@@ -15,7 +15,7 @@ test("a new site with nothing connected is asked where its website runs before a
   assert.match(page, /<p className="[^"]*">Where does your website run\?<\/p>/);
   const choices = /const PLATFORM_CHOICES[^=]*= (\[[^\n]*\]);/.exec(page)?.[1] ?? "";
   for (const platform of ["wordpress", "shopify", "webflow", "ghost"]) assert.ok(choices.includes(`"${platform}"`), platform);
-  assert.match(page, /<button onClick=\{connectGithub\} className=\{PLATFORM_CHOICE_CLS\}>GitHub \(Next\.js, Astro, Hugo…\)<\/button>/);
+  assert.match(page, /<button onClick=\{connectGithub\} className=\{PLATFORM_CHOICE_CLS\}>GitHub \(a Markdown blog in content\/blog\)<\/button>/);
   assert.match(page, /<button onClick=\{\(\) => choose\("manual"\)\} className=\{PLATFORM_CHOICE_CLS\}>Something else: paste the articles yourself<\/button>/);
   assert.match(page, /const choose = \(value: string\) => \{ setConnectionError\(null\); setConnectionVerified\(false\); setMethod\(value\); setEditing\(true\); \};/,
     "a choice opens that platform's connection form");

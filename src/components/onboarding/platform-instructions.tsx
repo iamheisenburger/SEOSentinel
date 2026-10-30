@@ -14,15 +14,14 @@ import {
 const platforms = [
   {
     id: "github",
-    name: "GitHub (Next.js, Astro, Hugo, Jekyll)",
+    name: "GitHub (a Markdown blog in content/blog)",
     icon: GitBranch,
     color: "#F7F8F8",
     steps: [
-      "Articles are committed as MDX files to your GitHub repository",
-      "Set your repo owner and name in the onboarding wizard",
-      "Files land in content/posts/[slug].md with full frontmatter",
-      "Your static site generator picks them up on the next build",
-      "Works with Next.js, Astro, Hugo, Jekyll, Gatsby, and any SSG",
+      "Pentra commits each article to content/blog/[slug].md in your repository",
+      "Your site must already show Markdown posts from that folder (title, description and date in the frontmatter)",
+      "Your site's normal build picks up each new file",
+      "Astro, Jekyll, Hugo and other blog layouts are being added; until then, choose Review first and paste",
     ],
   },
   {
