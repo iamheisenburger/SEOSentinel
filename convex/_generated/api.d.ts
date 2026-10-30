@@ -49,6 +49,7 @@ import type * as executionAuthorization from "../executionAuthorization.js";
 import type * as expectedClickDemandBackfill from "../expectedClickDemandBackfill.js";
 import type * as expectedClickEvidenceBackfill from "../expectedClickEvidenceBackfill.js";
 import type * as freeCheck from "../freeCheck.js";
+import type * as githubLayoutDetect from "../githubLayoutDetect.js";
 import type * as growthLoop from "../growthLoop.js";
 import type * as http from "../http.js";
 import type * as jobs from "../jobs.js";
@@ -104,6 +105,7 @@ import type * as lib_expectedClickSkipReceipt from "../lib/expectedClickSkipRece
 import type * as lib_expectedClickSkipReceiptStore from "../lib/expectedClickSkipReceiptStore.js";
 import type * as lib_fetchPage from "../lib/fetchPage.js";
 import type * as lib_finalArticleReview from "../lib/finalArticleReview.js";
+import type * as lib_githubLayout from "../lib/githubLayout.js";
 import type * as lib_githubRepositories from "../lib/githubRepositories.js";
 import type * as lib_growthLoopContracts from "../lib/growthLoopContracts.js";
 import type * as lib_growthScorecard from "../lib/growthScorecard.js";
@@ -278,6 +280,7 @@ declare const fullApi: ApiFromModules<{
   expectedClickDemandBackfill: typeof expectedClickDemandBackfill;
   expectedClickEvidenceBackfill: typeof expectedClickEvidenceBackfill;
   freeCheck: typeof freeCheck;
+  githubLayoutDetect: typeof githubLayoutDetect;
   growthLoop: typeof growthLoop;
   http: typeof http;
   jobs: typeof jobs;
@@ -333,6 +336,7 @@ declare const fullApi: ApiFromModules<{
   "lib/expectedClickSkipReceiptStore": typeof lib_expectedClickSkipReceiptStore;
   "lib/fetchPage": typeof lib_fetchPage;
   "lib/finalArticleReview": typeof lib_finalArticleReview;
+  "lib/githubLayout": typeof lib_githubLayout;
   "lib/githubRepositories": typeof lib_githubRepositories;
   "lib/growthLoopContracts": typeof lib_growthLoopContracts;
   "lib/growthScorecard": typeof lib_growthScorecard;

@@ -2667,6 +2667,7 @@ export const applyQualityReview = internalMutation({
         repoName: v.optional(v.string()),
         repoDefaultBranch: v.optional(v.string()),
         contentDir: v.optional(v.string()),
+        githubLayout: v.optional(v.any()),
         wpUrl: v.optional(v.string()),
         webhookUrl: v.optional(v.string()),
         cmsEndpoint: v.optional(v.string()),

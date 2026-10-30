@@ -1,4 +1,5 @@
 "use node";
+import { renderLayoutPost, type GithubLayout } from "./lib/githubLayout";
 import { ownerPublicationAuthorized } from "./lib/manualPublication";
 import { verifyLiveCreatedArticle, verifyLiveSelectedRestoration } from "./lib/publishedRevision";
 import { wordpressConditionalRequest, wordpressConditionalReceipt, preserveWordPressReviewedText } from "./lib/wordpressConditional";
@@ -306,6 +307,38 @@ function attemptedRevisionRendererVersion(
   return rendererVersion;
 }
 
+/** P243 (Oct 30 2026): the GitHub file for an article. A site whose own blog layout was detected (Astro, Hugo, Jekyll,
+ * Next.js or Gatsby Markdown blogs: convex/lib/githubLayout.ts) gets the article in that layout, mirroring its own posts;
+ * every other site keeps content/<dir>/<slug>.md with Pentra's frontmatter, byte for byte as before. */
+function githubArticleFile(article: ArticleRecord, site: SiteRecord, sealed: { contentDir?: string; githubLayout?: GithubLayout },
+  publicationDate: number, deliveryKey: string, auditVersion = PUBLICATION_AUDIT_VERSION): { path: string; content: string } {
+  const slug = article.slug.replace(/^\//, "");
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    throw new Error("Article slug is unsafe for a GitHub content path");
+  }
+  if (sealed.githubLayout) {
+    assertSafePublishableMarkdown(article.markdown);
+    const file = renderLayoutPost(sealed.githubLayout, { slug, title: article.title, description: article.metaDescription ?? "",
+      publishedAt: publicationDate, markdown: stripLeadingDocumentTitle(article.markdown, article.title), deliveryKey });
+    if (file.path.includes("..") || !file.path.startsWith(`${sealed.githubLayout.postsDir}/`)) {
+      throw new Error("Refusing to write outside the detected posts folder");
+    }
+    return file;
+  }
+  // Derive contentDir from site urlStructure (e.g. "/blog/[slug]" -> "content/blog")
+  const contentDir = sealed.contentDir;
+  if (!contentDir || !/^content\/[A-Za-z0-9][A-Za-z0-9_/-]*$/.test(contentDir)) {
+    throw new Error("Sealed GitHub content directory is missing or unsafe");
+  }
+  // Use a plain Markdown extension so the destination build cannot interpret
+  // article prose as executable MDX even if its content loader supports MDX.
+  const path = `${contentDir}/${slug}.md`;
+  if (!path.startsWith(`${contentDir}/`) || path.includes("..")) {
+    throw new Error("Refusing to write outside the sealed content directory");
+  }
+  return { path, content: buildMdx(article, site, publicationDate, deliveryKey, auditVersion) };
+}
+
 function buildMdx(
   article: ArticleRecord,
   site: SiteRecord,
@@ -491,6 +524,8 @@ async function reverifyGithubConnectionHandler(
     siteId,
     receipt,
   });
+  // P243: a new site's own blog layout is read from the repository once it is verified (sites that have published keep theirs).
+  await ctx.scheduler.runAfter(0, internal.githubLayoutDetect.detectSiteGithubLayout, { siteId });
   return { ok: true as const, repoDefaultBranch, verifiedAt };
 }
 
@@ -952,29 +987,7 @@ async function publishToGitHub(
       "GitHub default branch changed after the publication destination was sealed",
     );
   }
-  // Derive contentDir from site urlStructure (e.g. "/blog/[slug]" -> "content/blog")
-  const contentDir = site.contentDir;
-  if (!contentDir || !/^content\/[A-Za-z0-9][A-Za-z0-9_/-]*$/.test(contentDir)) {
-    throw new Error("Sealed GitHub content directory is missing or unsafe");
-  }
-
-  const slug = article.slug.replace(/^\//, "");
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-    throw new Error("Article slug is unsafe for a GitHub content path");
-  }
-  // Use a plain Markdown extension so the destination build cannot interpret
-  // article prose as executable MDX even if its content loader supports MDX.
-  const filePath = `${contentDir}/${slug}.md`;
-  if (!filePath.startsWith(`${contentDir}/`) || filePath.includes("..")) {
-    throw new Error("Refusing to write outside the sealed content directory");
-  }
-  const mdx = buildMdx(
-    article,
-    site,
-    publicationDate,
-    deliveryKey,
-    auditVersion,
-  );
+  const { path: filePath, content: mdx } = githubArticleFile(article, site, site, publicationDate, deliveryKey, auditVersion);
 
   const { commitUrl, sha } = await commitToMain({
     token,
@@ -1741,20 +1754,12 @@ async function reviseGitHub(args: {
   const owner = args.site.repoOwner;
   const repo = args.site.repoName;
   const branch = args.site.repoDefaultBranch;
-  const contentDir = sealedRevisionDeliveryConfig(args.article).contentDir;
-  if (!token || !owner || !repo || !branch || !contentDir) {
+  const sealed = sealedRevisionDeliveryConfig(args.article);
+  if (!token || !owner || !repo || !branch || !sealed.contentDir) {
     throw new Error("GitHub revision destination is incomplete");
   }
   if (await getDefaultBranch({ token, owner, repo }) !== branch) {
     throw new Error("GitHub default branch drifted from the sealed revision destination");
-  }
-  const slug = args.article.slug.replace(/^\//, "");
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-    throw new Error("Article slug is unsafe for a GitHub revision path");
-  }
-  const filePath = `${contentDir}/${slug}.md`;
-  if (!filePath.startsWith(`${contentDir}/`) || filePath.includes("..")) {
-    throw new Error("Refusing to revise outside the sealed content directory");
   }
   const base = revisionArticleRecord(
     args.article,
@@ -1768,21 +1773,11 @@ async function reviseGitHub(args: {
     args.revision.nextArtifactRendererVersion,
     args.revision.nextArtifactHash,
   );
-  const expectedCurrentContent = buildMdx(
-    base,
-    args.site,
-    args.revision.publicationDate,
-    args.revision.baseReceipt.deliveryKey,
-    args.revision.baseAuditVersion ?? PUBLICATION_AUDIT_VERSION,
-  );
+  const { path: filePath, content: expectedCurrentContent } = githubArticleFile(base, args.site, sealed, args.revision.publicationDate,
+    args.revision.baseReceipt.deliveryKey, args.revision.baseAuditVersion ?? PUBLICATION_AUDIT_VERSION);
   const deliveryKey = publishedRevisionDeliveryKey(args.revision.revisionKey);
-  const nextContent = buildMdx(
-    next,
-    args.site,
-    args.revision.publicationDate,
-    deliveryKey,
-    args.revision.nextAuditVersion ?? PUBLICATION_AUDIT_VERSION,
-  );
+  const { content: nextContent } = githubArticleFile(next, args.site, sealed, args.revision.publicationDate, deliveryKey,
+    args.revision.nextAuditVersion ?? PUBLICATION_AUDIT_VERSION);
   const result = await commitToMain({
     token,
     owner,

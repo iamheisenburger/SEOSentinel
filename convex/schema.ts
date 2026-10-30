@@ -76,6 +76,10 @@ export default defineSchema({
     repoName: v.optional(v.string()),
     repoDefaultBranch: v.optional(v.string()),
     githubToken: v.optional(v.string()),
+    // P243 (Oct 30 2026): where this site's own blog keeps its posts, detected from the repository (convex/lib/githubLayout.ts),
+    // or why it could not be (the setup screen offers review and paste instead).
+    githubLayout: v.optional(v.any()),
+    githubLayoutFailure: v.optional(v.object({ reason: v.string(), detail: v.string(), at: v.number() })),
 
     // ── Publishing platform ──
     publishMethod: v.optional(v.string()), // "github" | "wordpress" | "webhook" | "shopify" | "webflow" | "ghost" | "manual"
@@ -1066,6 +1070,7 @@ export default defineSchema({
         repoName: v.optional(v.string()),
         repoDefaultBranch: v.optional(v.string()),
         contentDir: v.optional(v.string()),
+        githubLayout: v.optional(v.any()),
         wpUrl: v.optional(v.string()),
         webhookUrl: v.optional(v.string()),
         cmsEndpoint: v.optional(v.string()),

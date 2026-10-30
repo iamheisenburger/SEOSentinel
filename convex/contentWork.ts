@@ -1221,7 +1221,10 @@ export const readiness = query({
     return { siteId, setupPending: Boolean(site.contentSetupRequestedAt && !site.serviceMode), serviceMode: site.serviceMode ?? "legacy_articles", reviewToken: contentConsentToken(site),
       profile: { name: site.siteName ?? site.domain, summary: site.siteSummary ?? "", audience: site.targetAudienceSummary ?? "", productUsage: site.productUsage ?? "", offerings: site.keyFeatures ?? [], questions: site.painPoints ?? [] },
       destination: { kind: site.publishMethod ?? "manual", domain: site.domain, repository: site.publishMethod === "github" ? `${site.repoOwner ?? ""}/${site.repoName ?? ""}` : null,
-        branch: site.repoDefaultBranch ?? null, contentDirectory: directory, verified },
+        branch: site.repoDefaultBranch ?? null, contentDirectory: directory, verified,
+        // P243: the site's own blog layout read from the repository, or why it could not be (plain words for the setup screen).
+        layout: site.githubLayout ? { framework: String((site.githubLayout as { framework?: string }).framework ?? ""), postsDir: String((site.githubLayout as { postsDir?: string }).postsDir ?? "") } : null,
+        layoutFailure: site.githubLayoutFailure ? { reason: site.githubLayoutFailure.reason, detail: site.githubLayoutFailure.detail } : null },
       // The dashboard asks owners to connect it: improvements and results need it.
       searchConsole: { connected: gscConnectionMatchesCurrentDomain(site) },
       entitlement: await contentEntitlementAuthorized(ctx, site), enabled: Boolean(site.autopilotEnabled), approvalRequired: Boolean(site.approvalRequired),

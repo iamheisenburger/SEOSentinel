@@ -1,0 +1,84 @@
+// P243 (Oct 30 2026): Pentra committed every article to content/blog/<slug>.md with its own frontmatter, which a stock
+// Astro blog (src/content/blog, pubDate), Jekyll (_posts/YYYY-MM-DD-*.md) or the Next.js blog starter (_posts, coverImage,
+// author) never shows. The site's own layout is detected from its repository and each article mirrors its posts.
+// Live proof (ops/data/github-layout-live-test.json): one real Pentra article on four stock starters, all 200.
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import { detectGithubLayout, renderLayoutPost } from "../convex/lib/githubLayout.ts";
+import { publicationDeliveryConfig } from "../convex/lib/publicationArtifact.ts";
+
+const ASTRO_CONFIG = `import { defineCollection } from 'astro:content';
+import { glob } from 'astro/loaders';
+const blog = defineCollection({
+	loader: glob({ base: './src/content/blog', pattern: '**/*.{md,mdx}' }),
+	schema: ({ image }) => z.object({ title: z.string(), description: z.string(), pubDate: z.coerce.date(),
+		updatedDate: z.coerce.date().optional(), heroImage: z.optional(image()) }),
+});
+export const collections = { blog };`;
+const STARTERS = {
+  nextjs: { paths: ["next.config.js", "package.json", "_posts/dynamic-routing.md", "_posts/hello-world.md", "_posts/preview.md", "src/app/posts/[slug]/page.tsx"],
+    files: { "_posts/hello-world.md": `---\ntitle: "Learn How to Pre-render Pages"\nexcerpt: "Lorem"\ncoverImage: "/assets/blog/hello-world/cover.jpg"\ndate: "2020-03-16T05:35:07.322Z"\nauthor:\n  name: Tim Neutkens\n  picture: "/assets/blog/authors/tim.jpeg"\nogImage:\n  url: "/assets/blog/hello-world/cover.jpg"\n---\n\nBody`,
+      "_posts/preview.md": `---\ntitle: "Preview Mode"\nexcerpt: "x"\ncoverImage: "/assets/blog/preview/cover.jpg"\ndate: "2020-03-16T05:35:07.322Z"\nauthor:\n  name: Joe Haddad\n  picture: "/assets/blog/authors/joe.jpeg"\nogImage:\n  url: "/assets/blog/preview/cover.jpg"\n---\n\nBody` } },
+  astro: { paths: ["astro.config.mjs", "src/content.config.ts", "src/content/blog/first-post.md", "src/content/blog/second-post.md", "src/pages/blog/[...slug].astro"],
+    files: { "src/content.config.ts": ASTRO_CONFIG, "src/content/blog/first-post.md": "---\ntitle: 'First post'\ndescription: 'Lorem ipsum'\npubDate: 'Jul 08 2022'\nheroImage: '../../assets/blog-placeholder-3.jpg'\n---\n\nBody",
+      "src/content/blog/second-post.md": "---\ntitle: 'Second post'\ndescription: 'Lorem ipsum'\npubDate: 'Jul 15 2022'\nheroImage: '../../assets/blog-placeholder-4.jpg'\n---\n\nBody" } },
+  jekyll: { paths: ["_config.yml", "index.markdown", "_posts/2026-10-01-welcome-to-jekyll.markdown"],
+    files: { "_posts/2026-10-01-welcome-to-jekyll.markdown": `---\nlayout: post\ntitle:  "Welcome to Jekyll!"\ndate:   2026-10-01 12:00:00 +0000\ncategories: jekyll update\n---\nBody` } },
+  hugo: { paths: ["hugo.toml", "layouts/_default/single.html", "content/posts/my-first-post.md"],
+    files: { "content/posts/my-first-post.md": "+++\ntitle = 'My First Post'\ndate = 2026-10-01T07:07:07+01:00\ndraft = false\n+++\n## Introduction" } },
+  gatsby: { paths: ["gatsby-config.js", "content/blog/hello-world/index.md", "content/blog/new-beginnings/index.md"],
+    files: { "content/blog/hello-world/index.md": `---\ntitle: Hello World\ndate: "2015-05-01T22:12:03.284Z"\ndescription: "Hello World"\n---\nBody`,
+      "content/blog/new-beginnings/index.md": `---\ntitle: New Beginnings\ndate: "2015-05-28T22:40:32.169Z"\ndescription: This is a custom description\n---\nBody` } },
+};
+const ARTICLE = { slug: "competitive-keyword-research-method", title: "Competitive Keyword Research", description: "A method",
+  publishedAt: Date.UTC(2026, 9, 30, 9, 37), markdown: "Competitive keyword research is the process...", deliveryKey: "pentra:abc" };
+
+test("P243 each stock starter's own blog layout is detected and an article is written the way its posts are", () => {
+  const expected: Record<string, [string, string, RegExp]> = {
+    nextjs: ["_posts/competitive-keyword-research-method.md", "/posts/[slug]", /^title: "Competitive Keyword Research"\nexcerpt: "A method"\ncoverImage: "\/assets\/blog\/preview\/cover\.jpg"\ndate: "2026-10-30T09:37:00\.000Z"\nauthor:\n  name: Joe Haddad/m],
+    astro: ["src/content/blog/competitive-keyword-research-method.md", "/blog/[slug]/", /^title: "Competitive Keyword Research"\ndescription: "A method"\npubDate: "2026-10-30T09:37:00\.000Z"\nheroImage: '\.\.\/\.\.\/assets\/blog-placeholder-4\.jpg'/m],
+    jekyll: ["_posts/2026-10-30-competitive-keyword-research-method.markdown", "/blog/[slug]/", /^layout: post\ntitle: "Competitive Keyword Research"\ndate: "2026-10-30T09:37:00\.000Z"\ncategories: \[\]\npermalink: "\/blog\/competitive-keyword-research-method\/"/m],
+    hugo: ["content/posts/competitive-keyword-research-method.md", "/posts/[slug]/", /^title: "Competitive Keyword Research"\ndate: "2026-10-30T09:37:00\.000Z"\ndraft: false/m],
+    gatsby: ["content/blog/competitive-keyword-research-method/index.md", "/[slug]/", /^title: "Competitive Keyword Research"\ndate: "2026-10-30T09:37:00\.000Z"\ndescription: "A method"/m],
+  };
+  for (const [name, snapshot] of Object.entries(STARTERS)) {
+    const detection = detectGithubLayout(snapshot);
+    assert.ok(detection.ok, `${name}: ${JSON.stringify(detection)}`);
+    const file = renderLayoutPost(detection.layout, ARTICLE);
+    assert.equal(file.path, expected[name][0], name);
+    assert.equal(detection.layout.urlStructure, expected[name][1], name);
+    assert.match(file.content, expected[name][2], name);
+    assert.match(file.content, /^pentraDeliveryKey: "pentra:abc"\n---\n\nCompetitive keyword research is the process\.\.\.\n$/m, `${name}: keeps Pentra's ownership key and the body`);
+  }
+});
+
+test("P243 a repository Pentra cannot publish to says why in plain words", () => {
+  assert.deepEqual(detectGithubLayout({ paths: ["index.html", "style.css"], files: {} }).ok, false);
+  const none = detectGithubLayout({ paths: ["next.config.js", "src/app/page.tsx"], files: {} });
+  assert.equal(!none.ok && none.reason, "no_posts");
+  const mdx = detectGithubLayout({ paths: ["next.config.js", "posts/a.mdx", "posts/b.mdx"], files: { "posts/a.mdx": "---\ntitle: A\n---\nx" } });
+  assert.equal(!mdx.ok && mdx.reason, "mdx_only");
+});
+
+test("P243 a site without a detected layout keeps today's exact delivery config (pentra.dev and LeadPilot)", () => {
+  const site = { publishMethod: "github", domain: "leadpilot.chat", urlStructure: "/blog/[slug]", repoOwner: "owner", repoName: "repo", repoDefaultBranch: "main" };
+  const plain = publicationDeliveryConfig(site as never);
+  assert.equal("githubLayout" in plain, false, "no new key, so the sealed config and its hash are unchanged");
+  assert.equal(plain.contentDir, "content/blog");
+  const layout = (detectGithubLayout(STARTERS.astro) as { layout: unknown }).layout;
+  assert.deepEqual(publicationDeliveryConfig({ ...site, githubLayout: layout } as never).githubLayout, layout);
+});
+
+test("P243 the publisher writes in the detected layout, detection follows GitHub verification, and setup offers paste", () => {
+  const publisher = readFileSync("convex/publisher.ts", "utf8");
+  assert.match(publisher, /const \{ path: filePath, content: mdx \} = githubArticleFile\(article, site, site, publicationDate, deliveryKey, auditVersion\);/);
+  assert.match(publisher, /const \{ path: filePath, content: expectedCurrentContent \} = githubArticleFile\(base, args\.site, sealed,/);
+  assert.match(publisher, /await ctx\.scheduler\.runAfter\(0, internal\.githubLayoutDetect\.detectSiteGithubLayout, \{ siteId \}\);/);
+  const detect = readFileSync("convex/githubLayoutDetect.ts", "utf8");
+  assert.match(detect, /if \(published\.length\) return \{ recorded: false \};/, "a site that has published keeps its layout");
+  const setup = readFileSync("src/components/pentra-setup-choice.tsx", "utf8");
+  assert.match(setup, /We couldn&apos;t find a Markdown blog in your repository that Pentra can publish to automatically\./);
+  assert.match(setup, />Review and paste instead<\/button>/);
+  assert.match(setup, /const ready = state\.destination\.verified && state\.entitlement && !noBlog;/);
+});

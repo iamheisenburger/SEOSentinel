@@ -315,6 +315,8 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       if (method === "GET" && options.githubReadUnavailable?.()) return json({ message: "Synthetic receipt-read outage" }, 503);
       if (method === "GET" && path === "") return json({ default_branch: "main", permissions: { push: true } });
       if (method === "GET" && path === "/git/ref/heads/main") { repo.snapshots.set(repo.head, new Map(repo.files)); return json({ object: { sha: repo.head } }); }
+      // P243: the repository's file list, read once after verification to find the site's own blog layout.
+      if (method === "GET" && path === "/git/trees/main") return json({ tree: [...repo.files.keys()].map(file => ({ path: file, type: "blob" })) });
       if (method === "GET" && path.startsWith("/contents/")) {
         const content = (repo.snapshots.get(url.searchParams.get("ref") ?? "") ?? repo.files).get(path.slice("/contents/".length));
         return content === undefined ? json({}, 404) : json({ type: "file", path: path.slice("/contents/".length), size: Buffer.byteLength(content), encoding: "base64", content: Buffer.from(content).toString("base64"), sha: blobSha(content) });

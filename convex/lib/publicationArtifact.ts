@@ -1,3 +1,4 @@
+import type { GithubLayout } from "./githubLayout";
 import {
   PUBLICATION_ADAPTER_VERSION,
   PUBLISHER_RENDERER_VERSION,
@@ -151,6 +152,8 @@ export type PublicationDeliveryConfig = {
   repoName?: string;
   repoDefaultBranch?: string;
   contentDir?: string;
+  /** P243: the site's own blog layout (convex/lib/githubLayout.ts); absent for sites built for content/blog. */
+  githubLayout?: GithubLayout;
   wpUrl?: string;
   webhookUrl?: string;
   cmsEndpoint?: string;
@@ -169,6 +172,7 @@ export type PublicationSiteConfig = {
   repoOwner?: string;
   repoName?: string;
   repoDefaultBranch?: string;
+  githubLayout?: unknown;
   wpUrl?: string;
   webhookUrl?: string;
   cmsEndpoint?: string;
@@ -389,6 +393,7 @@ export function publicationDeliveryConfig(
     repoName,
     repoDefaultBranch,
     contentDir: method === "github" ? contentDir : undefined,
+    ...(method === "github" && site.githubLayout ? { githubLayout: site.githubLayout as GithubLayout } : {}),
     wpUrl: normalizedEndpoint(site.wpUrl),
     webhookUrl: normalizedEndpoint(site.webhookUrl),
     ...(cmsConfig ? { cmsEndpoint: cmsEndpoint(cmsConfig)!, cmsCollection: cmsCollection(cmsConfig)! } : {}),

@@ -15,7 +15,8 @@ type SetupState = {
   siteId: Id<"sites">;
   reviewToken: string;
   entitlement: boolean;
-  destination: { kind: string; domain: string; verified: boolean };
+  destination: { kind: string; domain: string; verified: boolean; layout?: { framework: string; postsDir: string } | null;
+    layoutFailure?: { reason: string; detail: string } | null };
   plan: { tier: string; articlesPerMonth: number; autopilotIntervalMs: number };
 };
 
@@ -36,7 +37,9 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
   const choice = paste ? "review" : picked;
   const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const reviewAvailable = state.destination.kind === "github" || state.destination.kind === "wordpress" || isApiCmsMethod(state.destination.kind) || paste;
-  const ready = state.destination.verified && state.entitlement;
+  // P243: a GitHub site whose blog Pentra could not find is offered review and paste instead of publishing where nothing shows.
+  const noBlog = state.destination.kind === "github" ? state.destination.layoutFailure ?? null : null;
+  const ready = state.destination.verified && state.entitlement && !noBlog;
   // P185 (Oct 25 2026): the first real signups stopped here. Start was silently
   // disabled until the confirmation box was ticked (one owner had everything else
   // ready), and a site on a platform Pentra doesn't publish to could not start at
@@ -74,12 +77,20 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
     </div>
     <ul className="space-y-1 text-sm">
       {step(true, "Business profile saved")}
-      {step(state.destination.verified, paste ? "Website: you paste each approved article into your site" : "Website connected and verified",
+      {step(state.destination.verified && !noBlog, paste ? "Website: you paste each approved article into your site" : state.destination.layout
+        ? `Website connected and verified: articles go to ${state.destination.layout.postsDir}, the way your ${state.destination.layout.framework === "nextjs" ? "Next.js" : state.destination.layout.framework.charAt(0).toUpperCase() + state.destination.layout.framework.slice(1)} blog keeps its posts`
+        : "Website connected and verified",
         <Link className="ml-1 underline" href={`/sites/${state.siteId}?tab=settings`}>Connect your website</Link>)}
       {!state.destination.verified && <li className="pl-5 text-[#8A8F98]">Not connected yet, or not on WordPress, Shopify, Webflow, Ghost or GitHub?{" "}
         <button type="button" className="underline disabled:opacity-50" disabled={busy} onClick={usePaste}>Paste the articles yourself</button>:
         {" "}Pentra writes your first article as soon as you press Start, and you paste it into your site (Review first). Connect your website later to publish automatically.</li>}
       {step(state.entitlement, "Plan active", <Link className="ml-1 underline" href="/settings/billing">Check billing</Link>)}
+      {noBlog && <li role="status" className="space-y-2 rounded-lg border border-[#F59E0B]/30 bg-[#F59E0B]/[0.06] p-3 text-[#F7F8F8]">
+        <p>We couldn&apos;t find a Markdown blog in your repository that Pentra can publish to automatically.{noBlog.reason === "no_posts" ? " Your site doesn't show Markdown posts yet." : ""} {noBlog.detail}</p>
+        <p className="text-[#8A8F98]">Pentra can write each article for you to review and paste into your site, and publish automatically once your blog is set up.</p>
+        <p className="flex flex-wrap gap-3"><button type="button" className="underline disabled:opacity-50" disabled={busy} onClick={usePaste}>Review and paste instead</button>
+          <Link className="underline" href={`/sites/${state.siteId}?tab=settings`}>Try another repository</Link></p>
+      </li>}
     </ul>
     <fieldset className="grid gap-3 md:grid-cols-2">
       <legend className="sr-only">How should Pentra work?</legend>
