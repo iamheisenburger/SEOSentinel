@@ -1241,9 +1241,11 @@ export const STRICT_PUBLICATION_MIN_WORDS = 1000;
 export const ARTICLE_DEPTH_BASE_WORDS = 1200;
 
 /** P264 (Oct 31 2026): a planned article matches the top results' depth (Cowork: tutorials ran 1,600 words against
- * competitors' 3,000-5,000), so its ceiling follows the plan's target: 30% over it, at most 7,000 words. */
-export function plannedWordCeiling(articleType: string | undefined, targetWords: number | undefined): number {
-  return Math.max(articleWordCeiling(articleType), Math.min(7000, Math.round((targetWords ?? 0) * 1.3)));
+ * competitors' 3,000-5,000), so its ceiling follows the plan's target: 30% over it, at most 7,000 words.
+ * P268 (Oct 31 2026): a planned article has no word target (Cowork: "Length targets cause repetition... Coverage of the
+ * required items sets the length"), so its ceiling only stops a runaway draft: 7,000 words, or its type's own if higher. */
+export function plannedWordCeiling(articleType: string | undefined, _targetWords?: number | undefined): number {
+  return Math.max(articleWordCeiling(articleType), 7000);
 }
 
 export function articleWordCeiling(articleType?: string): number {

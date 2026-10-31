@@ -8,12 +8,14 @@ import { v } from "convex/values";
  * tables and list items. */
 export type SerpPage = { url: string; headings: string[]; words: number; codeBlocks: number; tables: number; items: number };
 export type SerpBrief = { observedAt: number; locationCode: number; languageCode: string; format: string;
-  results: { title: string; url: string; description?: string }[]; questions: string[]; pages?: SerpPage[] };
+  results: { title: string; url: string; description?: string }[]; questions: string[]; pages?: SerpPage[];
+  /** P268: how the fixed plan read Google (2: advanced results with People Also Ask, goto links recovered). */
+  reader?: number };
 
 const serpPageValidator = v.object({ url: v.string(), headings: v.array(v.string()), words: v.number(), codeBlocks: v.number(), tables: v.number(), items: v.number() });
 export const serpBriefValidator = v.object({ observedAt: v.number(), locationCode: v.number(), languageCode: v.string(), format: v.string(),
   results: v.array(v.object({ title: v.string(), url: v.string(), description: v.optional(v.string()) })), questions: v.array(v.string()),
-  pages: v.optional(v.array(serpPageValidator)) });
+  pages: v.optional(v.array(serpPageValidator)), reader: v.optional(v.number()) });
 
 /** A brief is reused for 30 days (the same window a keyword's SERP evidence is trusted elsewhere). */
 export const SERP_BRIEF_MAX_AGE_MS = 30 * 86_400_000;
@@ -95,13 +97,16 @@ export function planFormat(brief: Pick<SerpBrief, "results" | "pages">, asksForP
   const share = (n: number) => n >= 2;
   // The search itself says what it wants first (live trial, Oct 31: "ceramic vs cast iron cookware" and "how to reconcile
   // bank statements" were planned as guides when few of their results could be read).
-  if (/\bvs\.?\b|\bversus\b|\bcompared? (?:to|with)\b/i.test(search) || share(titles.filter((t) => /\bvs\.?\b|\bversus\b|\bcompar/i.test(t)).length)) return "comparison";
+  if (/\bvs\.?\b|\bversus\b|\bcompared? (?:to|with)\b/i.test(search)) return "comparison";
   if (asksForProducts) return "list";
   // A search naming a programming tool wants working code before a list of others (live trial: "best logging framework" and
   // "Best practices for writing app logs with Pino" made a Pino tutorial a list).
   // P264: with fewer than 3 pages read (forums, videos and redirect links often refuse readers), the pages can't say a
   // programming search wants no code.
+  // P268 (Oct 31 2026): ...nor can two "Pino vs Bunyan" titles among its results: with all of Google's results read, the
+  // Pino tutorial was planned as a comparison. Only the search itself asks for a comparison of tools.
   if (share(pages.filter((p) => p.codeBlocks > 0).length) || (technical && (pages.length < 3 || pages.some((p) => p.codeBlocks > 0)))) return "tutorial";
+  if (share(titles.filter((t) => /\bvs\.?\b|\bversus\b|\bcompar/i.test(t)).length)) return "comparison";
   if (share(titles.filter((t) => /^\d{1,3}\+?\s|\b(?:best|top)\b(?! practices?\b)|\b\d{1,3}\+?\s+(?:ways|tips|tools|examples|templates|ideas|apps|options)\b/i.test(t)).length)) return "list";
   if (/^how (?:to|do i|do you|can i)\b/i.test(search.trim()) || share(titles.filter((t) => /\bhow to\b|\bstep[- ]by[- ]step\b|\btutorial\b/i.test(t)).length)) return "how-to";
   return "guide";

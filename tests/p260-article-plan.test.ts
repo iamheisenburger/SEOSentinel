@@ -69,8 +69,9 @@ test("P260 the format is decided in code from what the top results share", () =>
   assert.equal(planFormat({ results: [], pages: [] }, false, false, "ceramic vs cast iron cookware"), "comparison");
   assert.equal(planFormat({ results: [], pages: [] }, false, false, "how to reconcile bank statements"), "how-to");
   assert.equal(planFormat({ results: [], pages: [] }, false, false, "tankless water heater installation austin"), "guide");
-  assert.match(pipeline, /const url = googleRedirect\(result\.url\) \? await resolveGoogleRedirect\(result\.url\)\.catch\(\(\) => null\) : result\.url;/,
-    "a redirect is resolved without loading its page, so a page that refuses automated reads keeps its result");
+  // P268: Google's goto links lead to a script page nothing can follow; the result keeps its title and description.
+  assert.match(pipeline, /if \(googleRedirect\(result\.url\)\) return \{ result, page: null \};/,
+    "a goto result is kept for the plan and its page is not read");
 });
 
 test("P260 every number must be in the fact sheet or the confirmed details; list and step numbers and citations are not claims", () => {
@@ -144,8 +145,9 @@ test("P260 the writer gets the outline with exact headings and the format's elem
   assert.match(prompt, /^OUTLINE \(the fixed plan, built from Google's top results for this search: follow it exactly\):/);
   assert.match(prompt, /## What to look for\n## The best invoice apps \(covers: Seven apps with prices and who each suits\.\)\n## How to switch\n/);
   assert.match(prompt, /Add no other H2 section, except a Sources section when you cite sources\./);
-  assert.match(prompt, /name at least 7 real options, each as an H3 \(### Name\) with its price/, "P264: options with prices, then a table");
-  assert.match(pipeline, /articleOutlinePrompt\(articlePlan, outlineCovers\)/);
+  assert.match(prompt, /name at least 7 real options built for this search's audience, each as an H3 \(### Name\) with its price exactly as its own page states it/,
+    "P264: options with prices, then a table (P268: built for the audience, each price with its conditions)");
+  assert.match(pipeline, /articleOutlinePrompt\(articlePlan, outlineCovers, productName\)/);
   assert.match(pipeline, /toolName: "plan_article",/);
   assert.match(readFileSync("convex/actions/contentWorkProvider.ts", "utf8"), /"plan_article"/, "the outline call is priced like every other check");
 });
@@ -166,7 +168,7 @@ test("P260 an article's provider spend is capped at $0.50; the cap skips the fix
   assert.match(work, /export const ARTICLE_COST_CAP_MICRO_USD = 500_000;/);
   assert.match(work, /const cap = Math\.min\(cw\.budgetMicroUsd, ARTICLE_COST_CAP_MICRO_USD\);/);
   assert.match(work, /if \(spent >= cap \|\| \(optional && spent \+ args\.ceilingMicroUsd > cap\)\) \{/);
-  assert.match(work, /export const ARTICLE_OPTIONAL_STEP = \/:remediate_final_article\$\|:review:submit_final_metadata\$\/;/,
+  assert.match(work, /export const ARTICLE_OPTIONAL_STEP = \/:remediate_final_article\$\|:review:submit_final_metadata\$\|:review:check_claims\$\/;/,
     "research passes are stopped only by spend (live trial: their $0.59 ceiling refused every second pass)");
   assert.match(work, /\/Content work \(budget exhausted\|rollover blocked\|cost cap reached\)\/\.test\(error\) \? error/);
   assert.match(pipeline, /\.catch\(\(error: unknown\) => \{ if \(costCapRefusal\(error\)\) return null; throw error; \}\) : null;/);

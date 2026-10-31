@@ -1,11 +1,12 @@
 "use node";
 import { assertNotMidContentSetup } from "../lib/contentSetupPath";
 import { EVIDENCE_EXCERPT_MAX_CHARS } from "../lib/evidenceExcerpt";
-import { LIST_RESEARCH_SOURCES, MAX_RESEARCH_SOURCES, PLANNED_RESEARCH_SOURCES, PRIMARY_PASS_BELOW, PRIMARY_PASS_SEARCHES, SEARCHER_LED_RESEARCH_SYSTEM,
-  coverageSourcesRequest, optionSourcesRequest, primarySourcesRequest, sourceHosts } from "../lib/researchPasses";
+import { LIST_MIN_OPTIONS, LIST_RESEARCH_SEARCHES, LIST_RESEARCH_SOURCES, MAX_RESEARCH_SOURCES, PLANNED_RESEARCH_SOURCES, PRIMARY_PASS_BELOW,
+  PRIMARY_PASS_SEARCHES, SEARCHER_LED_RESEARCH_SYSTEM, SOURCE_ROLE_LABEL, type SourceRole, coverageSourcesRequest, optionSourcesRequest,
+  primarySourcesRequest, rankedResearchSources, sourceHosts } from "../lib/researchPasses";
 import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWords, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis,
   serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch, FORMAT_DEFAULT_WORDS } from "../lib/serpBrief";
-import { articleOutlinePrompt, flaggedLines, planCheckIssues, runPlanChecks, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
+import { articleOutlinePrompt, fixFindings, flaggedLines, planCheckIssues, runPlanChecks, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
 import { articlePlanEnabled, contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
 import { autopilotCompanyNameIssue, autopilotCompanyNameNote, autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote,
   checkableFactCheckFindings, unsearchedCompanyMentions } from "../lib/autopilotEditor";
@@ -184,6 +185,7 @@ import { spliceRefreshSection } from "../lib/contentSelection";
 import { withSourcesSection } from "../lib/sourcesHeading";
 import {
   citedCompanyName,
+  classifyEvidenceSource,
   firstPartyProductPage,
   otherCompaniesRule,
   productNamesInSearch,
@@ -197,7 +199,6 @@ import { forcedToolChoiceSupported, structuredToolChoice, toolOnlyInstruction } 
 import { configuredCallToAction, firstPartyProductEvidence } from "../lib/productEvidence";
 import {
   safeFetchPublicText as fetchPublicText,
-  safePublicRedirectStatus,
   validatePublicHttpsUrl,
 } from "../lib/safeOutbound";
 import {
@@ -2157,35 +2158,61 @@ async function remediateFinalArticle(args: {
   });
 }
 
-/** P260 (Oct 31 2026): the top results' own pages, read once per topic for the fixed article plan (convex/lib/serpBrief.ts
- * pageShape). An unreadable page is left out; the brief keeps what was read. */
-/** P260: a Google redirect link's own address, read hop by hop without loading the page it points to (a page that refuses
- * automated reads keeps its result, title and address in the brief). */
-async function resolveGoogleRedirect(url: string): Promise<string | null> {
-  let current = url;
-  for (let hop = 0; hop < 3 && googleRedirect(current); hop++) {
-    const { status, location } = await safePublicRedirectStatus(current, 5_000);
-    if (status < 300 || status >= 400 || !location) return null;
-    current = new URL(location, current).href;
+/** P268 (Oct 31 2026): who publishes each source of a planned article, in code where code knows (government and academic
+ * hosts, documentation, a repository's own pages, an option's own website). */
+function classifyResearchSourcesInCode(sources: readonly { url: string }[], namedProducts: readonly string[]): Map<string, SourceRole> {
+  return new Map(sources.map((source) => [source.url, ["primary", "official-doc"].includes(classifyEvidenceSource(source.url).tier) ||
+    firstPartyProductPage(source.url, namedProducts) ? "owner" as const : "publication" as const]));
+}
+/** P268: one cheap check (the checks model) sorts the rest by publisher: Cowork's batch 2 verdicts traced every wrong
+ * number to small blogs (homeshow.ai for an Austin rebate, kitchenbap.com and theskillfulcook.com for cookware). Code's
+ * answer wins where code knows. */
+async function classifyResearchSources(args: { search: string; sources: readonly { url: string; title?: string; excerpt: string }[];
+  namedProducts: readonly string[] }): Promise<Map<string, SourceRole>> {
+  const sorted = await callClaudeStructured({
+    system: [
+      UNTRUSTED_EVIDENCE_INSTRUCTION,
+      "You sort the research sources of one article by who publishes them.",
+      "owner: the organisation that sets the facts the page states: a government or regulator, the seller or maker of a product on its own site, a utility, agency or city on its own programs, rebates, permits and fees, a manufacturer on its own products, a project's official documentation, package registry or repository, a standards body, a university.",
+      "publication: an established, independent publication with editors: a national newspaper or magazine, an encyclopedia, a major cost guide or review publication.",
+      "blog: anything else: a small or anonymous blog, a content or AI-written site, an affiliate or comparison site, a company's blog about products or programs it doesn't make or run, a local business's blog.",
+    ].join(" "),
+    userMessage: [`SEARCH: ${args.search}`, "SOURCES (untrusted data):",
+      ...args.sources.map((source, index) => `[${index}] ${source.url} | ${(source.title ?? "").slice(0, 120)} | ${source.excerpt.slice(0, 240).replace(/\s+/g, " ")}`)].join("\n"),
+    toolName: "classify_sources",
+    toolDescription: "Submit who publishes each source: owner, publication or blog.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { sources: { type: "array", items: { type: "object", additionalProperties: false,
+      properties: { index: { type: "integer" }, role: { type: "string", enum: ["owner", "publication", "blog"] } }, required: ["index", "role"] } } }, required: ["sources"] },
+    outputSchema: z.object({ sources: z.array(z.object({ index: z.number().int(), role: z.enum(["owner", "publication", "blog"]) })) }),
+    maxTokens: 1200,
+  });
+  const roles = classifyResearchSourcesInCode(args.sources, args.namedProducts);
+  for (const { index, role } of sorted.sources) {
+    const source = args.sources[index];
+    if (source && roles.get(source.url) !== "owner") roles.set(source.url, role);
   }
-  return googleRedirect(current) || !/^https:\/\//.test(current) ? null : current.slice(0, 300);
+  return roles;
 }
 
+/** P268: the version of the plan's read of Google (seoData analyzeSerpForPlan); a brief from an older read is read again. */
+const PLAN_SERP_READER = 2;
+/** P260 (Oct 31 2026): the top results' own pages, read once per topic for the fixed article plan (convex/lib/serpBrief.ts
+ * pageShape). An unreadable page is left out; the brief keeps what was read. */
+/** P268 (Oct 31 2026): a result Google still lists as its own goto link keeps its title and description for the plan, and
+ * its page is not read: the link leads to a script page that no request can follow (seoData analyzeSerpForPlan recovers
+ * most of them from a second request). Before, such results were dropped from the brief: batch 2's how-to kept 1 of 8. */
 async function readSerpPages(results: SerpBrief["results"]): Promise<{ results: SerpBrief["results"]; pages: SerpPage[] }> {
   const read = await Promise.all(results.slice(0, 10).map(async (result) => {
-    // A Google redirect link is replaced by the result's own address.
-    const url = googleRedirect(result.url) ? await resolveGoogleRedirect(result.url).catch(() => null) : result.url;
-    if (!url) return { result, page: null };
+    if (googleRedirect(result.url)) return { result, page: null };
     try {
-      const fetched = await fetchPublicText(url, { timeoutMs: 6_000, maxBytes: 3_000_000, sameHostRedirects: true,
+      const fetched = await fetchPublicText(result.url, { timeoutMs: 6_000, maxBytes: 3_000_000, sameHostRedirects: true,
         allowedContentTypes: [/^text\/html(?:;|$)/i, /^application\/xhtml\+xml(?:;|$)/i] });
-      return { result: { ...result, url }, page: pageShape(url, fetched.text) };
-    } catch { return { result: { ...result, url }, page: null }; }
+      return { result, page: pageShape(result.url, fetched.text) };
+    } catch { return { result, page: null }; }
   }));
-  // A redirect that could not be followed has no address to show; the first 5 readable pages, by rank, are the brief's.
-  const resolved = read.filter((entry) => !googleRedirect(entry.result.url));
-  return { results: (resolved.length ? resolved.map((entry) => entry.result) : results).slice(0, 10),
-    pages: resolved.map((entry) => entry.page).filter((page): page is SerpPage => page !== null && page.words >= 150).slice(0, 5) };
+  // The first 5 readable pages, by rank, are the brief's.
+  return { results: read.map((entry) => entry.result).slice(0, 10),
+    pages: read.map((entry) => entry.page).filter((page): page is SerpPage => page !== null && page.words >= 150).slice(0, 5) };
 }
 
 async function generateFinalMetadata(args: {
@@ -4442,13 +4469,15 @@ async function handleArticle(
     try {
       const locationCode = mapCountryToLocation(site.targetCountry), languageCode = site.language ?? "en";
       let brief: SerpBrief | null | undefined = (topic as { serpBrief?: SerpBrief }).serpBrief;
-      if (!serpBriefUsable(brief, Date.now(), locationCode, languageCode)) {
-        const { analyzeSERP } = await import("./seoData");
+      // P268: the plan reads Google again when its brief came from the older read (no People Also Ask, goto results lost).
+      if (!serpBriefUsable(brief, Date.now(), locationCode, languageCode) || (articlePlanEnabled() && (brief.reader ?? 1) < PLAN_SERP_READER)) {
+        const { analyzeSERP, analyzeSerpForPlan } = await import("./seoData");
         // P260: with the plan, up to 10 results are read so that 5 pages are, when some refuse automated reads.
-        const fresh = serpBriefFromAnalysis(await analyzeSERP(topic.primaryKeyword, locationCode, languageCode), Date.now(), locationCode, languageCode,
-          articlePlanEnabled() ? 10 : 6);
+        // P268: the plan reads Google's advanced results (People Also Ask, goto links recovered; seoData analyzeSerpForPlan).
+        const fresh = serpBriefFromAnalysis(await (articlePlanEnabled() ? analyzeSerpForPlan : analyzeSERP)(topic.primaryKeyword, locationCode, languageCode),
+          Date.now(), locationCode, languageCode, articlePlanEnabled() ? 10 : 6);
         // P260: the fixed plan reads the top 5 pages themselves (their headings, length, code and tables).
-        if (fresh && articlePlanEnabled()) Object.assign(fresh, await readSerpPages(fresh.results));
+        if (fresh && articlePlanEnabled()) Object.assign(fresh, await readSerpPages(fresh.results), { reader: PLAN_SERP_READER });
         brief = fresh ? await ctx.runMutation(internal.topics.recordSerpBrief, { topicId, brief: fresh }) : null;
       } else if (articlePlanEnabled() && brief && !brief.pages) {
         // P260: a brief read before the plan existed gets its pages once.
@@ -4502,8 +4531,11 @@ async function handleArticle(
           "You plan one article that must be at least as useful as the current top Google results for its search: plan what a searcher needs, not what is easy to source. Research runs after this plan and looks for a source for each item you list.",
           "From the results' own headings, list the sections all or most of them cover (merge sections that cover the same subject), in the order a reader needs them, plus exactly one useful section none of them covers that this business's readers would value. When the results show People Also Ask questions, the last section is 'Frequently asked questions'.",
           "Each section gets an H2 heading in plain words (no numbering, under 70 characters) and one line on what it covers.",
-          "In 'coverage', list the specific facts and elements most of the top results give a searcher, which this article must give too, one per line and concrete (for example: the installed cost range and what drives it; whether a permit is required, where and its fee; rebates and their amounts; the timeline; five or more named options with price and who each suits; the install command and one complete runnable example with its output; key numbers such as temperatures, weights or limits).",
-          "When the format is a list, one section holds the list: say in 'items' how many named options it gives (the results' own count when they show one, at least five).",
+          "In 'coverage', list the specific facts and elements most of the top results give a searcher, which this article must give too, one per line and concrete (for example: the installed cost range and what drives it; whether a permit is required, where and its fee; rebates and their amounts; the timeline; six or more named options with price and who each suits; the install command and one complete runnable example with its output; key numbers such as temperatures, weights or limits).",
+          // P268 (Oct 31 2026): Cowork traced batch 2's wrong numbers to blogs; research looks for each owned fact's owner.
+          "For an owned fact (a product's price or plans, a fee, a rebate or incentive, a specification such as a temperature limit or weight, a release date or version, a rule), name in the same line whose page states it (for example: 'rebate amounts, from the utility or program that pays them'; 'oven-safe temperatures, from the manufacturers' care pages'; 'first release date, from npm or the project's repository').",
+          "Then add two or three specifics this business's own readers face that the results miss (for freelancers, for example: payouts that arrive net of platform fees).",
+          "When the format is a list, one section holds the list: say in 'items' how many named options it gives (the results' own count when they show one, at least six, not counting this business's own product).",
         ].join(" "),
         userMessage: [
           `SEARCH: ${topic.primaryKeyword}`,
@@ -4540,7 +4572,7 @@ async function handleArticle(
         sections.splice(faq >= 0 ? faq : sections.length, 0, "Worked example");
         outlineCovers.set("Worked example", "A complete worked example with realistic amounts that add up.");
       }
-      coverage = planned.coverage.map((item) => item.replace(/\s+/g, " ").trim().slice(0, 200)).filter((item) => item.length >= 8).slice(0, 12);
+      coverage = planned.coverage.map((item) => item.replace(/\s+/g, " ").trim().slice(0, 220)).filter((item) => item.length >= 8).slice(0, 15);
     } catch (error) {
       researchQualityNotes.push(`Outline unavailable: ${error instanceof Error ? error.message.slice(0, 160) : "unknown"}`);
       sections = [];
@@ -4549,13 +4581,15 @@ async function handleArticle(
     const context = serpBrief ? [...serpBrief.results.map((r) => r.title), ...(serpBrief.pages ?? []).flatMap((p) => p.headings),
       ...serpBrief.questions].join("\n").slice(0, 8_000) : "";
     articlePlan = { version: 1, format, sections, targetWords, ...(context ? { context } : {}), ...(coverage.length ? { coverage } : {}),
-      ...(format === "list" ? { minItems: Math.max(5, Math.min(15, items ?? 5)) } : {}) };
+      ...(format === "list" ? { minItems: Math.max(LIST_MIN_OPTIONS, Math.min(15, items ?? LIST_MIN_OPTIONS)) } : {}) };
   }
 
   // ── Step 1: Web Research (graceful degradation) ──
   await reportProgress(2, "Researching the web...");
   let researchContext = "";
   let researchSources: PreservedSource[] = [];
+  // P268: who publishes each kept source of a planned article (owner, publication, or a blog kept as context only).
+  let researchSourceRoles = new Map<string, SourceRole>();
 
   if (topic && !contentProviderActive()) {
     try {
@@ -4697,6 +4731,8 @@ async function handleArticle(
     // P264: a planned article's research is searcher-led: a source for each item of its coverage, official where one
     // states it, otherwise the reputable page where the fact lives (lib/researchPasses SEARCHER_LED_RESEARCH_SYSTEM).
     const planned = Boolean(articlePlan), coverage = articlePlan?.coverage ?? [];
+    // P268: a list names at least LIST_MIN_OPTIONS options built for its audience, each researched on its own website.
+    const listFormat = articlePlan?.format === "list";
     try {
       const found = await contentResearchCall({
         system: planned ? SEARCHER_LED_RESEARCH_SYSTEM : [
@@ -4716,15 +4752,17 @@ async function handleArticle(
           topic.secondaryKeywords?.length ? `Related searches: ${topic.secondaryKeywords.slice(0, 6).join(", ")}` : "",
           site.targetCountry ? `Readers are in: ${site.targetCountry}` : "",
           // P262: a "best X" list names other options by design; it still never researches the business itself.
-          listOptions.length ? `Do not research ${site.siteName ?? site.domain} itself.`
+          listOptions.length || listFormat ? `Do not research ${site.siteName ?? site.domain} itself.`
             : `Do not research ${site.siteName ?? site.domain} itself or its competitors; research the subject for its readers.`,
           namedProducts.length ? `This compares the products the search names (“${topic.primaryKeyword}”). For a fact about one of them, its own website (features, plans and pricing pages) and documentation are the authoritative sources: cite those pages, not third-party lists.` : "",
           // P231: the article names the products a search for a kind of product asks for, so research finds them.
           listOptions.length ? `This search asks for a list of options (“${topic.primaryKeyword}”). The top results name these: ${listOptions.join(", ")}. Search for each by name and cite its own website (features, plans and pricing pages) or documentation for the facts about it; skip one you can't find.` : "",
+          listFormat ? `The list needs at least ${LIST_MIN_OPTIONS} options built for the audience this search names (not general-purpose tools a list for that audience would skip), not counting ${site.siteName ?? site.domain}: add the ones the current top lists for this search name, each from its own pricing page.` : "",
           !namedProducts.length && searchAsksForProducts(topic.primaryKeyword) ? `This search asks for specific options (“${topic.primaryKeyword}”). Find the products, services or places a reader would compare or use and, for facts about each one, its own documentation or help pages.` : "",
         ].filter(Boolean).join("\n"),
         // P249: five searches (was three) so a how-to finds the documentation pages it needs, not one overview.
-        maxUses: 5,
+        // P268: a list's research runs up to 8: its options' pricing pages, one search each.
+        maxUses: listFormat ? LIST_RESEARCH_SEARCHES : 5,
         firstPartyProducts: namedProducts,
         // P264: a coverage list needs a longer cited brief: at 4,000 tokens the model narrated five searches and was cut off
         // before writing it (the comparison and the list kept 0 and 1 sources in the live trial).
@@ -4747,17 +4785,26 @@ async function handleArticle(
       const optionsCovered = (pool: typeof kept.readable) => new Set(pool.filter((source) => firstPartyProductPage(source.url, namedProducts))
         .map((source) => new URL(source.url).hostname)).size;
       // P264: a planned article's second pass looks for the coverage items still without a source, below 4 sources.
-      const coveragePass = planned && coverage.length > 0 && !listOptions.length;
-      if (listOptions.length ? optionsCovered(kept.readable) < 3 : coveragePass ? kept.readable.length < 4 : kept.readable.length < PRIMARY_PASS_BELOW) {
+      // P268: below 4 owner pages (code-known: government, documentation, repositories, the options' own sites) it looks for
+      // the owners of the coverage's facts, and a list's for options until LIST_MIN_OPTIONS have their own pages.
+      const listPass = listFormat || listOptions.length > 0;
+      const coveragePass = planned && coverage.length > 0 && !listPass;
+      const ownerPages = (pool: typeof kept.readable) => pool.filter((source) => ["primary", "official-doc"].includes(classifyEvidenceSource(source.url).tier) ||
+        firstPartyProductPage(source.url, namedProducts)).length;
+      if (listPass ? optionsCovered(kept.readable) < LIST_MIN_OPTIONS : coveragePass ? ownerPages(kept.readable) < 4 : kept.readable.length < PRIMARY_PASS_BELOW) {
         try {
-          const more = await contentResearchCall({ ...(listOptions.length
-            ? optionSourcesRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword, options: listOptions, targetCountry: site.targetCountry })
+          const uncovered = listOptions.filter((option) => !kept.readable.some((source) =>
+            firstPartyProductPage(source.url, [option.toLowerCase().replace(/[^a-z0-9]/g, "")])));
+          const more = await contentResearchCall({ ...(listPass
+            ? optionSourcesRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword, options: uncovered, targetCountry: site.targetCountry,
+              productName: site.siteName ?? site.domain })
             : coveragePass ? coverageSourcesRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword, coverage, targetCountry: site.targetCountry,
               avoidHosts: sourceHosts(kept.readable.map((source) => source.url)) })
             : primarySourcesRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword,
               secondaryKeywords: topic.secondaryKeywords, targetCountry: site.targetCountry, siteName: site.siteName ?? site.domain,
               avoidHosts: sourceHosts(kept.strict.rejected.map(({ source }) => source.url)) })),
-            maxUses: PRIMARY_PASS_SEARCHES, firstPartyProducts: namedProducts, pass: "primary", ...(planned ? { reputableSecondary: true, maxTokens: 8000 } : {}) });
+            maxUses: listPass ? LIST_RESEARCH_SEARCHES : PRIMARY_PASS_SEARCHES, firstPartyProducts: namedProducts, pass: "primary",
+            ...(planned ? { reputableSecondary: true, maxTokens: 8000 } : {}) });
           const seen = new Set(found.sources.map(source => source.url));
           const added = more.sources.filter(source => !seen.has(source.url));
           candidates = [...candidates, ...added.filter(notCompetitor)];
@@ -4768,7 +4815,20 @@ async function handleArticle(
         }
       }
       const { strict, accepted, readable } = kept;
-      researchSources = readable.slice(0, listOptions.length ? LIST_RESEARCH_SOURCES : planned ? PLANNED_RESEARCH_SOURCES : MAX_RESEARCH_SOURCES);
+      // P268: a planned article keeps owners' pages first, then publications; a blog only as context while fewer than 4
+      // stronger sources exist (lib/researchPasses rankedResearchSources). Who publishes each page is one cheap check.
+      const limit = listPass ? LIST_RESEARCH_SOURCES : planned ? PLANNED_RESEARCH_SOURCES : MAX_RESEARCH_SOURCES;
+      if (planned && readable.length) {
+        const roles = await classifyResearchSources({ search: topic.primaryKeyword, sources: readable, namedProducts })
+          .catch((error: unknown) => {
+            researchQualityNotes.push(`Source check unavailable: ${error instanceof Error ? error.message.slice(0, 160) : "unknown"}`);
+            return classifyResearchSourcesInCode(readable, namedProducts);
+          });
+        const ranked = rankedResearchSources(readable, roles, limit);
+        researchSources = ranked.kept;
+        researchSourceRoles = new Map(ranked.kept.map((source) => [source.url, ranked.role(source.url)]));
+        researchQualityNotes.push(`Sources by publisher: ${ranked.counts.owner} owner page(s), ${ranked.counts.publication} publication(s), ${ranked.counts.context} blog(s) as context only${ranked.counts.dropped ? `; ${ranked.counts.dropped} blog(s) left out` : ""}.`);
+      } else researchSources = readable.slice(0, limit);
       if (strict.rejected.length) researchQualityNotes.push(planned ? `Excluded ${strict.rejected.length} source(s) from forums, social media or other unusable hosts.`
         : `Excluded ${strict.rejected.length} secondary or vendor-authored source(s) from strict evidence.`);
       // What the research produced, always (P144, Oct 21 2026: about half of
@@ -4777,12 +4837,15 @@ async function handleArticle(
         competitor: cited - candidates.length, secondary: strict.rejected.length,
         unreadable: accepted.length - readable.length, kept: researchSources.length }));
       researchContext = researchSources.length ? [
-        planned ? "Only the source excerpts below may support external factual claims. A product's or vendor's own page supports facts about that product only."
+        planned ? "Only the source excerpts below may support external factual claims. A product's or vendor's own page supports facts about that product only. Each source says who publishes it: an owned fact (a price, plan, fee, rebate, specification, release or rule) comes only from its owner's page."
           : "Strict evidence mode is active. Only the preserved source excerpts below may support external factual claims.",
         "PRESERVED SOURCE EXCERPTS (citation order):",
-        ...researchSources.map((source, index) =>
-          `[${index + 1}] ${source.title ?? "Untitled source"}\nURL: ${source.url}\nCONTENT HASH: ${source.contentHash}\nEXCERPT: ${source.excerpt}`),
-      ].join("\n\n").slice(0, 30000) : "";
+        ...researchSources.map((source, index) => {
+          const role = researchSourceRoles.get(source.url);
+          return `[${index + 1}] ${source.title ?? "Untitled source"}${role ? ` (${SOURCE_ROLE_LABEL[role]})` : ""}\nURL: ${source.url}\nCONTENT HASH: ${source.contentHash}\nEXCERPT: ${source.excerpt}`;
+        }),
+      // P268: a list's 10 sources fit (30,000 characters cut its last options' pricing pages).
+      ].join("\n\n").slice(0, planned ? 60000 : 30000) : "";
       console.log(`Autopilot research: ${searches} searches, ${cited} cited pages, ${researchSources.length} strict sources`);
     } catch (err) {
       researchQualityNotes.push(`Web research unavailable for this article: ${err instanceof Error ? err.message.slice(0, 200) : "unknown"}`);
@@ -4954,7 +5017,7 @@ async function handleArticle(
     ``,
     `<article_structure>`,
     // P260: the fixed plan's outline replaces the type template; otherwise the type-specific structure.
-    articlePlan?.sections.length ? articleOutlinePrompt(articlePlan, outlineCovers) : (() => {
+    articlePlan?.sections.length ? articleOutlinePrompt(articlePlan, outlineCovers, productName) : (() => {
       const articleType = (effectiveArticleType ?? "standard") as ArticleType;
       return getArticleTypeStructure(articleType, productName);
     })(),
@@ -4995,12 +5058,18 @@ async function handleArticle(
     `</search_intent>`,
     ``,
     `GLOBAL RULES:`,
-    articlePlan ? `- LENGTH: At least ${Math.max(minimumWords, Math.round(articlePlan.targetWords! * 0.9))} measured prose words, about ${articlePlan.targetWords} (the top results' typical length), never more than ${plannedWordCeiling(effectiveArticleType, articlePlan.targetWords)}; the publication floor is ${minimumWords}. Reach it with specifics from the fact sheet, never padding.` : "",
+    // P268 (Oct 31 2026): Cowork, batch 2: "Length targets cause repetition. In every article the same caveat appears 3-7
+    // times. The writer pads to reach the word target." Coverage sets the length.
+    articlePlan ? `- LENGTH: There is no word target: the outline and the coverage set the length. Give each section and each coverage item its specifics once, then stop. Never restate a point, caveat, warning, label or number you have already given; a later section refers back in a few words at most. The publication floor is ${minimumWords} words.` : "",
     articlePlan ? `- FACT SHEET: The source excerpts are the fact sheet. Every number and factual claim comes from them (put its [n] right after the claim it supports) or from the confirmed business facts. A product's or vendor's own page supports facts about that product only. Name no person or company the excerpts or business facts don't name.` : "",
     // P264 (Oct 31 2026), searcher-led: Cowork judged the plan's first 5 articles thin (a worked example stopped halfway,
     // no prices, steps repeated three times, a vacated FTC rule stated as current).
-    articlePlan?.coverage?.length ? [`- COVERAGE: Give the reader every item below (what the top results give a searcher), from the fact sheet. For an item no excerpt supports, say in one plain sentence that it isn't published or varies and what the reader should ask or check; never drop the item or leave its section without substance.`,
+    // P268: "No deflecting: 'check the manufacturer' and 'ask your plumber' count as a missing item when the top results give
+    // the number" (Cowork). The previous rule asked for exactly that sentence.
+    articlePlan?.coverage?.length ? [`- COVERAGE: Give the reader every item below (what the top results give a searcher), with its specific figures, names and steps from the fact sheet. Never answer an item by sending the reader elsewhere ("check the manufacturer", "ask your plumber", "contact your utility", "see the vendor's site"); when no excerpt supports an item, leave that item out.`,
       ...articlePlan.coverage.map((item) => `  - ${item}`)].join("\n") : "",
+    articlePlan ? `- OWNED FACTS: A product's price, plan or feature, a fee, a rebate or incentive, a specification (temperature limit, weight, capacity, lifespan, warranty), a release date or version, and a rule's terms come only from their owner's page in the fact sheet (marked OWNER'S PAGE: the seller's, the utility's or agency's, the city's, the manufacturer's, the registry or repository, the government's); never from a page marked PUBLICATION or CONTEXT ONLY. Give each price or fee exactly as its page states it, with its conditions (the plan it belongs to, the billing period, an introductory period, per location or per user, the date it takes effect); never total, average or extend a price or fee beyond what the page says.` : "",
+    articlePlan ? `- EXPLANATIONS: Explain a cause or mechanism (physics, chemistry, health, money, software internals) only as a fact-sheet source explains it; otherwise give the practical fact without the "because". Never contradict a source.` : "",
     articlePlan ? `- SYNTHESIZE: Give a worked example its own section headed "Worked example" (or an H3 "Example"): its illustrative amounts need no source, but finish it (every side, every number) and make every number add up. Say each step and each piece of advice once; never repeat it in a later section. State a law, rule or program as current only when a fact-sheet page from the last 12 months says it is in force; otherwise give its date and status.` : "",
     articlePlan ? "" : `- LENGTH: Produce at least ${generationTargetWords} and no more than ${maximumWords} measured prose words on this first draft so factual editing has a safe depth reserve. The immutable publication floor is ${minimumWords}. Reach the target only with evidence-grounded explanation, concrete decision support, and actionable detail; never pad or invent evidence. If the topic cannot support a truthful article at this depth, fail closed instead of submitting a thin draft.`,
     `- NO FLUFF: Every section must add explanation, evidence, a concrete example, or an actionable step.`,
@@ -5014,7 +5083,11 @@ async function handleArticle(
       ? " The one exception is a worked example in its own section headed as an example (see SYNTHESIZE): give it realistic illustrative amounts (dollar figures, not letters or placeholders) and make them add up." : ""}`,
     `- HYPOTHETICALS: Label invented examples explicitly as hypothetical and never present their details or results as evidence.`,
     // P249: a how-to about software showed no code at all; the reader left for a tutorial that does.
-    `- CODE AND SETTINGS: When the article teaches a task in software and the preserved excerpts show the exact API, option, file name or command, include a short code, configuration or command example built only from what the excerpts show, in a fenced code block. Never invent an API, option, flag or version. Show a whole example: never one that stops after its imports or types; when the excerpts show only part of the code, describe that step in words instead.`,
+    // P268 (Oct 31 2026): Cowork, batch 2's tutorial: "Code stops after the basics: child loggers, pino-http, redaction and
+    // shipping are prose only." The general rule sends every step the excerpts don't show in full to prose.
+    articlePlan?.format === "tutorial"
+      ? `- CODE AND SETTINGS: Build one small working app across the article. Every section that teaches a step or a pattern shows it in a complete, runnable fenced code block (its file name in a first-line comment) that builds on the earlier steps, then how to run it and what it prints. Use each API, option and command exactly as the official documentation in the fact sheet shows it; for a step the excerpts don't show, use only the package's standard documented calls you are certain of and keep that example minimal. Never invent an option, flag, version or package.`
+      : `- CODE AND SETTINGS: When the article teaches a task in software and the preserved excerpts show the exact API, option, file name or command, include a short code, configuration or command example built only from what the excerpts show, in a fenced code block. Never invent an API, option, flag or version. Show a whole example: never one that stops after its imports or types; when the excerpts show only part of the code, describe that step in words instead.`,
     `- PRACTICAL VALUE: Give the reader a concrete answer and a useful next step: an evidence-grounded explanation, a decision framework with explicit trade-offs, or a reader-run check with inputs and observable results. Give a framework you propose as plain advice ("a simple way to decide is..."), never as an industry standard, and never add a sentence saying it is a recommendation rather than a standard. Never write about your sources, research or drafting process in the article (no "no external sources were verified for this draft", "the documentation we can verify", "the excerpt is truncated" or "the supplied evidence"). Give the specific answer (the name, number, step, setting or code) from the sources; when the sources don't give it, leave the point out. Never send the reader to "check the documentation", "consult the official docs" or "consult a professional" in place of an answer, and never add hedging filler or boilerplate disclaimers. Never contrast your advice with the sources or say which parts are or are not from them (no "not figures from the sources", "rather than a rule from the sources", "source-specified" or "the sources do not give"): cite a sourced fact with its number and state everything else as plain advice. Do not claim uniqueness, competitor inferiority, or guaranteed traffic.`,
     `- COMPARISONS: A documented capability does not establish that competing tools lack it or that it produces better results. Omit unsupported superlatives and comparative outcome claims. Where useful, propose a conditional test the reader can evaluate using their own data.`,
     // P231: a search for a kind of product names the products (convex/lib/sourceQuality.ts otherCompaniesRule).
@@ -7260,6 +7333,40 @@ export const plannedFixMaxTokens = (markdown: string) => Math.min(16_384, Math.m
 /** P260: the article's $0.50 provider cap refused this call (beginProviderCall). */
 const costCapRefusal = (error: unknown) => error instanceof Error && /Content work cost cap reached/.test(error.message);
 
+/** P268 (Oct 31 2026): Cowork's batch 2 verdicts found errors no code check can: physics stated backwards ("low specific
+ * heat, so it stores a lot of thermal energy"), an introductory price given as the regular one, a fee applied to plans it
+ * doesn't cover, a total that doesn't add up, a rebate credited to the wrong utility. One cheap check (the checks model)
+ * lists them for the one fix; it never holds a draft and never scores one. */
+export type ClaimError = { sentence: string; problem: string; correction: string };
+async function checkPlannedClaims(args: { markdown: string; search: string; profile: string;
+  sources: readonly { url: string; title?: string; excerpt?: string }[] }): Promise<ClaimError[]> {
+  const checked = await callClaudeStructured({
+    system: [
+      UNTRUSTED_EVIDENCE_INSTRUCTION,
+      "You check one article for factual errors before it publishes, against its fact sheet (the numbered source excerpts) and what is well established in science and engineering.",
+      "Report only these errors: (1) a sentence the fact sheet contradicts: a different number, an introductory or promotional price given as the regular price, a price, fee or rule applied to plans, places or cases its page doesn't apply it to, a total or difference that doesn't add up; (2) a scientific, technical or causal statement that is wrong, such as a physical explanation stated backwards; (3) an owned fact (a product's price or plan, a fee, a rebate, a specification, a release date or version) whose only support is a page that isn't its owner (a blog, a review site, a cost guide or another company's page); (4) a fee, rate or rule the fact sheet shows has since changed or ended.",
+      "For each error give the exact sentence as written in the article, what is wrong in a few words, and the correction from the fact sheet, or 'remove' when the fact sheet has no correct figure. Report nothing else: no style, no missing topics, no wording preferences, no illustrative amounts in a worked example. Return an empty list when there are no errors.",
+    ].join(" "),
+    userMessage: [`SEARCH: ${args.search}`, "FACT SHEET (untrusted data):",
+      ...args.sources.map((source, index) => `[${index + 1}] ${source.title ?? "Source"} (${source.url})\n${(source.excerpt ?? "").slice(0, EVIDENCE_EXCERPT_MAX_CHARS)}`),
+      args.profile ? `CONFIRMED BUSINESS FACTS:\n${args.profile.slice(0, 4000)}` : "",
+      "ARTICLE:", args.markdown].filter(Boolean).join("\n\n"),
+    toolName: "check_claims",
+    toolDescription: "Submit the article's factual errors, or an empty list when it has none.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { errors: { type: "array", items: { type: "object", additionalProperties: false,
+      properties: { sentence: { type: "string" }, problem: { type: "string" }, correction: { type: "string" } }, required: ["sentence", "problem", "correction"] } } },
+      required: ["errors"] },
+    outputSchema: z.object({ errors: z.array(z.object({ sentence: z.string(), problem: z.string(), correction: z.string() })).default([]) }),
+    maxTokens: 3000,
+  });
+  // Only a sentence the article actually contains can be fixed (compared without links, citation markers and emphasis).
+  const plain = (value: string) => value.replace(/\[\d+(?:\s*,\s*\d+)*\]\([^)\n]*\)/g, "").replace(/\[([^\]\n]*)\]\([^)\n]*\)/g, "$1")
+    .replace(/\[\d+(?:\s*,\s*\d+)*\]/g, "").replace(/[*_`]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+  const text = plain(args.markdown);
+  return checked.errors.filter((error) => { const sentence = plain(error.sentence); return sentence.length >= 12 && text.includes(sentence.slice(0, 40)); })
+    .slice(0, 10);
+}
+
 async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">; articleId: Id<"articles">; incrementRevision: boolean;
   qualityRecoveryVersion?: number; site: Doc<"sites">; article: Doc<"articles"> }) {
   const { siteId, articleId, incrementRevision, site, article } = args;
@@ -7278,17 +7385,35 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
   };
   let fields = { title: article.title, markdown: article.markdown, metaTitle: article.metaTitle, metaDescription: article.metaDescription };
   const fixNotes: string[] = [];
-  if (incrementRevision) {
+  // P268 (Oct 31 2026): the one fix runs on the first review whenever anything is found to fix, not only when the gate
+  // blocks (Cowork's batch 2 failures were mostly things no gate blocks: repeats, referrals, wrong science, garbled prices).
+  // A review after the fix checks again and never fixes twice: at most one fix (Arshad's cost rule).
+  const fixedBefore = (article.qualityRevisionCount ?? 0) >= 1;
+  let fixedNow = false;
+  if (!fixedBefore) {
     // The one targeted fix: exactly the failing lines and checks, nothing else rewritten.
     const before = candidateFor(fields);
     const failures = planChecksForArticle(before);
     const objective = issuesBlockingPreLinkReview([...evaluatePublicationQuality(before, "strict").issues, ...readerVisibleIssues(before)])
       .filter((issue) => !/^Plan check:/.test(issue));
+    // P268 (Oct 31 2026): what Cowork failed batch 2 for that code can find (a passage said again, a reader sent elsewhere,
+    // a tutorial step without code, a list short of options) and one claims check, for the same one fix. Neither holds a draft.
+    const plan = article.articlePlan;
+    const found = plan ? fixFindings(fields.markdown, { format: plan.format as PlanFormat, sections: plan.sections, minItems: plan.minItems }, productName,
+      [topic?.primaryKeyword ?? "", ...plan.sections, ...(plan.coverage ?? [])].join(" ")) : [];
+    const claims = plan ? await checkPlannedClaims({ markdown: fields.markdown, search: topic?.primaryKeyword ?? article.title,
+      profile: article.productEvidenceSnapshot ?? "", sources: article.sources ?? [] })
+      .catch((error: unknown) => { fixNotes.push(costCapRefusal(error) ? "The claims check was skipped: this article reached its $0.50 cost cap."
+        : `Claims check unavailable: ${error instanceof Error ? error.message.slice(0, 120) : "unknown"}`); return [] as ClaimError[]; }) : [];
+    if (found.length || claims.length) fixNotes.push(`Fix inputs: ${claims.length} claim(s) to correct, ${found.filter((f) => f.kind === "repetition").length} repeated passage(s), ` +
+      `${found.filter((f) => f.kind === "deflection").length} referral(s), ${found.filter((f) => f.kind === "code").length} step(s) without code, ${found.filter((f) => f.kind === "options").length ? "too few options" : "options complete"}.`);
     const instructions = [
       ...failures.map((failure) => failure.check === "number" ? `Remove or correct this sentence; ${failure.detail}: «${failure.line}»`
         : failure.check === "product" ? `Correct this product fact to match the confirmed business details, or remove it: «${failure.line}»`
         : failure.check === "name" ? `Rewrite this sentence without the name(s) no source or business detail gives (${failure.detail.replace(/ is not named.*$/, "")}), keeping its point: «${failure.line}»`
         : `${failure.detail}: add it, following the outline and the format.`),
+      ...claims.map((claim) => `Correct this sentence (${claim.problem.slice(0, 200)}) using only the fact sheet; correction: ${claim.correction.slice(0, 300)}: «${claim.sentence}»`),
+      ...found.map((finding) => finding.line ? `${finding.detail}: «${finding.line}»` : `${finding.detail}.`),
       // An uncited number: the exact passage, so the one fix can cite its fact-sheet source or drop the number.
       ...objective.flatMap((issue) => UNCITED_QUANTITY_ISSUE.test(issue)
         ? uncitedEvidenceRequiredParagraphs(before.markdown, before).map((passage) =>
@@ -7299,12 +7424,22 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
     const fixed = instructions.length ? await remediateFinalArticle({ markdown: fields.markdown, articleType: article.articleType ?? "standard",
       primaryKeyword: topic?.primaryKeyword ?? article.title, productName, productEvidence: article.productEvidenceSnapshot ?? "",
       researchEvidence: article.researchEvidenceSummary ?? "", sources: article.sources ?? [], minWords: STRICT_PUBLICATION_MIN_WORDS,
-      maxWords: plannedWordCeiling(article.articleType, article.articlePlan?.targetWords), auditNotes: ["Fix only these points and change nothing else. Keep the worked example's illustrative amounts exactly as they are:", ...instructions.slice(0, 24)],
+      maxWords: plannedWordCeiling(article.articleType, article.articlePlan?.targetWords), auditNotes: ["Fix only these points and change nothing else. Keep the worked example's illustrative amounts exactly as they are:", ...instructions.slice(0, 32)],
       maxTokens: plannedFixMaxTokens(fields.markdown) })
       .catch((error: unknown) => { if (costCapRefusal(error)) return null; throw error; }) : null;
     if (instructions.length && !fixed) fixNotes.push("The fix was skipped: this article reached its $0.50 cost cap.");
-    if (fixed) {
-      fields = { ...fields, markdown: withSourcesSection(fixed.markdown, article.sources ?? []) };
+    if (fixed) fixedNow = true;
+    // P268: the fix never makes a draft worse by the objective checks. It now also runs on a draft that already passes
+    // (repeats, referrals, the claims check), and a held Autopilot draft is an empty slot: a fix that leaves more blocking
+    // issues than the draft had is set aside, and the draft it was given stands.
+    const blocking = (draft: typeof fields) => { const c = candidateFor(draft);
+      return issuesBlockingPreLinkReview([...evaluatePublicationQuality(c, "strict").issues, ...readerVisibleIssues(c)]).length; };
+    const fixedFields = fixed ? { ...fields, markdown: withSourcesSection(fixed.markdown, article.sources ?? []) } : null;
+    const [blockingBefore, blockingAfter] = fixedFields ? [blocking(fields), blocking(fixedFields)] : [0, 0];
+    if (fixedFields && blockingAfter > blockingBefore) {
+      fixNotes.push(`The fix was set aside: it left ${blockingAfter} blocking issue(s) where the draft had ${blockingBefore}.`);
+    } else if (fixedFields) {
+      fields = fixedFields;
       fixNotes.push(`One targeted fix for ${instructions.length} point(s).`);
       const metadataDefects = objective.filter((issue) => /^Meta (?:description|title)\b|^Title or meta description/.test(issue));
       if (metadataDefects.length && contentProviderMayRepairDraft()) {
@@ -7326,7 +7461,7 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
   const preLinkIssues = issuesBlockingPreLinkReview([...quality.issues, ...readerVisibleIssues(candidate)]);
   const readyForPublication = preLinkIssues.length === 0;
   const contentHash = readyForPublication ? publicationArtifactHash(candidate) : undefined;
-  const qualityRevisionCount = (article.qualityRevisionCount ?? 0) + (incrementRevision ? 1 : 0);
+  const qualityRevisionCount = (article.qualityRevisionCount ?? 0) + (incrementRevision || fixedNow ? 1 : 0);
   const stats = calculateArticleStats(fields.markdown);
   await ctx.runMutation(internal.articles.applyQualityReview, {
     articleId, title: fields.title, markdown: fields.markdown, metaTitle: fields.metaTitle, metaDescription: fields.metaDescription,
@@ -7335,7 +7470,7 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
     factCheckNotes: [`Code checks (fixed plan v1): ${failures.length ? `${failures.length} to fix` : "passed"}.`,
       ...[...new Set([...flaggedLines(failures), ...uncitedLines.map((line) => line.trim())])].map((line) => `Unverified claim: «${line.replace(/[«»]/g, "")}»`)].join(" "),
     editorialQualityNotes: [
-      ...(article.editorialQualityNotes ?? []).filter((note) => /^(?:Excluded \d+ .*source|Research: |Web research unavailable|Primary-source research pass|Outline unavailable)/.test(note)),
+      ...(article.editorialQualityNotes ?? []).filter((note) => /^(?:Excluded \d+ .*source|Research: |Web research unavailable|Primary-source research pass|Outline unavailable|Sources by publisher|Source check unavailable)/.test(note)),
       `Fixed article plan v1: ${article.articlePlan?.format ?? "guide"}, ${article.articlePlan?.sections.length ?? 0} outline section(s).`,
       ...fixNotes, ...planCheckIssues(failures),
     ],

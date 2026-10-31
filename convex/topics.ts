@@ -1265,7 +1265,9 @@ export const recordSerpBrief = internalMutation({ args: { topicId: v.id("topic_c
     if (!topic) return null;
     // P260: a brief stored without its pages (read before the fixed plan) takes the same results with pages, once.
     const addsPages = Boolean(topic.serpBrief && !topic.serpBrief.pages && brief.pages);
-    if (topic.serpBrief && !addsPages && brief.observedAt - topic.serpBrief.observedAt < SERP_BRIEF_MAX_AGE_MS) return topic.serpBrief;
+    // P268: a brief from the plan's newer read of Google (People Also Ask, goto links recovered) replaces an older one.
+    const newerRead = Boolean(topic.serpBrief && (brief.reader ?? 1) > (topic.serpBrief.reader ?? 1));
+    if (topic.serpBrief && !addsPages && !newerRead && brief.observedAt - topic.serpBrief.observedAt < SERP_BRIEF_MAX_AGE_MS) return topic.serpBrief;
     await ctx.db.patch(topicId, { serpBrief: brief, updatedAt: Date.now() });
     return brief;
   } });

@@ -1451,6 +1451,97 @@ export async function analyzeSERP(
   return analyzeSERPFromAI(keyword);
 }
 
+const googleGoto = (url: string) => { try { const u = new URL(url); return /(^|\.)google\.[a-z.]+$/.test(u.hostname) && u.pathname === "/goto"; } catch { return false; } };
+const titleKey = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+/** The site Google's breadcrumb names ("https://www.ramp.com › Blog › Accounting"), for a result listed as a goto link. */
+const breadcrumbHost = (breadcrumb: unknown) => { try { return new URL(String(breadcrumb).split(/\s+›\s+/)[0].trim()).hostname.replace(/^www\./, ""); } catch { return ""; } };
+const urlHost = (url: string) => { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; } };
+
+/** P268 (Oct 31 2026): the fixed plan's read of Google's results. Cowork judged batch 2 0 of 5, and its plans saw almost
+ * none of the results: the "regular" results never carry People Also Ask (no plan had an FAQ question), and Google lists
+ * about half of its results as its own goto links, at random on each request, behind a script page nothing can follow
+ * (the how-to kept 1 of 8 results, the list none it could read). The "advanced" results cost the same $0.002 and carry
+ * People Also Ask; up to two more requests recover a wrapped result from a request that lists it plainly (same title, or
+ * same site and most of the title). A result still wrapped keeps its title and description for the plan. */
+export async function analyzeSerpForPlan(keyword: string, locationCode: number = 2840, languageCode: string = "en"): Promise<SerpAnalysis> {
+  if (!getDataForSEOCredentials()) return analyzeSERP(keyword, locationCode, languageCode);
+  const read = async (): Promise<any[]> => {
+    const data = await dataForSEORequest("serp/google/organic/live/advanced",
+      [{ keyword, location_code: locationCode, language_code: dataForSeoLanguageCode(languageCode), depth: 10 }], 45_000);
+    return data.tasks?.[0]?.result?.[0]?.items ?? [];
+  };
+  const results: SerpResult[] = [];
+  const paaQuestions: string[] = [];
+  const wrappedSite = new Map<SerpResult, string>(), crumbs = new Map<SerpResult, string>();
+  let featuredSnippetPresent = false;
+  const askedAlso = (item: any) => {
+    for (const q of item.items ?? []) if (q?.title && !paaQuestions.includes(q.title)) paaQuestions.push(q.title);
+  };
+  // One retry: a live request can fail on its own (batch 3's dry run: status 40101 with five searches read at once).
+  let first: any[];
+  try { first = await read(); } catch { await new Promise((resolve) => setTimeout(resolve, 2_000)); first = await read(); }
+  for (const item of first) {
+    if (item.type === "organic" && item.url) {
+      const result = { position: item.rank_group ?? results.length + 1, url: item.url, title: item.title ?? "", description: item.description ?? "", type: "organic" };
+      results.push(result);
+      if (googleGoto(item.url)) { wrappedSite.set(result, breadcrumbHost(item.breadcrumb)); crumbs.set(result, String(item.breadcrumb ?? "")); }
+    } else if (item.type === "featured_snippet") {
+      featuredSnippetPresent = true;
+      results.unshift({ position: 0, url: item.url ?? "", title: item.title ?? "", description: item.description ?? "", type: "featured_snippet" });
+    } else if (item.type === "people_also_ask") askedAlso(item);
+  }
+  const sameResult = (wrapped: SerpResult, item: any) => {
+    if (titleKey(wrapped.title) && titleKey(wrapped.title) === titleKey(item.title ?? "")) return true;
+    const site = wrappedSite.get(wrapped);
+    if (!site || site !== urlHost(item.url)) return false;
+    const want = titleKey(wrapped.title).split(" "), have = new Set(titleKey(item.title ?? "").split(" "));
+    return want.length > 0 && want.filter((word) => have.has(word)).length / want.length >= 0.6;
+  };
+  for (let attempt = 0; attempt < 2 && results.some((r) => googleGoto(r.url)); attempt++) {
+    let items: any[];
+    try { items = await read(); } catch { break; }
+    for (const item of items) {
+      if (item.type === "people_also_ask") askedAlso(item);
+      if (item.type !== "organic" || !item.url || googleGoto(item.url)) continue;
+      const wrapped = results.find((r) => googleGoto(r.url) && sameResult(r, item));
+      if (wrapped) wrapped.url = item.url;
+    }
+  }
+  // Still wrapped (Google wrapped 6 to 8 of 8 results on each request in the dry run): the address its breadcrumb spells out
+  // when that is a whole path ("https://www.wellnessliving.com › yoga › software"), kept only when the page's title is the
+  // result's. A shortened breadcrumb ("› best-booking-s...") or a site's own trail ("› Blog › Accounting") is not an address.
+  await Promise.all(results.filter((r) => googleGoto(r.url)).map(async (result) => {
+    const url = breadcrumbUrl(crumbs.get(result) ?? "");
+    if (url && await titledAs(url, result.title)) result.url = url;
+  }));
+  const { dominantFormat, recommendedArticleType } = classifySERPResults(results);
+  return { keyword, results: results.slice(0, 10), dominantFormat, recommendedArticleType, featuredSnippetPresent,
+    paaQuestions: paaQuestions.slice(0, 8), difficulty: estimateSERPDifficulty(results) };
+}
+
+/** P268: the page address a Google breadcrumb spells out, when it is a whole path of URL segments. */
+export function breadcrumbUrl(breadcrumb: string): string | null {
+  const [origin, ...segments] = breadcrumb.split(/\s+›\s+/).map((part) => part.trim());
+  let parsed: URL;
+  try { parsed = new URL(origin); } catch { return null; }
+  if (parsed.protocol !== "https:" || parsed.pathname !== "/" || !segments.length) return null;
+  if (!segments.every((segment) => /^[a-z0-9][a-z0-9._~%-]*$/.test(segment) && !/\.\.\.|…/.test(segment))) return null;
+  return `${parsed.origin}/${segments.join("/")}`;
+}
+const TITLE_FILLER = new Set(["the", "and", "for", "with", "your", "you", "how", "what", "are", "best", "top", "guide", "from", "this", "that"]);
+const titleWords = (value: string) => titleKey(value).split(" ").filter((word) => word.length >= 3 && !TITLE_FILLER.has(word));
+/** The page's own title or first heading shares most of the result's title. */
+async function titledAs(url: string, title: string): Promise<boolean> {
+  try {
+    const page = await safeFetchPublicText(url, { timeoutMs: 5_000, maxBytes: 1_500_000, sameHostRedirects: true,
+      allowedContentTypes: [/^text\/html(?:;|$)/i, /^application\/xhtml\+xml(?:;|$)/i] });
+    const own = [/<title[^>]*>([\s\S]*?)<\/title>/i.exec(page.text)?.[1] ?? "", /<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(page.text)?.[1] ?? ""]
+      .join(" ").replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&#0?39;|&rsquo;/g, "'");
+    const want = titleWords(title.replace(/\s+[-|–—]\s+[^-|–—]+$/, "")), have = new Set(titleWords(own));
+    return want.length > 0 && want.filter((word) => have.has(word)).length / want.length >= 0.6;
+  } catch { return false; }
+}
+
 /**
  * Provider-only SERP measurement for paid evidence migrations.
  *

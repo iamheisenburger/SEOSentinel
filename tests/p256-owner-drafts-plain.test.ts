@@ -96,7 +96,8 @@ test("P256 research makes one more bounded pass for primary sources when it keep
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
   // P262: a "best X" list's second pass looks up its options instead (tests/p261-live-trial-fixes.test.ts).
   assert.match(pipeline, /: kept\.readable\.length < PRIMARY_PASS_BELOW\) \{/);
-  assert.match(pipeline, /maxUses: PRIMARY_PASS_SEARCHES, firstPartyProducts: namedProducts, pass: "primary", \.\.\.\(planned \? \{ reputableSecondary: true, maxTokens: 8000 \} : \{\}\) \}\);/);
+  // P268: a list's second pass runs up to LIST_RESEARCH_SEARCHES searches (its options' pricing pages).
+  assert.match(pipeline, /maxUses: listPass \? LIST_RESEARCH_SEARCHES : PRIMARY_PASS_SEARCHES, firstPartyProducts: namedProducts, pass: "primary",\n\s+\.\.\.\(planned \? \{ reputableSecondary: true, maxTokens: 8000 \} : \{\}\) \}\);/);
   assert.match(pipeline, /researchQualityNotes\.push\(`Primary-source research pass unavailable: /, "a failed pass never stops the draft");
   const provider = readFileSync("convex/actions/contentWorkProvider.ts", "utf8");
   // Its receipt key keeps ":web_research:", so a refused research call stays optional (contentWork's rejection handling).

@@ -28,7 +28,9 @@ test("P259 research gathers 3 to 5 real sources before writing", () => {
   assert.equal(MAX_RESEARCH_SOURCES, 5);
   // P262: a "best X" list keeps one source an option, up to 8.
   // P264: a planned article keeps up to 6 (lib/researchPasses PLANNED_RESEARCH_SOURCES).
-  assert.match(pipeline, /researchSources = readable\.slice\(0, listOptions\.length \? LIST_RESEARCH_SOURCES : planned \? PLANNED_RESEARCH_SOURCES : MAX_RESEARCH_SOURCES\);/);
+  // P268: a planned article keeps owners' pages first (rankedResearchSources); the limits are unchanged.
+  assert.match(pipeline, /const limit = listPass \? LIST_RESEARCH_SOURCES : planned \? PLANNED_RESEARCH_SOURCES : MAX_RESEARCH_SOURCES;/);
+  assert.match(pipeline, /\} else researchSources = readable\.slice\(0, limit\);/);
 });
 
 test("P259 the one check counts made-up numbers, product facts and invented quotes or people", () => {
@@ -60,7 +62,7 @@ test("P259 the writer sees what Google shows for the search, read once per topic
   assert.match(pipeline, /brief = fresh \? await ctx\.runMutation\(internal\.topics\.recordSerpBrief, \{ topicId, brief: fresh \}\) : null;/);
   assert.match(pipeline, /serpBrief \? serpBriefPrompt\(serpBrief\)/);
   // P260: a brief read before the fixed plan gains its pages once; otherwise the first reading is kept.
-  assert.match(readFileSync("convex/topics.ts", "utf8"), /if \(topic\.serpBrief && !addsPages && brief\.observedAt - topic\.serpBrief\.observedAt < SERP_BRIEF_MAX_AGE_MS\) return topic\.serpBrief;/,
+  assert.match(readFileSync("convex/topics.ts", "utf8"), /if \(topic\.serpBrief && !addsPages && !newerRead && brief\.observedAt - topic\.serpBrief\.observedAt < SERP_BRIEF_MAX_AGE_MS\) return topic\.serpBrief;/,
     "the first reading is kept, so retries and revisions see the same results");
 });
 

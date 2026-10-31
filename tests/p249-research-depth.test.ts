@@ -24,7 +24,8 @@ test("P249 a documentation page keeps the API names next to its cited quote; oth
 
 test("P249 research searches five times, documentation first, and the writer shows code only from the excerpts", () => {
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
-  assert.match(pipeline, /maxUses: 5,\n        firstPartyProducts: namedProducts,/);
+  // P268: a list's research runs up to 8 searches (its options' pricing pages); every other article's, five.
+  assert.match(pipeline, /maxUses: listFormat \? LIST_RESEARCH_SEARCHES : 5,\n        firstPartyProducts: namedProducts,/);
   assert.match(pipeline, /search its official documentation first and cite the pages that show the exact features, settings, APIs, file names or commands/);
   assert.match(pipeline, /include a short code, configuration or command example built only from what the excerpts show, in a fenced code block\. Never invent an API/);
   assert.match(pipeline, /\.slice\(0, EVIDENCE_EXCERPT_MAX_CHARS\);/);

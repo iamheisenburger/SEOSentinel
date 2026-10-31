@@ -69,9 +69,11 @@ test("P262 a list's second research pass looks up its options' own pages, never 
   const { optionSourcesRequest, LIST_RESEARCH_SOURCES } = await import("../convex/lib/researchPasses.ts");
   const request = optionSourcesRequest({ label: "Yoga studio scheduling", primaryKeyword: "best scheduling software for yoga studios",
     options: ["Mindbody", "Momence", "Glofox"], targetCountry: "United States" });
-  assert.match(request.system, /For each option, use web search to find its own official pages: features, plans and pricing/);
-  assert.match(request.userMessage, /Options to research, each on its own website: Mindbody, Momence, Glofox/);
-  assert.equal(LIST_RESEARCH_SOURCES, 8);
-  assert.match(pipeline, /if \(listOptions\.length \? optionsCovered\(kept\.readable\) < 3 : coveragePass \? kept\.readable\.length < 4 : kept\.readable\.length < PRIMARY_PASS_BELOW\) \{/);
-  assert.match(pipeline, /listOptions\.length \? `Do not research \$\{site\.siteName \?\? site\.domain\} itself\.`/);
+  assert.match(request.system, /For each option, use web search to find its own official pages: plans and pricing, features/);
+  assert.match(request.userMessage, /Options the top results name \(research each on its own website; add others the top lists for this search name until there are at least 6\): Mindbody, Momence, Glofox/);
+  // P268: a list keeps up to 10 sources and looks for options until 6 have their own pages.
+  assert.equal(LIST_RESEARCH_SOURCES, 10);
+  assert.match(pipeline, /if \(listPass \? optionsCovered\(kept\.readable\) < LIST_MIN_OPTIONS : coveragePass \? ownerPages\(kept\.readable\) < 4 : kept\.readable\.length < PRIMARY_PASS_BELOW\) \{/);
+  assert.match(pipeline, /listOptions\.length \|\| listFormat \? `Do not research \$\{site\.siteName \?\? site\.domain\} itself\.`/,
+    "P268: a list researches its options even when no list could be read");
 });

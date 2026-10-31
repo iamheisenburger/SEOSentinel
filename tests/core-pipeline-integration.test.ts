@@ -69,6 +69,8 @@ function articlePayload(keyword: string, uniqueDraft = false) {
 export function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean;
   /** P260: the fixed article plan (outline, code checks, no AI review). */
   articlePlan?: boolean; planResponse?: (plan: Fields, request: Fields) => unknown;
+  // P268: the planned article's claims check and research-source sorting.
+  claimsResponse?: (request: Fields) => unknown; classifyResponse?: (request: Fields) => unknown;
   growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
   longManagedPage?: boolean; gscFixture?: boolean; omitDraftTitle?: boolean; convexSerialization?: boolean;
   /** A synthetic draft without its repeated template paragraph (P101 repetition checks). */
@@ -105,6 +107,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   const telegramMessages: Fields[] = [];
   const opsEmails: Fields[] = [];
   const discoveryCalls: Array<{ endpoint: string; seeds: string[] }> = [];
+  const serpRequests = new Map<string, number>();
   const businesses = options.businesses ?? defaultBusinesses;
   let publisherFailuresRemaining = options.publisherFailures ?? 0;
   let lostCommitResponsesRemaining = options.lostCommitResponses ?? 0;
@@ -292,6 +295,13 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
           topics: business.keywords.slice(0, 4).map(k => k.split(" ").slice(0, 3).join(" ")), searches: business.keywords,
           places: [], free_plan: "unknown", country: "US" };
       }
+      else if (tool === "check_claims") {
+        // P268: the one claims check before the fix (no errors by default).
+        value = options.claimsResponse ? options.claimsResponse(body) : { errors: [] };
+      } else if (tool === "classify_sources") {
+        // P268: who publishes each research source (by default the code's own sorting stands).
+        value = options.classifyResponse ? options.classifyResponse(body) : { sources: [] };
+      }
       else assert.fail(`Unexpected Anthropic tool ${tool}`);
       if (tool === "remediate_final_article" && options.remediationNote !== undefined) value = { ...(value as Fields), notes: options.remediationNote };
       return json({ id: `synthetic-message-${modelCalls.length}`, type: "message", role: "assistant", model: body.model, stop_reason: "tool_use", stop_sequence: null,
@@ -359,18 +369,14 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       }
       assert.fail(`Unexpected GitHub call ${method} ${path}`);
     }
-    if (options.articlePlan && /^(?:www\.)?google\.com$/.test(url.hostname) && url.pathname === "/goto") {
-      const target = url.searchParams.get("url")!;
-      return url.hostname === "google.com" ? new Response("", { status: 301, headers: { location: `https://www.google.com/goto?url=${encodeURIComponent(target)}` } })
-        : new Response("", { status: 302, headers: { location: target } });
-    }
     if (url.origin === "https://www.youtube.com" && url.pathname === "/results") return new Response("<html><body>No synthetic video results</body></html>", { headers: { "Content-Type": "text/html" } });
     if (url.hostname.endsWith(".example") || url.hostname.endsWith(".example.gov") || url.hostname.endsWith(".example.edu")) {
       if (options.evidence?.failed?.includes(url.href)) return new Response("Synthetic rejected capture", { status: 503 });
       const evidence = options.evidence?.sources.find(source => source.url === url.href);
       if (evidence) return new Response(`<html><main>${evidence.text}</main></html>`, { headers: { "Content-Type": "text/html" } });
       // P260: the fixed plan reads the top results' own pages (the synthetic SERP below lists guideN.example).
-      if (/^guide\d+\.example$/.test(url.hostname)) return new Response(`<html><body><main><h1>Guide ${url.hostname}</h1>` +
+      if (/^guide\d+\.example$/.test(url.hostname)) return new Response(`<html><head><title>Practical guide to ${decodeURIComponent(url.pathname.slice(1)).replaceAll("-", " ")}${
+        url.hostname === "guide0.example" ? "" : ` (${url.hostname.slice(5, -8)})`} - Guides</title></head><body><main><h1>Guide ${url.hostname}</h1>` +
         `<h2>Define the decision</h2><p>${"Context for the decision. ".repeat(60)}</p><h2>Map the handoff</h2><p>${"Steps for the handoff. ".repeat(60)}</p>` +
         `<h2>Review exceptions</h2><ul><li>One</li><li>Two</li></ul></main></body></html>`, { headers: { "Content-Type": "text/html" } });
       const business = businesses.find(b => b.domain === url.hostname);
@@ -412,14 +418,26 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
     else if (url.pathname.endsWith("/bulk_keyword_difficulty/live")) result = [{ items: body.keywords.map(metric) }];
     else if (/\/(keyword_suggestions|related_keywords|keyword_ideas)\/live$/.test(url.pathname)) result = [{ items: [] }];
     else if (url.pathname.endsWith("/serp/google/organic/live/regular")) result = [{ items: Array.from({ length: 10 }, (_, i) => ({ type: "organic", rank_absolute: i + 1,
-      // P260: Google lists some results as its own redirect links, and DataForSEO reports them so.
-      url: i === 0 && options.articlePlan ? `https://google.com/goto?url=${encodeURIComponent(`https://guide0.example/${body.keyword.replaceAll(" ", "-")}`)}`
-        : `https://guide${i}.example/${body.keyword.replaceAll(" ", "-")}`, title: `Practical guide to ${body.keyword}`, description: `A workflow for ${body.keyword}` })) }];
+      url: `https://guide${i}.example/${body.keyword.replaceAll(" ", "-")}`, title: `Practical guide to ${body.keyword}`, description: `A workflow for ${body.keyword}` })) }];
+    else if (url.pathname.endsWith("/serp/google/organic/live/advanced")) {
+      // P268: the fixed plan reads Google's advanced results. Google lists some results as its own goto links, at random on
+      // each request (here the first result on the first request); a second request lists it plainly.
+      const asked = (serpRequests.get(body.keyword) ?? 0) + 1; serpRequests.set(body.keyword, asked);
+      const slug = body.keyword.replaceAll(" ", "-");
+      result = [{ items: [
+        // The second result is always wrapped but its breadcrumb is a whole path; the third's breadcrumb is shortened.
+        ...Array.from({ length: 10 }, (_, i) => ({ type: "organic", rank_group: i + 1, rank_absolute: i + 2,
+          url: (i === 0 && asked === 1) || i === 1 || i === 2 ? `https://google.com/goto?url=CAESsynthetic${i}` : `https://guide${i}.example/${slug}`,
+          breadcrumb: i === 2 ? `https://guide2.example › ${slug.slice(0, 8)}...` : `https://guide${i}.example › ${slug}`,
+          title: `Practical guide to ${body.keyword}${i ? ` (${i})` : ""}`, description: `A workflow for ${body.keyword}` })),
+        { type: "people_also_ask", rank_absolute: 12, items: [{ title: `How long does ${body.keyword} take?` }, { title: `What does ${body.keyword} cost?` }] },
+      ] }];
+    }
     else assert.fail(`Unexpected DataForSEO route ${url.pathname}`);
     return json({ status_code: 20000, cost: 0.001, tasks: [{ id: `synthetic-${f.trace.length}`, status_code: 20000, cost: 0.001, result }] });
   }, { ...(options.webResearch ? { PENTRA_CONTENT_WEB_RESEARCH: "on" } : {}), ...(options.articlePlan ? { PENTRA_ARTICLE_PLAN: "on" } : {}), ...(options.growthFirst && !options.noPricing ? { PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ model: "mocked-content-model", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1, budgetMicroUsd: options.budgetMicroUsd ?? 500_000 }) } : {}),
     ...(options.gscFixture ? { GSC_CLIENT_ID: "synthetic-client", GSC_CLIENT_SECRET: "synthetic-client-secret" } : {}) },
-  { serializeValues: options.convexSerialization, ...(options.articlePlan ? { syntheticHosts: ["google.com", "www.google.com"] } : {}) });
+  { serializeValues: options.convexSerialization });
   const sites = businesses.map(b => {
     const owner = `synthetic-owner-${b.domain}`;
     f.add("account_plan_entitlements", { userId: owner, status: "completed", maxSites: 9999, maxArticles: 150, planFeatures: ["max_sites_unlimited", "max_articles_150"] });
@@ -10940,9 +10958,21 @@ test("P260 a planned Autopilot article: top results read, outlined, written once
   const job = f.tables.jobs.find(j => j.contentWork?.stage === "ready");
   assert.ok(job, diagnostic(f));
   const article = f.get(job.articleId)!, topic = f.get(article.topicId)!;
-  assert.deepEqual(f.modelCalls.map(c => c.tools?.[0]?.name).filter(Boolean), ["plan_article", "submit_article"], "outline, then write once");
+  // P268: the first review runs one claims check, and the synthetic article's template sentences (each said 12 times) get the
+  // one fix there; no review score, no second fix.
+  assert.deepEqual(f.modelCalls.map(c => c.tools?.[0]?.name).filter(Boolean), ["plan_article", "submit_article", "check_claims", "remediate_final_article"],
+    "outline, write once, one claims check, one fix");
+  assert.match(JSON.stringify(f.modelCalls.find(c => c.tools?.[0]?.name === "remediate_final_article")!.messages),
+    /is said 12 times; keep it the first time and cut or rewrite the repeats/);
   assert.equal(topic.serpBrief.pages.length, 5, "the top 5 pages were read and kept with the topic");
-  assert.equal(topic.serpBrief.results[0].url, "https://guide0.example/garden-maintenance-visit-preparation", "a Google redirect result is followed to its page");
+  assert.equal(topic.serpBrief.results[0].url, "https://guide0.example/garden-maintenance-visit-preparation",
+    "P268: a result Google listed as a goto link is recovered from a second request that lists it plainly");
+  assert.equal(topic.serpBrief.results[1].url, "https://guide1.example/garden-maintenance-visit-preparation",
+    "a result still wrapped is recovered from its breadcrumb when that page's title is the result's");
+  assert.match(topic.serpBrief.results[2].url, /^https:\/\/google\.com\/goto\?/, "a shortened breadcrumb is not an address: the result keeps its title");
+  assert.equal(topic.serpBrief.reader, 2, "read with the plan's advanced results");
+  assert.deepEqual(topic.serpBrief.questions, ["How long does garden maintenance visit preparation take?", "What does garden maintenance visit preparation cost?"],
+    "People Also Ask reaches the plan");
   assert.deepEqual(topic.serpBrief.pages[0].headings, ["Define the decision", "Map the handoff", "Review exceptions"]);
   assert.equal(article.qualityPlan, "fixed_v1");
   assert.equal(article.articlePlan.format, "guide");
@@ -10953,6 +10983,26 @@ test("P260 a planned Autopilot article: top results read, outlined, written once
   assert.equal(article.factCheckScore, undefined); assert.equal(article.editorialQualityScore, undefined);
   assert.equal(article.publicationGateStatus, "passed", JSON.stringify(article.publicationGateIssues));
   assert.match(article.factCheckNotes, /^Code checks \(fixed plan v1\): passed\.$/);
+  assert.equal(job.contentWork.revisions, 0);
+  f.assertOffline();
+});
+
+// P268 (Oct 31 2026): the one fix now also runs on a draft that already passes (repeats, referrals, the claims check). A fix
+// that leaves more blocking issues than it found is set aside: a held Autopilot draft is an empty slot.
+test("P268 a fix that makes a passing planned draft fail is set aside, and the draft publishes as written", async () => {
+  const injected = "Most owners save 40% of their time with a register.";
+  const f = setup({ growthFirst: true, articlePlan: true, businesses: [slcBusinesses[1]],
+    remediationResponse: (value: Fields) => ({ ...value, markdown: String(value.markdown).replace("\n\n## Map the handoff", `\n\n${injected}\n\n## Map the handoff`) }) });
+  await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => ["ready", "failed"].includes(j.contentWork?.stage)));
+  const job = f.tables.jobs.find(j => j.contentWork?.stage === "ready");
+  assert.ok(job, diagnostic(f));
+  const article = f.get(job.articleId)!;
+  assert.equal(f.modelCalls.filter(c => c.tools?.[0]?.name === "remediate_final_article").length, 1, "one fix, never a second");
+  assert.ok(!article.markdown.includes(injected), "the fix's unsupported statistic never reaches the article");
+  assert.ok(article.editorialQualityNotes.some((note: string) => /^The fix was set aside: it left \d+ blocking issue\(s\) where the draft had 0\.$/.test(note)),
+    JSON.stringify(article.editorialQualityNotes));
+  assert.equal(article.publicationGateStatus, "passed", JSON.stringify(article.publicationGateIssues));
   assert.equal(job.contentWork.revisions, 0);
   f.assertOffline();
 });
@@ -10971,8 +11021,8 @@ test("P260 an owner's planned draft gets one targeted fix, comes back with the d
   const first = await f.invoke("contentWork:requestDraft", { ...base, requestKey: "p260-first-draft" });
   await pumpUntil(f, () => ["ready", "failed"].includes(f.get(first.jobId)!.contentWork.stage));
   const job = f.get(first.jobId)!, article = f.get(job.articleId)!;
-  assert.deepEqual(f.modelCalls.map(c => c.tools?.[0]?.name).filter(Boolean), ["plan_article", "submit_article", "remediate_final_article"],
-    "written once, one targeted fix, no AI review");
+  assert.deepEqual(f.modelCalls.map(c => c.tools?.[0]?.name).filter(Boolean), ["plan_article", "submit_article", "check_claims", "remediate_final_article"],
+    "written once, one claims check, one targeted fix (P268: on the first review), no AI review");
   const fix = f.modelCalls.find(c => c.tools?.[0]?.name === "remediate_final_article")!;
   assert.match(JSON.stringify(fix.messages), /Fix only these points and change nothing else\. Keep the worked example's illustrative amounts exactly as they are:/);
   assert.match(JSON.stringify(fix.messages), /Jane Doe/);

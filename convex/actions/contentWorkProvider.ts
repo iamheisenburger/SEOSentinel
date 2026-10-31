@@ -47,7 +47,9 @@ export async function contentStructuredCall(args: { system: string; userMessage:
   const s = scope.getStore();
   if (!s?.job.contentWork) throw new Error("Missing content provider scope");
   // P260: plan_article is the fixed plan's outline step (checks model).
-  if (!["submit_article", "review_article", "remediate_final_article", "audit_final_article", "submit_final_metadata", "plan_article"].includes(args.toolName)) throw new Error(`Unpriced content tool: ${args.toolName}`);
+  // P268: classify_sources (who publishes each research source) and check_claims (the one claims check before the fix).
+  if (!["submit_article", "review_article", "remediate_final_article", "audit_final_article", "submit_final_metadata", "plan_article",
+    "classify_sources", "check_claims"].includes(args.toolName)) throw new Error(`Unpriced content tool: ${args.toolName}`);
   const cw = s.job.contentWork, p = cw.pricing;
   const baseKey = `${cw.replacements}:${cw.revisions}:${s.phase}:${args.toolName}`;
   const logicalKey = baseKey + (clarifyAudit ? SEMANTIC_AUDIT_SUFFIX : "");
