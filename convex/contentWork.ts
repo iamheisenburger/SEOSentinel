@@ -67,6 +67,12 @@ export function siteAutopilotIntervalMs(site: { cadencePerWeek?: number }, artic
 }
 /** With nothing prepared, the next Autopilot article starts now and lands in about this long. */
 export const FIRST_ARTICLE_LEAD_MS = 2 * 3_600_000;
+/** P270 (Oct 31 2026): a slot is pulled in only when it is more than one interval and this margin away. A delivery lands up
+ * to CONTENT_DELIVERY_WINDOW_MS before its deadline, so right after it the next slot is a whole interval and a few minutes
+ * away. With nothing waiting (a month's last day: next month's slot is prepared when the month begins), every delivery
+ * pulled the next slot in to 4 hours later: pentra.dev, 7 a week, published at 09:37 and 13:37 and prepared a third
+ * article for 17:42 on Oct 31, and LeadPilot (1 a day, Arshad's decision) would have followed its 18:00 slot. */
+export const PULL_IN_MARGIN_MS = 3_600_000;
 async function accountPlan(ctx: QueryCtx | MutationCtx, site: Doc<"sites">) {
   const entitlement = site.userId ? await ctx.db.query("account_plan_entitlements").withIndex("by_user", q => q.eq("userId", site.userId!)).unique() : null;
   const tier = resolvePlanFromFeatures(entitlement?.planFeatures ?? site.planFeatures ?? []).tier;
@@ -2695,7 +2701,7 @@ export const advance = internalMutation({
       (waiting.length === 0 || (waiting.length === 1 && waiting[0].contentWork!.deadlineAt === schedule.nextDeadlineAt))) {
       const rhythm = (await accountPlan(ctx, site)).autopilotIntervalMs, now = Date.now();
       let nextDeadlineAt = schedule.nextDeadlineAt;
-      if (waiting.length === 0 && schedule.nextDeadlineAt > now + rhythm) {
+      if (waiting.length === 0 && schedule.nextDeadlineAt > now + rhythm + PULL_IN_MARGIN_MS) {
         // Deliveries are spaced (catchUpPaceAt), so a slot pulled in right
         // after one would be missed by design: it lands no earlier than the
         // spacing allows, with its delivery window opening exactly then.

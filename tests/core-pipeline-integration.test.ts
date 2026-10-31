@@ -1775,6 +1775,42 @@ test("SLC65 Autopilot follows the customer's cadence, starts right away, and nev
   f.assertOffline(); g.assertOffline();
 });
 
+// P270 (Oct 31 2026): right after a delivery (up to 5 minutes before its deadline) the next slot is a whole interval and a
+// few minutes away. With nothing waiting (a month's last day: next month's slot is prepared when the month begins) it was
+// pulled in to 4 hours after the delivery, again and again: pentra.dev, 7 a week, published at 09:37 and 13:37 and
+// prepared a third article for 17:42 on Oct 31.
+test("P270 a slot one interval and a delivery window away keeps its place; a slot further away is still pulled in", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:setAutopilotCadence", { siteId: site.id, reviewToken: r.reviewToken, cadencePerWeek: 7 });
+  await f.invoke("contentWork:addResearchedTopics", { siteId: site.id, keywords: [
+    { keyword: `${slcBusinesses[0].keywords[0]} pricing guide`, searchVolume: 480, difficulty: 14, difficultyMeasured: true }] });
+  f.setIdentity(null);
+  const hour = 3_600_000, next = f.now() + 24 * hour + 5 * 60_000;
+  f.get(site.id)!.contentSchedule.nextDeadlineAt = next;
+  await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, next, "the next slot keeps its place on the cadence");
+  for (const job of f.tables.jobs.filter(j => j.contentWork && j.siteId === site.id)) assert.equal(job.contentWork.deadlineAt, next);
+  // A slot well beyond one interval (Autopilot just turned on, a pause ended) is still pulled in.
+  const g = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const other = await createEmptyContentSite(g); g.setIdentity(g.get(other.id)!.userId);
+  let rr = await g.invoke("contentWork:readiness", { siteId: other.id });
+  await g.invoke("contentWork:selectServiceMode", { siteId: other.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: rr.reviewToken, autopilot: true });
+  rr = await g.invoke("contentWork:readiness", { siteId: other.id });
+  await g.invoke("contentWork:setAutopilotCadence", { siteId: other.id, reviewToken: rr.reviewToken, cadencePerWeek: 7 });
+  await g.invoke("contentWork:addResearchedTopics", { siteId: other.id, keywords: [
+    { keyword: `${slcBusinesses[0].keywords[0]} pricing guide`, searchVolume: 480, difficulty: 14, difficultyMeasured: true }] });
+  g.setIdentity(null);
+  g.get(other.id)!.contentSchedule.nextDeadlineAt = g.now() + 3 * 24 * hour;
+  await g.invoke("contentWork:advance", { siteId: other.id });
+  assert.ok(g.get(other.id)!.contentSchedule.nextDeadlineAt <= g.now() + 2 * hour + 60_000, "pulled in: the next article starts now");
+  f.assertOffline(); g.assertOffline();
+});
+
 test("SLC66 an Autopilot site goes live with its first reviewed article, even when the plan allows only one", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
