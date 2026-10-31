@@ -114,4 +114,4 @@ This depends on your current page-to-keyword map and what's missing. If your cat
 
 - [Localized Keyword Research: How to Find the Search Terms Your Market Actually Uses](/blog/localized-keyword-research-2)
 - [Fiverr Keyword Research: A Practical Framework for Finding Terms Buyers Actually Search](/blog/fiverr-keywords-research)
-- [Keyword Research for Content Creators: A Step-by-Step Guide](/blog/keyword-research-for-content-creators-guide)
+- [Keywords for Research: How to Find Search Terms Worth Writing About](/blog/keywords-for-research-how-to-find-search-terms)
