@@ -1134,6 +1134,11 @@ export default defineSchema({
     publicationAmbiguityDispositionBy: v.optional(v.string()),
     publicationAmbiguityDispositionDetail: v.optional(v.string()),
     qualityRevisionCount: v.optional(v.number()),
+    // P260 (Oct 31 2026): Arshad's fixed article plan (ops/ARTICLE-PLAN-V1.md): the outline the writer followed and the
+    // code checks review (convex/lib/articlePlanChecks.ts); "fixed_v1" articles carry no AI review scores.
+    articlePlan: v.optional(v.object({ version: v.number(), format: v.string(), sections: v.array(v.string()),
+      minItems: v.optional(v.number()), targetWords: v.optional(v.number()) })),
+    qualityPlan: v.optional(v.string()),
     qualityRecoveryVersion: v.optional(v.number()),
     qualityRecoveryAttemptVersion: v.optional(v.number()),
     deterministicQualityRepairAttemptVersion: v.optional(v.number()),

@@ -3,6 +3,7 @@ import { publicationArtifactHash, sha256Hex } from "./publicationArtifact.ts";
 import { markdownCitationMarkers, removeUnverifiedMarkdownCitations } from "./markdownCitations.ts";
 import { deleteSentencesCoherently } from "./coherentDeletion.ts";
 import { SOURCES_HEADING } from "./sourcesHeading.ts";
+import { numbersOutsideFactSheet, planCheckIssues, runPlanChecks, type PlanCheckFailure, type PlanFormat } from "./articlePlanChecks.ts";
 
 export type PublicationQualityMode = "standard" | "strict";
 
@@ -98,7 +99,7 @@ export const AUTOPILOT_ACCEPTANCE = "pentra-autopilot";
  * check is corrected: a quality failure judged by an older version is no
  * evidence that today's drafts keep failing (P181, Oct 25 2026). */
 export const CONTENT_CHECKS_VERSION = 1;
-const UNCITED_QUANTITY_ISSUE = /^\d+ quantified outcome or operational claim\(s\) lack an inline citation\.$/;
+export const UNCITED_QUANTITY_ISSUE = /^\d+ quantified outcome or operational claim\(s\) lack an inline citation\.$/;
 export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number; claimEvidenceStatus?: string; markdown?: string } &
   Partial<Pick<PublicationArticle, "claimEvidence" | "productEvidenceSnapshot" | "productEvidenceHash">>): boolean {
   // Rule 2a, for Autopilot and for the owner alike. P256 (Oct 30 2026): Review-first drafts kept the old bar (scores of
@@ -129,6 +130,17 @@ export function ownerWaivableIssue(issue: string, article: { factCheckScore?: nu
 }
 export const META_DESCRIPTION_SHORT_ISSUE = "Meta description is too short for a useful search snippet (minimum 100 characters).";
 
+/** P260 (Oct 31 2026), Arshad's fixed plan: "At most one fix, then hand it to the user as a draft with doubtful lines
+ * marked." A planned draft's code-check findings hold Autopilot (it never publishes them unread), but the owner who
+ * reads the draft with those lines marked may approve it: the checks are code heuristics (a number missing from the
+ * fact sheet, a name no source gives), and blocking the reader who checked them would be the score gate again. */
+export const PLAN_CHECK_ISSUE = /^Plan check: /;
+export function ownerAcceptableIssue(issue: string, article: Parameters<typeof ownerWaivableIssue>[1] & { qualityPlan?: string }): boolean {
+  // In a planned draft an uncited number is one of the marked lines too (live trial, Oct 31: a worked example's table).
+  return PLAN_CHECK_ISSUE.test(issue) || (article.qualityPlan === "fixed_v1" && UNCITED_QUANTITY_ISSUE.test(issue)) ||
+    ownerWaivableIssue(issue, article);
+}
+
 export type OwnerQualityWaiver = { artifactHash: string; issues: string[]; acceptedAt: number; userId: string };
 
 export type PublicationArticle = {
@@ -152,7 +164,25 @@ export type PublicationArticle = {
   claimEvidence?: ClaimEvidenceEntry[];
   sources?: PublicationSource[];
   ownerQualityWaiver?: OwnerQualityWaiver;
+  // P260: Arshad's fixed article plan (ops/ARTICLE-PLAN-V1.md).
+  qualityPlan?: string;
+  articlePlan?: { format: string; sections: string[]; minItems?: number };
+  researchEvidenceSummary?: string;
+  metaKeywords?: string[];
 };
+
+/** P260 (Oct 31 2026), Arshad's fixed article plan: the code checks of a planned article, recomputed from what it stores
+ * (its outline, its fact sheet of preserved source excerpts and the confirmed profile), so the review, the seal and the
+ * publication all judge it the same way. Not a planned article: no checks. */
+export function planChecksForArticle(article: PublicationArticle): PlanCheckFailure[] {
+  if (article.qualityPlan !== "fixed_v1" || !article.articlePlan) return [];
+  const profile = article.productEvidenceSnapshot ?? "";
+  const productName = /^Name:\s*(.+)$/m.exec(profile)?.[1]?.trim() ?? "";
+  const sources = [...(article.sources ?? []).map((source) => ({ url: source.url, title: source.title, text: source.excerpt ?? "" })),
+    ...(article.researchEvidenceSummary ? [{ url: "https://fact-sheet.invalid/", text: article.researchEvidenceSummary }] : [])];
+  const outline = { format: article.articlePlan.format as PlanFormat, sections: article.articlePlan.sections, minItems: article.articlePlan.minItems };
+  return runPlanChecks(article.markdown, { sources, profile, productName }, outline, article.metaKeywords ?? []);
+}
 
 export type PublicationQualityResult = {
   passed: boolean;
@@ -397,7 +427,9 @@ export function containsExecutableMdx(markdown: string): boolean {
     /^\s*(?:import|export)\b/m.test(prose) ||
     /<\/?[A-Za-z!][\s\S]*?>/.test(prose) ||
     /<>|<\/>/.test(prose) ||
-    code.some((part) => /\{\{|\{%|%\}|\}\}/.test(part))
+    // Only an opening starts a template tag: a JSON example's closing "}}" is text (P260 live trial: a Pino tutorial's
+    // {"MIX":{"IN":"always"}} sample was blocked).
+    code.some((part) => /\{\{|\{%/.test(part))
   );
 }
 
@@ -2388,7 +2420,9 @@ export function evaluatePublicationQuality(
   const sourceHosts = new Set(validSources.map((source) => source.hostname));
   const paragraphsWithClaims = quantifiedParagraphs(markdown);
   const paragraphsWithOutcomes = quantifiedOutcomeParagraphs(markdown);
-  const uncitedClaims = uncitedEvidenceRequiredParagraphs(markdown, article);
+  // P260: in a planned article, a number the confirmed profile states needs no citation (its plan check verified it).
+  const uncitedClaims = uncitedEvidenceRequiredParagraphs(markdown, article).filter((paragraph) => article.qualityPlan !== "fixed_v1" ||
+    numbersOutsideFactSheet(paragraph, { sources: [], profile: article.productEvidenceSnapshot ?? "", productName: "" }).length > 0);
   if (uncitedClaims.length > 0) {
     const message = `${uncitedClaims.length} quantified outcome or operational claim(s) lack an inline citation.`;
     if (mode === "strict") issues.push(message);
@@ -2467,12 +2501,18 @@ export function evaluatePublicationQuality(
     } else if (!article.featuredImage) {
       warnings.push("No featured image is attached; omission is preferable to an unreviewed asset.");
     }
-    if (article.factCheckScore === undefined) {
+    // P260: a planned article (Arshad's fixed plan) has no AI review and no scores: its code checks block instead.
+    const planned = article.qualityPlan === "fixed_v1";
+    if (planned) {
+      issues.push(...planCheckIssues(planChecksForArticle(article)));
+    } else if (article.factCheckScore === undefined) {
       issues.push("Strict publication requires a completed fact check.");
     } else if (article.factCheckScore < 85) {
       issues.push(`Fact-check score is ${article.factCheckScore}; strict minimum is 85.`);
     }
-    if (article.editorialQualityScore === undefined) {
+    if (planned) {
+      // No editorial score for a planned article.
+    } else if (article.editorialQualityScore === undefined) {
       issues.push("Strict publication requires a completed people-first editorial review.");
     } else if (article.editorialQualityScore < 85) {
       issues.push(
@@ -2487,7 +2527,7 @@ export function evaluatePublicationQuality(
         "A product-specific section requires validated first-party product evidence.",
       );
     }
-    if (article.claimEvidenceStatus !== "passed") {
+    if (article.claimEvidenceStatus !== "passed" && !planned) {
       issues.push(
         "Strict publication requires a completed claim-to-evidence audit.",
       );
@@ -2528,7 +2568,8 @@ export function evaluatePublicationQuality(
     try { exact = publicationArtifactHash(article as never) === waiver.artifactHash; } catch { exact = false; }
     if (exact) {
       for (let index = issues.length - 1; index >= 0; index--) {
-        if (waiver.issues.includes(issues[index]) && ownerWaivableIssue(issues[index], article)) {
+        if (waiver.issues.includes(issues[index]) && (waiver.userId === AUTOPILOT_ACCEPTANCE
+          ? ownerWaivableIssue(issues[index], article) : ownerAcceptableIssue(issues[index], article))) {
           warnings.push(`${waiver.userId === AUTOPILOT_ACCEPTANCE ? "Autopilot" : "Owner"} accepted reviewer note: ${issues[index]}`);
           issues.splice(index, 1);
         }

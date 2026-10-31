@@ -2,8 +2,10 @@
 import { assertNotMidContentSetup } from "../lib/contentSetupPath";
 import { EVIDENCE_EXCERPT_MAX_CHARS } from "../lib/evidenceExcerpt";
 import { MAX_RESEARCH_SOURCES, PRIMARY_PASS_BELOW, PRIMARY_PASS_SEARCHES, primarySourcesRequest, sourceHosts } from "../lib/researchPasses";
-import { type SerpBrief, serpArticleType, serpBriefFromAnalysis, serpBriefPrompt, serpBriefUsable } from "../lib/serpBrief";
-import { contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
+import { type SerpBrief, type SerpPage, googleRedirect, medianWords, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis, serpBriefPrompt,
+  serpBriefUsable, serpPagesPrompt, technicalSearch } from "../lib/serpBrief";
+import { articleOutlinePrompt, flaggedLines, planCheckIssues, runPlanChecks, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
+import { articlePlanEnabled, contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
 import { autopilotCompanyNameIssue, autopilotCompanyNameNote, autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote,
   checkableFactCheckFindings, unsearchedCompanyMentions } from "../lib/autopilotEditor";
 class ContentQualityRejection extends Error {}
@@ -48,6 +50,7 @@ import {
   normalizedFactCheckConfidence,
   contractConsistentEditorialScore,
   evaluatePublicationQuality,
+  planChecksForArticle,
   insertReviewedProductImage,
   issuesBlockingPreLinkReview,
   preservedResearchEvidenceSnapshot,
@@ -72,6 +75,7 @@ import {
   stripUnsourcedQualityClaims,
   stripDraftProcessNotes,
   uncitedEvidenceRequiredParagraphs,
+  UNCITED_QUANTITY_ISSUE,
   validateClaimEvidenceLedger,
   readerVisibleIssues,
   ownerWaivableIssue,
@@ -189,6 +193,7 @@ import { forcedToolChoiceSupported, structuredToolChoice, toolOnlyInstruction } 
 import { configuredCallToAction, firstPartyProductEvidence } from "../lib/productEvidence";
 import {
   safeFetchPublicText as fetchPublicText,
+  safePublicRedirectStatus,
   validatePublicHttpsUrl,
 } from "../lib/safeOutbound";
 import {
@@ -2142,6 +2147,37 @@ async function remediateFinalArticle(args: {
       notes: z.array(z.string()).default([]),
     }),
   });
+}
+
+/** P260 (Oct 31 2026): the top results' own pages, read once per topic for the fixed article plan (convex/lib/serpBrief.ts
+ * pageShape). An unreadable page is left out; the brief keeps what was read. */
+/** P260: a Google redirect link's own address, read hop by hop without loading the page it points to (a page that refuses
+ * automated reads keeps its result, title and address in the brief). */
+async function resolveGoogleRedirect(url: string): Promise<string | null> {
+  let current = url;
+  for (let hop = 0; hop < 3 && googleRedirect(current); hop++) {
+    const { status, location } = await safePublicRedirectStatus(current, 5_000);
+    if (status < 300 || status >= 400 || !location) return null;
+    current = new URL(location, current).href;
+  }
+  return googleRedirect(current) || !/^https:\/\//.test(current) ? null : current.slice(0, 300);
+}
+
+async function readSerpPages(results: SerpBrief["results"]): Promise<{ results: SerpBrief["results"]; pages: SerpPage[] }> {
+  const read = await Promise.all(results.slice(0, 10).map(async (result) => {
+    // A Google redirect link is replaced by the result's own address.
+    const url = googleRedirect(result.url) ? await resolveGoogleRedirect(result.url).catch(() => null) : result.url;
+    if (!url) return { result, page: null };
+    try {
+      const fetched = await fetchPublicText(url, { timeoutMs: 6_000, maxBytes: 3_000_000, sameHostRedirects: true,
+        allowedContentTypes: [/^text\/html(?:;|$)/i, /^application\/xhtml\+xml(?:;|$)/i] });
+      return { result: { ...result, url }, page: pageShape(url, fetched.text) };
+    } catch { return { result: { ...result, url }, page: null }; }
+  }));
+  // A redirect that could not be followed has no address to show; the first 5 readable pages, by rank, are the brief's.
+  const resolved = read.filter((entry) => !googleRedirect(entry.result.url));
+  return { results: (resolved.length ? resolved.map((entry) => entry.result) : results).slice(0, 10),
+    pages: resolved.map((entry) => entry.page).filter((page): page is SerpPage => page !== null && page.words >= 150).slice(0, 5) };
 }
 
 async function generateFinalMetadata(args: {
@@ -4400,8 +4436,15 @@ async function handleArticle(
       let brief: SerpBrief | null | undefined = (topic as { serpBrief?: SerpBrief }).serpBrief;
       if (!serpBriefUsable(brief, Date.now(), locationCode, languageCode)) {
         const { analyzeSERP } = await import("./seoData");
-        const fresh = serpBriefFromAnalysis(await analyzeSERP(topic.primaryKeyword, locationCode, languageCode), Date.now(), locationCode, languageCode);
+        // P260: with the plan, up to 10 results are read so that 5 pages are, when some refuse automated reads.
+        const fresh = serpBriefFromAnalysis(await analyzeSERP(topic.primaryKeyword, locationCode, languageCode), Date.now(), locationCode, languageCode,
+          articlePlanEnabled() ? 10 : 6);
+        // P260: the fixed plan reads the top 5 pages themselves (their headings, length, code and tables).
+        if (fresh && articlePlanEnabled()) Object.assign(fresh, await readSerpPages(fresh.results));
         brief = fresh ? await ctx.runMutation(internal.topics.recordSerpBrief, { topicId, brief: fresh }) : null;
+      } else if (articlePlanEnabled() && brief && !brief.pages) {
+        // P260: a brief read before the plan existed gets its pages once.
+        brief = await ctx.runMutation(internal.topics.recordSerpBrief, { topicId, brief: { ...brief, ...await readSerpPages(brief.results) } });
       }
       if (serpBriefUsable(brief, Date.now(), locationCode, languageCode)) {
         serpBrief = brief;
@@ -4704,6 +4747,63 @@ async function handleArticle(
     console.error(`Site data crawl failed (continuing without): ${msg}`);
   }
 
+  // ── Step 1d: The fixed article plan's outline (P260, ops/ARTICLE-PLAN-V1.md) ──
+  // Arshad's order (Oct 30 2026): read Google's top 5 results, cover every subtopic they share plus one useful thing they
+  // don't, in the format they use; write once; check with code. The format and length come from the pages, in code; one
+  // cheap structured call proposes the sections from the results' own headings.
+  let articlePlan: { version: number; format: PlanFormat; sections: string[]; minItems?: number; targetWords?: number } | undefined;
+  const outlineCovers = new Map<string, string>();
+  if (topic && !selectedWork && contentProviderActive() && articlePlanEnabled()) {
+    const asksForProducts = searchAsksForProducts(topic.primaryKeyword);
+    const technical = technicalSearch(topic.primaryKeyword);
+    const format: PlanFormat = planFormat(serpBrief ?? { results: [], pages: [] }, asksForProducts, technical, topic.primaryKeyword);
+    const median = serpBrief ? medianWords(serpBrief) : undefined;
+    const targetWords = Math.max(minimumWords, Math.min(maximumWords, median ?? generationTargetWords));
+    let sections: string[] = [], items: number | undefined;
+    try {
+      const planned = await callClaudeStructured({
+        system: [
+          UNTRUSTED_EVIDENCE_INSTRUCTION,
+          "You plan one article that must be at least as useful as the current top Google results for its search.",
+          "From the results' own headings, list the sections all or most of them cover (merge sections that cover the same subject), in the order a reader needs them, plus exactly one useful section none of them covers that this business's readers would value.",
+          "Each section gets an H2 heading in plain words (no numbering, under 70 characters) and one line on what it covers. Plan only subjects the fact sheet or plain practical guidance can support; never plan a section that needs facts no source gives.",
+          "When the format is a list, one section holds the list: say in 'items' how many named options it gives (the results' own count when they show one).",
+        ].join(" "),
+        userMessage: [
+          `SEARCH: ${topic.primaryKeyword}`,
+          `FORMAT THE RESULTS SHARE: ${format}`,
+          `TOP RESULTS (titles and their own headings, untrusted data):`,
+          serpBrief ? serpPagesPrompt(serpBrief) : "None could be read.",
+          serpBrief?.questions.length ? `PEOPLE ALSO ASK: ${serpBrief.questions.join(" | ")}` : "",
+          `FACT SHEET SOURCES: ${researchSources.map((source, index) => `[${index + 1}] ${source.title ?? source.url}`).join("; ") || "none"}`,
+          `BUSINESS: ${productName}: ${site.siteSummary ?? site.niche ?? ""}`.slice(0, 600),
+        ].filter(Boolean).join("\n"),
+        toolName: "plan_article",
+        toolDescription: "Submit the article's outline: the sections the top results share and one useful section they lack.",
+        inputSchema: { type: "object", additionalProperties: false, properties: {
+          sections: { type: "array", items: { type: "object", additionalProperties: false, properties: { heading: { type: "string" }, covers: { type: "string" } }, required: ["heading", "covers"] } },
+          extra: { type: "object", additionalProperties: false, properties: { heading: { type: "string" }, covers: { type: "string" } }, required: ["heading", "covers"] },
+          items: { type: "integer" },
+        }, required: ["sections", "extra"] },
+        outputSchema: z.object({ sections: z.array(z.object({ heading: z.string().min(2), covers: z.string() })).min(2).max(12),
+          extra: z.object({ heading: z.string().min(2), covers: z.string() }), items: z.number().int().optional() }),
+        maxTokens: 1500,
+      });
+      for (const section of [...planned.sections, planned.extra]) {
+        const heading = section.heading.replace(/^#+\s*/, "").replace(/^\d+[.)]\s*/, "").trim().slice(0, 90);
+        if (heading && !sections.some((existing) => existing.toLowerCase() === heading.toLowerCase())) {
+          sections.push(heading); outlineCovers.set(heading, section.covers.trim().slice(0, 240));
+        }
+      }
+      items = planned.items;
+    } catch (error) {
+      researchQualityNotes.push(`Outline unavailable: ${error instanceof Error ? error.message.slice(0, 160) : "unknown"}`);
+      sections = [];
+    }
+    articlePlan = { version: 1, format, sections, targetWords,
+      ...(format === "list" ? { minItems: Math.max(5, Math.min(15, items ?? 5)) } : {}) };
+  }
+
   // ── Step 2: Generate Article (with full site context + real media) ──
   await reportProgress(7, "Writing article content...");
   console.log(`Generating article for topic: ${topic?.label ?? "General"}`);
@@ -4799,8 +4899,8 @@ async function handleArticle(
     `</images>`,
     ``,
     `<article_structure>`,
-    // Use type-specific structure if the topic has an articleType set
-    (() => {
+    // P260: the fixed plan's outline replaces the type template; otherwise the type-specific structure.
+    articlePlan?.sections.length ? articleOutlinePrompt(articlePlan, outlineCovers) : (() => {
       const articleType = (effectiveArticleType ?? "standard") as ArticleType;
       return getArticleTypeStructure(articleType, productName);
     })(),
@@ -4841,7 +4941,9 @@ async function handleArticle(
     `</search_intent>`,
     ``,
     `GLOBAL RULES:`,
-    `- LENGTH: Produce at least ${generationTargetWords} and no more than ${maximumWords} measured prose words on this first draft so factual editing has a safe depth reserve. The immutable publication floor is ${minimumWords}. Reach the target only with evidence-grounded explanation, concrete decision support, and actionable detail; never pad or invent evidence. If the topic cannot support a truthful article at this depth, fail closed instead of submitting a thin draft.`,
+    articlePlan ? `- LENGTH: About ${articlePlan.targetWords} measured prose words (the top results' typical length), never more than ${maximumWords}; the publication floor is ${minimumWords}. Reach it with specifics from the fact sheet, never padding.` : "",
+    articlePlan ? `- FACT SHEET: The preserved source excerpts are the fact sheet. Every number and factual claim comes from them (cite [n]) or from the confirmed business facts; leave out anything they don't support. Name no person or company the excerpts or business facts don't name.` : "",
+    articlePlan ? "" : `- LENGTH: Produce at least ${generationTargetWords} and no more than ${maximumWords} measured prose words on this first draft so factual editing has a safe depth reserve. The immutable publication floor is ${minimumWords}. Reach the target only with evidence-grounded explanation, concrete decision support, and actionable detail; never pad or invent evidence. If the topic cannot support a truthful article at this depth, fail closed instead of submitting a thin draft.`,
     `- NO FLUFF: Every section must add explanation, evidence, a concrete example, or an actionable step.`,
     `- NO INVENTED EVIDENCE: Never invent statistics, customer outcomes, benchmark numbers, quotations, case studies, integrations, or product capabilities.`,
     researchSources.length === 0
@@ -5081,6 +5183,8 @@ async function handleArticle(
         // Autopilot drafts are reviewed from this checkpoint, so its research
         // notes are stored here or never (P144: none ever reached a draft).
         ...(researchQualityNotes.length ? { editorialQualityNotes: [...researchQualityNotes] } : {}),
+        // P260: the outline the code checks review this draft against.
+        ...(articlePlan ? { articlePlan, qualityPlan: "fixed_v1" } : {}),
         ...generatedStats,
       })
     : undefined;
@@ -7080,6 +7184,108 @@ export const generateArticle = action({
 // Re-audit the exact prose of an edited, unpublished draft. This closes the
 // quality-control loop without consuming another generation slot or creating a
 // duplicate article.
+/** P260 (Oct 31 2026), Arshad's fixed article plan (ops/ARTICLE-PLAN-V1.md): a planned draft is checked with code, never
+ * AI judgement (every number in the fact sheet or the confirmed profile, product facts in the profile, no person or company
+ * the sources don't name, every outline section, the format's elements), plus the objective gate (reader-visible defects,
+ * safe rendering, metadata). Its one revision (MAX_CONTENT_REWRITES) is one targeted fix of exactly the failing lines. No
+ * review_article or audit_final_article call and no scores; the gate recomputes the same plan checks at seal and publish. */
+/** P260: the article's $0.50 provider cap refused this call (beginProviderCall). */
+const costCapRefusal = (error: unknown) => error instanceof Error && /Content work cost cap reached/.test(error.message);
+
+async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">; articleId: Id<"articles">; incrementRevision: boolean;
+  qualityRecoveryVersion?: number; site: Doc<"sites">; article: Doc<"articles"> }) {
+  const { siteId, articleId, incrementRevision, site, article } = args;
+  const topic = article.topicId ? await ctx.runQuery(internal.topics.getInternal, { topicId: article.topicId }) : null;
+  const productName = site.siteName ?? site.domain;
+  const deliveryConfig = publicationDeliveryConfig(site);
+  const deliveryConfigHash = publicationDeliveryConfigHash(deliveryConfig);
+  const productHeadingPattern = new RegExp(`^##\\s+.*(?:${productName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}|how\\s+.*helps?).*$`, "im");
+  const candidateFor = (fields: { title: string; markdown: string; metaTitle?: string; metaDescription?: string }): Doc<"articles"> => {
+    const productEvidenceStatus = productHeadingPattern.test(fields.markdown)
+      ? (article.productEvidenceSnapshot && article.productEvidenceHash ? "passed" : "failed") : "not_applicable";
+    return { ...article, ...fields, ...calculateArticleStats(fields.markdown), qualityPlan: "fixed_v1", claimEvidence: [], claimEvidenceStatus: "not_applicable",
+      productEvidenceStatus, mediaQualityStatus: publicationMediaQualityStatus({ markdown: fields.markdown, featuredImage: article.featuredImage,
+        reviewedMediaUrls: article.reviewedMediaUrls ?? [], productEvidenceStatus }), factCheckScore: undefined, editorialQualityScore: undefined,
+      publicationConfigHash: deliveryConfigHash };
+  };
+  let fields = { title: article.title, markdown: article.markdown, metaTitle: article.metaTitle, metaDescription: article.metaDescription };
+  const fixNotes: string[] = [];
+  if (incrementRevision) {
+    // The one targeted fix: exactly the failing lines and checks, nothing else rewritten.
+    const before = candidateFor(fields);
+    const failures = planChecksForArticle(before);
+    const objective = issuesBlockingPreLinkReview([...evaluatePublicationQuality(before, "strict").issues, ...readerVisibleIssues(before)])
+      .filter((issue) => !/^Plan check:/.test(issue));
+    const instructions = [
+      ...failures.map((failure) => failure.check === "number" ? `Remove or correct this sentence; ${failure.detail}: «${failure.line}»`
+        : failure.check === "product" ? `Correct this product fact to match the confirmed business details, or remove it: «${failure.line}»`
+        : failure.check === "name" ? `Rewrite this sentence without the name(s) no source or business detail gives (${failure.detail.replace(/ is not named.*$/, "")}), keeping its point: «${failure.line}»`
+        : `${failure.detail}: add it, following the outline and the format.`),
+      // An uncited number: the exact passage, so the one fix can cite its fact-sheet source or drop the number.
+      ...objective.flatMap((issue) => UNCITED_QUANTITY_ISSUE.test(issue)
+        ? uncitedEvidenceRequiredParagraphs(before.markdown, before).map((passage) =>
+          `Cite the fact-sheet source [n] for the numbers in this passage, or remove those numbers: «${passage.slice(0, 900)}»`)
+        : [`Fix: ${issue}`]),
+    ];
+    // The $0.50 cap skips the fix, never the writing: a fix it refuses leaves the draft for its owner, lines marked.
+    const fixed = instructions.length ? await remediateFinalArticle({ markdown: fields.markdown, articleType: article.articleType ?? "standard",
+      primaryKeyword: topic?.primaryKeyword ?? article.title, productName, productEvidence: article.productEvidenceSnapshot ?? "",
+      researchEvidence: article.researchEvidenceSummary ?? "", sources: article.sources ?? [], minWords: STRICT_PUBLICATION_MIN_WORDS,
+      maxWords: articleWordCeiling(article.articleType), auditNotes: ["Fix only these points and change nothing else:", ...instructions.slice(0, 24)] })
+      .catch((error: unknown) => { if (costCapRefusal(error)) return null; throw error; }) : null;
+    if (instructions.length && !fixed) fixNotes.push("The fix was skipped: this article reached its $0.50 cost cap.");
+    if (fixed) {
+      fields = { ...fields, markdown: fixed.markdown };
+      fixNotes.push(`One targeted fix for ${instructions.length} point(s).`);
+      const metadataDefects = objective.filter((issue) => /^Meta (?:description|title)\b|^Title or meta description/.test(issue));
+      if (metadataDefects.length && contentProviderMayRepairDraft()) {
+        const metadata = await generateFinalMetadata({ title: fields.title, markdown: fields.markdown, primaryKeyword: topic?.primaryKeyword ?? fields.title,
+          sources: article.sources ?? [], rejected: { metadata: { title: fields.title, metaTitle: fields.metaTitle ?? fields.title,
+            metaDescription: fields.metaDescription ?? "" }, defects: metadataDefects } })
+          .catch((error: unknown) => { if (costCapRefusal(error)) return null; throw error; });
+        if (metadata) fields = { ...fields, metaTitle: clampMetaTitle(metadata.metaTitle) ?? fields.metaTitle,
+          metaDescription: clampMetaDescription(metadata.metaDescription) ?? fields.metaDescription };
+      }
+    }
+  }
+  const candidate = candidateFor(fields);
+  const quality = evaluatePublicationQuality(candidate, "strict");
+  const failures = planChecksForArticle(candidate);
+  // The owner's marked lines include the sentences with an uncited number (a table is listed by the check, not marked).
+  const uncitedLines = uncitedEvidenceRequiredParagraphs(candidate.markdown, candidate).filter((passage) => !/^\s*\|/.test(passage))
+    .flatMap((passage) => passage.split(/(?<=[.!?])\s+/)).filter((sentence) => /\d/.test(sentence) && sentence.trim().length >= 12);
+  const preLinkIssues = issuesBlockingPreLinkReview([...quality.issues, ...readerVisibleIssues(candidate)]);
+  const readyForPublication = preLinkIssues.length === 0;
+  const contentHash = readyForPublication ? publicationArtifactHash(candidate) : undefined;
+  const qualityRevisionCount = (article.qualityRevisionCount ?? 0) + (incrementRevision ? 1 : 0);
+  const stats = calculateArticleStats(fields.markdown);
+  await ctx.runMutation(internal.articles.applyQualityReview, {
+    articleId, title: fields.title, markdown: fields.markdown, metaTitle: fields.metaTitle, metaDescription: fields.metaDescription,
+    wordCount: stats.wordCount, readingTime: stats.readingTime,
+    // The lines a failed check points at, for the owner's marked draft (statementsToCheck reads them).
+    factCheckNotes: [`Code checks (fixed plan v1): ${failures.length ? `${failures.length} to fix` : "passed"}.`,
+      ...[...new Set([...flaggedLines(failures), ...uncitedLines.map((line) => line.trim())])].map((line) => `Unverified claim: «${line.replace(/[«»]/g, "")}»`)].join(" "),
+    editorialQualityNotes: [
+      ...(article.editorialQualityNotes ?? []).filter((note) => /^(?:Excluded \d+ .*source|Research: |Web research unavailable|Primary-source research pass|Outline unavailable)/.test(note)),
+      `Fixed article plan v1: ${article.articlePlan?.format ?? "guide"}, ${article.articlePlan?.sections.length ?? 0} outline section(s).`,
+      ...fixNotes, ...planCheckIssues(failures),
+    ],
+    featuredImage: article.featuredImage, reviewedMediaUrls: article.reviewedMediaUrls ?? [],
+    mediaQualityStatus: candidate.mediaQualityStatus ?? "passed", mediaQualityNotes: article.mediaQualityNotes ?? [],
+    productEvidenceStatus: candidate.productEvidenceStatus ?? "not_applicable",
+    productEvidenceSnapshot: article.productEvidenceSnapshot, productEvidenceHash: article.productEvidenceHash,
+    claimEvidence: [], claimEvidenceStatus: "not_applicable", contentHash,
+    auditVersion: readyForPublication ? PUBLICATION_AUDIT_VERSION : undefined,
+    publicationConfigHash: readyForPublication ? deliveryConfigHash : undefined,
+    publicationConfigSnapshot: readyForPublication ? deliveryConfig : undefined,
+    qualityRevisionCount, qualityRecoveryVersion: QUALITY_RECOVERY_VERSION,
+  });
+  await ctx.runMutation(internal.articles.recordPublicationCheck, { articleId, status: readyForPublication ? "passed" : "blocked",
+    issues: preLinkIssues, warnings: quality.warnings });
+  return { articleId, factCheckScore: undefined, editorialQualityScore: undefined, evidenceDefectCount: failures.length,
+    wordCount: stats.wordCount, readyForPublication, contentHash, qualityRevisionCount, issues: preLinkIssues };
+}
+
 async function reviewExistingArticleHandler(
   ctx: ActionCtx,
   {
@@ -7095,8 +7301,8 @@ async function reviewExistingArticleHandler(
   },
 ): Promise<{
   articleId: Id<"articles">;
-  factCheckScore: number;
-  editorialQualityScore: number;
+  factCheckScore: number | undefined;
+  editorialQualityScore: number | undefined;
   evidenceDefectCount: number;
   wordCount: number;
   readyForPublication: boolean;
@@ -7113,6 +7319,10 @@ async function reviewExistingArticleHandler(
     if (!article || article.siteId !== siteId) throw new Error("Article not found for site");
     if (article.status === "published") {
       throw new Error("Published articles must use the refresh workflow");
+    }
+    // P260: a planned draft (Arshad's fixed plan) is checked with code, never by the AI review below.
+    if (article.qualityPlan === "fixed_v1" && contentProviderActive()) {
+      return reviewPlannedArticle(ctx, { siteId, articleId, incrementRevision, qualityRecoveryVersion, site, article });
     }
 
     const topic = article.topicId

@@ -307,7 +307,7 @@ async function publishShopify(args: PublishArgs): Promise<PublicationReceipt> {
 
 const WEBFLOW_API = "https://api.webflow.com/v2";
 
-type WebflowFieldMap = { body: string; summary?: string; image?: string };
+type WebflowFieldMap = { body: string; summary?: string; image?: string; seoTitle?: string };
 
 function webflowHeaders(site: CmsSite): Record<string, string> {
   return { Authorization: `Bearer ${site.cmsSecret!.trim()}`, "accept-version": "2.0.0" };
@@ -343,14 +343,20 @@ export function webflowFieldMap(fields: unknown[]): WebflowFieldMap {
     candidates.find((field) => pattern.test(slugOf(field))) ?? candidates[0];
   const body = prefer(byType("RichText"), /body|content|post|article/);
   if (!body) throw new Error("Webflow collection has no rich text field for the article body");
-  const summary = byType("PlainText").find((field) => /summary|excerpt|description|intro/.test(slugOf(field)));
+  // P260 (Oct 31 2026): Cowork's Webflow test post showed the site name as its page title and no description: a blog
+  // template's own title and summary fields (often "title" and "text") are what its SEO settings bind to, so Pentra fills
+  // them with the article's search title and description.
+  const summary = byType("PlainText").find((field) => /summary|excerpt|description|intro|teaser|subtitle/.test(slugOf(field)))
+    ?? byType("PlainText").find((field) => /^(?:post-)?text$/.test(slugOf(field)));
+  const seoTitle = byType("PlainText").find((field) => /^(?:seo-?title|meta-?title|post-title|title)$/.test(slugOf(field)));
   const image = prefer(byType("Image"), /main|thumbnail|cover|hero|featured|image/);
-  const filled = new Set(["name", "slug", slugOf(body), summary && slugOf(summary), image && slugOf(image)].filter(Boolean));
+  const filled = new Set(["name", "slug", slugOf(body), summary && slugOf(summary), image && slugOf(image), seoTitle && slugOf(seoTitle)].filter(Boolean));
   const missing = list.filter((field) => field.isRequired === true && !filled.has(slugOf(field)));
   if (missing.length) {
     throw new Error(`Webflow collection has required fields Pentra can't fill: ${missing.map((field) => String(field.displayName ?? field.slug)).join(", ")}. Make them optional in the collection settings.`);
   }
-  return { body: slugOf(body), ...(summary ? { summary: slugOf(summary) } : {}), ...(image ? { image: slugOf(image) } : {}) };
+  return { body: slugOf(body), ...(summary ? { summary: slugOf(summary) } : {}), ...(image ? { image: slugOf(image) } : {}),
+    ...(seoTitle ? { seoTitle: slugOf(seoTitle) } : {}) };
 }
 
 async function webflowContext(site: CmsSite, request: CmsRequest) {
@@ -406,6 +412,7 @@ async function publishWebflow(args: PublishArgs): Promise<PublicationReceipt> {
     [context.fields.body]: article.html,
   };
   if (context.fields.summary && article.metaDescription) fieldData[context.fields.summary] = plainText(article.metaDescription, 256);
+  if (context.fields.seoTitle) fieldData[context.fields.seoTitle] = plainText(article.metaTitle || article.title, 256);
   if (context.fields.image && image) fieldData[context.fields.image] = { url: image, alt: plainText(article.title, 200) };
   const response = await request(`${WEBFLOW_API}/collections/${encodeURIComponent(context.collectionId)}/items/live`, {
     method: "POST",
@@ -654,6 +661,7 @@ export async function updateHostedPost(site: CmsSite, request: CmsRequest, args:
   const context = await webflowContext(site, request);
   const fieldData: Record<string, unknown> = { name: args.title, [context.fields.body]: args.html };
   if (context.fields.summary && args.metaDescription) fieldData[context.fields.summary] = plainText(args.metaDescription, 256);
+  if (context.fields.seoTitle) fieldData[context.fields.seoTitle] = plainText(args.metaTitle ?? args.title, 256);
   await args.beforeWrite();
   const response = await request(`${WEBFLOW_API}/collections/${encodeURIComponent(context.collectionId)}/items/${encodeURIComponent(args.id)}/live`, {
     method: "PATCH",

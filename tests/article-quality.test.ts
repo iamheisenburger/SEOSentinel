@@ -920,6 +920,8 @@ test("plain-Markdown publication rejects multiline and component MDX", () => {
   // ...but template engines still expand {{ }} and {% %} inside code, and prose stays strict.
   assert.equal(containsExecutableMdx("Use `{{ page.title }}` in Jekyll."), true);
   assert.equal(containsExecutableMdx("```liquid\n{% if x %}\n```"), true);
+  // P260 live trial: only an opening starts a template tag, so a JSON example's closing braces are text.
+  assert.equal(containsExecutableMdx("```json\n{\"level\":30,\"MIX\":{\"IN\":\"always\"}}\n```"), false);
   assert.equal(containsExecutableMdx("A `code` span, then <b>raw</b> HTML."), true);
   assert.equal(containsExecutableMdx("An unclosed `<title> span and <script>"), true);
 });

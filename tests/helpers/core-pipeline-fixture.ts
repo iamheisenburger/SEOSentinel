@@ -128,7 +128,8 @@ export function corePipelineFixture(network: (url: URL, init: RequestInit, f: Re
       console: Object.fromEntries(["log", "warn", "error", "info"].map(level => [level, (...values: unknown[]) => logs.push(values.map(String).join(" "))])),
       process: { env: { ANTHROPIC_API_KEY: "synthetic-only", OPENAI_API_KEY: "synthetic-only", DATAFORSEO_LOGIN: "synthetic-only", DATAFORSEO_PASSWORD: "synthetic-only",
         // Autopilot web research is on in production; fixtures opt in explicitly so existing call sequences stay exact.
-        PENTRA_CONTENT_WEB_RESEARCH: "off", ...environment } },
+        // P260: so is the fixed article plan (the previous AI-reviewed pipeline is what most fixtures test).
+        PENTRA_CONTENT_WEB_RESEARCH: "off", PENTRA_ARTICLE_PLAN: "off", ...environment } },
     });
     modules.set(name, runtime.exports); return runtime.exports;
   }

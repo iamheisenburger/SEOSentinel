@@ -1713,6 +1713,11 @@ export const requestDraft = mutation({
  * ($0.06 of a $0.12 draft), and a draft that failed twice was followed by a whole new draft on another topic: pentra.dev
  * paid for 13 drafts to publish 7 in the week to Oct 30. */
 export const MAX_CONTENT_REWRITES = 1;
+/** P260: the hard provider-spend cap per article (Arshad, Oct 30 2026). */
+export const ARTICLE_COST_CAP_MICRO_USD = 500_000;
+/** P260: the steps an article can do without (the one fix and the fix's metadata), by call key. A research pass is
+ * stopped only by spend: its ceiling ($0.59) assumes a whole context window of results, about ten times its cost. */
+export const ARTICLE_OPTIONAL_STEP = /:remediate_final_article$|:review:submit_final_metadata$/;
 
 async function reviseFailedWork(ctx: MutationCtx, site: Doc<"sites">, failed: Doc<"jobs">): Promise<CadenceScheduleResult> {
   const cw = failed.contentWork!;
@@ -2942,7 +2947,8 @@ export async function recoverContentWork(ctx: MutationCtx, job: Doc<"jobs">, err
     : requestRefused ? "content_provider_request_rejected"
     : error === "content_model_response_invalid" ? error
     : /^content_audit_/.test(error) ? error
-    : /Content work (budget exhausted|rollover blocked)/.test(error) ? error
+    // P260: a call the $0.50 article cap refused is refused again on retry; it ends here, at no further cost.
+    : /Content work (budget exhausted|rollover blocked|cost cap reached)/.test(error) ? error
     : /Content provider (authority changed|reservation unavailable)|Content checkpoint/.test(error) ? error
     : recoveries >= MAX_CONTENT_RECOVERIES ? (providerBusy ? "content_provider_unavailable" : "content_recovery_attempts_exhausted")
     : used >= cw.budgetMicroUsd ? `Content work budget exhausted: limitMicroUsd=${cw.budgetMicroUsd}; consumedCeilingMicroUsd=${used}; availableMicroUsd=0`
@@ -3018,6 +3024,22 @@ export const beginProviderCall = internalMutation({
       throw new Error("Content provider reservation unavailable: work envelope binding changed");
     }
     const used = cw.providerCalls.reduce((sum, c) => sum + (c.actualMicroUsd ?? c.ceilingMicroUsd), 0);
+    // P260 (Oct 31 2026), Arshad's hard cap of $0.50 of provider spend per new article. Spend is what was charged:
+    // completed calls at their actual cost, a call whose outcome is uncertain at its ceiling, a refused request at nothing.
+    // Nothing is bought once an article has spent $0.50, and an optional step (the one fix and its metadata) runs only
+    // while its highest possible price still fits. Research and writing are stopped only by spend: a research call's
+    // ceiling assumes a whole context window of search results ($0.61, about ten times its cost), so a ceiling-based cap
+    // refused every article's research in the first live trial (Oct 31). Measured before: $0.38 per published article in
+    // the week to Oct 30, every retry included; in the live trial a planned article cost $0.15 to $0.23.
+    if (process.env.PENTRA_ARTICLE_PLAN !== "off" && cw.intent === "create" && Number.isSafeInteger(args.ceilingMicroUsd)) {
+      const cap = Math.min(cw.budgetMicroUsd, ARTICLE_COST_CAP_MICRO_USD);
+      const spent = cw.providerCalls.reduce((sum, c) => sum + (c.state === "completed" ? c.actualMicroUsd ?? c.ceilingMicroUsd
+        : c.state === "started" ? c.ceilingMicroUsd : 0), 0);
+      const optional = ARTICLE_OPTIONAL_STEP.test(args.key);
+      if (spent >= cap || (optional && spent + args.ceilingMicroUsd > cap)) {
+        throw new Error(`Content work cost cap reached: capMicroUsd=${cap}; spentMicroUsd=${spent}; requestedMicroUsd=${args.ceilingMicroUsd}`);
+      }
+    }
     if (!Number.isSafeInteger(args.ceilingMicroUsd) || args.ceilingMicroUsd <= 0 || used + args.ceilingMicroUsd > cw.budgetMicroUsd || cw.providerCalls.length >= 20) {
       throw new Error(`Content work budget exhausted: limitMicroUsd=${cw.budgetMicroUsd}; consumedCeilingMicroUsd=${used}; requestedMicroUsd=${args.ceilingMicroUsd}; availableMicroUsd=${Math.max(0, cw.budgetMicroUsd - used)}; calls=${cw.providerCalls.length}/20`);
     }

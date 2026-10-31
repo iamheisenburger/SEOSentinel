@@ -240,6 +240,16 @@ function webflowServer(options: { fields?: unknown[]; existing?: Record<string, 
 
 test("Webflow maps collection fields and refuses collections Pentra cannot fill", () => {
   assert.deepEqual(webflowFieldMap(webflowFields), { body: "post-body", summary: "post-summary", image: "main-image" });
+  // P260: Webflow's blog template (Cowork's test site) keeps its own "Title" and "Intro Text" fields, which its SEO settings
+  // bind to; Pentra fills them with the article's search title and description.
+  assert.deepEqual(webflowFieldMap([
+    { slug: "article-image", type: "Image", isRequired: false, displayName: "Article Thumbnail" },
+    { slug: "title", type: "PlainText", isRequired: true, displayName: "Title" },
+    { slug: "text", type: "PlainText", isRequired: true, displayName: "Intro Text" },
+    { slug: "post-content", type: "RichText", isRequired: true, displayName: "Post Content" },
+    { slug: "name", type: "PlainText", isRequired: true, displayName: "Name" },
+    { slug: "slug", type: "PlainText", isRequired: true, displayName: "Slug" },
+  ]), { body: "post-content", summary: "text", image: "article-image", seoTitle: "title" });
   assert.throws(() => webflowFieldMap([...webflowFields, { slug: "category", type: "Reference", isRequired: true, displayName: "Category" }]), /required fields Pentra can't fill: Category/);
   assert.throws(() => webflowFieldMap(webflowFields.filter((field) => field.type !== "RichText")), /no rich text field/);
 });

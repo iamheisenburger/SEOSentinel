@@ -51,7 +51,9 @@ import {
 } from "./lib/publicationReceipts";
 import {
   clampMetaDescription,
+  AUTOPILOT_ACCEPTANCE,
   evaluatePublicationQuality,
+  ownerAcceptableIssue,
   ownerWaivableIssue,
   readerVisibleIssues,
   repairDanglingStructuredIntroductions,
@@ -1078,6 +1080,9 @@ export const createDraftForJob = internalMutation({
     mediaQualityStatus: v.optional(v.string()),
     mediaQualityNotes: v.optional(v.array(v.string())),
     productEvidenceStatus: v.optional(v.string()),
+    articlePlan: v.optional(v.object({ version: v.number(), format: v.string(), sections: v.array(v.string()),
+      minItems: v.optional(v.number()), targetWords: v.optional(v.number()) })),
+    qualityPlan: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const {
@@ -1189,6 +1194,8 @@ export const createDraftForJob = internalMutation({
       mediaQualityStatus: args.mediaQualityStatus,
       mediaQualityNotes: args.mediaQualityNotes,
       productEvidenceStatus: args.productEvidenceStatus,
+      ...(args.articlePlan ? { articlePlan: args.articlePlan } : {}),
+      ...(args.qualityPlan ? { qualityPlan: args.qualityPlan } : {}),
       qualityRevisionCount: 0,
       internalLinks: [],
       createdAt: timestamp,
@@ -2636,9 +2643,10 @@ export const applyQualityReview = internalMutation({
     metaDescription: v.optional(v.string()),
     wordCount: v.number(),
     readingTime: v.number(),
-    factCheckScore: v.number(),
+    // P260: a planned article (Arshad's fixed plan) has no AI review scores.
+    factCheckScore: v.optional(v.number()),
     factCheckNotes: v.string(),
-    editorialQualityScore: v.number(),
+    editorialQualityScore: v.optional(v.number()),
     editorialQualityNotes: v.array(v.string()),
     featuredImage: v.optional(v.string()),
     reviewedMediaUrls: v.array(v.string()),
@@ -3265,7 +3273,9 @@ export async function sealAcceptedReviewNotes(ctx: MutationCtx, site: Doc<"sites
   const deliveryConfig = publicationDeliveryConfig(site);
   const candidate = { ...article, publicationConfigHash: publicationDeliveryConfigHash(deliveryConfig), ownerQualityWaiver: undefined };
   const review = evaluatePublicationQuality(candidate, "strict");
-  const waivable = review.issues.filter(issue => ownerWaivableIssue(issue, candidate));
+  // P260: the owner who read a planned draft may also accept its code-check findings; Autopilot never does.
+  const waivable = review.issues.filter(issue => acceptedBy === AUTOPILOT_ACCEPTANCE ? ownerWaivableIssue(issue, candidate)
+    : ownerAcceptableIssue(issue, candidate));
   // Rule 2a: what a reader would see or be misled by is never accepted.
   const blocking = [...review.issues.filter(issue => !waivable.includes(issue)), ...readerVisibleIssues(candidate)];
   if (blocking.length > 0) return { sealed: false as const, blocking, waivable };

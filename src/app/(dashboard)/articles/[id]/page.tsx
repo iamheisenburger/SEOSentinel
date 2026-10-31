@@ -5,7 +5,7 @@ import { ConvexError } from "convex/values";
 import { api } from "../../../../../convex/_generated/api";
 import { manualPublicationBlocker } from "../../../../../convex/lib/manualPublication";
 import { publicationArtifactHash } from "../../../../../convex/lib/publicationArtifact";
-import { ownerWaivableIssue, statementsToCheck } from "../../../../../convex/lib/articleQuality";
+import { ownerAcceptableIssue, PLAN_CHECK_ISSUE, statementsToCheck } from "../../../../../convex/lib/articleQuality";
 import { markDoubtfulLines, plainReviewNotes, sourcingLine } from "../../../../../convex/lib/plainReviewNotes";
 import { useParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
@@ -405,7 +405,9 @@ export default function ArticleDetailPage() {
   // version (the server re-runs every check). Only an objective problem, in plain words below, needs a fix first.
   // Legacy sites keep their existing approve-then-quality-review flow.
   const gateIssues = article.publicationGateStatus === "passed" ? [] : article.publicationGateIssues ?? [];
-  const blockingGateIssues = gateIssues.filter((issue) => !ownerWaivableIssue(issue, article));
+  const blockingGateIssues = gateIssues.filter((issue) => !ownerAcceptableIssue(issue, article));
+  // P260: what the fixed plan's code checks still found after the one fix: the owner reads it, then decides.
+  const planNotes = gateIssues.filter((issue) => PLAN_CHECK_ISSUE.test(issue) && !/sentence\(s\)/.test(issue));
   const plainApproveAllowed = gateIssues.length === 0 || (site != null && site.serviceMode !== "growth_first");
   const handedBack = article.status !== "published" &&
     contentReadiness?.ownerDraft.latest?.articleId === articleId && contentReadiness.ownerDraft.latest.stage === "failed";
@@ -1110,13 +1112,14 @@ export default function ArticleDetailPage() {
 
       {/* P256 (Oct 30 2026): a draft Pentra handed back reads as a draft: one plain line on what backs it and what isn't
           sourced, never a score or a check's name. Only an objective problem asks for a fix before Approve. */}
-      {handedBack && (unsourcedNoted || blockingGateIssues.length > 0) && (
+      {handedBack && (unsourcedNoted || blockingGateIssues.length > 0 || planNotes.length > 0) && (
         <section role="note" aria-label="Before you publish" className="rounded-lg border border-[#F59E0B]/20 bg-[#F59E0B]/[0.05] p-3 space-y-2 text-sm">
           <p className="font-medium text-[#F7F8F8]">Before you publish</p>
           {unsourcedNoted && <p className="text-[#F7F8F8]">{sourcingLine(article.sources ?? [], unsourced.length)}</p>}
           {unsourced.length > 0 && <p className="text-[#8A8F98]">They&apos;re highlighted in the draft below.</p>}
           {unsourced.length > 0 && <details className="text-[#8A8F98]"><summary className="cursor-pointer">Show the statements to check</summary>
             <ul className="mt-1 list-disc space-y-1 pl-5">{unsourced.slice(0, 12).map((claim, index) => <li key={index}>{claim}</li>)}</ul></details>}
+          {planNotes.length > 0 && <ul className="list-disc space-y-1 pl-5 text-[#F7F8F8]">{plainReviewNotes(planNotes).slice(0, 6).map((note, index) => <li key={index}>{note}</li>)}</ul>}
           {blockingGateIssues.length > 0 && <>
             <p className="font-medium text-[#F59E0B]">Fix this first, in Edit this draft below. Pentra checks the new version.</p>
             <ul className="list-disc space-y-1 pl-5 text-[#F7F8F8]">{plainReviewNotes(blockingGateIssues).slice(0, 8).map((note, index) => <li key={index}>{note}</li>)}</ul>

@@ -28,6 +28,12 @@ const PLAIN: [RegExp, string | ((match: RegExpExecArray) => string)][] = [
   [/^Quantified outcome claims require at least two/, "Numbers about results need a second source, or softer wording."],
   [/^Title or meta description makes a quantified outcome claim/, "The title or search description promises a number the article can't back up."],
   [/^Title or meta description uses unsupported promotional language\.$/, "The title or search description uses hype words. Describe what the article covers instead."],
+  // P260: the fixed plan's code checks, after its one fix. The sentences themselves are highlighted in the draft.
+  [/^Plan check: \d+ sentence\(s\) state a number that is not in the fact sheet/, "Some highlighted sentences state a number that isn't in the sources Pentra used. Check them, or edit them out, before you publish."],
+  [/^Plan check: \d+ sentence\(s\) state a product fact/, "A highlighted sentence says something about your product that your business details don't confirm. Correct it or remove it."],
+  [/^Plan check: \d+ sentence\(s\) name a person or company/, "A highlighted sentence names a person or company the sources don't mention. Check it, or edit it out."],
+  [/^Plan check: The outline's section "(.+)" is missing\.$/, match => `The planned section “${match[1]}” is missing. Most top results for this search cover it.`],
+  [/^Plan check: (.+)$/, match => match[1]],
   [/^Reader-visible defect: \d+ cited sentence\(s\) state a number their source does not contain, e\.g\. «(.+)»\.$/,
     match => `A number isn't in the source it cites: «${match[1]}». Correct it or remove it.`],
   [/^Reader-visible defect: \d+ sentence\(s\) about the product state a number the confirmed business profile does not contain, e\.g\. «(.+)»\.$/,
@@ -96,14 +102,28 @@ export const ownerDraftReadable = (stage: string, failure: string | undefined, h
 /** P258 (Oct 30 2026), Arshad's cost rule: a draft that still has doubtful lines after its one rewrite is shown to its
  * owner with those lines marked, never rewritten again. Display only: copies and publication use the article's own text. */
 export const DOUBTFUL_LINE_TITLE = "Not matched to a source yet: check it before you publish";
+function exactSpan(markdown: string, text: string): [number, number] | null {
+  const at = markdown.indexOf(text);
+  return at < 0 ? null : [at, at + text.length];
+}
+function looseSpan(markdown: string, text: string): [number, number] | null {
+  // Words and single punctuation marks, each matched literally, with any markup allowed between them ("Doe](url).").
+  const words = (text.replace(/[[\]]/g, " ").match(/[A-Za-z0-9$%'’-]+|[^\sA-Za-z0-9]/g) ?? []).map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (words.length < 4) return null;
+  const markup = String.raw`(?:[\s*_~]|\]\([^)\s]*\)|\[|\]|\x60[^\x60\n]*\x60)*`;
+  const match = new RegExp(words.join(markup)).exec(markdown);
+  return match && !match[0].includes("\n\n") ? [match.index, match.index + match[0].length] : null;
+}
 export function markDoubtfulLines(markdown: string, statements: readonly string[]): string {
   let out = markdown;
   for (const statement of statements) {
     const text = statement.trim();
     if (text.length < 12) continue;
-    const at = out.indexOf(text);
-    if (at < 0 || out.lastIndexOf("<mark", at) > out.lastIndexOf("</mark>", at)) continue;
-    out = `${out.slice(0, at)}<mark title="${DOUBTFUL_LINE_TITLE}">${text}</mark>${out.slice(at + text.length)}`;
+    // P260: the code checks read sentences without their markdown (emphasis, link targets, inline code), so a sentence
+    // is also found with that markup between its words.
+    const span = exactSpan(out, text) ?? looseSpan(out, text);
+    if (!span || out.lastIndexOf("<mark", span[0]) > out.lastIndexOf("</mark>", span[0])) continue;
+    out = `${out.slice(0, span[0])}<mark title="${DOUBTFUL_LINE_TITLE}">${out.slice(span[0], span[1])}</mark>${out.slice(span[1])}`;
   }
   return out;
 }

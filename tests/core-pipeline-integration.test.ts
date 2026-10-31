@@ -18,7 +18,8 @@ import { planProviderEnvelopeMicroUsd, AUTOMATIC_PLAN_TOPIC_CAPACITY } from "../
 import { auditResultHash, SEMANTIC_AUDIT_SUFFIX } from "../convex/lib/contentAudit.ts";
 import { contentServiceStatus } from "../src/lib/content-service-status.ts";
 import { RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_SPACING_MS, RELATED_REPAIR_VERSION, relatedRepairAllowed } from "../convex/lib/contentCorrection.ts";
-import { CONTENT_CHECKS_VERSION } from "../convex/lib/articleQuality.ts";
+import { CONTENT_CHECKS_VERSION, statementsToCheck } from "../convex/lib/articleQuality.ts";
+import { markDoubtfulLines } from "../convex/lib/plainReviewNotes.ts";
 
 const defaultBusinesses = [
   { name: "ReservoirNote", domain: "reservoir.example", cadence: 7,
@@ -66,6 +67,8 @@ function articlePayload(keyword: string, uniqueDraft = false) {
     metaKeywords: [keyword], sources: [{ url: "https://records.example.gov/specification", title: "Synthetic register specification" }, { url: "https://methods.example.edu/review", title: "Synthetic review methods" }] };
 }
 export function setup(options: { quality?: "unsupported" | "low"; publisherFailures?: number; lostCommitResponses?: number; emptyDiscovery?: boolean;
+  /** P260: the fixed article plan (outline, code checks, no AI review). */
+  articlePlan?: boolean; planResponse?: (plan: Fields, request: Fields) => unknown;
   growthFirst?: boolean; businesses?: typeof defaultBusinesses; providerFailure?: string; noPricing?: boolean; budgetMicroUsd?: number;
   longManagedPage?: boolean; gscFixture?: boolean; omitDraftTitle?: boolean; convexSerialization?: boolean;
   /** A synthetic draft without its repeated template paragraph (P101 repetition checks). */
@@ -262,6 +265,12 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
           materialDefects: options.quality === "low" ? ["Replace repetitive advice with a worked decision example tied to this business."] : [],
           claimEvidence: claims.map((claim: Fields) => ({ claim: claim.paragraph, citationNumbers: [...claim.paragraph.matchAll(/\[(\d+)\]/g)].map((match: string[]) => Number(match[1])), supported: true, reason: "Synthetic source fixture supports the register fields." })) };
         if (options.auditResponse) value = options.auditResponse(value as Fields, body);
+      } else if (tool === "plan_article") {
+        // P260: an outline of sections the synthetic article really has (its first five headings).
+        const headings = [...articlePayload("synthetic").markdown.matchAll(/^## (.+)$/gm)].map(m => m[1]).filter(h => h !== "Sources");
+        value = { sections: headings.slice(0, 4).map(heading => ({ heading, covers: `What ${heading.toLowerCase()} involves.` })),
+          extra: { heading: headings[4], covers: "One useful point the results leave out." } };
+        if (options.planResponse) value = options.planResponse(value as Fields, body);
       } else if (tool === "submit_final_metadata") {
         assert.ok(keyword); value = { title: titleFor(keyword), metaTitle: titleFor(keyword).slice(0, 60), metaDescription: description };
         if (options.metadataResponse) value = options.metadataResponse(value as Fields, body);
@@ -350,11 +359,20 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
       }
       assert.fail(`Unexpected GitHub call ${method} ${path}`);
     }
+    if (options.articlePlan && /^(?:www\.)?google\.com$/.test(url.hostname) && url.pathname === "/goto") {
+      const target = url.searchParams.get("url")!;
+      return url.hostname === "google.com" ? new Response("", { status: 301, headers: { location: `https://www.google.com/goto?url=${encodeURIComponent(target)}` } })
+        : new Response("", { status: 302, headers: { location: target } });
+    }
     if (url.origin === "https://www.youtube.com" && url.pathname === "/results") return new Response("<html><body>No synthetic video results</body></html>", { headers: { "Content-Type": "text/html" } });
     if (url.hostname.endsWith(".example") || url.hostname.endsWith(".example.gov") || url.hostname.endsWith(".example.edu")) {
       if (options.evidence?.failed?.includes(url.href)) return new Response("Synthetic rejected capture", { status: 503 });
       const evidence = options.evidence?.sources.find(source => source.url === url.href);
       if (evidence) return new Response(`<html><main>${evidence.text}</main></html>`, { headers: { "Content-Type": "text/html" } });
+      // P260: the fixed plan reads the top results' own pages (the synthetic SERP below lists guideN.example).
+      if (/^guide\d+\.example$/.test(url.hostname)) return new Response(`<html><body><main><h1>Guide ${url.hostname}</h1>` +
+        `<h2>Define the decision</h2><p>${"Context for the decision. ".repeat(60)}</p><h2>Map the handoff</h2><p>${"Steps for the handoff. ".repeat(60)}</p>` +
+        `<h2>Review exceptions</h2><ul><li>One</li><li>Two</li></ul></main></body></html>`, { headers: { "Content-Type": "text/html" } });
       const business = businesses.find(b => b.domain === url.hostname);
       if (business && url.pathname.startsWith("/blog/")) {
         const files = repositories.get(business.name.toLowerCase())!.files;
@@ -394,11 +412,14 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
     else if (url.pathname.endsWith("/bulk_keyword_difficulty/live")) result = [{ items: body.keywords.map(metric) }];
     else if (/\/(keyword_suggestions|related_keywords|keyword_ideas)\/live$/.test(url.pathname)) result = [{ items: [] }];
     else if (url.pathname.endsWith("/serp/google/organic/live/regular")) result = [{ items: Array.from({ length: 10 }, (_, i) => ({ type: "organic", rank_absolute: i + 1,
-      url: `https://guide${i}.example/${body.keyword.replaceAll(" ", "-")}`, title: `Practical guide to ${body.keyword}`, description: `A workflow for ${body.keyword}` })) }];
+      // P260: Google lists some results as its own redirect links, and DataForSEO reports them so.
+      url: i === 0 && options.articlePlan ? `https://google.com/goto?url=${encodeURIComponent(`https://guide0.example/${body.keyword.replaceAll(" ", "-")}`)}`
+        : `https://guide${i}.example/${body.keyword.replaceAll(" ", "-")}`, title: `Practical guide to ${body.keyword}`, description: `A workflow for ${body.keyword}` })) }];
     else assert.fail(`Unexpected DataForSEO route ${url.pathname}`);
     return json({ status_code: 20000, cost: 0.001, tasks: [{ id: `synthetic-${f.trace.length}`, status_code: 20000, cost: 0.001, result }] });
-  }, { ...(options.webResearch ? { PENTRA_CONTENT_WEB_RESEARCH: "on" } : {}), ...(options.growthFirst && !options.noPricing ? { PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ model: "mocked-content-model", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1, budgetMicroUsd: options.budgetMicroUsd ?? 500_000 }) } : {}),
-    ...(options.gscFixture ? { GSC_CLIENT_ID: "synthetic-client", GSC_CLIENT_SECRET: "synthetic-client-secret" } : {}) }, { serializeValues: options.convexSerialization });
+  }, { ...(options.webResearch ? { PENTRA_CONTENT_WEB_RESEARCH: "on" } : {}), ...(options.articlePlan ? { PENTRA_ARTICLE_PLAN: "on" } : {}), ...(options.growthFirst && !options.noPricing ? { PENTRA_CONTENT_WORK_PRICING: JSON.stringify({ model: "mocked-content-model", inputMicroUsdPerToken: 1, outputMicroUsdPerToken: 1, budgetMicroUsd: options.budgetMicroUsd ?? 500_000 }) } : {}),
+    ...(options.gscFixture ? { GSC_CLIENT_ID: "synthetic-client", GSC_CLIENT_SECRET: "synthetic-client-secret" } : {}) },
+  { serializeValues: options.convexSerialization, ...(options.articlePlan ? { syntheticHosts: ["google.com", "www.google.com"] } : {}) });
   const sites = businesses.map(b => {
     const owner = `synthetic-owner-${b.domain}`;
     f.add("account_plan_entitlements", { userId: owner, status: "completed", maxSites: 9999, maxArticles: 150, planFeatures: ["max_sites_unlimited", "max_articles_150"] });
@@ -10907,4 +10928,96 @@ test("P188/P190 a preparation pass at LeadPilot's size stays far inside the time
   assert.equal(count("topic_clusters"), 1, "topics are read once a pass");
   assert.ok(second.ms < 500, `a pass at this size takes ${Math.round(second.ms)} ms`);
   f.assertOffline();
+});
+
+// P260 (Oct 31 2026), Arshad's fixed article plan (ops/ARTICLE-PLAN-V1.md): the top results' pages are read once per topic,
+// one cheap outline call plans the sections, the article is written once and checked with code. No AI review, no scores.
+test("P260 a planned Autopilot article: top results read, outlined, written once, checked with code, no AI review or scores", async () => {
+  // CedarCare's searches are about a service, not software, so the results' format (guides) is the plan's format.
+  const f = setup({ growthFirst: true, articlePlan: true, businesses: [slcBusinesses[1]] });
+  await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs?.some(j => ["ready", "failed"].includes(j.contentWork?.stage)));
+  const job = f.tables.jobs.find(j => j.contentWork?.stage === "ready");
+  assert.ok(job, diagnostic(f));
+  const article = f.get(job.articleId)!, topic = f.get(article.topicId)!;
+  assert.deepEqual(f.modelCalls.map(c => c.tools?.[0]?.name).filter(Boolean), ["plan_article", "submit_article"], "outline, then write once");
+  assert.equal(topic.serpBrief.pages.length, 5, "the top 5 pages were read and kept with the topic");
+  assert.equal(topic.serpBrief.results[0].url, "https://guide0.example/garden-maintenance-visit-preparation", "a Google redirect result is followed to its page");
+  assert.deepEqual(topic.serpBrief.pages[0].headings, ["Define the decision", "Map the handoff", "Review exceptions"]);
+  assert.equal(article.qualityPlan, "fixed_v1");
+  assert.equal(article.articlePlan.format, "guide");
+  assert.deepEqual(article.articlePlan.sections, ["Define the decision", "Inspect the working context", "Choose a record boundary",
+    "Describe an observation", "Map the handoff"]);
+  const writer = f.modelCalls.find(c => c.tools?.[0]?.name === "submit_article")!;
+  assert.match(writer.system + JSON.stringify(writer.messages), /OUTLINE \(the fixed plan, built from Google's top results/);
+  assert.equal(article.factCheckScore, undefined); assert.equal(article.editorialQualityScore, undefined);
+  assert.equal(article.publicationGateStatus, "passed", JSON.stringify(article.publicationGateIssues));
+  assert.match(article.factCheckNotes, /^Code checks \(fixed plan v1\): passed\.$/);
+  assert.equal(job.contentWork.revisions, 0);
+  f.assertOffline();
+});
+
+test("P260 an owner's planned draft gets one targeted fix, comes back with the doubtful line marked, and Approve then a new Generate work", async () => {
+  const invented = "According to Jane Doe, the register works best when one person owns it.";
+  const f = setup({ growthFirst: true, articlePlan: true, businesses: [slcBusinesses[0]],
+    draftResponse: (article: Fields) => ({ ...article, markdown: String(article.markdown).replace("\n\n## Inspect the working context", `\n\n${invented}\n\n## Inspect the working context`) }) });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", ownerReviewedOnly: true,
+    confirmBusinessProfile: true, reviewToken: r.reviewToken });
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  const base = { siteId: site.id, reviewToken: r.reviewToken, maximumMicroUsd: r.ownerDraft.maximumMicroUsd };
+  const first = await f.invoke("contentWork:requestDraft", { ...base, requestKey: "p260-first-draft" });
+  await pumpUntil(f, () => ["ready", "failed"].includes(f.get(first.jobId)!.contentWork.stage));
+  const job = f.get(first.jobId)!, article = f.get(job.articleId)!;
+  assert.deepEqual(f.modelCalls.map(c => c.tools?.[0]?.name).filter(Boolean), ["plan_article", "submit_article", "remediate_final_article"],
+    "written once, one targeted fix, no AI review");
+  const fix = f.modelCalls.find(c => c.tools?.[0]?.name === "remediate_final_article")!;
+  assert.match(JSON.stringify(fix.messages), /Fix only these points and change nothing else:/);
+  assert.match(JSON.stringify(fix.messages), /Jane, Doe/);
+  assert.equal(job.contentWork.stage, "failed", "handed back after its one fix, never regenerated");
+  assert.equal(job.contentWork.revisions, 1); assert.equal(job.contentWork.replacements, 0);
+  assert.ok(article.markdown.includes(invented));
+  assert.ok(article.publicationGateIssues.includes("Plan check: 1 sentence(s) name a person or company the sources and details don't."));
+  const toCheck = statementsToCheck({ factCheckNotes: article.factCheckNotes, productEvidenceSnapshot: article.productEvidenceSnapshot });
+  assert.deepEqual(toCheck, [invented], "the line is listed for the owner");
+  assert.match(markDoubtfulLines(article.markdown, toCheck), /<mark title="[^"]+">According to Jane Doe, the register works best when one person owns it\.<\/mark>/);
+  assert.equal(article.factCheckScore, undefined); assert.equal(article.editorialQualityScore, undefined);
+  // The owner read the marked line and approves: the code check's finding is theirs to accept (Autopilot never does).
+  f.setIdentity(saved.userId);
+  const accepted = await f.invoke("articles:acceptOwnerReviewNotes", { articleId: article._id, artifactHash: publicationArtifactHash(article as never) });
+  assert.ok(accepted.accepted >= 1);
+  assert.equal(f.get(article._id)!.status, "ready");
+  assert.ok(f.get(article._id)!.ownerQualityWaiver.issues.some((issue: string) => issue.startsWith("Plan check: ")));
+  // Item 2 of the same order: after approving the first draft, Generate writes a new one.
+  const second = await f.invoke("contentWork:requestDraft", { ...base, requestKey: "p260-second-draft" });
+  assert.notEqual(second.jobId, first.jobId, "a new draft, not the approved one returned");
+  f.setIdentity(null);
+  f.assertOffline();
+});
+
+test("P260 an article's provider spend stops at $0.50: nothing is bought past it, and an optional step runs only if it fits", async t => {
+  for (const plan of [true, false]) await t.test(plan ? "fixed_plan" : "plan_off", async () => {
+    const f = setup({ growthFirst: true, articlePlan: plan, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });
+    const site = await selectGrowth(f);
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_fill");
+    const job = f.tables.jobs.find(j => j.contentWork)!, workerToken = "p260-cap";
+    assert.equal(job.contentWork.intent, "create");
+    await f.invoke("jobs:claimPending", { siteId: site.id, jobId: job._id, workerToken });
+    const call = (key: string, ceilingMicroUsd: number) => f.invoke("contentWork:beginProviderCall", { jobId: job._id, workerToken, key, ceilingMicroUsd });
+    const complete = (key: string, actualMicroUsd: number) => f.invoke("contentWork:completeProviderCall", { jobId: job._id, workerToken, key, actualMicroUsd, result: { fixture: true } });
+    // Research's ceiling assumes a whole context window of results ($0.61); it runs, and counts at what it cost.
+    await complete((await call("0:draft:web_research", 610_000)).key, 60_000);
+    await complete((await call("0:0:draft:submit_article", 300_000)).key, 80_000);
+    const fix = call("0:1:review:remediate_final_article", 400_000);
+    if (!plan) { assert.equal((await fix).kind, "started", "without the plan the work keeps its own budget"); f.assertOffline(); return; }
+    await assert.rejects(fix, /Content work cost cap reached: capMicroUsd=500000; spentMicroUsd=140000; requestedMicroUsd=400000/,
+      "the fix is skipped when its highest price would pass $0.50");
+    // A required step is not refused for its price, until $0.50 is spent.
+    await complete((await call("0:0:draft:plan_article", 400_000)).key, 360_000);
+    await assert.rejects(call("0:1:review:audit_final_article", 1_000), /Content work cost cap reached: capMicroUsd=500000; spentMicroUsd=500000/,
+      "nothing is bought once $0.50 is spent");
+    f.assertOffline();
+  });
 });

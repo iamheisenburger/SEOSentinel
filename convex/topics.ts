@@ -1263,7 +1263,9 @@ export const recordSerpBrief = internalMutation({ args: { topicId: v.id("topic_c
   handler: async (ctx, { topicId, brief }) => {
     const topic = await ctx.db.get(topicId);
     if (!topic) return null;
-    if (topic.serpBrief && brief.observedAt - topic.serpBrief.observedAt < SERP_BRIEF_MAX_AGE_MS) return topic.serpBrief;
+    // P260: a brief stored without its pages (read before the fixed plan) takes the same results with pages, once.
+    const addsPages = Boolean(topic.serpBrief && !topic.serpBrief.pages && brief.pages);
+    if (topic.serpBrief && !addsPages && brief.observedAt - topic.serpBrief.observedAt < SERP_BRIEF_MAX_AGE_MS) return topic.serpBrief;
     await ctx.db.patch(topicId, { serpBrief: brief, updatedAt: Date.now() });
     return brief;
   } });

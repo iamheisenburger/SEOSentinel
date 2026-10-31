@@ -190,6 +190,7 @@ export const CMS_SETUP_STEPS: Record<ApiCmsMethod, string[]> = {
     "In Webflow, open Site settings → Apps & integrations → API access and generate a site API token with CMS read and write and Sites read access.",
     "Enter the token and the slug of your blog collection (the part of the address before each post, for example \"blog\" in yoursite.com/blog/post-name).",
     "Your Webflow site must be published on the same domain as this Pentra website.",
+    "Once, in the Designer: open the blog's template page settings and set its SEO title to the post's Title field (or its Name) and its meta description to the post's summary field, then publish. Pentra fills both, so Google shows each article's own headline and description.",
   ],
   ghost: [
     "In Ghost Admin, open Settings → Integrations → Add custom integration and name it Pentra.",

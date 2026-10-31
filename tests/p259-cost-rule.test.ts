@@ -57,7 +57,8 @@ test("P259 the writer sees what Google shows for the search, read once per topic
   assert.match(pipeline, /\} else if \(topic && topicId && !selectedWork && contentProviderActive\(\)\) \{/);
   assert.match(pipeline, /brief = fresh \? await ctx\.runMutation\(internal\.topics\.recordSerpBrief, \{ topicId, brief: fresh \}\) : null;/);
   assert.match(pipeline, /serpBrief \? serpBriefPrompt\(serpBrief\)/);
-  assert.match(readFileSync("convex/topics.ts", "utf8"), /if \(topic\.serpBrief && brief\.observedAt - topic\.serpBrief\.observedAt < SERP_BRIEF_MAX_AGE_MS\) return topic\.serpBrief;/,
+  // P260: a brief read before the fixed plan gains its pages once; otherwise the first reading is kept.
+  assert.match(readFileSync("convex/topics.ts", "utf8"), /if \(topic\.serpBrief && !addsPages && brief\.observedAt - topic\.serpBrief\.observedAt < SERP_BRIEF_MAX_AGE_MS\) return topic\.serpBrief;/,
     "the first reading is kept, so retries and revisions see the same results");
 });
 

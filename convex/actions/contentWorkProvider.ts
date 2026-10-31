@@ -46,7 +46,8 @@ export async function contentStructuredCall(args: { system: string; userMessage:
   toolDescription: string; inputSchema: Anthropic.Tool.InputSchema; maxTokens?: number }, clarifyAudit?: { originalResult: unknown; phantomRepetition?: string[] }) {
   const s = scope.getStore();
   if (!s?.job.contentWork) throw new Error("Missing content provider scope");
-  if (!["submit_article", "review_article", "remediate_final_article", "audit_final_article", "submit_final_metadata"].includes(args.toolName)) throw new Error(`Unpriced content tool: ${args.toolName}`);
+  // P260: plan_article is the fixed plan's outline step (checks model).
+  if (!["submit_article", "review_article", "remediate_final_article", "audit_final_article", "submit_final_metadata", "plan_article"].includes(args.toolName)) throw new Error(`Unpriced content tool: ${args.toolName}`);
   const cw = s.job.contentWork, p = cw.pricing;
   const baseKey = `${cw.replacements}:${cw.revisions}:${s.phase}:${args.toolName}`;
   const logicalKey = baseKey + (clarifyAudit ? SEMANTIC_AUDIT_SUFFIX : "");
@@ -126,6 +127,9 @@ export async function contentStructuredCall(args: { system: string; userMessage:
  * citation-heavy drafts failed the publication gate and left slots empty, so the
  * proven confirmed-facts path is the default until research passes the gate. */
 export const contentWebResearchEnabled = () => process.env.PENTRA_CONTENT_WEB_RESEARCH === "on";
+/** P260 (Oct 31 2026): Arshad's fixed article plan (ops/ARTICLE-PLAN-V1.md) writes and checks every new Pentra draft;
+ * "off" keeps the previous AI-reviewed pipeline (the integration fixtures that test it set this). */
+export const articlePlanEnabled = () => process.env.PENTRA_ARTICLE_PLAN !== "off";
 /** Anthropic's published server web search fee: $10 per 1,000 searches. */
 export const WEB_SEARCH_MICRO_USD_PER_REQUEST = 10_000;
 /** The research prompt's input bound is the model's whole context window:
