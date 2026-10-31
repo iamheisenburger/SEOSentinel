@@ -73,6 +73,15 @@ function decodeHtmlEntities(value: string): string {
     .replace(/&(?:apos|#39);/gi, "'");
 }
 
+/** P261 (Oct 31 2026): WordPress (wptexturize) and many themes print straight quotes, dashes and dots typographically, so
+ * "A Homeowner's Guide" is shown as "A Homeowner’s Guide". The title check compared characters exactly: a WordPress article
+ * whose title has an apostrophe, a quote or a spaced dash would never have been marked live (found publishing Cowork's judge
+ * articles to the WordPress test site). Both sides are compared in plain punctuation. */
+export function plainPunctuation(value: string): string {
+  return value.replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'").replace(/[\u201C\u201D\u201E\u201F\u2033]/g, '"')
+    .replace(/[\u2010-\u2015\u2212]/g, "-").replace(/\u2026/g, "...").replace(/\u00D7/g, "x").replace(/[\u00A0\u202F]/g, " ");
+}
+
 function normalizedVisibleText(html: string): string {
   const body = html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? html;
   return decodeHtmlEntities(
@@ -206,11 +215,11 @@ export function verifyLivePublicationPage(input: {
   ) {
     throw new Error("The public page resolved to a different canonical URL");
   }
-  const title = decodeHtmlEntities(input.title)
+  const title = plainPunctuation(decodeHtmlEntities(input.title))
     .replace(/\s+/g, " ")
     .trim()
     .toLocaleLowerCase("en-US");
-  if (!title || !normalizedVisibleText(input.html).includes(title)) {
+  if (!title || !plainPunctuation(normalizedVisibleText(input.html)).replace(/\s+/g, " ").includes(title)) {
     throw new Error(
       "The public page does not contain the published article title",
     );

@@ -166,7 +166,7 @@ export type PublicationArticle = {
   ownerQualityWaiver?: OwnerQualityWaiver;
   // P260: Arshad's fixed article plan (ops/ARTICLE-PLAN-V1.md).
   qualityPlan?: string;
-  articlePlan?: { format: string; sections: string[]; minItems?: number };
+  articlePlan?: { format: string; sections: string[]; minItems?: number; context?: string };
   researchEvidenceSummary?: string;
   metaKeywords?: string[];
 };
@@ -181,7 +181,8 @@ export function planChecksForArticle(article: PublicationArticle): PlanCheckFail
   const sources = [...(article.sources ?? []).map((source) => ({ url: source.url, title: source.title, text: source.excerpt ?? "" })),
     ...(article.researchEvidenceSummary ? [{ url: "https://fact-sheet.invalid/", text: article.researchEvidenceSummary }] : [])];
   const outline = { format: article.articlePlan.format as PlanFormat, sections: article.articlePlan.sections, minItems: article.articlePlan.minItems };
-  return runPlanChecks(article.markdown, { sources, profile, productName }, outline, article.metaKeywords ?? []);
+  return runPlanChecks(article.markdown, { sources, profile, productName }, outline,
+    [...(article.metaKeywords ?? []), ...(article.articlePlan.context ? [article.articlePlan.context] : [])]);
 }
 
 export type PublicationQualityResult = {

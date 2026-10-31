@@ -170,7 +170,11 @@ export function firstPartyProductPage(url: string, products: readonly string[]):
   const normalized = normalizeEvidenceUrl(url);
   if (!normalized) return false;
   const host = new URL(normalized).hostname.toLowerCase();
-  return !matchesAnyHost(host, LOW_AUTHORITY_HOSTS) && products.includes(websiteName(host));
+  // P262: "Mindbody" is mindbodyonline.com and "Walla" hellowalla.com: the name with an affix brands use for their own
+  // domain counts; a review or comparison site that contains the name ("seobotreview") does not.
+  const site = websiteName(host);
+  return !matchesAnyHost(host, LOW_AUTHORITY_HOSTS) && products.some((product) => site === product ||
+    (product.length >= 4 && new RegExp(`^(?:get|try|use|go|hello|join|my)?${product.replace(/[^a-z0-9]/g, "")}(?:app|hq|online|labs|software|hub|cloud|now)?$`).test(site)));
 }
 
 /** A source's title as readers see it in the Sources list. Web search often

@@ -90,8 +90,8 @@ test("P260 product facts must match the confirmed details; names must come from 
   const product = productFactsOutsideProfile("Madman Invoice's paid plan costs $15 a month. Madman Invoice's free plan covers 5 invoices.", sheet);
   assert.deepEqual(product.map(f => f.line), ["Madman Invoice's paid plan costs $15 a month."]);
   const names = namesOutsideSources("Tools such as QuickBooks and Xero send reminders. According to Jane Doe, reminders work. HubSpot sends them too.", sheet);
-  assert.deepEqual(names.map(f => f.detail), ["Jane, Doe is not named in the sources or your details", "HubSpot is not named in the sources or your details"],
-    "a sentence's first word counts only when it looks like a brand");
+  // P261: a person or company the article attributes something to or names as an organisation, never any capitalised word.
+  assert.deepEqual(names.map(f => f.detail), ["Jane Doe is not named in the sources or your details"]);
   assert.deepEqual(namesOutsideSources("Use FreshBooks for this.", sheet, ["freshbooks alternatives"]), [], "the search itself may name it");
 });
 

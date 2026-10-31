@@ -27,6 +27,26 @@ export function primarySourcesRequest(args: { label: string; primaryKeyword: str
   };
 }
 
+/** P262 (Oct 31 2026): a "best X" list's second pass looks up the options its top lists name on their own sites (features,
+ * plans and pricing, help centre), where the general pass found government pages instead (live trial: the IRS and the FTC for
+ * "best scheduling software for yoga studios"). A list keeps up to LIST_RESEARCH_SOURCES sources, one an option. */
+export const LIST_RESEARCH_SOURCES = 8;
+export function optionSourcesRequest(args: { label: string; primaryKeyword: string; options: readonly string[]; targetCountry?: string }) {
+  return {
+    system: [
+      "You research a list article that compares named options. For each option, use web search to find its own official pages: features, plans and pricing, and its help centre or documentation.",
+      "Cite those pages for what each option offers and costs; skip an option whose own pages you can't find. Do not cite review sites, affiliate lists, forums, social media or news aggregators.",
+      "Then write a short research brief: for each option, the facts its own pages state, citing the page each fact comes from. Quote only what the pages say; do not add facts of your own.",
+    ].join(" "),
+    userMessage: [
+      `Article topic: ${args.label}`,
+      `Primary search: ${args.primaryKeyword}`,
+      `Options to research, each on its own website: ${args.options.join(", ")}`,
+      args.targetCountry ? `Readers are in: ${args.targetCountry}` : "",
+    ].filter(Boolean).join("\n"),
+  };
+}
+
 /** Distinct host names (without "www."), in first-seen order. */
 export function sourceHosts(urls: readonly string[], limit = 12): string[] {
   const hosts: string[] = [];

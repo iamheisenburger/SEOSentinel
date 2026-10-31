@@ -1137,7 +1137,9 @@ export default defineSchema({
     // P260 (Oct 31 2026): Arshad's fixed article plan (ops/ARTICLE-PLAN-V1.md): the outline the writer followed and the
     // code checks review (convex/lib/articlePlanChecks.ts); "fixed_v1" articles carry no AI review scores.
     articlePlan: v.optional(v.object({ version: v.number(), format: v.string(), sections: v.array(v.string()),
-      minItems: v.optional(v.number()), targetWords: v.optional(v.number()) })),
+      minItems: v.optional(v.number()), targetWords: v.optional(v.number()),
+      /** P261: the top results' titles, headings and questions: names they use are part of the subject. */
+      context: v.optional(v.string()) })),
     qualityPlan: v.optional(v.string()),
     qualityRecoveryVersion: v.optional(v.number()),
     qualityRecoveryAttemptVersion: v.optional(v.number()),

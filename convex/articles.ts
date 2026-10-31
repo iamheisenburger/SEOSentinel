@@ -1081,7 +1081,7 @@ export const createDraftForJob = internalMutation({
     mediaQualityNotes: v.optional(v.array(v.string())),
     productEvidenceStatus: v.optional(v.string()),
     articlePlan: v.optional(v.object({ version: v.number(), format: v.string(), sections: v.array(v.string()),
-      minItems: v.optional(v.number()), targetWords: v.optional(v.number()) })),
+      minItems: v.optional(v.number()), targetWords: v.optional(v.number()), context: v.optional(v.string()) })),
     qualityPlan: v.optional(v.string()),
   },
   handler: async (ctx, args) => {

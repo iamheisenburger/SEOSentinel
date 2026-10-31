@@ -1,9 +1,10 @@
 "use node";
 import { assertNotMidContentSetup } from "../lib/contentSetupPath";
 import { EVIDENCE_EXCERPT_MAX_CHARS } from "../lib/evidenceExcerpt";
-import { MAX_RESEARCH_SOURCES, PRIMARY_PASS_BELOW, PRIMARY_PASS_SEARCHES, primarySourcesRequest, sourceHosts } from "../lib/researchPasses";
-import { type SerpBrief, type SerpPage, googleRedirect, medianWords, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis, serpBriefPrompt,
-  serpBriefUsable, serpPagesPrompt, technicalSearch } from "../lib/serpBrief";
+import { LIST_RESEARCH_SOURCES, MAX_RESEARCH_SOURCES, PRIMARY_PASS_BELOW, PRIMARY_PASS_SEARCHES, optionSourcesRequest, primarySourcesRequest,
+  sourceHosts } from "../lib/researchPasses";
+import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWords, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis,
+  serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch } from "../lib/serpBrief";
 import { articleOutlinePrompt, flaggedLines, planCheckIssues, runPlanChecks, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
 import { articlePlanEnabled, contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
 import { autopilotCompanyNameIssue, autopilotCompanyNameNote, autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote,
@@ -181,6 +182,7 @@ import {
 import { spliceRefreshSection } from "../lib/contentSelection";
 import {
   citedCompanyName,
+  firstPartyProductPage,
   otherCompaniesRule,
   productNamesInSearch,
   readableSourceTitle,
@@ -2139,9 +2141,13 @@ async function remediateFinalArticle(args: {
   maxWords: number;
   auditNotes: string[];
   purpose?: "audit_remediation" | "evidence_safe_length_recovery";
+  /** P261: the planned fix's output bound, from the article's length (default 16,384). */
+  maxTokens?: number;
 }): Promise<{ markdown: string; notes: string[] }> {
   return callClaudeStructured({
     ...remediationRequest({ ...args, currentYear: new Date(contentProviderPromptTime()).getUTCFullYear() }),
+    // P261: the planned fix's output bound follows the article's length.
+    ...(args.maxTokens ? { maxTokens: args.maxTokens } : {}),
     outputSchema: z.object({
       markdown: z.string(),
       notes: z.array(z.string()).default([]),
@@ -4603,7 +4609,12 @@ async function handleArticle(
     // API attributes to a page becomes evidence, and strict source rules apply.
     // A comparison may cite the products its search names from their own
     // websites, for facts about those products (P160).
-    const namedProducts = effectiveArticleType === "comparison" ? productNamesInSearch(topic.primaryKeyword) : [];
+    // P262: a list search researches the options its top lists name, from their own sites (the fixed plan's brief).
+    const listOptions = articlePlanEnabled() && serpBrief && !productNamesInSearch(topic.primaryKeyword).length &&
+      planFormat(serpBrief, searchAsksForProducts(topic.primaryKeyword), technicalSearch(topic.primaryKeyword), topic.primaryKeyword) === "list"
+      ? listedOptions(serpBrief) : [];
+    const namedProducts = effectiveArticleType === "comparison" ? productNamesInSearch(topic.primaryKeyword)
+      : listOptions.map((option) => option.toLowerCase().replace(/[^a-z0-9]/g, "")).filter((name) => name.length >= 3);
     try {
       const found = await contentResearchCall({
         system: [
@@ -4621,9 +4632,12 @@ async function handleArticle(
           `Primary search: ${topic.primaryKeyword}`,
           topic.secondaryKeywords?.length ? `Related searches: ${topic.secondaryKeywords.slice(0, 6).join(", ")}` : "",
           site.targetCountry ? `Readers are in: ${site.targetCountry}` : "",
-          `Do not research ${site.siteName ?? site.domain} itself or its competitors; research the subject for its readers.`,
+          // P262: a "best X" list names other options by design; it still never researches the business itself.
+          listOptions.length ? `Do not research ${site.siteName ?? site.domain} itself.`
+            : `Do not research ${site.siteName ?? site.domain} itself or its competitors; research the subject for its readers.`,
           namedProducts.length ? `This compares the products the search names (“${topic.primaryKeyword}”). For a fact about one of them, its own website (features, plans and pricing pages) and documentation are the authoritative sources: cite those pages, not third-party lists.` : "",
           // P231: the article names the products a search for a kind of product asks for, so research finds them.
+          listOptions.length ? `This search asks for a list of options (“${topic.primaryKeyword}”). The top results name these: ${listOptions.join(", ")}. Search for each by name and cite its own website (features, plans and pricing pages) or documentation for the facts about it; skip one you can't find.` : "",
           !namedProducts.length && searchAsksForProducts(topic.primaryKeyword) ? `This search asks for specific options (“${topic.primaryKeyword}”). Find the products, services or places a reader would compare or use and, for facts about each one, its own documentation or help pages.` : "",
         ].filter(Boolean).join("\n"),
         // P249: five searches (was three) so a how-to finds the documentation pages it needs, not one overview.
@@ -4643,11 +4657,16 @@ async function handleArticle(
       let candidates = found.sources.filter(notCompetitor), searches = found.searches, cited = found.sources.length;
       let kept = keep(candidates);
       // P256 (Oct 30 2026): one more bounded pass for primary sources when the first kept fewer than two (lib/researchPasses).
-      if (kept.readable.length < PRIMARY_PASS_BELOW) {
+      // P262: a list's second pass looks up its options' own pages when fewer than three options are covered.
+      const optionsCovered = (pool: typeof kept.readable) => new Set(pool.filter((source) => firstPartyProductPage(source.url, namedProducts))
+        .map((source) => new URL(source.url).hostname)).size;
+      if (listOptions.length ? optionsCovered(kept.readable) < 3 : kept.readable.length < PRIMARY_PASS_BELOW) {
         try {
-          const more = await contentResearchCall({ ...primarySourcesRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword,
-            secondaryKeywords: topic.secondaryKeywords, targetCountry: site.targetCountry, siteName: site.siteName ?? site.domain,
-            avoidHosts: sourceHosts(kept.strict.rejected.map(({ source }) => source.url)) }),
+          const more = await contentResearchCall({ ...(listOptions.length
+            ? optionSourcesRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword, options: listOptions, targetCountry: site.targetCountry })
+            : primarySourcesRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword,
+              secondaryKeywords: topic.secondaryKeywords, targetCountry: site.targetCountry, siteName: site.siteName ?? site.domain,
+              avoidHosts: sourceHosts(kept.strict.rejected.map(({ source }) => source.url)) })),
             maxUses: PRIMARY_PASS_SEARCHES, firstPartyProducts: namedProducts, pass: "primary" });
           const seen = new Set(found.sources.map(source => source.url));
           const added = more.sources.filter(source => !seen.has(source.url));
@@ -4659,7 +4678,7 @@ async function handleArticle(
         }
       }
       const { strict, accepted, readable } = kept;
-      researchSources = readable.slice(0, MAX_RESEARCH_SOURCES);
+      researchSources = readable.slice(0, listOptions.length ? LIST_RESEARCH_SOURCES : MAX_RESEARCH_SOURCES);
       if (strict.rejected.length) researchQualityNotes.push(`Excluded ${strict.rejected.length} secondary or vendor-authored source(s) from strict evidence.`);
       // What the research produced, always (P144, Oct 21 2026: about half of
       // the owner sites' drafts since Oct 19 kept no source, and nothing said why).
@@ -4751,7 +4770,7 @@ async function handleArticle(
   // Arshad's order (Oct 30 2026): read Google's top 5 results, cover every subtopic they share plus one useful thing they
   // don't, in the format they use; write once; check with code. The format and length come from the pages, in code; one
   // cheap structured call proposes the sections from the results' own headings.
-  let articlePlan: { version: number; format: PlanFormat; sections: string[]; minItems?: number; targetWords?: number } | undefined;
+  let articlePlan: { version: number; format: PlanFormat; sections: string[]; minItems?: number; targetWords?: number; context?: string } | undefined;
   const outlineCovers = new Map<string, string>();
   if (topic && !selectedWork && contentProviderActive() && articlePlanEnabled()) {
     const asksForProducts = searchAsksForProducts(topic.primaryKeyword);
@@ -4800,7 +4819,10 @@ async function handleArticle(
       researchQualityNotes.push(`Outline unavailable: ${error instanceof Error ? error.message.slice(0, 160) : "unknown"}`);
       sections = [];
     }
-    articlePlan = { version: 1, format, sections, targetWords,
+    // P261: the names the top results use are part of the subject (the names check reads them).
+    const context = serpBrief ? [...serpBrief.results.map((r) => r.title), ...(serpBrief.pages ?? []).flatMap((p) => p.headings),
+      ...serpBrief.questions].join("\n").slice(0, 8_000) : "";
+    articlePlan = { version: 1, format, sections, targetWords, ...(context ? { context } : {}),
       ...(format === "list" ? { minItems: Math.max(5, Math.min(15, items ?? 5)) } : {}) };
   }
 
@@ -7189,6 +7211,10 @@ export const generateArticle = action({
  * the sources don't name, every outline section, the format's elements), plus the objective gate (reader-visible defects,
  * safe rendering, metadata). Its one revision (MAX_CONTENT_REWRITES) is one targeted fix of exactly the failing lines. No
  * review_article or audit_final_article call and no scores; the gate recomputes the same plan checks at seal and publish. */
+/** P261: the one fix rewrites few lines of an article it returns whole: room for the article (at most 2.5 characters a
+ * token) and 2,000 tokens more, never above the writer's 16,384. */
+export const plannedFixMaxTokens = (markdown: string) => Math.min(16_384, Math.max(4_000, Math.ceil(markdown.length / 2.5) + 2_000));
+
 /** P260: the article's $0.50 provider cap refused this call (beginProviderCall). */
 const costCapRefusal = (error: unknown) => error instanceof Error && /Content work cost cap reached/.test(error.message);
 
@@ -7231,7 +7257,8 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
     const fixed = instructions.length ? await remediateFinalArticle({ markdown: fields.markdown, articleType: article.articleType ?? "standard",
       primaryKeyword: topic?.primaryKeyword ?? article.title, productName, productEvidence: article.productEvidenceSnapshot ?? "",
       researchEvidence: article.researchEvidenceSummary ?? "", sources: article.sources ?? [], minWords: STRICT_PUBLICATION_MIN_WORDS,
-      maxWords: articleWordCeiling(article.articleType), auditNotes: ["Fix only these points and change nothing else:", ...instructions.slice(0, 24)] })
+      maxWords: articleWordCeiling(article.articleType), auditNotes: ["Fix only these points and change nothing else:", ...instructions.slice(0, 24)],
+      maxTokens: plannedFixMaxTokens(fields.markdown) })
       .catch((error: unknown) => { if (costCapRefusal(error)) return null; throw error; }) : null;
     if (instructions.length && !fixed) fixNotes.push("The fix was skipped: this article reached its $0.50 cost cap.");
     if (fixed) {

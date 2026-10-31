@@ -94,7 +94,8 @@ test("P256 research makes one more bounded pass for primary sources when it keep
   assert.match(request.userMessage, /Already found, not usable as evidence \(do not cite\): freshbooks\.com, quickbooks\.intuit\.com\n/);
   assert.match(request.userMessage, /Readers are in: US, UK/);
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
-  assert.match(pipeline, /if \(kept\.readable\.length < PRIMARY_PASS_BELOW\) \{/);
+  // P262: a "best X" list's second pass looks up its options instead (tests/p261-live-trial-fixes.test.ts).
+  assert.match(pipeline, /: kept\.readable\.length < PRIMARY_PASS_BELOW\) \{/);
   assert.match(pipeline, /maxUses: PRIMARY_PASS_SEARCHES, firstPartyProducts: namedProducts, pass: "primary" \}\);/);
   assert.match(pipeline, /researchQualityNotes\.push\(`Primary-source research pass unavailable: /, "a failed pass never stops the draft");
   const provider = readFileSync("convex/actions/contentWorkProvider.ts", "utf8");

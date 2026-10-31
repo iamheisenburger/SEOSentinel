@@ -66,27 +66,30 @@ export function productFactsOutsideProfile(markdown: string, sheet: FactSheet): 
   return failures;
 }
 
-/** Capitalised words a reader takes for a person, company or product. Sentence-initial words, headings, common
- * capitalised words and everyday technical names are not counted. */
-const COMMON = new Set(("I A An The This That These Those It Its If In On At For To Of And Or But With Without When While Where What Which Who Why How " +
-  "Your You We Our Their They He She His Her Each Every Some Any All Most Many More Less Use Using Step Steps Note Tip Example Examples " +
-  "Monday Tuesday Wednesday Thursday Friday Saturday Sunday January February March April May June July August September October November December " +
-  "US USA UK EU UAE API APIs URL URLs HTML CSS JSON XML PDF CSV SEO AI FAQ FAQs SaaS CRM CMS HTTP HTTPS SQL ID IDs VAT GST IRS HMRC Q A B C").split(/\s+/));
+/** P261 (Oct 31 2026): a person or a company the article attributes something to, or names as an organisation: "according
+ * to Jane Doe", "Jane Doe said", "Dr. Lee", "Brightway Labs Inc.". Arshad's rule is about invented people, quotes and
+ * companies; every capitalised word was too wide (the live trial flagged "United States", "ESM", and the logging libraries
+ * a Pino tutorial compared). */
+const NAME = String.raw`[A-Z][a-zA-Z'’.-]+(?:\s+(?:de|van|von|da|del|la|le|[A-Z][a-zA-Z'’.-]+)){0,3}`;
+const ATTRIBUTION = [
+  new RegExp(String.raw`\b[Aa]ccording to (${NAME})`, "g"),
+  new RegExp(String.raw`(?:^|[.;:!?]\s+|,\s+|\s)(${NAME}),?\s+(?:said|says|told|wrote|writes|explains|explained|notes|noted|recommends|recommended|argues|argued|adds|added|warns|warned)\b`, "g"),
+  new RegExp(String.raw`\b(?:said|says|wrote|writes|explains|added|adds)\s+(${NAME})`, "g"),
+  new RegExp(String.raw`\b(?:Dr|Mr|Mrs|Ms|Prof)\.?\s+(${NAME})`, "g"),
+];
+const ORGANISATION = new RegExp(String.raw`\b((?:[A-Z][\w&'’.-]*\s+){1,4}(?:Inc|LLC|Ltd|Corp|Corporation|Company|Group|Agency|Foundation|Institute|Association|Labs|Partners|Consulting)\b\.?)`, "g");
+const NOT_A_NAME = /^(?:The|This|That|These|Those|It|Its|Your|You|We|Our|They|Their|He|She|A|An|Each|Every|Some|Most|Many|Research|Studies|Data|Experts?|Analysts?|Google|Users?|Customers?|Owners?|Teams?)$/;
 export function namesOutsideSources(markdown: string, sheet: FactSheet, allowed: readonly string[] = []): PlanCheckFailure[] {
   const known = normalize([...sheet.sources.flatMap((s) => [s.text, s.title ?? "", (() => { try { return new URL(s.url).hostname; } catch { return ""; } })()]),
     sheet.profile, sheet.productName, ...allowed].join("\n"));
   const failures: PlanCheckFailure[] = [];
   for (const sentence of sentences(prose(markdown))) {
-    // A word after an opening quote or bracket starts a phrase, like the sentence's first word.
-    const [first, ...rest] = sentence.split(/\s+/);
-    // A sentence's first word is capitalised anyway; it counts as a name only when it looks like a brand
-    // ("QuickBooks", "HubSpot", "Next.js").
-    const lead = (first ?? "").replace(/^[^A-Za-z]+|[^A-Za-z0-9]+$/g, "");
-    const words = [...(/^[A-Z][a-z0-9]+[A-Z]|^[A-Z][A-Za-z0-9]*\.[a-z]/.test(lead) ? [lead] : []), ...rest.filter((w) => !/^["“'‘(\[]/.test(w))];
-    // A name ending a sentence or a link ("Doe.", "Doe],") is still a name.
-    const names = [...new Set(words.map((w) => w.replace(/^[^A-Za-z]+|[^A-Za-z0-9]+$/g, ""))
-      .filter((w) => /^[A-Z][A-Za-z0-9]*(?:[.+#-][A-Za-z0-9]+)*$/.test(w) && w.length > 1 && !COMMON.has(w)))];
-    const unknown = names.filter((n) => !known.includes(n.toLowerCase()));
+    const names = new Set<string>();
+    for (const pattern of ATTRIBUTION) for (const m of sentence.matchAll(pattern)) names.add(m[1].trim().replace(/[.,]+$/, ""));
+    for (const m of sentence.matchAll(ORGANISATION)) names.add(m[1].trim().replace(/[.,]+$/, ""));
+    const unknown = [...names].filter((name) => !NOT_A_NAME.test(name.split(/\s+/)[0]) &&
+      !name.split(/\s+/).filter((word) => /^[A-Z]/.test(word) && !/^(?:Inc|LLC|Ltd|Corp|Corporation|Company|Group|Agency|Foundation|Institute|Association|Labs|Partners|Consulting)\.?$/.test(word))
+        .every((word) => known.includes(word.toLowerCase().replace(/[.,'’]+$/, ""))));
     if (unknown.length) failures.push({ check: "name", line: sentence, detail: `${unknown.join(", ")} is not named in the sources or your details` });
   }
   return failures;

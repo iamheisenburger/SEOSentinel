@@ -10975,7 +10975,7 @@ test("P260 an owner's planned draft gets one targeted fix, comes back with the d
     "written once, one targeted fix, no AI review");
   const fix = f.modelCalls.find(c => c.tools?.[0]?.name === "remediate_final_article")!;
   assert.match(JSON.stringify(fix.messages), /Fix only these points and change nothing else:/);
-  assert.match(JSON.stringify(fix.messages), /Jane, Doe/);
+  assert.match(JSON.stringify(fix.messages), /Jane Doe/);
   assert.equal(job.contentWork.stage, "failed", "handed back after its one fix, never regenerated");
   assert.equal(job.contentWork.revisions, 1); assert.equal(job.contentWork.replacements, 0);
   assert.ok(article.markdown.includes(invented));

@@ -96,10 +96,39 @@ export function planFormat(brief: Pick<SerpBrief, "results" | "pages">, asksForP
   // The search itself says what it wants first (live trial, Oct 31: "ceramic vs cast iron cookware" and "how to reconcile
   // bank statements" were planned as guides when few of their results could be read).
   if (/\bvs\.?\b|\bversus\b|\bcompared? (?:to|with)\b/i.test(search) || share(titles.filter((t) => /\bvs\.?\b|\bversus\b|\bcompar/i.test(t)).length)) return "comparison";
-  if (asksForProducts || share(titles.filter((t) => /^\d{1,3}\+?\s|\b(?:best|top)\b|\b\d{1,3}\+?\s+(?:ways|tips|tools|examples|templates|ideas|apps|options)\b/i.test(t)).length)) return "list";
+  if (asksForProducts) return "list";
+  // A search naming a programming tool wants working code before a list of others (live trial: "best logging framework" and
+  // "Best practices for writing app logs with Pino" made a Pino tutorial a list).
   if (share(pages.filter((p) => p.codeBlocks > 0).length) || (technical && pages.filter((p) => p.codeBlocks > 0).length >= Math.min(1, pages.length))) return "tutorial";
+  if (share(titles.filter((t) => /^\d{1,3}\+?\s|\b(?:best|top)\b(?! practices?\b)|\b\d{1,3}\+?\s+(?:ways|tips|tools|examples|templates|ideas|apps|options)\b/i.test(t)).length)) return "list";
   if (/^how (?:to|do i|do you|can i)\b/i.test(search.trim()) || share(titles.filter((t) => /\bhow to\b|\bstep[- ]by[- ]step\b|\btutorial\b/i.test(t)).length)) return "how-to";
   return "guide";
+}
+
+const NOT_AN_OPTION = /^(?:what|why|how|when|where|which|who|best|top|our|the|a|an|is|are|do|does|can|should|conclusion|summary|final|faqs?|frequently|pricing|prices?|features?|pros|cons|overview|introduction|methodology|key|comparison|compare|table|related|bottom|verdict|choosing|choose|benefits?|alternatives?|other|more|free|paid|why|tips?|step|steps|getting|get|start|sign|book|contact|about|reviews?|rating|ratings|honorable|wrapping|editor|editors|in|for|with|and|to|online|class|classes|scheduling|software|booking|payment|payments|customer|support|integrations?|reporting|marketing|membership|memberships|mobile|apps?|ease|value|security|setup|onboarding|cost|costs|plans?)\b/i;
+/** P262 (Oct 31 2026): the options a list search's top results name, from their own headings ("1. Mindbody", "Momence: best
+ * for…", "WellnessLiving"), most named first. Live trial: "best scheduling software for yoga studios" named 3 options, because
+ * research kept only two vendors' help pages and the fact sheet rule allows only the options it holds. */
+export function listedOptions(brief: Pick<SerpBrief, "pages">, limit = 10): string[] {
+  const counts = new Map<string, { name: string; pages: number; first: number }>();
+  (brief.pages ?? []).forEach((page, pageIndex) => {
+    const found = new Map<string, string>();
+    for (const heading of page.headings) {
+      const name = heading.replace(/^\s*(?:#?\d+[.):]?|[-•*])\s+/, "").split(/\s*(?::|–|—| - |\(|\||,| vs\.? )\s*/)[0].trim();
+      const words = name.split(/\s+/);
+      if (!name || words.length > 3 || NOT_AN_OPTION.test(name) || !words.every((w) => /^(?:[A-Z0-9][A-Za-z0-9.&'+-]*|of|and|for|by)$/.test(w)) ||
+        !/[a-z]/.test(name) || name.length < 3 || name.length > 40) continue;
+      const key = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (key.length >= 3 && !found.has(key)) found.set(key, name);
+    }
+    // A page is a list when its headings name three options or more; a guide's few headings are not options.
+    if (found.size < 3) return;
+    [...found].forEach(([key, name], index) => {
+      const entry = counts.get(key) ?? { name, pages: 0, first: pageIndex * 100 + index };
+      entry.pages += 1; counts.set(key, entry);
+    });
+  });
+  return [...counts.values()].sort((a, b) => b.pages - a.pages || a.first - b.first).slice(0, limit).map((option) => option.name);
 }
 
 /** The top results' median length in visible words (pages with fewer than 300 words are not articles). */
