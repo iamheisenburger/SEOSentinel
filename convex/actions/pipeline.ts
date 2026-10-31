@@ -4536,6 +4536,9 @@ async function handleArticle(
           "For an owned fact (a product's price or plans, a fee, a rebate or incentive, a specification such as a temperature limit or weight, a release date or version, a rule), name in the same line whose page states it (for example: 'rebate amounts, from the utility or program that pays them'; 'oven-safe temperatures, from the manufacturers' care pages'; 'first release date, from npm or the project's repository').",
           "Then add two or three specifics this business's own readers face that the results miss (for freelancers, for example: payouts that arrive net of platform fees).",
           "When the format is a list, one section holds the list: say in 'items' how many named options it gives (the results' own count when they show one, at least six, not counting this business's own product).",
+          // P271 (Oct 31 2026): the first production article under P268 ("astro keyword research", pentra.dev) planned "six
+          // named keyword tools with prices": its competitors. Research spent 9 searches on their pages and kept none.
+          "The business's competitors (listed with the business) are never named: never plan a section or coverage item that names, prices or depends on them; plan such a comparison by kind of tool or by the job it does instead, and a list's options are other products.",
         ].join(" "),
         userMessage: [
           `SEARCH: ${topic.primaryKeyword}`,
@@ -4544,6 +4547,7 @@ async function handleArticle(
           serpBrief ? serpPagesPrompt(serpBrief) : "None could be read.",
           serpBrief?.questions.length ? `PEOPLE ALSO ASK: ${serpBrief.questions.join(" | ")}` : "",
           `BUSINESS: ${productName}: ${site.siteSummary ?? site.niche ?? ""}`.slice(0, 600),
+          site.competitors?.length ? `COMPETITORS OF THE BUSINESS (never named, priced or planned for): ${site.competitors.join(", ")}` : "",
         ].filter(Boolean).join("\n"),
         toolName: "plan_article",
         toolDescription: "Submit the article's outline: the sections the top results share and one useful section they lack.",
@@ -4723,9 +4727,13 @@ async function handleArticle(
     // A comparison may cite the products its search names from their own
     // websites, for facts about those products (P160).
     // P262: a list search researches the options its top lists name, from their own sites (the fixed plan's brief).
-    const listOptions = articlePlanEnabled() && serpBrief && !productNamesInSearch(topic.primaryKeyword).length &&
+    // P271: the business's competitors are never researched, named or listed (the writer bans them; the filter drops their pages).
+    const competitorList = (site.competitors ?? []).map((c: string) => c.trim()).filter(Boolean);
+    const competitorKey = (name: string) => name.toLowerCase().replace(/^https?:\/\//, "").replace(/\.(?:com|io|co|ai|org|net)\/?$/, "").replace(/[^a-z0-9]/g, "");
+    const competitorKeys = competitorList.map(competitorKey).filter((key: string) => key.length >= 3);
+    const listOptions = (articlePlanEnabled() && serpBrief && !productNamesInSearch(topic.primaryKeyword).length &&
       planFormat(serpBrief, searchAsksForProducts(topic.primaryKeyword), technicalSearch(topic.primaryKeyword), topic.primaryKeyword) === "list"
-      ? listedOptions(serpBrief) : [];
+      ? listedOptions(serpBrief) : []).filter((option) => !competitorKeys.includes(competitorKey(option)));
     const namedProducts = effectiveArticleType === "comparison" ? productNamesInSearch(topic.primaryKeyword)
       : listOptions.map((option) => option.toLowerCase().replace(/[^a-z0-9]/g, "")).filter((name) => name.length >= 3);
     // P264: a planned article's research is searcher-led: a source for each item of its coverage, official where one
@@ -4752,8 +4760,8 @@ async function handleArticle(
           topic.secondaryKeywords?.length ? `Related searches: ${topic.secondaryKeywords.slice(0, 6).join(", ")}` : "",
           site.targetCountry ? `Readers are in: ${site.targetCountry}` : "",
           // P262: a "best X" list names other options by design; it still never researches the business itself.
-          listOptions.length || listFormat ? `Do not research ${site.siteName ?? site.domain} itself.`
-            : `Do not research ${site.siteName ?? site.domain} itself or its competitors; research the subject for its readers.`,
+          listOptions.length || listFormat ? `Do not research ${site.siteName ?? site.domain} itself${competitorList.length ? ` or its competitors (${competitorList.join(", ")}), which the article never names` : ""}.`
+            : `Do not research ${site.siteName ?? site.domain} itself or its competitors${competitorList.length ? ` (${competitorList.join(", ")})` : ""}; research the subject for its readers.`,
           namedProducts.length ? `This compares the products the search names (“${topic.primaryKeyword}”). For a fact about one of them, its own website (features, plans and pricing pages) and documentation are the authoritative sources: cite those pages, not third-party lists.` : "",
           // P231: the article names the products a search for a kind of product asks for, so research finds them.
           listOptions.length ? `This search asks for a list of options (“${topic.primaryKeyword}”). The top results name these: ${listOptions.join(", ")}. Search for each by name and cite its own website (features, plans and pricing pages) or documentation for the facts about it; skip one you can't find.` : "",
@@ -4797,12 +4805,12 @@ async function handleArticle(
             firstPartyProductPage(source.url, [option.toLowerCase().replace(/[^a-z0-9]/g, "")])));
           const more = await contentResearchCall({ ...(listPass
             ? optionSourcesRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword, options: uncovered, targetCountry: site.targetCountry,
-              productName: site.siteName ?? site.domain })
+              productName: site.siteName ?? site.domain, competitors: competitorList })
             : coveragePass ? coverageSourcesRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword, coverage, targetCountry: site.targetCountry,
-              avoidHosts: sourceHosts(kept.readable.map((source) => source.url)) })
+              avoidHosts: sourceHosts(kept.readable.map((source) => source.url)), competitors: competitorList })
             : primarySourcesRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword,
               secondaryKeywords: topic.secondaryKeywords, targetCountry: site.targetCountry, siteName: site.siteName ?? site.domain,
-              avoidHosts: sourceHosts(kept.strict.rejected.map(({ source }) => source.url)) })),
+              avoidHosts: sourceHosts(kept.strict.rejected.map(({ source }) => source.url)), competitors: competitorList })),
             maxUses: listPass ? LIST_RESEARCH_SEARCHES : PRIMARY_PASS_SEARCHES, firstPartyProducts: namedProducts, pass: "primary",
             ...(planned ? { reputableSecondary: true, maxTokens: 8000 } : {}) });
           const seen = new Set(found.sources.map(source => source.url));

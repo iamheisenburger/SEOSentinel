@@ -74,6 +74,6 @@ test("P262 a list's second research pass looks up its options' own pages, never 
   // P268: a list keeps up to 10 sources and looks for options until 6 have their own pages.
   assert.equal(LIST_RESEARCH_SOURCES, 10);
   assert.match(pipeline, /if \(listPass \? optionsCovered\(kept\.readable\) < LIST_MIN_OPTIONS : coveragePass \? ownerPages\(kept\.readable\) < 4 : kept\.readable\.length < PRIMARY_PASS_BELOW\) \{/);
-  assert.match(pipeline, /listOptions\.length \|\| listFormat \? `Do not research \$\{site\.siteName \?\? site\.domain\} itself\.`/,
-    "P268: a list researches its options even when no list could be read");
+  assert.match(pipeline, /listOptions\.length \|\| listFormat \? `Do not research \$\{site\.siteName \?\? site\.domain\} itself\$\{competitorList\.length/,
+    "P268: a list researches its options even when no list could be read (P271: never the business's competitors)");
 });

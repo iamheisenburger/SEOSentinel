@@ -7,8 +7,13 @@ export const PRIMARY_PASS_BELOW = 3;
 export const MAX_RESEARCH_SOURCES = 5;
 export const PRIMARY_PASS_SEARCHES = 4;
 
+/** P271 (Oct 31 2026): a pass told only "not its competitors" researched them: the first production article under P268 spent
+ * 9 searches on pentra.dev's competitors' pages and kept none (the competitor filter drops them). Each pass names them. */
+const competitorsLine = (competitors?: readonly string[]) =>
+  competitors?.length ? `Do not research or cite the business's competitors (the article never names them): ${competitors.join(", ")}` : "";
+
 export function primarySourcesRequest(args: { label: string; primaryKeyword: string; secondaryKeywords?: string[];
-  targetCountry?: string; siteName: string; avoidHosts: string[] }) {
+  targetCountry?: string; siteName: string; avoidHosts: string[]; competitors?: readonly string[] }) {
   return {
     system: [
       "You research primary sources for a fact-checked article. A first search found mostly vendor blogs and other secondary pages, which cannot be cited.",
@@ -23,6 +28,7 @@ export function primarySourcesRequest(args: { label: string; primaryKeyword: str
       args.targetCountry ? `Readers are in: ${args.targetCountry}` : "",
       args.avoidHosts.length ? `Already found, not usable as evidence (do not cite): ${args.avoidHosts.join(", ")}` : "",
       `Do not research ${args.siteName} itself or its competitors; research the subject for its readers.`,
+      competitorsLine(args.competitors),
     ].filter(Boolean).join("\n"),
   };
 }
@@ -37,7 +43,8 @@ export const LIST_RESEARCH_SOURCES = 10;
 export const LIST_MIN_OPTIONS = 6;
 /** Searches a list's research may run: one or two for the top lists, then one per option's pricing page. */
 export const LIST_RESEARCH_SEARCHES = 8;
-export function optionSourcesRequest(args: { label: string; primaryKeyword: string; options: readonly string[]; targetCountry?: string; productName?: string }) {
+export function optionSourcesRequest(args: { label: string; primaryKeyword: string; options: readonly string[]; targetCountry?: string; productName?: string;
+  competitors?: readonly string[] }) {
   return {
     system: [
       `You research a list article that compares named options for the audience its search names. Name at least ${LIST_MIN_OPTIONS} options built for that audience: the options the current top lists for this search name, not general-purpose tools a list for this audience would skip.`,
@@ -51,6 +58,7 @@ export function optionSourcesRequest(args: { label: string; primaryKeyword: stri
       args.options.length ? `Options the top results name (research each on its own website; add others the top lists for this search name until there are at least ${LIST_MIN_OPTIONS}): ${args.options.join(", ")}`
         : `Find at least ${LIST_MIN_OPTIONS} options the current top lists for this search name, and research each on its own website.`,
       args.productName ? `Do not research ${args.productName}: it is the business this article is for.` : "",
+      competitorsLine(args.competitors),
       args.targetCountry ? `Readers are in: ${args.targetCountry}` : "",
     ].filter(Boolean).join("\n"),
   };
@@ -73,7 +81,7 @@ export const SEARCHER_LED_RESEARCH_SYSTEM = [
   "Then write a short research brief: for each coverage item, the facts its source states with the conditions the source gives (introductory periods, which plan or product, effective dates), citing the page; say which items no source states. Quote only what the sources say; do not add facts of your own.",
 ].join(" ");
 export function coverageSourcesRequest(args: { label: string; primaryKeyword: string; coverage: readonly string[]; targetCountry?: string;
-  avoidHosts: string[] }) {
+  avoidHosts: string[]; competitors?: readonly string[] }) {
   return {
     system: SEARCHER_LED_RESEARCH_SYSTEM,
     userMessage: [
@@ -84,6 +92,7 @@ export function coverageSourcesRequest(args: { label: string; primaryKeyword: st
       ...args.coverage.map((item) => `- ${item}`),
       args.targetCountry ? `Readers are in: ${args.targetCountry}` : "",
       args.avoidHosts.length ? `Already found (find other pages): ${args.avoidHosts.join(", ")}` : "",
+      competitorsLine(args.competitors),
     ].filter(Boolean).join("\n"),
   };
 }
