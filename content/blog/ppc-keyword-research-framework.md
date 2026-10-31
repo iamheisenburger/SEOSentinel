@@ -127,4 +127,4 @@ Many advertisers do, mainly to control the message a searcher sees when they loo
 
 - [Fiverr Keyword Research: A Practical Framework for Finding Terms Buyers Actually Search](/blog/fiverr-keywords-research)
 - [Localized Keyword Research: How to Find the Search Terms Your Market Actually Uses](/blog/localized-keyword-research-2)
-- [Keyword Clustering Strategy: How to Organize Keywords by Search Intent](/blog/keyword-clustering-strategy-organize-by-intent)
+- [Keywords for Research: How to Find Search Terms Worth Writing About](/blog/keywords-for-research-how-to-find-search-terms)
