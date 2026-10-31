@@ -2706,8 +2706,16 @@ export const advance = internalMutation({
         // after one would be missed by design: it lands no earlier than the
         // spacing allows, with its delivery window opening exactly then.
         const paceAt = await catchUpPaceAt(ctx, siteId, rhythm);
+        // P274 (Oct 31 2026): a slot parked ahead of its deadline (its draft failed its checks a day early, held under the
+        // cost rule) keeps its day: the next article is pulled in to just after that slot, never into today. Both owner
+        // sites' Nov 1 slots failed at 17:40-17:57Z Oct 31 and their next articles were pulled in to 19:58Z and 21:42Z
+        // the same evening, a second LeadPilot article that day (1 a day, Arshad's decision) and none on Nov 1.
+        const parkedAhead = (await ctx.db.query("jobs").withIndex("by_site_content_deadline", q => q.eq("siteId", siteId)
+          .gt("contentWork.deadlineAt", now).lt("contentWork.deadlineAt", schedule.nextDeadlineAt)).take(20))
+          .reduce((latest, j) => j.contentWork?.stage === "failed" && !j.contentWork.ownerRequest
+            ? Math.max(latest, j.contentWork.deadlineAt + CONTENT_DELIVERY_WINDOW_MS) : latest, 0);
         nextDeadlineAt = Math.min(schedule.nextDeadlineAt,
-          Math.max(now + Math.min(rhythm, FIRST_ARTICLE_LEAD_MS), paceAt > 0 ? paceAt + CONTENT_DELIVERY_WINDOW_MS : 0));
+          Math.max(now + Math.min(rhythm, FIRST_ARTICLE_LEAD_MS), paceAt > 0 ? paceAt + CONTENT_DELIVERY_WINDOW_MS : 0, parkedAhead));
       }
       if (rhythm !== schedule.intervalMs || nextDeadlineAt !== schedule.nextDeadlineAt) slot = { ...schedule, intervalMs: rhythm, nextDeadlineAt };
     }

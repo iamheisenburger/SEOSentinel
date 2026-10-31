@@ -1811,6 +1811,34 @@ test("P270 a slot one interval and a delivery window away keeps its place; a slo
   f.assertOffline(); g.assertOffline();
 });
 
+// P274 (Oct 31 2026): both owner sites' Nov 1 slots failed their checks a day ahead (held under the cost rule, so parked),
+// and their next articles were pulled in to the same evening: LeadPilot twice in one day, Nov 1 with none.
+test("P274 after a slot is parked a day ahead, the next article lands just after that slot, not today", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:setAutopilotCadence", { siteId: site.id, reviewToken: r.reviewToken, cadencePerWeek: 7 });
+  await f.invoke("contentWork:addResearchedTopics", { siteId: site.id, keywords: [
+    { keyword: `${slcBusinesses[0].keywords[0]} pricing guide`, searchVolume: 480, difficulty: 14, difficultyMeasured: true },
+    { keyword: `${slcBusinesses[0].keywords[1]} setup checklist`, searchVolume: 320, difficulty: 12, difficultyMeasured: true }] });
+  f.setIdentity(null);
+  const hour = 3_600_000, parked = f.now() + 22 * hour;
+  f.get(site.id)!.contentSchedule.nextDeadlineAt = parked;
+  await f.invoke("contentWork:advance", { siteId: site.id });
+  const first = f.tables.jobs.find(j => j.contentWork && j.siteId === site.id)!;
+  assert.equal(first.contentWork.deadlineAt, parked);
+  // Its draft failed its checks a day ahead: held, never regenerated, and the slot parked.
+  first.status = "failed"; Object.assign(first.contentWork, { stage: "failed", failure: "bounded_content_quality_exhausted" });
+  f.get(site.id)!.contentSchedule.nextDeadlineAt = parked + 24 * hour;
+  await f.invoke("contentWork:advance", { siteId: site.id });
+  const next = f.get(site.id)!.contentSchedule.nextDeadlineAt;
+  assert.ok(next > parked && next <= parked + 10 * 60_000, `the next article keeps the parked slot's day (${((next - f.now()) / hour).toFixed(2)} h away)`);
+  f.assertOffline();
+});
+
 test("SLC66 an Autopilot site goes live with its first reviewed article, even when the plan allows only one", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
