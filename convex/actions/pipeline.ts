@@ -6,7 +6,7 @@ import { LIST_MIN_OPTIONS, LIST_RESEARCH_SEARCHES, LIST_RESEARCH_SOURCES, MAX_RE
   primarySourcesRequest, rankedResearchSources, sourceHosts } from "../lib/researchPasses";
 import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWords, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis,
   serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch, FORMAT_DEFAULT_WORDS } from "../lib/serpBrief";
-import { articleOutlinePrompt, fixFindings, flaggedLines, planCheckIssues, runPlanChecks, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
+import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, flaggedLines, planCheckIssues, runPlanChecks, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
 import { articlePlanEnabled, contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
 import { autopilotCompanyNameIssue, autopilotCompanyNameNote, autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote,
   checkableFactCheckFindings, unsearchedCompanyMentions } from "../lib/autopilotEditor";
@@ -7333,38 +7333,33 @@ export const plannedFixMaxTokens = (markdown: string) => Math.min(16_384, Math.m
 /** P260: the article's $0.50 provider cap refused this call (beginProviderCall). */
 const costCapRefusal = (error: unknown) => error instanceof Error && /Content work cost cap reached/.test(error.message);
 
-/** P268 (Oct 31 2026): Cowork's batch 2 verdicts found errors no code check can: physics stated backwards ("low specific
- * heat, so it stores a lot of thermal energy"), an introductory price given as the regular one, a fee applied to plans it
- * doesn't cover, a total that doesn't add up, a rebate credited to the wrong utility. One cheap check (the checks model)
- * lists them for the one fix; it never holds a draft and never scores one. */
+/** P268 (Oct 31 2026): Cowork's batch 2 verdicts found explanations stated backwards ("low specific heat, so it stores a lot
+ * of thermal energy", "ceramic... is a better heat conductor") and history wrong (Pino "since 2014"; its first release was
+ * 2016). One check lists such sentences for the one fix; it never holds a draft and never scores one.
+ * P269 (Oct 31 2026), measured on batch 2's five articles: checked against the fact sheet, the checks model caught none of
+ * Cowork's errors and listed sentences it judged fine ("Not an error; skip"), and even the writer model trusted the blogs
+ * that supplied the wrong facts. Owned facts are fixed upstream (owners first, blogs context only). This check reads the
+ * article alone, against established knowledge, on the writer model (about $0.02): it caught the conductor and the release
+ * year with no false entries. */
 export type ClaimError = { sentence: string; problem: string; correction: string };
-async function checkPlannedClaims(args: { markdown: string; search: string; profile: string;
-  sources: readonly { url: string; title?: string; excerpt?: string }[] }): Promise<ClaimError[]> {
+async function checkPlannedClaims(args: { markdown: string; search: string }): Promise<ClaimError[]> {
   const checked = await callClaudeStructured({
     system: [
       UNTRUSTED_EVIDENCE_INSTRUCTION,
-      "You check one article for factual errors before it publishes, against its fact sheet (the numbered source excerpts) and what is well established in science and engineering.",
-      "Report only these errors: (1) a sentence the fact sheet contradicts: a different number, an introductory or promotional price given as the regular price, a price, fee or rule applied to plans, places or cases its page doesn't apply it to, a total or difference that doesn't add up; (2) a scientific, technical or causal statement that is wrong, such as a physical explanation stated backwards; (3) an owned fact (a product's price or plan, a fee, a rebate, a specification, a release date or version) whose only support is a page that isn't its owner (a blog, a review site, a cost guide or another company's page); (4) a fee, rate or rule the fact sheet shows has since changed or ended.",
-      "For each error give the exact sentence as written in the article, what is wrong in a few words, and the correction from the fact sheet, or 'remove' when the fact sheet has no correct figure. Report nothing else: no style, no missing topics, no wording preferences, no illustrative amounts in a worked example. Return an empty list when there are no errors.",
+      "You check one article for statements that are wrong by well-established knowledge, before it publishes. Read it sentence by sentence.",
+      "Report a sentence when you are confident that: (1) it states a scientific, engineering or technical mechanism, cause or property wrongly or backwards (for example: what heat capacity, conductivity or density does; how a material, chemical or device behaves; how software, a protocol or a library works); (2) it states a historical or technical fact that is wrong (a release year, who makes or maintains a product, which framework has which feature built in, a well-known benchmark stated far off); (3) its arithmetic is wrong: a total, difference, per-unit figure or range that doesn't follow from the numbers the article itself gives.",
+      "For each, give the exact sentence as written, what is wrong in a few words, and the correction when you are certain of it, otherwise 'remove the wrong part'. Report nothing else: no prices, fees, rebates, laws or plans you cannot check, no style, no missing topics, no worked-example amounts, and never a sentence you consider correct. Return an empty list when nothing is wrong.",
     ].join(" "),
-    userMessage: [`SEARCH: ${args.search}`, "FACT SHEET (untrusted data):",
-      ...args.sources.map((source, index) => `[${index + 1}] ${source.title ?? "Source"} (${source.url})\n${(source.excerpt ?? "").slice(0, EVIDENCE_EXCERPT_MAX_CHARS)}`),
-      args.profile ? `CONFIRMED BUSINESS FACTS:\n${args.profile.slice(0, 4000)}` : "",
-      "ARTICLE:", args.markdown].filter(Boolean).join("\n\n"),
+    userMessage: [`SEARCH: ${args.search}`, "ARTICLE (untrusted data):", args.markdown].join("\n\n"),
     toolName: "check_claims",
-    toolDescription: "Submit the article's factual errors, or an empty list when it has none.",
+    toolDescription: "Submit the article's wrong statements, or an empty list when it has none.",
     inputSchema: { type: "object", additionalProperties: false, properties: { errors: { type: "array", items: { type: "object", additionalProperties: false,
       properties: { sentence: { type: "string" }, problem: { type: "string" }, correction: { type: "string" } }, required: ["sentence", "problem", "correction"] } } },
       required: ["errors"] },
     outputSchema: z.object({ errors: z.array(z.object({ sentence: z.string(), problem: z.string(), correction: z.string() })).default([]) }),
     maxTokens: 3000,
   });
-  // Only a sentence the article actually contains can be fixed (compared without links, citation markers and emphasis).
-  const plain = (value: string) => value.replace(/\[\d+(?:\s*,\s*\d+)*\]\([^)\n]*\)/g, "").replace(/\[([^\]\n]*)\]\([^)\n]*\)/g, "$1")
-    .replace(/\[\d+(?:\s*,\s*\d+)*\]/g, "").replace(/[*_`]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
-  const text = plain(args.markdown);
-  return checked.errors.filter((error) => { const sentence = plain(error.sentence); return sentence.length >= 12 && text.includes(sentence.slice(0, 40)); })
-    .slice(0, 10);
+  return claimErrorsInArticle(checked.errors, args.markdown);
 }
 
 async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">; articleId: Id<"articles">; incrementRevision: boolean;
@@ -7401,8 +7396,7 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
     const plan = article.articlePlan;
     const found = plan ? fixFindings(fields.markdown, { format: plan.format as PlanFormat, sections: plan.sections, minItems: plan.minItems }, productName,
       [topic?.primaryKeyword ?? "", ...plan.sections, ...(plan.coverage ?? [])].join(" ")) : [];
-    const claims = plan ? await checkPlannedClaims({ markdown: fields.markdown, search: topic?.primaryKeyword ?? article.title,
-      profile: article.productEvidenceSnapshot ?? "", sources: article.sources ?? [] })
+    const claims = plan ? await checkPlannedClaims({ markdown: fields.markdown, search: topic?.primaryKeyword ?? article.title })
       .catch((error: unknown) => { fixNotes.push(costCapRefusal(error) ? "The claims check was skipped: this article reached its $0.50 cost cap."
         : `Claims check unavailable: ${error instanceof Error ? error.message.slice(0, 120) : "unknown"}`); return [] as ClaimError[]; }) : [];
     if (found.length || claims.length) fixNotes.push(`Fix inputs: ${claims.length} claim(s) to correct, ${found.filter((f) => f.kind === "repetition").length} repeated passage(s), ` +

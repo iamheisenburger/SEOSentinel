@@ -37,7 +37,8 @@ export const contentProviderAutopilotDraft = () => {
 };
 
 /** Tools that write article prose (first draft and rewrites). */
-const WRITER_TOOLS = new Set(["submit_article", "remediate_final_article"]);
+// P269: the claims check runs on the writer model (the checks model missed every error Cowork found in batch 2).
+const WRITER_TOOLS = new Set(["submit_article", "remediate_final_article", "check_claims"]);
 
 /** No SDK retry, model fallback, repair ladder or optional paid service. The
  * same durable job owns every bounded call and its ambiguous-response receipt.

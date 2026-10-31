@@ -148,8 +148,8 @@ test("P268 the one fix runs on the first review with the claims check and the co
   assert.match(pipeline, /const claims = plan \? await checkPlannedClaims\(/);
   assert.match(pipeline, /\.\.\.claims\.map\(\(claim\) => `Correct this sentence \(/);
   assert.match(pipeline, /\.\.\.found\.map\(\(finding\) => finding\.line \? `\$\{finding\.detail\}: «\$\{finding\.line\}»` : `\$\{finding\.detail\}\.`\),/);
-  assert.match(pipeline, /an introductory or promotional price given as the regular price/);
-  assert.match(pipeline, /a scientific, technical or causal statement that is wrong, such as a physical explanation stated backwards/);
+  // P269: the check reads the article alone, against established knowledge (tests/p269-claims-check.test.ts).
+  assert.match(pipeline, /it states a scientific, engineering or technical mechanism, cause or property wrongly or backwards/);
   assert.match(readFileSync("convex/contentWork.ts", "utf8"), /:review:check_claims\$\/;/, "the claims check is optional under the $0.50 cap");
   // Never a gate: the new findings are not plan checks.
   assert.doesNotMatch(readFileSync("convex/lib/articlePlanChecks.ts", "utf8").slice(0, readFileSync("convex/lib/articlePlanChecks.ts", "utf8").indexOf("export function runPlanChecks")),

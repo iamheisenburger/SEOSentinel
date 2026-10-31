@@ -260,7 +260,7 @@ export function repeatedPassages(markdown: string, n = 6, topic = ""): { phrase:
 }
 
 /** A reader sent elsewhere for the answer, the way Cowork marked it ("check the manufacturer", "ask your plumber"). */
-const DEFLECTION = /\b(?:check|confirm|verify|ask|consult|contact|call|talk to|speak (?:to|with)|refer to|look up|see)\b[^.!?]{0,50}?\b(?:the|your|a|an|each|local|their)\s+(?:\w+\s+){0,2}?(?:manufacturer|maker|brand|plumber|installer|contractor|electrician|technician|provider|vendor|retailer|dealer|utility|city|county|municipality|accountant|bookkeeper|tax (?:pro|professional|adviser|advisor)|professional|expert|documentation|docs|official (?:site|website|page)|product page|pricing page|(?:care |product )?label|packaging)(?:'s|s|’s)?\b/i;
+const DEFLECTION = /(?<![-\w])(?:check|confirm|verify|ask|consult|contact|call|talk to|speak (?:to|with)|refer to|look up|see)\b[^.!?]{0,50}?\b(?:the|your|a|an|each|local|their)\s+(?:\w+\s+){0,2}?(?:manufacturer|maker|brand|plumber|installer|contractor|electrician|technician|provider|vendor|retailer|dealer|utility|city|county|municipality|accountant|bookkeeper|tax (?:pro|professional|adviser|advisor)|professional|expert|documentation|docs|official (?:site|website|page)|product page|pricing page|(?:care |product )?label|packaging)(?:'s|s|’s)?\b/i;
 export function deflections(markdown: string): string[] {
   return sentences(prose(markdown)).filter((sentence) => DEFLECTION.test(sentence));
 }
@@ -281,6 +281,21 @@ export function listOptionCount(markdown: string, productName: string): number {
   const body = markdown.split(SOURCES_HEADING)[0];
   const own = normalize(productName).replace(/[^a-z0-9]/g, "");
   return [...body.matchAll(/^###\s+(.+)$/gm)].filter((m) => !own || !normalize(m[1]).replace(/[^a-z0-9]/g, "").includes(own)).length;
+}
+
+/** P269 (Oct 31 2026): a claims-check entry the one fix can act on: a sentence the article contains (compared without links,
+ * citation markers and emphasis) that the check says is wrong. Entries the check itself calls fine ("Not an error; skip",
+ * "so this is fine") are dropped: measured on batch 2, the checks model listed those, and the fix would have rewritten
+ * sentences it had judged correct. */
+export function claimErrorsInArticle<T extends { sentence: string; problem: string }>(errors: readonly T[], markdown: string): T[] {
+  const plain = (value: string) => value.replace(/\[\d+(?:\s*,\s*\d+)*\]\([^)\n]*\)/g, "").replace(/\[([^\]\n]*)\]\([^)\n]*\)/g, "$1")
+    .replace(/\[\d+(?:\s*,\s*\d+)*\]/g, "").replace(/[*_`]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+  const text = plain(markdown);
+  const notAnError = /\b(?:not an error|no error|not wrong|is (?:fine|correct|accurate)|so this is fine|nothing wrong|skip|omit)\b/i;
+  return errors.filter((error) => {
+    const sentence = plain(error.sentence);
+    return sentence.length >= 12 && text.includes(sentence.slice(0, 40)) && !notAnError.test(error.problem);
+  }).slice(0, 10);
 }
 
 export function fixFindings(markdown: string, outline: ArticleOutline, productName: string, topic = ""): FixFinding[] {
