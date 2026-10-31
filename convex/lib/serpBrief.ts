@@ -99,7 +99,9 @@ export function planFormat(brief: Pick<SerpBrief, "results" | "pages">, asksForP
   if (asksForProducts) return "list";
   // A search naming a programming tool wants working code before a list of others (live trial: "best logging framework" and
   // "Best practices for writing app logs with Pino" made a Pino tutorial a list).
-  if (share(pages.filter((p) => p.codeBlocks > 0).length) || (technical && pages.filter((p) => p.codeBlocks > 0).length >= Math.min(1, pages.length))) return "tutorial";
+  // P264: with fewer than 3 pages read (forums, videos and redirect links often refuse readers), the pages can't say a
+  // programming search wants no code.
+  if (share(pages.filter((p) => p.codeBlocks > 0).length) || (technical && (pages.length < 3 || pages.some((p) => p.codeBlocks > 0)))) return "tutorial";
   if (share(titles.filter((t) => /^\d{1,3}\+?\s|\b(?:best|top)\b(?! practices?\b)|\b\d{1,3}\+?\s+(?:ways|tips|tools|examples|templates|ideas|apps|options)\b/i.test(t)).length)) return "list";
   if (/^how (?:to|do i|do you|can i)\b/i.test(search.trim()) || share(titles.filter((t) => /\bhow to\b|\bstep[- ]by[- ]step\b|\btutorial\b/i.test(t)).length)) return "how-to";
   return "guide";
@@ -131,11 +133,16 @@ export function listedOptions(brief: Pick<SerpBrief, "pages">, limit = 10): stri
   return [...counts.values()].sort((a, b) => b.pages - a.pages || a.first - b.first).slice(0, limit).map((option) => option.name);
 }
 
-/** The top results' median length in visible words (pages with fewer than 300 words are not articles). */
+/** The top results' median length in visible words (pages with fewer than 300 words are not articles): the first three
+ * articles by rank (P264: Cowork's bar is the median of the top 3). */
 export function medianWords(brief: Pick<SerpBrief, "pages">): number | undefined {
-  const words = (brief.pages ?? []).map((p) => p.words).filter((w) => w >= 300).sort((a, b) => a - b);
-  return words.length ? words[Math.floor((words.length - 1) / 2)] : undefined;
+  const words = (brief.pages ?? []).map((p) => p.words).filter((w) => w >= 300).slice(0, 3).sort((a, b) => a - b);
+  // Of two, the longer: the how-to's 1,662-word target missed Brex's 3,567-word page Cowork compared it with.
+  return words.length ? words[Math.floor(words.length / 2)] : undefined;
 }
+
+/** P264: the length a format needs when no top result could be read (forums, videos and redirect links refuse readers). */
+export const FORMAT_DEFAULT_WORDS = { tutorial: 2500, list: 2400, comparison: 2200, "how-to": 2000, guide: 1800 } as const;
 
 /** The brief for the outline step: each result's title and its own headings. */
 export function serpPagesPrompt(brief: SerpBrief): string {

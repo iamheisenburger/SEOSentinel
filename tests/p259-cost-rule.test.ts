@@ -27,7 +27,8 @@ test("P259 research gathers 3 to 5 real sources before writing", () => {
   assert.equal(PRIMARY_PASS_BELOW, 3);
   assert.equal(MAX_RESEARCH_SOURCES, 5);
   // P262: a "best X" list keeps one source an option, up to 8.
-  assert.match(pipeline, /researchSources = readable\.slice\(0, listOptions\.length \? LIST_RESEARCH_SOURCES : MAX_RESEARCH_SOURCES\);/);
+  // P264: a planned article keeps up to 6 (lib/researchPasses PLANNED_RESEARCH_SOURCES).
+  assert.match(pipeline, /researchSources = readable\.slice\(0, listOptions\.length \? LIST_RESEARCH_SOURCES : planned \? PLANNED_RESEARCH_SOURCES : MAX_RESEARCH_SOURCES\);/);
 });
 
 test("P259 the one check counts made-up numbers, product facts and invented quotes or people", () => {

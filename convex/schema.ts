@@ -1139,7 +1139,9 @@ export default defineSchema({
     articlePlan: v.optional(v.object({ version: v.number(), format: v.string(), sections: v.array(v.string()),
       minItems: v.optional(v.number()), targetWords: v.optional(v.number()),
       /** P261: the top results' titles, headings and questions: names they use are part of the subject. */
-      context: v.optional(v.string()) })),
+      context: v.optional(v.string()),
+      /** P264: what the top results give a searcher, which the article must give too. */
+      coverage: v.optional(v.array(v.string())) })),
     qualityPlan: v.optional(v.string()),
     qualityRecoveryVersion: v.optional(v.number()),
     qualityRecoveryAttemptVersion: v.optional(v.number()),

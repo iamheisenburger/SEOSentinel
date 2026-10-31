@@ -8,7 +8,7 @@ import { internal } from "../_generated/api";
 import { sha256Hex } from "../lib/publicationArtifact";
 import { isProviderCreditRefusal, isProviderRequestRefusal, validProviderRequestId } from "../lib/contentProviderRefusal";
 import { auditResultHash, clarifiableContentAudit, contradictoryContentAudit, semanticAuditPrompt, SEMANTIC_AUDIT_SUFFIX } from "../lib/contentAudit";
-import { classifyEvidenceSource, firstPartyProductPage } from "../lib/sourceQuality";
+import { classifyEvidenceSource, firstPartyProductPage, reputableSecondarySource } from "../lib/sourceQuality";
 import { excerptLimit, pageExcerpt } from "../lib/evidenceExcerpt";
 import { safeFetchPublicText } from "../lib/safeOutbound";
 import { promptRates } from "../lib/promptRates";
@@ -154,7 +154,9 @@ export async function contentResearchCall(args: { system: string; userMessage: s
   /** Products a comparison search names: their own pages are fetched as evidence too (P160). */
   firstPartyProducts?: string[];
   /** P256: the second, primary-sources-only pass has its own receipt (its key keeps ":web_research:"). */
-  pass?: "primary" }): Promise<ContentResearchResult> {
+  pass?: "primary";
+  /** P264: reputable secondary pages are evidence too (the fixed plan), so their passages are read as well. */
+  reputableSecondary?: boolean }): Promise<ContentResearchResult> {
   const s = scope.getStore();
   if (!s?.job.contentWork) throw new Error("Missing content provider scope");
   const cw = s.job.contentWork, p = cw.pricing;
@@ -203,7 +205,8 @@ export async function contentResearchCall(args: { system: string; userMessage: s
     // The numbers go on the draft's research note, so a refusal says which bound it hit.
     throw new Error(`Provider usage receipt missing or over bound (input ${input}/${inputBound}, output ${output}/${outputBound}, searches ${searches}/${maxUses})`);
   }
-  const result = await withPreservedExcerpts(researchFromResponse(response.content as unknown[], searches), undefined, args.firstPartyProducts);
+  const result = await withPreservedExcerpts(researchFromResponse(response.content as unknown[], searches), undefined, args.firstPartyProducts,
+    args.reputableSecondary);
   await s.ctx.runMutation(internal.contentWork.completeProviderCall, { jobId: s.job._id, workerToken: s.workerToken, key,
     actualMicroUsd: Math.ceil(input * promptRates(p, input).input + output * promptRates(p, input).output) + searches * WEB_SEARCH_MICRO_USD_PER_REQUEST, result });
   return result;
@@ -244,14 +247,15 @@ const plainPageText = (html: string) => html.replace(/<script[\s\S]*?<\/script>/
  * Only strict-eligible sources are fetched; others keep just their quotes. */
 export async function withPreservedExcerpts(result: ContentResearchResult,
   fetchText: (url: string) => Promise<{ url: string; text: string }> = url => safeFetchPublicText(url, { sameHostRedirects: true }),
-  firstPartyProducts: readonly string[] = []): Promise<ContentResearchResult> {
+  firstPartyProducts: readonly string[] = [], reputableSecondary = false): Promise<ContentResearchResult> {
   const sources = [];
   for (const source of result.sources) {
     let excerpt = source.excerpts.join(" … ");
     // P249: official documentation keeps a wider passage around each cited quote (pageExcerpt).
     const quality = classifyEvidenceSource(source.url), firstParty = firstPartyProductPage(source.url, firstPartyProducts);
     const docs = quality.tier === "official-doc" || firstParty;
-    if ((quality.strictEligible || firstParty) && sources.filter(s => s.excerpt !== s.excerpts.join(" … ")).length < 6) {
+    const secondary = reputableSecondary && reputableSecondarySource(source.url);
+    if ((quality.strictEligible || firstParty || secondary) && sources.filter(s => s.excerpt !== s.excerpts.join(" … ")).length < (reputableSecondary ? 8 : 6)) {
       try {
         excerpt = pageExcerpt(plainPageText((await fetchText(source.url)).text), source.excerpts, docs) ?? excerpt;
       } catch { /* Unreachable page: keep only the API-attributed quotes. */ }

@@ -3,7 +3,7 @@ import { publicationArtifactHash, sha256Hex } from "./publicationArtifact.ts";
 import { markdownCitationMarkers, removeUnverifiedMarkdownCitations } from "./markdownCitations.ts";
 import { deleteSentencesCoherently } from "./coherentDeletion.ts";
 import { SOURCES_HEADING } from "./sourcesHeading.ts";
-import { numbersOutsideFactSheet, planCheckIssues, runPlanChecks, type PlanCheckFailure, type PlanFormat } from "./articlePlanChecks.ts";
+import { exampleSections, numbersOutsideFactSheet, planCheckIssues, runPlanChecks, type PlanCheckFailure, type PlanFormat } from "./articlePlanChecks.ts";
 
 export type PublicationQualityMode = "standard" | "strict";
 
@@ -166,7 +166,7 @@ export type PublicationArticle = {
   ownerQualityWaiver?: OwnerQualityWaiver;
   // P260: Arshad's fixed article plan (ops/ARTICLE-PLAN-V1.md).
   qualityPlan?: string;
-  articlePlan?: { format: string; sections: string[]; minItems?: number; context?: string };
+  articlePlan?: { format: string; sections: string[]; minItems?: number; context?: string; targetWords?: number };
   researchEvidenceSummary?: string;
   metaKeywords?: string[];
 };
@@ -1239,6 +1239,12 @@ const INCOMPLETE_TRANSITIVE_META_END_PATTERN =
 export const STRICT_PUBLICATION_MIN_WORDS = 1000;
 /** The depth the writer is asked for starts from this (plus a reserve). */
 export const ARTICLE_DEPTH_BASE_WORDS = 1200;
+
+/** P264 (Oct 31 2026): a planned article matches the top results' depth (Cowork: tutorials ran 1,600 words against
+ * competitors' 3,000-5,000), so its ceiling follows the plan's target: 30% over it, at most 7,000 words. */
+export function plannedWordCeiling(articleType: string | undefined, targetWords: number | undefined): number {
+  return Math.max(articleWordCeiling(articleType), Math.min(7000, Math.round((targetWords ?? 0) * 1.3)));
+}
 
 export function articleWordCeiling(articleType?: string): number {
   switch (articleType) {
@@ -2422,8 +2428,11 @@ export function evaluatePublicationQuality(
   const paragraphsWithClaims = quantifiedParagraphs(markdown);
   const paragraphsWithOutcomes = quantifiedOutcomeParagraphs(markdown);
   // P260: in a planned article, a number the confirmed profile states needs no citation (its plan check verified it).
+  // P264: and a worked example's illustrative amounts (a section headed as an example) need none.
+  const examples = article.qualityPlan === "fixed_v1" ? exampleSections(markdown) : [];
   const uncitedClaims = uncitedEvidenceRequiredParagraphs(markdown, article).filter((paragraph) => article.qualityPlan !== "fixed_v1" ||
-    numbersOutsideFactSheet(paragraph, { sources: [], profile: article.productEvidenceSnapshot ?? "", productName: "" }).length > 0);
+    (!examples.some((body) => body.includes(paragraph.trim())) &&
+      numbersOutsideFactSheet(paragraph, { sources: [], profile: article.productEvidenceSnapshot ?? "", productName: "" }).length > 0));
   if (uncitedClaims.length > 0) {
     const message = `${uncitedClaims.length} quantified outcome or operational claim(s) lack an inline citation.`;
     if (mode === "strict") issues.push(message);
@@ -2533,7 +2542,7 @@ export function evaluatePublicationQuality(
         "Strict publication requires a completed claim-to-evidence audit.",
       );
     }
-    const maxWords = articleWordCeiling(article.articleType);
+    const maxWords = planned ? plannedWordCeiling(article.articleType, article.articlePlan?.targetWords) : articleWordCeiling(article.articleType);
     if (measuredWordCount > maxWords) {
       issues.push(
         `Article is overlong for its format (${measuredWordCount} words; review ceiling ${maxWords}).`,

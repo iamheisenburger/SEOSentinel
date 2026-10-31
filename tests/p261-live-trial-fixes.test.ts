@@ -72,6 +72,6 @@ test("P262 a list's second research pass looks up its options' own pages, never 
   assert.match(request.system, /For each option, use web search to find its own official pages: features, plans and pricing/);
   assert.match(request.userMessage, /Options to research, each on its own website: Mindbody, Momence, Glofox/);
   assert.equal(LIST_RESEARCH_SOURCES, 8);
-  assert.match(pipeline, /if \(listOptions\.length \? optionsCovered\(kept\.readable\) < 3 : kept\.readable\.length < PRIMARY_PASS_BELOW\) \{/);
+  assert.match(pipeline, /if \(listOptions\.length \? optionsCovered\(kept\.readable\) < 3 : coveragePass \? kept\.readable\.length < 4 : kept\.readable\.length < PRIMARY_PASS_BELOW\) \{/);
   assert.match(pipeline, /listOptions\.length \? `Do not research \$\{site\.siteName \?\? site\.domain\} itself\.`/);
 });

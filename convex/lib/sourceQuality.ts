@@ -56,6 +56,20 @@ const LOW_AUTHORITY_HOSTS = [
   "youtube.com",
 ];
 
+/** P264 (Oct 31 2026): never evidence, even for the facts searchers need: forums, social media, marketplaces and
+ * user-review directories. */
+const SEARCHER_EXCLUDED_HOSTS = [...LOW_AUTHORITY_HOSTS, "facebook.com", "instagram.com", "tiktok.com", "pinterest.com", "quora.com",
+  "yelp.com", "tripadvisor.com", "nextdoor.com", "stackoverflow.com", "stackexchange.com", "amazon.com", "ebay.com", "fiverr.com", "upwork.com"];
+
+/** P264: a reputable secondary page (an established cost guide, a product's own pages, a publication) may support the
+ * facts searchers need where no primary source states them: Cowork judged the plan's first 5 articles thin because only
+ * government and documentation pages were kept. Forums, social media and marketplaces never are. */
+export function reputableSecondarySource(url: string): boolean {
+  const quality = classifyEvidenceSource(url);
+  if (quality.tier !== "secondary" || !quality.url) return false;
+  return !matchesAnyHost(new URL(quality.url).hostname.toLowerCase(), SEARCHER_EXCLUDED_HOSTS);
+}
+
 function matchesHost(host: string, expected: string): boolean {
   return host === expected || host.endsWith(`.${expected}`);
 }
@@ -279,7 +293,9 @@ export function classifyEvidenceSource(value: string): EvidenceSourceQuality {
   };
 }
 
-export function strictEvidenceSources<T extends { url: string }>(sources: T[], options: { firstPartyProducts?: readonly string[] } = {}): {
+export function strictEvidenceSources<T extends { url: string }>(sources: T[], options: { firstPartyProducts?: readonly string[];
+  /** P264: keep reputable secondary pages too (the fixed plan's searcher-led research). */
+  reputableSecondary?: boolean } = {}): {
   accepted: T[];
   rejected: Array<{ source: T; reason: string }>;
 } {
@@ -293,6 +309,7 @@ export function strictEvidenceSources<T extends { url: string }>(sources: T[], o
     if (!quality.strictEligible && quality.url && firstPartyProductPage(source.url, options.firstPartyProducts ?? [])) {
       quality.strictEligible = true;
     }
+    if (!quality.strictEligible && options.reputableSecondary && reputableSecondarySource(source.url)) quality.strictEligible = true;
     if (!quality.strictEligible || !quality.url) {
       rejected.push({ source, reason: quality.reason });
       continue;

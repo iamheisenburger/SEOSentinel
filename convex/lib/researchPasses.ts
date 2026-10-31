@@ -47,6 +47,34 @@ export function optionSourcesRequest(args: { label: string; primaryKeyword: stri
   };
 }
 
+/** P264 (Oct 31 2026): the fixed plan keeps up to 6 sources (a list 8), one each for the facts its coverage needs. */
+export const PLANNED_RESEARCH_SOURCES = 6;
+/** P264: the fixed plan's research, searcher-led. The plan lists what the top results give a searcher (its coverage), and
+ * research finds a reputable source for each item: official where it exists, otherwise the reputable page where that
+ * fact lives. Cowork judged the first 5 planned articles 0 of 5, "accurate, cautious and thin", because only government
+ * and documentation pages were kept: no prices, no named tools, no runnable code, no rebates. */
+export const SEARCHER_LED_RESEARCH_SYSTEM = [
+  "You research sources for an article that must give a searcher everything the current top results give them. For each item in the coverage list, use web search to find a reputable page that states it.",
+  "Use government, academic, standards and official documentation pages where they state it; otherwise use the reputable page where that fact lives: an established cost guide (for example Angi or HomeGuide) for local prices, a product's own pricing, features or documentation pages for that product, a utility's, city's or manufacturer's page for rebates, permits and specifications, an established publication for comparisons.",
+  "When the topic is about using a specific software product, framework or platform, cite its official documentation for the exact APIs, options, commands and file names.",
+  "Avoid forums, social media, marketplaces, content farms, AI-written listicles, coupon or affiliate pages and anonymous blogs. For prices, laws and rules, prefer pages from the last 12 months, and check that a law or rule is still in force (court rulings, repeals, effective dates).",
+  "Then write a short research brief: for each coverage item, the facts its source states, citing the page; say which items no source states. Quote only what the sources say; do not add facts of your own.",
+].join(" ");
+export function coverageSourcesRequest(args: { label: string; primaryKeyword: string; coverage: readonly string[]; targetCountry?: string;
+  avoidHosts: string[] }) {
+  return {
+    system: SEARCHER_LED_RESEARCH_SYSTEM,
+    userMessage: [
+      `Article topic: ${args.label}`,
+      `Primary search: ${args.primaryKeyword}`,
+      `COVERAGE still without a source (find one for each item you can):`,
+      ...args.coverage.map((item) => `- ${item}`),
+      args.targetCountry ? `Readers are in: ${args.targetCountry}` : "",
+      args.avoidHosts.length ? `Already found (find other pages): ${args.avoidHosts.join(", ")}` : "",
+    ].filter(Boolean).join("\n"),
+  };
+}
+
 /** Distinct host names (without "www."), in first-seen order. */
 export function sourceHosts(urls: readonly string[], limit = 12): string[] {
   const hosts: string[] = [];

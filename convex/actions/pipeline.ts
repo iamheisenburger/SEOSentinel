@@ -1,10 +1,10 @@
 "use node";
 import { assertNotMidContentSetup } from "../lib/contentSetupPath";
 import { EVIDENCE_EXCERPT_MAX_CHARS } from "../lib/evidenceExcerpt";
-import { LIST_RESEARCH_SOURCES, MAX_RESEARCH_SOURCES, PRIMARY_PASS_BELOW, PRIMARY_PASS_SEARCHES, optionSourcesRequest, primarySourcesRequest,
-  sourceHosts } from "../lib/researchPasses";
+import { LIST_RESEARCH_SOURCES, MAX_RESEARCH_SOURCES, PLANNED_RESEARCH_SOURCES, PRIMARY_PASS_BELOW, PRIMARY_PASS_SEARCHES, SEARCHER_LED_RESEARCH_SYSTEM,
+  coverageSourcesRequest, optionSourcesRequest, primarySourcesRequest, sourceHosts } from "../lib/researchPasses";
 import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWords, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis,
-  serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch } from "../lib/serpBrief";
+  serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch, FORMAT_DEFAULT_WORDS } from "../lib/serpBrief";
 import { articleOutlinePrompt, flaggedLines, planCheckIssues, runPlanChecks, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
 import { articlePlanEnabled, contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
 import { autopilotCompanyNameIssue, autopilotCompanyNameNote, autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote,
@@ -80,6 +80,7 @@ import {
   validateClaimEvidenceLedger,
   readerVisibleIssues,
   ownerWaivableIssue,
+  plannedWordCeiling,
 } from "../lib/articleQuality";
 import { finalAuditRequest, remediationRequest, UNTRUSTED_EVIDENCE_INSTRUCTION } from "../lib/finalArticleReview";
 import { normalizeArticleHeadings } from "../lib/markdownPublishing";
@@ -180,6 +181,7 @@ import {
   siteCanonicalDomainRevision,
 } from "../lib/siteDomainBinding";
 import { spliceRefreshSection } from "../lib/contentSelection";
+import { withSourcesSection } from "../lib/sourcesHeading";
 import {
   citedCompanyName,
   firstPartyProductPage,
@@ -4473,6 +4475,74 @@ async function handleArticle(
     requestedWords: options?.targetWords,
   });
 
+  // ── Step 0b: The fixed article plan's outline (P260, ops/ARTICLE-PLAN-V1.md) ──
+  // Arshad's order (Oct 30 2026): read Google's top 5 results, cover every subtopic they share plus one useful thing they
+  // don't, in the format they use; write once; check with code. The format and length come from the pages, in code; one
+  // cheap structured call proposes the sections from the results' own headings.
+  // P264 (Oct 31 2026), searcher-led: Cowork judged the plan's first 5 articles 0 of 5 ("accurate, cautious and thin":
+  // no prices, no named tools, no runnable code, no rebates). The outline now comes first and lists what the top results
+  // give a searcher (its coverage); research then finds a source for each item.
+  let articlePlan: { version: number; format: PlanFormat; sections: string[]; minItems?: number; targetWords?: number; context?: string;
+    coverage?: string[] } | undefined;
+  const outlineCovers = new Map<string, string>();
+  if (topic && !selectedWork && contentProviderActive() && articlePlanEnabled()) {
+    const asksForProducts = searchAsksForProducts(topic.primaryKeyword);
+    const technical = technicalSearch(topic.primaryKeyword);
+    const format: PlanFormat = planFormat(serpBrief ?? { results: [], pages: [] }, asksForProducts, technical, topic.primaryKeyword);
+    const median = serpBrief ? medianWords(serpBrief) : undefined;
+    // P264: the top results' depth, not the type's usual ceiling (lib/articleQuality plannedWordCeiling).
+    const targetWords = Math.max(minimumWords, Math.min(7000, median ?? FORMAT_DEFAULT_WORDS[format]));
+    let sections: string[] = [], items: number | undefined, coverage: string[] = [];
+    try {
+      const planned = await callClaudeStructured({
+        system: [
+          UNTRUSTED_EVIDENCE_INSTRUCTION,
+          "You plan one article that must be at least as useful as the current top Google results for its search: plan what a searcher needs, not what is easy to source. Research runs after this plan and looks for a source for each item you list.",
+          "From the results' own headings, list the sections all or most of them cover (merge sections that cover the same subject), in the order a reader needs them, plus exactly one useful section none of them covers that this business's readers would value. When the results show People Also Ask questions, the last section is 'Frequently asked questions'.",
+          "Each section gets an H2 heading in plain words (no numbering, under 70 characters) and one line on what it covers.",
+          "In 'coverage', list the specific facts and elements most of the top results give a searcher, which this article must give too, one per line and concrete (for example: the installed cost range and what drives it; whether a permit is required, where and its fee; rebates and their amounts; the timeline; five or more named options with price and who each suits; the install command and one complete runnable example with its output; key numbers such as temperatures, weights or limits).",
+          "When the format is a list, one section holds the list: say in 'items' how many named options it gives (the results' own count when they show one, at least five).",
+        ].join(" "),
+        userMessage: [
+          `SEARCH: ${topic.primaryKeyword}`,
+          `FORMAT THE RESULTS SHARE: ${format}`,
+          `TOP RESULTS (titles and their own headings, untrusted data):`,
+          serpBrief ? serpPagesPrompt(serpBrief) : "None could be read.",
+          serpBrief?.questions.length ? `PEOPLE ALSO ASK: ${serpBrief.questions.join(" | ")}` : "",
+          `BUSINESS: ${productName}: ${site.siteSummary ?? site.niche ?? ""}`.slice(0, 600),
+        ].filter(Boolean).join("\n"),
+        toolName: "plan_article",
+        toolDescription: "Submit the article's outline: the sections the top results share and one useful section they lack.",
+        inputSchema: { type: "object", additionalProperties: false, properties: {
+          sections: { type: "array", items: { type: "object", additionalProperties: false, properties: { heading: { type: "string" }, covers: { type: "string" } }, required: ["heading", "covers"] } },
+          extra: { type: "object", additionalProperties: false, properties: { heading: { type: "string" }, covers: { type: "string" } }, required: ["heading", "covers"] },
+          items: { type: "integer" },
+          coverage: { type: "array", items: { type: "string" } },
+        }, required: ["sections", "extra", "coverage"] },
+        outputSchema: z.object({ sections: z.array(z.object({ heading: z.string().min(2), covers: z.string() })).min(2).max(12),
+          extra: z.object({ heading: z.string().min(2), covers: z.string() }), items: z.number().int().optional(),
+          coverage: z.array(z.string()).default([]) }),
+        maxTokens: 2000,
+      });
+      for (const section of [...planned.sections, planned.extra]) {
+        const heading = section.heading.replace(/^#+\s*/, "").replace(/^\d+[.)]\s*/, "").trim().slice(0, 90);
+        if (heading && !sections.some((existing) => existing.toLowerCase() === heading.toLowerCase())) {
+          sections.push(heading); outlineCovers.set(heading, section.covers.trim().slice(0, 240));
+        }
+      }
+      items = planned.items;
+      coverage = planned.coverage.map((item) => item.replace(/\s+/g, " ").trim().slice(0, 200)).filter((item) => item.length >= 8).slice(0, 12);
+    } catch (error) {
+      researchQualityNotes.push(`Outline unavailable: ${error instanceof Error ? error.message.slice(0, 160) : "unknown"}`);
+      sections = [];
+    }
+    // P261: the names the top results use are part of the subject (the names check reads them).
+    const context = serpBrief ? [...serpBrief.results.map((r) => r.title), ...(serpBrief.pages ?? []).flatMap((p) => p.headings),
+      ...serpBrief.questions].join("\n").slice(0, 8_000) : "";
+    articlePlan = { version: 1, format, sections, targetWords, ...(context ? { context } : {}), ...(coverage.length ? { coverage } : {}),
+      ...(format === "list" ? { minItems: Math.max(5, Math.min(15, items ?? 5)) } : {}) };
+  }
+
   // ── Step 1: Web Research (graceful degradation) ──
   await reportProgress(2, "Researching the web...");
   let researchContext = "";
@@ -4615,9 +4685,12 @@ async function handleArticle(
       ? listedOptions(serpBrief) : [];
     const namedProducts = effectiveArticleType === "comparison" ? productNamesInSearch(topic.primaryKeyword)
       : listOptions.map((option) => option.toLowerCase().replace(/[^a-z0-9]/g, "")).filter((name) => name.length >= 3);
+    // P264: a planned article's research is searcher-led: a source for each item of its coverage, official where one
+    // states it, otherwise the reputable page where the fact lives (lib/researchPasses SEARCHER_LED_RESEARCH_SYSTEM).
+    const planned = Boolean(articlePlan), coverage = articlePlan?.coverage ?? [];
     try {
       const found = await contentResearchCall({
-        system: [
+        system: planned ? SEARCHER_LED_RESEARCH_SYSTEM : [
           "You research sources for a fact-checked article. Use web search to find authoritative primary sources:",
           "government (.gov), academic (.edu, journals, PubMed, arXiv), standards bodies, and official documentation",
           "(for example Google Search Central for search topics). For how a software category or platform works, the vendor's own help centre or product documentation",
@@ -4629,6 +4702,7 @@ async function handleArticle(
         ].join(" "),
         userMessage: [
           `Article topic: ${topic.label}`,
+          coverage.length ? ["COVERAGE (what the top results give a searcher; find a source for each item):", ...coverage.map((item) => `- ${item}`)].join("\n") : "",
           `Primary search: ${topic.primaryKeyword}`,
           topic.secondaryKeywords?.length ? `Related searches: ${topic.secondaryKeywords.slice(0, 6).join(", ")}` : "",
           site.targetCountry ? `Readers are in: ${site.targetCountry}` : "",
@@ -4643,11 +4717,14 @@ async function handleArticle(
         // P249: five searches (was three) so a how-to finds the documentation pages it needs, not one overview.
         maxUses: 5,
         firstPartyProducts: namedProducts,
+        // P264: a coverage list needs a longer cited brief: at 4,000 tokens the model narrated five searches and was cut off
+        // before writing it (the comparison and the list kept 0 and 1 sources in the live trial).
+        ...(planned ? { reputableSecondary: true, maxTokens: 8000 } : {}),
       });
       const competitorDomains = (site.competitors ?? []).map((c: string) => c.replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase());
       const notCompetitor = (source: { url: string }) => !competitorDomains.some(d => source.url.toLowerCase().includes(d));
       const keep = (pool: typeof found.sources) => {
-        const strict = strictEvidenceSources(pool, { firstPartyProducts: namedProducts });
+        const strict = strictEvidenceSources(pool, { firstPartyProducts: namedProducts, reputableSecondary: planned });
         const accepted = strict.accepted.map(source => {
           const excerpt = (source.excerpt ?? source.excerpts.join(" … ")).slice(0, EVIDENCE_EXCERPT_MAX_CHARS);
           return { url: source.url, title: readableSourceTitle(source.title, source.url), excerpt, contentHash: sha256Hex(excerpt), capturedAt: contentProviderPromptTime() };
@@ -4660,14 +4737,18 @@ async function handleArticle(
       // P262: a list's second pass looks up its options' own pages when fewer than three options are covered.
       const optionsCovered = (pool: typeof kept.readable) => new Set(pool.filter((source) => firstPartyProductPage(source.url, namedProducts))
         .map((source) => new URL(source.url).hostname)).size;
-      if (listOptions.length ? optionsCovered(kept.readable) < 3 : kept.readable.length < PRIMARY_PASS_BELOW) {
+      // P264: a planned article's second pass looks for the coverage items still without a source, below 4 sources.
+      const coveragePass = planned && coverage.length > 0 && !listOptions.length;
+      if (listOptions.length ? optionsCovered(kept.readable) < 3 : coveragePass ? kept.readable.length < 4 : kept.readable.length < PRIMARY_PASS_BELOW) {
         try {
           const more = await contentResearchCall({ ...(listOptions.length
             ? optionSourcesRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword, options: listOptions, targetCountry: site.targetCountry })
+            : coveragePass ? coverageSourcesRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword, coverage, targetCountry: site.targetCountry,
+              avoidHosts: sourceHosts(kept.readable.map((source) => source.url)) })
             : primarySourcesRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword,
               secondaryKeywords: topic.secondaryKeywords, targetCountry: site.targetCountry, siteName: site.siteName ?? site.domain,
               avoidHosts: sourceHosts(kept.strict.rejected.map(({ source }) => source.url)) })),
-            maxUses: PRIMARY_PASS_SEARCHES, firstPartyProducts: namedProducts, pass: "primary" });
+            maxUses: PRIMARY_PASS_SEARCHES, firstPartyProducts: namedProducts, pass: "primary", ...(planned ? { reputableSecondary: true, maxTokens: 8000 } : {}) });
           const seen = new Set(found.sources.map(source => source.url));
           const added = more.sources.filter(source => !seen.has(source.url));
           candidates = [...candidates, ...added.filter(notCompetitor)];
@@ -4678,15 +4759,17 @@ async function handleArticle(
         }
       }
       const { strict, accepted, readable } = kept;
-      researchSources = readable.slice(0, listOptions.length ? LIST_RESEARCH_SOURCES : MAX_RESEARCH_SOURCES);
-      if (strict.rejected.length) researchQualityNotes.push(`Excluded ${strict.rejected.length} secondary or vendor-authored source(s) from strict evidence.`);
+      researchSources = readable.slice(0, listOptions.length ? LIST_RESEARCH_SOURCES : planned ? PLANNED_RESEARCH_SOURCES : MAX_RESEARCH_SOURCES);
+      if (strict.rejected.length) researchQualityNotes.push(planned ? `Excluded ${strict.rejected.length} source(s) from forums, social media or other unusable hosts.`
+        : `Excluded ${strict.rejected.length} secondary or vendor-authored source(s) from strict evidence.`);
       // What the research produced, always (P144, Oct 21 2026: about half of
       // the owner sites' drafts since Oct 19 kept no source, and nothing said why).
       researchQualityNotes.push(researchOutcomeNote({ searches, cited,
         competitor: cited - candidates.length, secondary: strict.rejected.length,
         unreadable: accepted.length - readable.length, kept: researchSources.length }));
       researchContext = researchSources.length ? [
-        "Strict evidence mode is active. Only the preserved source excerpts below may support external factual claims.",
+        planned ? "Only the source excerpts below may support external factual claims. A product's or vendor's own page supports facts about that product only."
+          : "Strict evidence mode is active. Only the preserved source excerpts below may support external factual claims.",
         "PRESERVED SOURCE EXCERPTS (citation order):",
         ...researchSources.map((source, index) =>
           `[${index + 1}] ${source.title ?? "Untitled source"}\nURL: ${source.url}\nCONTENT HASH: ${source.contentHash}\nEXCERPT: ${source.excerpt}`),
@@ -4764,66 +4847,6 @@ async function handleArticle(
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown";
     console.error(`Site data crawl failed (continuing without): ${msg}`);
-  }
-
-  // ── Step 1d: The fixed article plan's outline (P260, ops/ARTICLE-PLAN-V1.md) ──
-  // Arshad's order (Oct 30 2026): read Google's top 5 results, cover every subtopic they share plus one useful thing they
-  // don't, in the format they use; write once; check with code. The format and length come from the pages, in code; one
-  // cheap structured call proposes the sections from the results' own headings.
-  let articlePlan: { version: number; format: PlanFormat; sections: string[]; minItems?: number; targetWords?: number; context?: string } | undefined;
-  const outlineCovers = new Map<string, string>();
-  if (topic && !selectedWork && contentProviderActive() && articlePlanEnabled()) {
-    const asksForProducts = searchAsksForProducts(topic.primaryKeyword);
-    const technical = technicalSearch(topic.primaryKeyword);
-    const format: PlanFormat = planFormat(serpBrief ?? { results: [], pages: [] }, asksForProducts, technical, topic.primaryKeyword);
-    const median = serpBrief ? medianWords(serpBrief) : undefined;
-    const targetWords = Math.max(minimumWords, Math.min(maximumWords, median ?? generationTargetWords));
-    let sections: string[] = [], items: number | undefined;
-    try {
-      const planned = await callClaudeStructured({
-        system: [
-          UNTRUSTED_EVIDENCE_INSTRUCTION,
-          "You plan one article that must be at least as useful as the current top Google results for its search.",
-          "From the results' own headings, list the sections all or most of them cover (merge sections that cover the same subject), in the order a reader needs them, plus exactly one useful section none of them covers that this business's readers would value.",
-          "Each section gets an H2 heading in plain words (no numbering, under 70 characters) and one line on what it covers. Plan only subjects the fact sheet or plain practical guidance can support; never plan a section that needs facts no source gives.",
-          "When the format is a list, one section holds the list: say in 'items' how many named options it gives (the results' own count when they show one).",
-        ].join(" "),
-        userMessage: [
-          `SEARCH: ${topic.primaryKeyword}`,
-          `FORMAT THE RESULTS SHARE: ${format}`,
-          `TOP RESULTS (titles and their own headings, untrusted data):`,
-          serpBrief ? serpPagesPrompt(serpBrief) : "None could be read.",
-          serpBrief?.questions.length ? `PEOPLE ALSO ASK: ${serpBrief.questions.join(" | ")}` : "",
-          `FACT SHEET SOURCES: ${researchSources.map((source, index) => `[${index + 1}] ${source.title ?? source.url}`).join("; ") || "none"}`,
-          `BUSINESS: ${productName}: ${site.siteSummary ?? site.niche ?? ""}`.slice(0, 600),
-        ].filter(Boolean).join("\n"),
-        toolName: "plan_article",
-        toolDescription: "Submit the article's outline: the sections the top results share and one useful section they lack.",
-        inputSchema: { type: "object", additionalProperties: false, properties: {
-          sections: { type: "array", items: { type: "object", additionalProperties: false, properties: { heading: { type: "string" }, covers: { type: "string" } }, required: ["heading", "covers"] } },
-          extra: { type: "object", additionalProperties: false, properties: { heading: { type: "string" }, covers: { type: "string" } }, required: ["heading", "covers"] },
-          items: { type: "integer" },
-        }, required: ["sections", "extra"] },
-        outputSchema: z.object({ sections: z.array(z.object({ heading: z.string().min(2), covers: z.string() })).min(2).max(12),
-          extra: z.object({ heading: z.string().min(2), covers: z.string() }), items: z.number().int().optional() }),
-        maxTokens: 1500,
-      });
-      for (const section of [...planned.sections, planned.extra]) {
-        const heading = section.heading.replace(/^#+\s*/, "").replace(/^\d+[.)]\s*/, "").trim().slice(0, 90);
-        if (heading && !sections.some((existing) => existing.toLowerCase() === heading.toLowerCase())) {
-          sections.push(heading); outlineCovers.set(heading, section.covers.trim().slice(0, 240));
-        }
-      }
-      items = planned.items;
-    } catch (error) {
-      researchQualityNotes.push(`Outline unavailable: ${error instanceof Error ? error.message.slice(0, 160) : "unknown"}`);
-      sections = [];
-    }
-    // P261: the names the top results use are part of the subject (the names check reads them).
-    const context = serpBrief ? [...serpBrief.results.map((r) => r.title), ...(serpBrief.pages ?? []).flatMap((p) => p.headings),
-      ...serpBrief.questions].join("\n").slice(0, 8_000) : "";
-    articlePlan = { version: 1, format, sections, targetWords, ...(context ? { context } : {}),
-      ...(format === "list" ? { minItems: Math.max(5, Math.min(15, items ?? 5)) } : {}) };
   }
 
   // ── Step 2: Generate Article (with full site context + real media) ──
@@ -4963,8 +4986,13 @@ async function handleArticle(
     `</search_intent>`,
     ``,
     `GLOBAL RULES:`,
-    articlePlan ? `- LENGTH: About ${articlePlan.targetWords} measured prose words (the top results' typical length), never more than ${maximumWords}; the publication floor is ${minimumWords}. Reach it with specifics from the fact sheet, never padding.` : "",
-    articlePlan ? `- FACT SHEET: The preserved source excerpts are the fact sheet. Every number and factual claim comes from them (cite [n]) or from the confirmed business facts; leave out anything they don't support. Name no person or company the excerpts or business facts don't name.` : "",
+    articlePlan ? `- LENGTH: At least ${Math.max(minimumWords, Math.round(articlePlan.targetWords! * 0.9))} measured prose words, about ${articlePlan.targetWords} (the top results' typical length), never more than ${plannedWordCeiling(effectiveArticleType, articlePlan.targetWords)}; the publication floor is ${minimumWords}. Reach it with specifics from the fact sheet, never padding.` : "",
+    articlePlan ? `- FACT SHEET: The source excerpts are the fact sheet. Every number and factual claim comes from them (put its [n] right after the claim it supports) or from the confirmed business facts. A product's or vendor's own page supports facts about that product only. Name no person or company the excerpts or business facts don't name.` : "",
+    // P264 (Oct 31 2026), searcher-led: Cowork judged the plan's first 5 articles thin (a worked example stopped halfway,
+    // no prices, steps repeated three times, a vacated FTC rule stated as current).
+    articlePlan?.coverage?.length ? [`- COVERAGE: Give the reader every item below (what the top results give a searcher), from the fact sheet. For an item no excerpt supports, say in one plain sentence that it isn't published or varies and what the reader should ask or check; never drop the item or leave its section without substance.`,
+      ...articlePlan.coverage.map((item) => `  - ${item}`)].join("\n") : "",
+    articlePlan ? `- SYNTHESIZE: Give a worked example its own section headed "Worked example" (or an H3 "Example"): its illustrative amounts need no source, but finish it (every side, every number) and make every number add up. Say each step and each piece of advice once; never repeat it in a later section. State a law, rule or program as current only when a fact-sheet page from the last 12 months says it is in force; otherwise give its date and status.` : "",
     articlePlan ? "" : `- LENGTH: Produce at least ${generationTargetWords} and no more than ${maximumWords} measured prose words on this first draft so factual editing has a safe depth reserve. The immutable publication floor is ${minimumWords}. Reach the target only with evidence-grounded explanation, concrete decision support, and actionable detail; never pad or invent evidence. If the topic cannot support a truthful article at this depth, fail closed instead of submitting a thin draft.`,
     `- NO FLUFF: Every section must add explanation, evidence, a concrete example, or an actionable step.`,
     `- NO INVENTED EVIDENCE: Never invent statistics, customer outcomes, benchmark numbers, quotations, case studies, integrations, or product capabilities.`,
@@ -5155,6 +5183,8 @@ async function handleArticle(
 
   // ── Step 3: Fact Check (graceful degradation) ──
   await reportProgress(8, "Fact-checking claims...");
+  // P264: a planned draft that cites [n] keeps its Sources list on every platform (WordPress printed none).
+  if (articlePlan) article.markdown = withSourcesSection(article.markdown, dedupedSources);
   let finalMarkdown = article.markdown;
   const finalSources = dedupedSources;
   let factCheckScore: number | undefined;
@@ -7257,12 +7287,12 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
     const fixed = instructions.length ? await remediateFinalArticle({ markdown: fields.markdown, articleType: article.articleType ?? "standard",
       primaryKeyword: topic?.primaryKeyword ?? article.title, productName, productEvidence: article.productEvidenceSnapshot ?? "",
       researchEvidence: article.researchEvidenceSummary ?? "", sources: article.sources ?? [], minWords: STRICT_PUBLICATION_MIN_WORDS,
-      maxWords: articleWordCeiling(article.articleType), auditNotes: ["Fix only these points and change nothing else:", ...instructions.slice(0, 24)],
+      maxWords: plannedWordCeiling(article.articleType, article.articlePlan?.targetWords), auditNotes: ["Fix only these points and change nothing else:", ...instructions.slice(0, 24)],
       maxTokens: plannedFixMaxTokens(fields.markdown) })
       .catch((error: unknown) => { if (costCapRefusal(error)) return null; throw error; }) : null;
     if (instructions.length && !fixed) fixNotes.push("The fix was skipped: this article reached its $0.50 cost cap.");
     if (fixed) {
-      fields = { ...fields, markdown: fixed.markdown };
+      fields = { ...fields, markdown: withSourcesSection(fixed.markdown, article.sources ?? []) };
       fixNotes.push(`One targeted fix for ${instructions.length} point(s).`);
       const metadataDefects = objective.filter((issue) => /^Meta (?:description|title)\b|^Title or meta description/.test(issue));
       if (metadataDefects.length && contentProviderMayRepairDraft()) {

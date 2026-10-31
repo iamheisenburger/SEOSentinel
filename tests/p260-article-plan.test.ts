@@ -64,7 +64,7 @@ test("P260 the format is decided in code from what the top results share", () =>
   assert.equal(technicalSearch("node.js structured logging with pino"), true);
   assert.equal(technicalSearch("tankless water heater installation austin"), false);
   assert.equal(planFormat({ results: [{ title: "Best practices for app logs with Pino", url: "https://www.reddit.com/r/node/x" }], pages: [] }, false, true), "tutorial");
-  assert.equal(planFormat(brief(["What is an API", "APIs explained"]), false, true), "guide", "a technical search whose pages show no code is not a tutorial");
+  assert.equal(planFormat(brief(["What is an API", "APIs explained", "API basics"]), false, true), "guide", "a technical search whose 3 pages show no code is not a tutorial");
   // Live trial: the search itself says what it wants when few results can be read.
   assert.equal(planFormat({ results: [], pages: [] }, false, false, "ceramic vs cast iron cookware"), "comparison");
   assert.equal(planFormat({ results: [], pages: [] }, false, false, "how to reconcile bank statements"), "how-to");
@@ -144,7 +144,7 @@ test("P260 the writer gets the outline with exact headings and the format's elem
   assert.match(prompt, /^OUTLINE \(the fixed plan, built from Google's top results for this search: follow it exactly\):/);
   assert.match(prompt, /## What to look for\n## The best invoice apps \(covers: Seven apps with prices and who each suits\.\)\n## How to switch\n/);
   assert.match(prompt, /Add no other H2 section, except a Sources section when you cite sources\./);
-  assert.match(prompt, /at least 7 named options, each as an H3/);
+  assert.match(prompt, /name at least 7 real options, each as an H3 \(### Name\) with its price/, "P264: options with prices, then a table");
   assert.match(pipeline, /articleOutlinePrompt\(articlePlan, outlineCovers\)/);
   assert.match(pipeline, /toolName: "plan_article",/);
   assert.match(readFileSync("convex/actions/contentWorkProvider.ts", "utf8"), /"plan_article"/, "the outline call is priced like every other check");

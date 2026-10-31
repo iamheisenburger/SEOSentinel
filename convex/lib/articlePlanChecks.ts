@@ -42,10 +42,34 @@ function numberStated(number: string, haystack: string): boolean {
   return new RegExp(`(?<![\\d.])${digits.replace(/\./g, "\\.")}(?![\\d])`).test(haystack.replace(/(\d),(\d{3})/g, "$1$2"));
 }
 
+/** P264 (Oct 31 2026): a worked example's illustrative amounts need no source (they must add up). Cowork judged the
+ * how-to's example "stops halfway"; the next draft renamed it a "worked template" with no amounts at all, because every
+ * number had to come from a source. A section headed as an example (H2 or H3) is exempt from the number check; real
+ * statistics elsewhere still need their source, and product facts their confirmed details. */
+export const EXAMPLE_HEADING = /\b(?:worked\s+)?examples?\b|\bsample\b|\bscenarios?\b|\billustrat/i;
+export function exampleSections(markdown: string): string[] {
+  const lines = markdown.split("\n"), sections: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const heading = /^(#{2,3})\s+(.+)$/.exec(lines[i]);
+    if (!heading || !EXAMPLE_HEADING.test(heading[2])) continue;
+    const level = heading[1].length, body: string[] = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      const next = /^(#{1,6})\s/.exec(lines[j]);
+      if (next && next[1].length <= level) break;
+      body.push(lines[j]);
+    }
+    sections.push(body.join("\n"));
+  }
+  return sections;
+}
+function withoutExampleSections(markdown: string): string {
+  return exampleSections(markdown).reduce((text, body) => body.trim() ? text.replace(body, "\n") : text, markdown);
+}
+
 export function numbersOutsideFactSheet(markdown: string, sheet: FactSheet): PlanCheckFailure[] {
   const haystack = [...sheet.sources.map((s) => s.text), sheet.profile].join("\n");
   const failures: PlanCheckFailure[] = [];
-  for (const sentence of sentences(prose(markdown))) {
+  for (const sentence of sentences(prose(withoutExampleSections(markdown)))) {
     const missing = statedNumbers(sentence).filter((n) => !numberStated(n, haystack));
     if (missing.length) failures.push({ check: "number", line: sentence, detail: `${missing.join(", ")} is not in the fact sheet or your confirmed details` });
   }
@@ -96,9 +120,18 @@ export function namesOutsideSources(markdown: string, sheet: FactSheet, allowed:
 }
 
 const headingKey = (value: string) => normalize(value).replace(/^#+\s*/, "").replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+const significant = (value: string) => headingKey(value).split(" ").filter((word) => word.length >= 3 &&
+  !/^(?:the|and|for|with|how|what|why|your|you|are|its|our|from|into|that|this)$/.test(word));
+/** P264: a section counts as present under a heading that keeps most of the planned heading's words (the writer's
+ * "Worked template for a reconciliation" for "Worked example of a reconciliation"). */
 export function missingOutlineSections(markdown: string, outline: ArticleOutline): PlanCheckFailure[] {
-  const present = new Set([...markdown.matchAll(/^##\s+(.+)$/gm)].map((m) => headingKey(m[1])));
-  return outline.sections.filter((s) => !present.has(headingKey(s)))
+  const written = [...markdown.matchAll(/^##\s+(.+)$/gm)].map((m) => m[1]);
+  const present = (planned: string) => written.some((heading) => {
+    if (headingKey(heading) === headingKey(planned)) return true;
+    const want = significant(planned), have = new Set(significant(heading));
+    return want.length >= 2 && want.filter((word) => have.has(word)).length / want.length >= 0.6;
+  });
+  return outline.sections.filter((s) => !present(s))
     .map((s) => ({ check: "section" as const, detail: `The outline's section "${s}" is missing` }));
 }
 
@@ -147,11 +180,12 @@ export function planCheckIssues(failures: readonly PlanCheckFailure[]): string[]
 
 /** The writer's outline: the sections in order with their exact headings, and the format's required elements. */
 export function articleOutlinePrompt(plan: { format: PlanFormat; sections: string[]; minItems?: number }, covers: ReadonlyMap<string, string>): string {
+  // P264 (Oct 31 2026): what each format must deliver, from Cowork's judgement of the plan's first 5 articles.
   const formatRule = {
-    list: `FORMAT: a list. In the section that holds the list, give at least ${plan.minItems ?? 5} named options, each as an H3 (### Name) saying what it is, who it suits and the specifics its own page in the fact sheet gives.`,
-    tutorial: "FORMAT: a tutorial. Give numbered steps (1., 2., 3.) and at least one fenced code, command or settings block taken from the official documentation in the fact sheet; never invent an API, option or command.",
-    "how-to": "FORMAT: step by step. Give the steps as a numbered list (1., 2., 3.).",
-    comparison: "FORMAT: a comparison. Include a markdown table comparing the options side by side, then say which suits whom.",
+    list: `FORMAT: a list. In the section that holds the list, name at least ${plan.minItems ?? 5} real options, each as an H3 (### Name) with its price (from its own page or a dated source in the fact sheet), what it is, who it suits and one limitation; then compare them in a markdown table.`,
+    tutorial: "FORMAT: a tutorial. Build one runnable example end to end as numbered steps (1., 2., 3.): the install command, one complete file in a fenced code block, how to run it, and the output it prints. Use every API name, option and command exactly as the official documentation in the fact sheet gives it; never invent one. Show the common patterns the top results show.",
+    "how-to": "FORMAT: step by step. Give the steps as a numbered list (1., 2., 3.), and finish every worked example with every number.",
+    comparison: "FORMAT: a comparison. Say what each option is, compare them in a markdown table on the attributes the top results compare (with each option's key numbers from the fact sheet), then say which suits whom.",
     guide: "FORMAT: a guide. Answer the search in the first paragraph, then follow the sections.",
   }[plan.format];
   return [
