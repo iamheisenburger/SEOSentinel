@@ -66,11 +66,36 @@ function withoutExampleSections(markdown: string): string {
   return exampleSections(markdown).reduce((text, body) => body.trim() ? text.replace(body, "\n") : text, markdown);
 }
 
-export function numbersOutsideFactSheet(markdown: string, sheet: FactSheet): PlanCheckFailure[] {
+/** P266 (Oct 31 2026): the worked example's amounts, wherever the article reuses them. The live trial's how-to drew 10
+ * findings, all of them its example's own amounts reused after it ("Debit Bank Fees Expense $35.00", "In the example
+ * above, $540.00 versus $450.00 is a $90.00 difference, and 90 ÷ 9 = 10"); the one fix then turned the whole example into
+ * letters. Arshad's rule is about made-up statistics, not illustrations. Only amounts count (10 or more, or with
+ * decimals), and a percentage is never illustrative. */
+export function illustrativeNumbers(markdown: string): Set<number> {
+  const values = new Set<number>();
+  for (const body of exampleSections(markdown)) {
+    for (const sentence of sentences(prose(body))) {
+      for (const n of statedNumbers(sentence)) {
+        const value = Number.parseFloat(n);
+        if (Number.isFinite(value) && (value >= 10 || n.includes("."))) values.add(value);
+      }
+    }
+  }
+  return values;
+}
+const REFERS_TO_EXAMPLE = /\b(?:in|from|of|for)\s+(?:the|this|our|that)\s+(?:worked\s+)?example\b|\bexample\s+(?:above|below)\b/i;
+const ARITHMETIC = /\d[\d,.]*\s*[÷×*/+−–-]\s*\$?\d[\d,.]*\s*=\s*\$?\d/;
+const statedAsPercent = (sentence: string, n: string) =>
+  new RegExp(`(?<![\\d.])${n.replace(/\./g, "\\.")}(?:\\.0+)?\\s*(?:%|percent)`).test(sentence.replace(/(\d),(\d{3})/g, "$1$2"));
+
+export function numbersOutsideFactSheet(markdown: string, sheet: FactSheet, illustrative: ReadonlySet<number> = illustrativeNumbers(markdown)): PlanCheckFailure[] {
   const haystack = [...sheet.sources.map((s) => s.text), sheet.profile].join("\n");
   const failures: PlanCheckFailure[] = [];
+  const example = (sentence: string, n: string) => illustrative.has(Number.parseFloat(n)) && !statedAsPercent(sentence, n);
   for (const sentence of sentences(prose(withoutExampleSections(markdown)))) {
-    const missing = statedNumbers(sentence).filter((n) => !numberStated(n, haystack));
+    // A sentence about the example, or its arithmetic, that uses the example's amounts is part of the illustration.
+    if ((REFERS_TO_EXAMPLE.test(sentence) || ARITHMETIC.test(sentence)) && statedNumbers(sentence).some((n) => example(sentence, n))) continue;
+    const missing = statedNumbers(sentence).filter((n) => !numberStated(n, haystack) && !example(sentence, n));
     if (missing.length) failures.push({ check: "number", line: sentence, detail: `${missing.join(", ")} is not in the fact sheet or your confirmed details` });
   }
   return failures;

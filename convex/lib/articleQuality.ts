@@ -3,7 +3,7 @@ import { publicationArtifactHash, sha256Hex } from "./publicationArtifact.ts";
 import { markdownCitationMarkers, removeUnverifiedMarkdownCitations } from "./markdownCitations.ts";
 import { deleteSentencesCoherently } from "./coherentDeletion.ts";
 import { SOURCES_HEADING } from "./sourcesHeading.ts";
-import { exampleSections, numbersOutsideFactSheet, planCheckIssues, runPlanChecks, type PlanCheckFailure, type PlanFormat } from "./articlePlanChecks.ts";
+import { exampleSections, illustrativeNumbers, numbersOutsideFactSheet, planCheckIssues, runPlanChecks, type PlanCheckFailure, type PlanFormat } from "./articlePlanChecks.ts";
 
 export type PublicationQualityMode = "standard" | "strict";
 
@@ -2430,9 +2430,11 @@ export function evaluatePublicationQuality(
   // P260: in a planned article, a number the confirmed profile states needs no citation (its plan check verified it).
   // P264: and a worked example's illustrative amounts (a section headed as an example) need none.
   const examples = article.qualityPlan === "fixed_v1" ? exampleSections(markdown) : [];
+  // P266: and the example's amounts where the article reuses them (journal entries, "in the example above").
+  const illustrative = article.qualityPlan === "fixed_v1" ? illustrativeNumbers(markdown) : new Set<number>();
   const uncitedClaims = uncitedEvidenceRequiredParagraphs(markdown, article).filter((paragraph) => article.qualityPlan !== "fixed_v1" ||
     (!examples.some((body) => body.includes(paragraph.trim())) &&
-      numbersOutsideFactSheet(paragraph, { sources: [], profile: article.productEvidenceSnapshot ?? "", productName: "" }).length > 0));
+      numbersOutsideFactSheet(paragraph, { sources: [], profile: article.productEvidenceSnapshot ?? "", productName: "" }, illustrative).length > 0));
   if (uncitedClaims.length > 0) {
     const message = `${uncitedClaims.length} quantified outcome or operational claim(s) lack an inline citation.`;
     if (mode === "strict") issues.push(message);

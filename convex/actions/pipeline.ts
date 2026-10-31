@@ -7299,7 +7299,7 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
     const fixed = instructions.length ? await remediateFinalArticle({ markdown: fields.markdown, articleType: article.articleType ?? "standard",
       primaryKeyword: topic?.primaryKeyword ?? article.title, productName, productEvidence: article.productEvidenceSnapshot ?? "",
       researchEvidence: article.researchEvidenceSummary ?? "", sources: article.sources ?? [], minWords: STRICT_PUBLICATION_MIN_WORDS,
-      maxWords: plannedWordCeiling(article.articleType, article.articlePlan?.targetWords), auditNotes: ["Fix only these points and change nothing else:", ...instructions.slice(0, 24)],
+      maxWords: plannedWordCeiling(article.articleType, article.articlePlan?.targetWords), auditNotes: ["Fix only these points and change nothing else. Keep the worked example's illustrative amounts exactly as they are:", ...instructions.slice(0, 24)],
       maxTokens: plannedFixMaxTokens(fields.markdown) })
       .catch((error: unknown) => { if (costCapRefusal(error)) return null; throw error; }) : null;
     if (instructions.length && !fixed) fixNotes.push("The fix was skipped: this article reached its $0.50 cost cap.");

@@ -157,7 +157,7 @@ test("P260 no AI review and no scores for a planned article: code checks, at mos
   assert.doesNotMatch(planned, /callClaudeStructured|contentStructuredCall|review_article|audit_final_article|reviewArticle\(|auditFinalArticle\(/);
   assert.equal(planned.match(/await remediateFinalArticle\(/g)?.length, 1, "one targeted fix");
   assert.match(planned, /factCheckScore: undefined, editorialQualityScore: undefined/);
-  assert.match(planned, /"Fix only these points and change nothing else:"/);
+  assert.match(planned, /"Fix only these points and change nothing else\. Keep the worked example's illustrative amounts exactly as they are:"/);
   const quality = readFileSync("convex/lib/articleQuality.ts", "utf8");
   assert.match(quality, /if \(planned\) \{\n\s+issues\.push\(\.\.\.planCheckIssues\(planChecksForArticle\(article\)\)\);/);
 });
