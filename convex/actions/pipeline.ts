@@ -6,7 +6,7 @@ import { LIST_MIN_OPTIONS, LIST_RESEARCH_SEARCHES, LIST_RESEARCH_SOURCES, MAX_RE
   primarySourcesRequest, rankedResearchSources, sourceHosts } from "../lib/researchPasses";
 import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWords, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis,
   serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch, FORMAT_DEFAULT_WORDS } from "../lib/serpBrief";
-import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, flaggedLines, planCheckIssues, runPlanChecks, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
+import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, flaggedLines, planCheckIssues, planCheckNotes, runPlanChecks, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
 import { articlePlanEnabled, contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
 import { autopilotCompanyNameIssue, autopilotCompanyNameNote, autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote,
   checkableFactCheckFindings, unsearchedCompanyMentions } from "../lib/autopilotEditor";
@@ -7474,7 +7474,7 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
     editorialQualityNotes: [
       ...(article.editorialQualityNotes ?? []).filter((note) => /^(?:Excluded \d+ .*source|Research: |Web research unavailable|Primary-source research pass|Outline unavailable|Sources by publisher|Source check unavailable)/.test(note)),
       `Fixed article plan v1: ${article.articlePlan?.format ?? "guide"}, ${article.articlePlan?.sections.length ?? 0} outline section(s).`,
-      ...fixNotes, ...planCheckIssues(failures),
+      ...fixNotes, ...planCheckIssues(failures), ...planCheckNotes(failures),
     ],
     featuredImage: article.featuredImage, reviewedMediaUrls: article.reviewedMediaUrls ?? [],
     mediaQualityStatus: candidate.mediaQualityStatus ?? "passed", mediaQualityNotes: article.mediaQualityNotes ?? [],

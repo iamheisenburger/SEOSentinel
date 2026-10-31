@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { articleOutlinePrompt, flaggedLines, missingFormatElements, missingOutlineSections, namesOutsideSources, numbersOutsideFactSheet,
-  planCheckIssues, productFactsOutsideProfile, runPlanChecks, statedNumbers, type FactSheet } from "../convex/lib/articlePlanChecks.ts";
+  planCheckIssues, planCheckNotes, productFactsOutsideProfile, runPlanChecks, statedNumbers, type FactSheet } from "../convex/lib/articlePlanChecks.ts";
 import { ownerAcceptableIssue, ownerWaivableIssue, PLAN_CHECK_ISSUE } from "../convex/lib/articleQuality.ts";
 import { markDoubtfulLines, plainReviewNotes } from "../convex/lib/plainReviewNotes.ts";
 import { googleRedirect, medianWords, pageShape, planFormat, serpPagesPrompt, technicalSearch, type SerpBrief } from "../convex/lib/serpBrief.ts";
@@ -113,8 +113,9 @@ test("P260 the checks become plain, blocking issues for Autopilot and marked lin
   const markdown = "Intro.\n\n## When invoices are due\n\nA late fee of **2%** a month is common, says [Jane Doe](https://jane.example).\n\n## Sources\n\n[1] IRS";
   const failures = runPlanChecks(markdown, sheet, { format: "guide", sections: ["When invoices are due", "Reminders"] });
   const issues = planCheckIssues(failures);
+  // P273: a missing section is a note and a fix input, never a gate (rule 2a).
   assert.deepEqual(issues, ["Plan check: 1 sentence(s) state a number that is not in the fact sheet or the confirmed details.",
-    "Plan check: 1 sentence(s) name a person or company the sources and details don't.", "Plan check: The outline's section \"Reminders\" is missing."]);
+    "Plan check: 1 sentence(s) name a person or company the sources and details don't."]);
   const uncited = "1 quantified outcome or operational claim(s) lack an inline citation.";
   assert.equal(ownerAcceptableIssue(uncited, { qualityPlan: "fixed_v1" }), true, "in a planned draft an uncited number is a marked line too");
   assert.equal(ownerAcceptableIssue(uncited, {}), false, "outside the plan the rule is unchanged");
@@ -129,10 +130,10 @@ test("P260 the checks become plain, blocking issues for Autopilot and marked lin
   const marked = markDoubtfulLines(markdown, lines);
   assert.match(marked, /<mark title="[^"]+">A late fee of \*\*2%\*\* a month is common, says \[Jane Doe\]\(https:\/\/jane\.example\)\.<\/mark>/,
     "a line is found in the draft with its bold and link markup");
-  assert.deepEqual(plainReviewNotes(issues), [
+  assert.deepEqual(plainReviewNotes([...issues, ...planCheckNotes(failures)]), [
     "Some highlighted sentences state a number that isn't in the sources Pentra used. Check them, or edit them out, before you publish.",
     "A highlighted sentence names a person or company the sources don't mention. Check it, or edit it out.",
-    "The planned section “Reminders” is missing. Most top results for this search cover it."]);
+    "The planned section “Reminders” is missing. Most top results for this search cover it."], "P273: the section is a note the owner still reads");
   const page = readFileSync("src/app/(dashboard)/articles/[id]/page.tsx", "utf8");
   assert.match(page, /const blockingGateIssues = gateIssues\.filter\(\(issue\) => !ownerAcceptableIssue\(issue, article\)\);/);
   const articles = readFileSync("convex/articles.ts", "utf8");

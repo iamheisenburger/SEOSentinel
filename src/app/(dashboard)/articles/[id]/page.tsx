@@ -407,7 +407,9 @@ export default function ArticleDetailPage() {
   const gateIssues = article.publicationGateStatus === "passed" ? [] : article.publicationGateIssues ?? [];
   const blockingGateIssues = gateIssues.filter((issue) => !ownerAcceptableIssue(issue, article));
   // P260: what the fixed plan's code checks still found after the one fix: the owner reads it, then decides.
-  const planNotes = gateIssues.filter((issue) => PLAN_CHECK_ISSUE.test(issue) && !/sentence\(s\)/.test(issue));
+  // P273: a missing section or format element no longer blocks; it is kept in the article's notes for its owner.
+  const planNotes = [...gateIssues.filter((issue) => PLAN_CHECK_ISSUE.test(issue) && !/sentence\(s\)/.test(issue)),
+    ...(article.editorialQualityNotes ?? []).filter((note: string) => /^Plan note: /.test(note))];
   const plainApproveAllowed = gateIssues.length === 0 || (site != null && site.serviceMode !== "growth_first");
   const handedBack = article.status !== "published" &&
     contentReadiness?.ownerDraft.latest?.articleId === articleId && contentReadiness.ownerDraft.latest.stage === "failed";

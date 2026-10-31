@@ -32,8 +32,9 @@ const PLAIN: [RegExp, string | ((match: RegExpExecArray) => string)][] = [
   [/^Plan check: \d+ sentence\(s\) state a number that is not in the fact sheet/, "Some highlighted sentences state a number that isn't in the sources Pentra used. Check them, or edit them out, before you publish."],
   [/^Plan check: \d+ sentence\(s\) state a product fact/, "A highlighted sentence says something about your product that your business details don't confirm. Correct it or remove it."],
   [/^Plan check: \d+ sentence\(s\) name a person or company/, "A highlighted sentence names a person or company the sources don't mention. Check it, or edit it out."],
-  [/^Plan check: The outline's section "(.+)" is missing\.$/, match => `The planned section “${match[1]}” is missing. Most top results for this search cover it.`],
-  [/^Plan check: (.+)$/, match => match[1]],
+  // P273: a missing section or format element is a note (Plan note:), never a gate.
+  [/^Plan (?:check|note): The outline's section "(.+)" is missing\.$/, match => `The planned section “${match[1]}” is missing. Most top results for this search cover it.`],
+  [/^Plan (?:check|note): (.+)$/, match => match[1]],
   [/^Reader-visible defect: \d+ cited sentence\(s\) state a number their source does not contain, e\.g\. «(.+)»\.$/,
     match => `A number isn't in the source it cites: «${match[1]}». Correct it or remove it.`],
   [/^Reader-visible defect: \d+ sentence\(s\) about the product state a number the confirmed business profile does not contain, e\.g\. «(.+)»\.$/,

@@ -320,15 +320,22 @@ export function fixFindings(markdown: string, outline: ArticleOutline, productNa
 export function flaggedLines(failures: readonly PlanCheckFailure[]): string[] {
   return [...new Set(failures.map((f) => f.line?.trim()).filter((line): line is string => Boolean(line && line.length >= 12)))];
 }
-/** One plain issue per failed check, for the publication gate (blocking) and the owner's "Before you publish" box. */
+/** One plain issue per failed check, for the publication gate (blocking) and the owner's "Before you publish" box.
+ * P273 (Oct 31 2026), rule 2a: only objective, reader-facing checks hold an Autopilot draft: a number no source states, a
+ * product fact outside the confirmed details, a person or company no source names. A missing outline section or format
+ * element (a list's option count, a tutorial's code block, a comparison's table) goes to the one fix and the notes
+ * (planCheckNotes), never the gate: P268's list floor of 6 held pentra.dev's Nov 1 article for naming 5 options. */
 export function planCheckIssues(failures: readonly PlanCheckFailure[]): string[] {
   const count = (check: PlanCheckFailure["check"]) => failures.filter((f) => f.check === check).length;
   return [
     count("number") ? `Plan check: ${count("number")} sentence(s) state a number that is not in the fact sheet or the confirmed details.` : "",
     count("product") ? `Plan check: ${count("product")} sentence(s) state a product fact that is not in the confirmed details.` : "",
     count("name") ? `Plan check: ${count("name")} sentence(s) name a person or company the sources and details don't.` : "",
-    ...failures.filter((f) => f.check === "section" || f.check === "format").map((f) => `Plan check: ${f.detail}.`),
   ].filter(Boolean);
+}
+/** P273: what the outline and format checks found that the one fix could not add, for the article's notes. */
+export function planCheckNotes(failures: readonly PlanCheckFailure[]): string[] {
+  return failures.filter((f) => f.check === "section" || f.check === "format").map((f) => `Plan note: ${f.detail}.`);
 }
 
 /** The writer's outline: the sections in order with their exact headings, and the format's required elements. */
