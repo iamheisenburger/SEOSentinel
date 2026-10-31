@@ -4491,7 +4491,9 @@ async function handleArticle(
     const format: PlanFormat = planFormat(serpBrief ?? { results: [], pages: [] }, asksForProducts, technical, topic.primaryKeyword);
     const median = serpBrief ? medianWords(serpBrief) : undefined;
     // P264: the top results' depth, not the type's usual ceiling (lib/articleQuality plannedWordCeiling).
-    const targetWords = Math.max(minimumWords, Math.min(7000, median ?? FORMAT_DEFAULT_WORDS[format]));
+    // P265: never below the format's typical depth: the readable results are often short Q&A pages (489, 836 and 1,683
+    // words for "how to reconcile bank statements", which set a 1,000-word target) while the longer ones refuse readers.
+    const targetWords = Math.max(minimumWords, Math.min(7000, Math.max(median ?? 0, FORMAT_DEFAULT_WORDS[format])));
     let sections: string[] = [], items: number | undefined, coverage: string[] = [];
     try {
       const planned = await callClaudeStructured({
@@ -4531,6 +4533,13 @@ async function handleArticle(
         }
       }
       items = planned.items;
+      // P265: a worked example the coverage asks for gets its own section, so the writer gives one and the check holds it.
+      if (planned.coverage.some((item) => /\bworked\s+example|\bexample\b.*\b(?:numbers|amounts|figures|calculation)/i.test(item)) &&
+        !sections.some((heading) => /\bexample\b/i.test(heading))) {
+        const faq = sections.findIndex((heading) => /^frequently asked questions$/i.test(heading));
+        sections.splice(faq >= 0 ? faq : sections.length, 0, "Worked example");
+        outlineCovers.set("Worked example", "A complete worked example with realistic amounts that add up.");
+      }
       coverage = planned.coverage.map((item) => item.replace(/\s+/g, " ").trim().slice(0, 200)).filter((item) => item.length >= 8).slice(0, 12);
     } catch (error) {
       researchQualityNotes.push(`Outline unavailable: ${error instanceof Error ? error.message.slice(0, 160) : "unknown"}`);
@@ -4999,7 +5008,10 @@ async function handleArticle(
     researchSources.length === 0
       ? `- EVIDENCE-SCARCE MODE: No external source survived verification. Do not state market patterns, typical user behaviour, causation, comparative effectiveness, conversion advantages, or industry prevalence as facts. Frame useful non-product guidance as a conditional diagnostic the reader must verify in their own analytics, or omit it.`
       : "",
-    `- NUMERIC CLAIMS: Every operational number, range, timeline, threshold, duration, score, volume, percentage, or price must come directly from supplied evidence. Cite external evidence using its matching numbered citation. First-party product facts are supported by the unnumbered product snapshot; never invent a citation for it. Otherwise remove the number.`,
+    `- NUMERIC CLAIMS: Every operational number, range, timeline, threshold, duration, score, volume, percentage, or price must come directly from supplied evidence. Cite external evidence using its matching numbered citation. First-party product facts are supported by the unnumbered product snapshot; never invent a citation for it. Otherwise remove the number.${articlePlan
+      // P265 (Oct 31 2026): with only the rule above, the writer filled the how-to's worked example with letters (S, B, D1)
+      // instead of amounts: Cowork judged the first one "stops halfway".
+      ? " The one exception is a worked example in its own section headed as an example (see SYNTHESIZE): give it realistic illustrative amounts (dollar figures, not letters or placeholders) and make them add up." : ""}`,
     `- HYPOTHETICALS: Label invented examples explicitly as hypothetical and never present their details or results as evidence.`,
     // P249: a how-to about software showed no code at all; the reader left for a tutorial that does.
     `- CODE AND SETTINGS: When the article teaches a task in software and the preserved excerpts show the exact API, option, file name or command, include a short code, configuration or command example built only from what the excerpts show, in a fenced code block. Never invent an API, option, flag or version. Show a whole example: never one that stops after its imports or types; when the excerpts show only part of the code, describe that step in words instead.`,

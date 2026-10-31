@@ -82,7 +82,6 @@ test("P264 a planned article matches the top results' depth: the longer of two p
   assert.equal(plannedWordCeiling("how-to", 4000), 5200, "30% over the target");
   assert.equal(plannedWordCeiling("how-to", 1500), 2800, "never below the type's own ceiling");
   assert.equal(plannedWordCeiling("standard", 9000), 7000, "at most 7,000 words");
-  assert.match(pipeline, /const targetWords = Math\.max\(minimumWords, Math\.min\(7000, median \?\? FORMAT_DEFAULT_WORDS\[format\]\)\);/);
   assert.match(readFileSync("convex/lib/articleQuality.ts", "utf8"), /const maxWords = planned \? plannedWordCeiling\(article\.articleType, article\.articlePlan\?\.targetWords\) : articleWordCeiling\(article\.articleType\);/);
 });
 
@@ -99,4 +98,13 @@ test("P264 a worked example may use illustrative amounts; real statistics elsewh
   assert.equal(missingOutlineSections("## Pricing\n\nText.", { format: "how-to", sections: ["Worked example of a reconciliation"] }).length, 1);
   assert.match(pipeline, /Give a worked example its own section headed "Worked example" \(or an H3 "Example"\): its illustrative amounts need no source, but finish it/);
   assert.match(readFileSync("convex/lib/articleQuality.ts", "utf8"), /const examples = article\.qualityPlan === "fixed_v1" \? exampleSections\(markdown\) : \[\];/);
+});
+
+test("P265 the global numbers rule names the worked example as its one exception, so examples get real amounts", () => {
+  assert.match(pipeline, /The one exception is a worked example in its own section headed as an example \(see SYNTHESIZE\): give it realistic illustrative amounts \(dollar figures, not letters or placeholders\) and make them add up\./);
+});
+
+test("P265 the length never drops below the format's depth; a worked example the coverage asks for gets its own section", () => {
+  assert.match(pipeline, /const targetWords = Math\.max\(minimumWords, Math\.min\(7000, Math\.max\(median \?\? 0, FORMAT_DEFAULT_WORDS\[format\]\)\)\);/);
+  assert.match(pipeline, /sections\.splice\(faq >= 0 \? faq : sections\.length, 0, "Worked example"\);/);
 });
