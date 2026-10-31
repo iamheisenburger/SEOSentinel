@@ -30,3 +30,12 @@ test("P266 the worked example's amounts are illustrations wherever the article r
   assert.match(pipeline, /"Fix only these points and change nothing else\. Keep the worked example's illustrative amounts exactly as they are:"/);
   assert.match(readFileSync("convex/lib/articleQuality.ts", "utf8"), /const illustrative = article\.qualityPlan === "fixed_v1" \? illustrativeNumbers\(markdown\) : new Set<number>\(\);/);
 });
+
+test("P267 a day of the month and a clock time are not claims; amounts and percentages still are", async () => {
+  const { statedNumbers } = await import("../convex/lib/articlePlanChecks.ts");
+  assert.deepEqual(statedNumbers("A check you wrote on the 29th that clears on the 3rd is outstanding on the 31st."), []);
+  assert.deepEqual(statedNumbers("Reconcile at 9:00 a.m. on the 1st."), []);
+  assert.deepEqual(statedNumbers("The fee is $35 and 40% of firms pay it on the 2nd."), ["35", "40"]);
+  assert.deepEqual(numbersOutsideFactSheet("A check you wrote on the 29th that clears on the 3rd is outstanding on the 31st.", sheet), []);
+});
+

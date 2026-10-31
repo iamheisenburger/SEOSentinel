@@ -34,7 +34,10 @@ const normalize = (value: string) => value.toLowerCase().replace(/[‘’]/g, "'
 /** The numbers a sentence states, as digits (list and step numbering, citation markers and ordinals in headings are not
  * claims). "40 %", "40%" and "40 percent" are one number; "$1,200" and "1200" too. */
 export function statedNumbers(sentence: string): string[] {
-  const text = sentence.replace(/\[\d+(?:\s*,\s*\d+)*\]/g, " ").replace(/\bstep\s+\d+\b/gi, " ");
+  // P267 (Oct 31 2026): a day of the month ("on the 29th") and a clock time ("9:00 a.m.") are not claims: the live
+  // trial's how-to drew a finding for "A check you wrote on the 29th that clears on the 3rd is outstanding on the 31st."
+  const text = sentence.replace(/\[\d+(?:\s*,\s*\d+)*\]/g, " ").replace(/\bstep\s+\d+\b/gi, " ")
+    .replace(/\b\d{1,2}(?:st|nd|rd|th)\b/gi, " ").replace(/\b\d{1,2}:\d{2}\b/g, " ");
   return [...new Set([...text.matchAll(/(?<![\w.])\$?\d[\d,]*(?:\.\d+)?/g)].map((m) => m[0].replace(/[$,]/g, "")).filter((n) => n !== ""))];
 }
 function numberStated(number: string, haystack: string): boolean {
