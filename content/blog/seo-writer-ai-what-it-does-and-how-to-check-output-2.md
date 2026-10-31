@@ -39,7 +39,7 @@ This is why the input material matters more than the drafting model. If the tool
 
 ## A review checklist for AI-written SEO articles
 
-The steps below are a practical process you can run yourself. They are recommendations for an editorial workflow, not an industry standard.
+The steps below are a practical process you can run yourself. They are recommendations for an editorial workflow.
 
 **Before drafting**
 
