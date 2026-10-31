@@ -2109,6 +2109,11 @@ const READER_VISIBLE_PIPELINE_TEXT: RegExp[] = [
   // facts", and 4 of pentra.dev's 34 live articles said so in one stock sentence ("The framework is the author's
   // recommendation, not an industry standard"). Cowork's launch audit read it as boilerplate.
   /\brecommendations?,?\s+(?:not|rather than)\s+(?:an?\s+)?(?:industry|official|universal|established|formal)\s+(?:standards?|rules?|benchmarks?|requirements?|best[- ]practices?|facts?)\b/i,
+  // P272 (Oct 31 2026): its variants on 23 live owner-site pages: the author's own framework, method, structure, grouping,
+  // view or checklist set against a standard ("This breakdown is an author-proposed way to organize your stack, not an
+  // industry standard", "The grouping below is not an industry standard or a formal taxonomy"). A cue that the sentence is
+  // about the article's own proposal is required: "Markdown itself is not a formal standard" is a fact, not a disclaimer.
+  /\b(?:author|recommend|propos|suggest|framework|method|approach|grid|checklist|structure|grouping|breakdown|template|diagnostic|following|below|view|working)\w*[^.!?\n]{0,200}?\b(?:not|rather than)\s+(?:an?\s+)?(?:industry|official|universal|established|formal)\s+(?:standards?|rules?|benchmarks?|requirements?|best[- ]practices?|taxonom(?:y|ies)|facts?)\b/i,
   /\bthe\s+(?:cited\s+|listed\s+|above\s+)?sources?\s+(?:do|does|did)\s*(?:not|n't)\s+(?:give|say|state|specify|provide|cover|offer|mention|include|list)\b/i,
   // P168 (Oct 23 2026): told to leave out the company behind a cited help page
   // (P162), a LeadPilot draft wrote "That documentation says a lead is ..." and

@@ -156,11 +156,29 @@ export function relatedReadingRepairProposal(markdown: string, titleByHref: Map<
  * established industry facts", and 10 of the owner sites' live pages say so in one stock clause ("The method is a
  * recommendation, not an industry standard, and ..."): pipeline text since P248. The repair deletes only that contrast
  * clause, so the advice around it stays word for word and nothing is added; readerTextRepair then proves it. */
-const STOCK_CONTRAST = /(\brecommendations?),?\s+(?:not|rather than)\s+(?:an?\s+)?(?:industry|official|universal|established|formal)\s+(?:standards?|rules?|benchmarks?|requirements?|best[- ]practices?|facts?)(?=[\s,.;:!?)]|$)/gi;
+/** P272 (Oct 31 2026): the stock disclaimer's shapes on the 23 live owner-site pages that carry it (29 sentences), in the
+ * order they are removed. Only the contrast with a standard goes; the advice around it stays word for word. */
+const STOCK_STANDARD = String.raw`(?:an?\s+)?(?:industry|official|universal|established|formal)\s+(?:standards?|rules?|benchmarks?|requirements?|best[- ]practices?|taxonom(?:y|ies)|facts?)`;
+const STOCK_TAIL = String.raw`(?:\s+or\s+(?:an?\s+)?(?:[\w-]+\s+)?(?:standards?|rules?|benchmarks?|taxonom(?:y|ies)))?(?:,?\s+(?:and|or)\s+not\s+[^.!?\u2014\u2013:;]+)?`;
+const STOCK_REPAIRS: [RegExp, string][] = [
+  // "The grouping below is not an industry standard or a formal taxonomy — it's a way of …" → "The grouping below is a way of …"
+  [new RegExp(String.raw`\b(is|are)\s+not\s+${STOCK_STANDARD}${STOCK_TAIL}\s*[\u2014\u2013]\s*(?:it(?:'|\u2019)?s|it is|they(?:'|\u2019)?re|they are)\s+`, "gi"), "$1 "],
+  // "… run yourself — not an industry standard — so treat …" → "… run yourself, so treat …"
+  [new RegExp(String.raw`\s*[\u2014\u2013]\s*not\s+${STOCK_STANDARD}${STOCK_TAIL}\s*[\u2014\u2013]\s*`, "gi"), ", "],
+  // "… your own data — not a universal standard, but a reader-usable starting point" → "… your own data — a reader-usable starting point"
+  [new RegExp(String.raw`\bnot\s+${STOCK_STANDARD},?\s+but\s+`, "gi"), ""],
+  // "… a reasonable starting point to adapt — not a universal standard, and not a guarantee of specific outcomes." → "… to adapt."
+  [new RegExp(String.raw`\s*[\u2014\u2013]\s*not\s+${STOCK_STANDARD}${STOCK_TAIL}(?=\s*[.!?:]|$)`, "gi"), ""],
+  // "…, not an industry standard." / "…, not an industry rule: decide …" / "… a recommendation rather than an established standard."
+  [new RegExp(String.raw`(?:,\s*not|,?\s+rather than)\s+${STOCK_STANDARD}${STOCK_TAIL}(?=\s*[,.;:!?)\u2014\u2013]|$)`, "gi"), ""],
+];
+export function withoutStockContrast(text: string): string {
+  return STOCK_REPAIRS.reduce((value, [pattern, replacement]) => value.replace(pattern, replacement), text);
+}
 export function stockDisclaimerRepairProposal(markdown: string): { before: string; replacement: string } | null {
   for (const block of markdown.split(/\n\s*\n/).map(part => part.trim())) {
     if (!block || /\n/.test(block) || /^(?:#|[-*+]\s|\d+[.)]\s|>|\||```|<)/.test(block) || pipelineText(block).length === 0) continue;
-    const replacement = block.replace(STOCK_CONTRAST, "$1");
+    const replacement = withoutStockContrast(block);
     if (replacement !== block && pipelineText(replacement).length === 0) return { before: block, replacement };
   }
   return null;
@@ -235,7 +253,7 @@ export const RELATED_REPAIR_SLOT_LEAD_MS = 6 * 3_600_000, RELATED_REPAIR_SPACING
 /** P220 (Oct 26 2026): the rules the link repair runs by. A change to them (2, P218: links to consolidated pages)
  * makes every page due once more: a pass records the rules it started under, and a site whose last finished pass
  * ran under earlier rules runs a fresh one, instead of resting a week with pages passed under the old rules. */
-export const RELATED_REPAIR_VERSION = 4; // 3: P221 (a title cut after a dropped leading question word); 4: P250 (the stock disclaimer)
+export const RELATED_REPAIR_VERSION = 5; // 3: P221 (a title cut after a dropped leading question word); 4: P250 (the stock disclaimer); 5: P272 (its variants)
 export function relatedRepairAllowed(site: Doc<"sites">, now: number): boolean {
   const s = site.contentSchedule;
   return Boolean(s && site.serviceMode === "growth_first" && site.autopilotEnabled && s.autopilotSelectedAt && s.autopublishConsentAt &&

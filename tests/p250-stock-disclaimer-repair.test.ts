@@ -36,7 +36,7 @@ test("P250 the repair chain offers it when a page's links need nothing, under a 
   const improvements = readFileSync("convex/contentImprovements.ts", "utf8");
   assert.match(improvements, /const stock = related \? null : stockDisclaimerRepairProposal\(e\.markdown\);/);
   assert.match(improvements, /kind: stock \? "reader_text_repair" : "related_reading_titles"/);
-  assert.equal(RELATED_REPAIR_VERSION, 4, "a fresh pass re-checks every page");
+  assert.ok(RELATED_REPAIR_VERSION >= 4, "a fresh pass re-checks every page (P272: 5, its variants)");
 });
 
 // C3 (Cowork's launch audit): /beta did not say what happens after the 60 days.
