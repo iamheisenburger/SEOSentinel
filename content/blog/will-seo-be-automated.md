@@ -109,6 +109,6 @@ Where recovery actions or outreach are involved, Pentra queues the evidence-back
 
 ## Related reading
 
-- [Best SEO Monitoring Tools for Small Teams: Pentra vs. Traditional Solutions](/blog/best-seo-monitoring-tools-small-teams)
-- [AI Content Generator vs Manual Article Writing: Which Wins for Rankings](/blog/ai-content-generator-vs-manual-writing-rankings)
-- [Article Refresh Strategy: Complete Guide to Updating Old Content for Better Rankings](/blog/article-refresh-strategy-guide)
+- [A Practical Guide to Weekly Website SEO Health Checks](/blog/weekly-website-seo-health-checks)
+- [Is AI-Written Content Safe for SEO? What Actually Matters](/blog/is-ai-written-content-safe-for-seo)
+- [A Practical Guide to Improving Pages Close to Page One](/blog/improving-pages-close-to-page-one)
