@@ -206,7 +206,7 @@ If your team needs to scale the search-content portion of that system while keep
 ## Related reading
 
 - [Ranking Optimization: A Decision Worksheet for Search Visibility](/blog/ranking-optimization-decision-system)
-- [B2B SaaS Content Strategy for Ranking and Lead Generation: A Complete Guide](/blog/b2b-saas-content-strategy-ranking-lead-generation)
+- [SaaS Keyword Research: Start From Buyer Problems, Not Product Terms](/blog/saas-keyword-research)
 
 ## Sources
 
