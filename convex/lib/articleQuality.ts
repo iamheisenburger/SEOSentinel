@@ -2251,9 +2251,13 @@ function readableNumbers(sentence: string): Set<string> {
 
 /** A list item or line that is only a link ("Related reading") is navigation, not a claim. */
 const BARE_LINK_ITEM = /^(?:[-*+]\s+|\d+[.)]\s+)?\[[^\]]*\]\([^)]*\)\s*[.;]?$/;
+/** P275 (Nov 1 2026): a Sources list is a bibliography, never a claim, whatever form its entries take. pentra.dev's first
+ * November draft was held for its own entry «- [1] [ChatGPT Plans and Pricing (2026): $0 to $500 a Month](…)»: the
+ * title's numbers are not in the page's excerpt, and the one fix cannot change a source's title. */
+const BIBLIOGRAPHY_HEADING = /^#{2,3}\s+(?:Sources|References|Works cited|Bibliography)\s*$/im;
 function articleClaimSentences(markdown: string): string[] {
   const { prose } = markdownOutsideCode(markdown);
-  return prose.split(/\n\s*\n/).map((paragraph) => paragraph.trim())
+  return prose.split(BIBLIOGRAPHY_HEADING)[0].split(/\n\s*\n/).map((paragraph) => paragraph.trim())
     .filter((paragraph) => paragraph && !paragraph.startsWith("#") && !paragraph.startsWith("|") && !isSourceBibliographyEntry(paragraph))
     .flatMap((paragraph) => claimSentenceSegments(paragraph))
     .filter((sentence) => !/^#/.test(sentence) && !/^\[\d+\]\s/.test(sentence) && !BARE_LINK_ITEM.test(sentence.trim()));
