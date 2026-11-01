@@ -142,5 +142,5 @@ If a page already appears in results for a broad marketing phrase but sits far f
 
 ## Related reading
 
-- [Keyword Clustering Strategy: How to Organize Keywords by Search Intent](/blog/keyword-clustering-strategy-organize-by-intent)
-- [How to Detect Ranking Drops in SEO: A Complete Monitoring Guide](/blog/how-to-detect-ranking-drops-seo)
+- [Keywords for Research: How to Find Search Terms Worth Writing About](/blog/keywords-for-research-how-to-find-search-terms)
+- [Ranking Optimization: A Decision Worksheet for Search Visibility](/blog/ranking-optimization-decision-system)
