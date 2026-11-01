@@ -128,8 +128,8 @@ The final artifact is not a promise of improved rankings. It is a documented edi
 
 ## Related reading
 
-- [B2B SaaS Content Strategy for Ranking and Lead Generation: A Complete Guide](/blog/b2b-saas-content-strategy-ranking-lead-generation)
-- [On-Page and Off-Page SEO: Complete Strategy Guide for Rankings](/blog/on-page-off-page-seo-strategy-guide)
+- [SaaS Keyword Research: Start From Buyer Problems, Not Product Terms](/blog/saas-keyword-research)
+- [How to Increase SEO Ranking: What to Fix First, in Order](/blog/increase-seo-ranking)
 
 ## Sources
 
