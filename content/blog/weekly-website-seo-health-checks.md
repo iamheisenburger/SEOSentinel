@@ -145,7 +145,7 @@ The edit-date column is the most valuable one. When rankings move, the first thi
 
 ## Which parts you might automate
 
-This is the author's view, not an established rule. Steps that compare a state against an expectation (is the page live, is a tag present, did a count change) are, in my view, the most natural candidates for automation, because the expected answer is known in advance. Steps that need judgement, such as deciding whether a drop reflects a change in search intent or whether a page deserves a rewrite, are better left with a person.
+This is the author's view. Steps that compare a state against an expectation (is the page live, is a tag present, did a count change) are, in my view, the most natural candidates for automation, because the expected answer is known in advance. Steps that need judgement, such as deciding whether a drop reflects a change in search intent or whether a page deserves a rewrite, are better left with a person.
 
 If you do automate, keep one rule: an automated check should tell you what it looked at and what it found, so you can verify it occasionally yourself. A tool that only reports "all good" gives you nothing to audit.
 
