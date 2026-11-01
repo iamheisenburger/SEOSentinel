@@ -35,7 +35,7 @@ internalLinks:
 
 You can write every article on your site yourself, and for some businesses it is the right call. It stays sustainable only if you treat each article as a repeatable process rather than a burst of inspiration. You need a fixed set of facts you write from, a short sequence of stages every piece passes through, and a clear rule for which articles deserve your personal time.
 
-This guide gives you that process. The cited sources are general guides to the writing process, written for students and scholarly writers rather than for blogs. The stages they describe are applied here to blog articles, along with a few editorial checks that matter when the goal is customers from search. The workflow in the later sections is the author's recommendation, not an industry standard, so adjust it to your own pace.
+This guide gives you that process. The cited sources are general guides to the writing process, written for students and scholarly writers rather than for blogs. The stages they describe are applied here to blog articles, along with a few editorial checks that matter when the goal is customers from search. The workflow in the later sections is the author's recommendation, so adjust it to your own pace.
 
 ## Decide whether writing everything yourself fits your goal
 
