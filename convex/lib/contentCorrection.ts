@@ -162,6 +162,8 @@ export function relatedReadingRepairProposal(markdown: string, titleByHref: Map<
 const STOCK_STANDARD = String.raw`(?:an?\s+)?(?:(?:industry|official|universal|established|formal)\s+){1,2}(?:standards?|rules?|benchmarks?|requirements?|best[- ]practices?|taxonom(?:y|ies)|facts?|statistics?)`;
 const STOCK_TAIL = String.raw`(?:\s+or\s+(?:an?\s+)?(?:[\w-]+\s+)?(?:standards?|rules?|benchmarks?|taxonom(?:y|ies)))?(?:,?\s+(?:and|or)\s+not\s+[^.!?\u2014\u2013:;]+)?`;
 const STOCK_REPAIRS: [RegExp, string | ((match: string, ...groups: string[]) => string)][] = [
+  // P282: "This section is a recommendation, not an industry rule. Explicit data is …" → "Explicit data is …"
+  [new RegExp(String.raw`(?:This\s+section\s+is|This\s+is)\s+(?:an?\s+|the\s+author(?:'|’)s\s+)?(?:own\s+)?recommendations?,?\s+(?:not|rather than)\s+${STOCK_STANDARD}\s*\.\s+(?=\S)`, "g"), ""],
   // P279: the disclaimer as a sentence of its own after the proposal.
   // "It is not an established industry standard, so verify each rule \u2026" \u2192 "Verify each rule \u2026"
   [new RegExp(String.raw`\b(?:It|This|That|They|These)\s+(?:is|are)\s+not\s+${STOCK_STANDARD},?\s+so\s+(\w)`, "g"), (_match, first) => first.toUpperCase()],
@@ -185,6 +187,17 @@ const STOCK_REPAIRS: [RegExp, string | ((match: string, ...groups: string[]) => 
 export function withoutStockContrast(text: string): string {
   return STOCK_REPAIRS.reduce((value, [pattern, replacement]) =>
     typeof replacement === "string" ? value.replace(pattern, replacement) : value.replace(pattern, replacement), text);
+}
+/** P282: every repairable stock disclaimer in text Pentra just wrote (a fix's output), removed the way the live repair
+ * removes it: only the contrast with a standard goes. Applied before a refresh keeps its own section. */
+export function withoutStockDisclaimers(markdown: string): string {
+  let text = markdown;
+  for (let pass = 0; pass < 12; pass++) {
+    const proposal = stockDisclaimerRepairProposal(text);
+    if (!proposal) break;
+    text = text.replace(proposal.before, proposal.replacement);
+  }
+  return text;
 }
 export function stockDisclaimerRepairProposal(markdown: string): { before: string; replacement: string } | null {
   for (const block of markdown.split(/\n\s*\n/).map(part => part.trim())) {

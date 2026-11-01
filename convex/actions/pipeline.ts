@@ -7,6 +7,7 @@ import { LIST_MIN_OPTIONS, LIST_RESEARCH_SEARCHES, LIST_RESEARCH_SOURCES, MAX_RE
 import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWords, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis,
   serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch, FORMAT_DEFAULT_WORDS } from "../lib/serpBrief";
 import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, flaggedLines, planCheckIssues, planCheckNotes, runPlanChecks, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
+import { withoutStockDisclaimers } from "../lib/contentCorrection";
 import { articlePlanEnabled, contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
 import { autopilotCompanyNameIssue, autopilotCompanyNameNote, autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote,
   checkableFactCheckFindings, unsearchedCompanyMentions } from "../lib/autopilotEditor";
@@ -7462,7 +7463,8 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
     // issues than the draft had is set aside, and the draft it was given stands.
     const blocking = (draft: typeof fields) => { const c = candidateFor(draft);
       return issuesBlockingPreLinkReview([...evaluatePublicationQuality(c, "strict").issues, ...readerVisibleIssues(c)]).length; };
-    const fixedFields = fixed ? { ...fields, markdown: withSourcesSection(fixed.markdown, article.sources ?? []) } : null;
+    // P282: a stock disclaimer the fix itself wrote is removed in code, the way the live repair removes it.
+    const fixedFields = fixed ? { ...fields, markdown: withSourcesSection(withoutStockDisclaimers(fixed.markdown), article.sources ?? []) } : null;
     const [blockingBefore, blockingAfter] = fixedFields ? [blocking(fields), blocking(fixedFields)] : [0, 0];
     if (fixedFields && blockingAfter > blockingBefore) {
       fixNotes.push(`The fix was set aside: it left ${blockingAfter} blocking issue(s) where the draft had ${blockingBefore}.`);
@@ -7716,7 +7718,9 @@ async function reviewExistingArticleHandler(
           return priority(left) - priority(right);
         }).slice(0, 20),
       });
-      reviewMarkdown = keepRefreshSection(remediated.markdown);
+      // P282: before a refresh keeps its section, a stock disclaimer the fix wrote is removed in code (LeadPilot's Nov 3
+      // refresh was held for "This section is a recommendation, not an industry rule.", written by its one fix).
+      reviewMarkdown = keepRefreshSection(withoutStockDisclaimers(remediated.markdown));
     }
 
     if (contentProviderMayRepairDraft()) {
