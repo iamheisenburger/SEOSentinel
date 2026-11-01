@@ -1905,6 +1905,60 @@ test("P277 a draft held under checks since corrected fills its slot, re-checked 
   }
 });
 
+// P278 (Nov 1 2026): pentra.dev's reused /seo-optimization-automation was sealed with "[SEO automation](/#features)" and
+// "[How It](/#pipeline)" as its Related reading. A draft P277 reused before P278 is linked once more before its slot:
+// the article and its job's sealed hash change together, the first hash stays on record, and nothing else is rewritten.
+test("P278 a reused draft sealed with homepage sections as Related reading is linked again before its slot", async () => {
+  const f = setup({ growthFirst: true, articlePlan: true, businesses: [slcBusinesses[1]] });
+  const site = await selectGrowth(f, 24 * 3_600_000);
+  Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+  await pumpUntil(f, () => f.tables.jobs?.some(j => ["ready", "failed"].includes(j.contentWork?.stage)));
+  const held = f.tables.jobs.find(j => j.contentWork?.stage === "ready");
+  assert.ok(held, diagnostic(f));
+  for (const other of f.tables.jobs) if (other.contentWork && other._id !== held._id) Object.assign(other, { status: "failed", contentWork: { ...other.contentWork, stage: "failed", retiredAt: f.now() } });
+  const article = f.get(held.articleId)!, topic = f.get(article.topicId)!, saved = f.get(site.id)!;
+  const shift = f.now() + 12 * 3_600_000 - held.contentWork.deadlineAt;
+  Object.assign(held, { status: "failed", updatedAt: f.now() });
+  Object.assign(held.contentWork, { stage: "failed", failure: "bounded_content_quality_exhausted", approvedArtifactHash: undefined, checksVersion: 1,
+    deadlineAt: held.contentWork.deadlineAt + shift, windowStartAt: held.contentWork.windowStartAt + shift, windowWakeId: undefined });
+  f.get(site.id)!.contentSchedule.nextDeadlineAt = held.contentWork.deadlineAt;
+  Object.assign(article, { status: "review", publicationGateStatus: "blocked", publicationGateIssues: ["Plan check: A list needs at least 6 items (it has 5)."], qualityRevisionCount: 1 });
+  Object.assign(topic, { status: "disqualified", contentFeasibilityStatus: "quality_exhausted" });
+  // The crawl kept the homepage's sections as pages.
+  for (const [slug, title] of [["/#features", "Features"], ["/#pipeline", "How It Works"]]) f.add("pages", { siteId: site.id, url: `https://${saved.domain}${slug}`, slug, title,
+    summary: "", keywords: [title.toLowerCase(), "garden maintenance visit preparation"], canonicalDomain: saved.canonicalDomain ?? saved.domain, domainRevision: saved.canonicalDomainRevision ?? 0 });
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_replacement");
+  const reuse = f.tables.jobs.find(j => j.contentWork?.reusedDraft)!;
+  await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: reuse._id });
+  assert.equal(f.get(reuse._id)!.contentWork.stage, "ready", diagnostic(f));
+  const sealed = f.get(article._id)!;
+  assert.ok(!(sealed.internalLinks ?? []).some((link: Fields) => String(link.href).includes("#")), "P278: a section of a page is never Related reading");
+  // A draft sealed before P278 with the old list: linked again on the next pass, once.
+  const junk = "## Related reading\n\n- [SEO automation](/#features)\n- [How It](/#pipeline)";
+  const body = String(sealed.markdown).replace(/\n## Related reading\n[\s\S]*?(?=\n## Sources|$)/, "");
+  sealed.markdown = body.replace(/\n## Sources/, `\n${junk}\n\n## Sources`);
+  sealed.internalLinks = [{ anchor: "SEO automation", href: "/#features" }, { anchor: "How It", href: "/#pipeline" }];
+  const oldHash = publicationArtifactHash(sealed as never);
+  sealed.auditedContentHash = oldHash; f.get(reuse._id)!.contentWork.approvedArtifactHash = oldHash;
+  const calls = f.modelCalls.length;
+  await f.invoke("contentWork:advance", { siteId: site.id });
+  const scheduled = f.tables._scheduled_functions.filter(row => row.name === "actions/pipeline:relinkWaitingArticle" && row.state.kind === "pending");
+  assert.equal(scheduled.length, 1, "linked once more, once");
+  await f.invoke("actions/pipeline:relinkWaitingArticle", { siteId: site.id, jobId: reuse._id });
+  const relinked = f.get(article._id)!, job = f.get(reuse._id)!;
+  assert.ok(!String(relinked.markdown).includes("/#features") && !String(relinked.markdown).includes("[How It]"), String(relinked.markdown).slice(-600));
+  assert.ok(!(relinked.internalLinks ?? []).some((link: Fields) => String(link.href).includes("#")));
+  assert.equal(relinked.status, "ready"); assert.equal(relinked.publicationGateStatus, "passed");
+  assert.equal(job.contentWork.stage, "ready");
+  assert.equal(job.contentWork.approvedArtifactHash, relinked.auditedContentHash, "the job delivers exactly the relinked article");
+  assert.equal(publicationArtifactHash(relinked as never), relinked.auditedContentHash);
+  assert.equal(job.contentWork.relinkedFromHash, oldHash, "the first sealed hash stays on record");
+  assert.equal(f.modelCalls.length, calls, "code only");
+  await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(f.tables._scheduled_functions.filter(row => row.name === "actions/pipeline:relinkWaitingArticle").length, 1, "never twice");
+  f.assertOffline();
+});
+
 test("SLC66 an Autopilot site goes live with its first reviewed article, even when the plan allows only one", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const site = await createEmptyContentSite(f), saved = f.get(site.id)!;

@@ -106,7 +106,8 @@ test("P217 new internal links go only to pentra.dev pages served on their own UR
     { href: `https://pentra.dev/blog/${merged}`, title: "Merged, absolute" }]);
   assert.deepEqual(kept.map(d => d.title), ["Survivor", "Pricing"]);
   assert.equal(servedDestinations("leadpilot.chat", [{ href: `/blog/${merged}` }]).length, 1, "another site's links are untouched");
-  for (const [file, count] of [["convex/actions/pipeline.ts", 1], ["convex/articles.ts", 1], ["convex/publishedRevisions.ts", 2]] as const) {
+  // P278: the article pipeline also filters the siblings it chooses from (merged articles had crowded out served ones).
+  for (const [file, count] of [["convex/actions/pipeline.ts", 2], ["convex/articles.ts", 1], ["convex/publishedRevisions.ts", 2]] as const) {
     assert.equal((readFileSync(file, "utf8").match(/servedDestinations\(site\.domain,/g) ?? []).length, count, `${file} filters its link destinations`);
   }
 });

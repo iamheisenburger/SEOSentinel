@@ -247,7 +247,7 @@ async function settleRecoveredTopicQuality(
   return false;
 }
 
-async function syncSummary(ctx: MutationCtx, articleId: Doc<"articles">["_id"]) {
+export async function syncSummary(ctx: MutationCtx, articleId: Doc<"articles">["_id"]) {
   const article = await ctx.db.get(articleId);
   if (!article) return;
 

@@ -1412,6 +1412,8 @@ export default defineSchema({
       // The held job and its verdict stay on record there; this copy keeps the verdict next to the delivery.
       reusedDraft: v.optional(v.object({ fromJobId: v.id("jobs"), previousIssues: v.array(v.string()),
         previousChecksVersion: v.number(), at: v.number() })),
+      // P278: a waiting article linked before P278 had its Related reading chosen again; the hash it was sealed with first.
+      relinkRequestedAt: v.optional(v.number()), relinkedFromHash: v.optional(v.string()),
       // A ready article moved to the current cadence slot after the schedule
       // passed (or never matched) its original deadline. Kept as the record.
       slotRebinds: v.optional(v.array(v.object({ fromDeadlineAt: v.number(), toDeadlineAt: v.number(),

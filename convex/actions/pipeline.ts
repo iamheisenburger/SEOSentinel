@@ -6172,6 +6172,8 @@ async function handleLinks(
   siteId: Id<"sites">,
   articleId: Id<"articles">,
   expectedSealedContentHash?: string,
+  // P278: a waiting article linked again; the article and its job's sealed hash change together, or nothing changes.
+  options: { relinkJobId?: Id<"jobs"> } = {},
 ): Promise<{
   count: number;
   readyForPublication?: boolean;
@@ -6227,7 +6229,9 @@ async function handleLinks(
       kind: "published article",
       preferredGrowthTarget: candidate._id === growthParentArticle?._id,
     }));
-  const linkPages: Array<{ slug: string; title?: string; summary?: string; keywords?: string[] }> = [...pages];
+  // P278: a section of a page (pentra.dev's crawl kept "/#features", "/#pipeline") is not reading.
+  const linkPages: Array<{ slug: string; title?: string; summary?: string; keywords?: string[] }> =
+    pages.filter((page: { slug: string }) => !page.slug.includes("#"));
   // A content-only empty account has no legacy crawl inventory yet. Its
   // confirmed business homepage may be a link target only after a fresh safe
   // read proves the exact root exists. This neither enrolls editable content
@@ -6272,6 +6276,10 @@ async function handleLinks(
   ));
 
   if (!article.markdown || destinations.length === 0) {
+    if (expectedSealedContentHash && options.relinkJobId) {
+      return await ctx.runMutation(internal.contentWork.applyRelinkedArtifact, { jobId: options.relinkJobId,
+        expectedContentHash: expectedSealedContentHash, markdown: article.markdown, internalLinks: [] });
+    }
     if (expectedSealedContentHash) {
       return await ctx.runMutation(
         internal.articles.applyInternalLinksToSealedArtifact,
@@ -6305,10 +6313,13 @@ async function handleLinks(
   // P251: the site's pages near the click zone (Search Console, 28 days) come first among articles about as related.
   const clickZone: ClickZone = new Map((await ctx.runQuery(internal.searchPerformance.pageClickZoneInternal, { siteId }).catch(() => []))
     .map((page: { path: string; position: number; impressions: number }) => [page.path, { position: page.position, impressions: page.impressions }]));
+  // P278 (Nov 1 2026): siblings come from the pages served on their own URL only. The best matches for pentra.dev's
+  // "seo optimization automation" were articles merged away (P193); they filled the top 3, the check after the choice
+  // dropped them, and the list fell back to two homepage sections.
   const siblingLinks = selectRelatedInternalLinks({
     currentTitle: article.title,
     currentKeywords: article.metaKeywords,
-    destinations: relatedArticles,
+    destinations: servedDestinations(site.domain, relatedArticles),
     limit: 3,
     clickZone,
   });
@@ -6377,6 +6388,10 @@ async function handleLinks(
     };
   }
 
+  if (expectedSealedContentHash && options.relinkJobId) {
+    return await ctx.runMutation(internal.contentWork.applyRelinkedArtifact, { jobId: options.relinkJobId,
+      expectedContentHash: expectedSealedContentHash, markdown: result.markdown, internalLinks: result.inserted });
+  }
   if (expectedSealedContentHash) {
     return await ctx.runMutation(
       internal.articles.applyInternalLinksToSealedArtifact,
@@ -8480,6 +8495,21 @@ export const reviewExistingArticleInternal = internalAction({
     throw new Error(
       "Direct internal article review is disabled. Queue a bounded quality-retry job instead.",
     );
+  },
+});
+
+/** P278: a waiting Autopilot article linked before P278 gets its Related reading chosen again by today's rules (code
+ * only, no model call). Its article and its job's sealed hash change together, or nothing changes. */
+export const relinkWaitingArticle = internalAction({
+  args: { siteId: v.id("sites"), jobId: v.id("jobs") },
+  handler: async (ctx, { siteId, jobId }) => {
+    const job = await ctx.runQuery(internal.jobs.getInternal, { jobId });
+    const cw = job?.contentWork;
+    if (!job || !cw || job.siteId !== siteId || job.status !== "done" || cw.stage !== "ready" || !job.articleId || !cw.approvedArtifactHash) {
+      return { relinked: false };
+    }
+    const linked = await handleLinks(ctx, siteId, job.articleId, cw.approvedArtifactHash, { relinkJobId: jobId });
+    return { relinked: linked.readyForPublication === true, count: linked.count };
   },
 });
 

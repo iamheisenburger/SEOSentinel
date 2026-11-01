@@ -6,7 +6,7 @@ import { ConvexError, v } from "convex/values";
 import { contentIntentConflicts, evaluateTopicBusinessFit, tenantDiscoveryAnchors, tenantTopicBusinessSignals, isSealedReady, topicFitSettled } from "./lib/autopilotBuffer";
 import { normalizeResearchKeyword, researchSeedsForRound, searchLikePhrase, searchSeedLength, TOPIC_RESEARCH_METHOD } from "./lib/researchSeeds";
 import { relatedRepairAllowed } from "./lib/contentCorrection";
-import { publicationArtifactHash, publicationDeliveryConfig, sha256Hex } from "./lib/publicationArtifact";
+import { publicationArtifactHash, publicationDeliveryConfig, publicationDeliveryConfigHash, sha256Hex } from "./lib/publicationArtifact";
 import { isProviderRequestRefusal, legacyCreditRefusal, validProviderRequestId } from "./lib/contentProviderRefusal";
 import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopics, contentAnalysisMatchesCurrentDomain, pageMatchesCurrentDomain, articleMatchesCurrentDomain, gscConnectionMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
@@ -34,7 +34,7 @@ import { assertSafeImprovement } from "./lib/contentSelection";
 import { authorizedWorkPage, chooseImprovement, contentWorkConnection, enrollVerifiedCreation, renewManagedEnrollments } from "./selectedPages";
 import { noteDraftReady, noteFirstArticleLive } from "./customerEmails";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
-import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes } from "./articles";
+import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes, syncSummary } from "./articles";
 import { AUTOPILOT_ACCEPTANCE, CONTENT_CHECKS_VERSION, evaluatePublicationQuality, issuesBlockingPreLinkReview, ownerWaivableIssue, readerVisibleIssues } from "./lib/articleQuality";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
 import { auditResultHash, clarifiableContentAudit, inconsistentAuditFeedback, internalContentProcessingError, retainedContradictoryContentAudit, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
@@ -1826,6 +1826,48 @@ async function reusableHeldDraft(ctx: MutationCtx, site: Doc<"sites">, preferJob
   return null;
 }
 
+/** P278 (Nov 1 2026): Related reading took its top 3 matches from every published article, then dropped the ones merged
+ * away, and fell back to homepage sections listed under cut titles ("How It"). The drafts P277 reused before P278 were
+ * linked that way (pentra.dev's: its live articles and other waiting work are unaffected); each is linked once more
+ * with today's rules before delivery. */
+const RELATED_LINKS_RULE_AT = Date.UTC(2026, 10, 1, 14, 0);
+async function relinkWaitingArticles(ctx: MutationCtx, siteId: Id<"sites">, waiting: Doc<"jobs">[]) {
+  for (const job of waiting) {
+    const cw = job.contentWork!;
+    if (!cw.reusedDraft || job._creationTime >= RELATED_LINKS_RULE_AT || cw.relinkRequestedAt !== undefined || job.status !== "done" ||
+      cw.stage !== "ready" || cw.intent !== "create" || !job.articleId || Date.now() >= cw.windowStartAt) continue;
+    // The marker also goes on this pass's copy, so a later write of the job in the same pass keeps it.
+    job.contentWork = { ...cw, relinkRequestedAt: Date.now() };
+    await ctx.db.patch(job._id, { contentWork: job.contentWork });
+    await ctx.scheduler.runAfter(0, internal.actions.pipeline.relinkWaitingArticle, { siteId, jobId: job._id });
+  }
+}
+/** P278: the links relinkWaitingArticle chose, applied to the exact sealed artifact the job will deliver while the
+ * linked article still passes the publication checks: the article and the job's sealed hash change in this one
+ * transaction, or nothing changes. The first sealed hash stays on the job. */
+export const applyRelinkedArtifact = internalMutation({
+  args: { jobId: v.id("jobs"), expectedContentHash: v.string(), markdown: v.string(),
+    internalLinks: v.array(v.object({ anchor: v.string(), href: v.string() })) },
+  handler: async (ctx, args) => {
+    const unchanged = { count: 0, readyForPublication: false, issues: ["The waiting article or its job changed; its links were left as they were."] };
+    const job = await ctx.db.get(args.jobId), cw = job?.contentWork;
+    if (!job?.siteId || !cw || job.status !== "done" || cw.stage !== "ready" || cw.approvedArtifactHash !== args.expectedContentHash || !job.articleId) return unchanged;
+    const article = await ctx.db.get(job.articleId), site = await ctx.db.get(job.siteId);
+    if (!article || !site || article.siteId !== site._id || !isSealedReady(article) || article.publicationLeaseOwner || article.publicationAttemptedAt ||
+      article.auditedContentHash !== args.expectedContentHash || publicationArtifactHash(article) !== args.expectedContentHash ||
+      article.publicationConfigHash !== publicationDeliveryConfigHash(publicationDeliveryConfig(site))) return unchanged;
+    const candidate: Doc<"articles"> = { ...article, markdown: args.markdown, internalLinks: args.internalLinks };
+    const quality = evaluatePublicationQuality(candidate, "strict");
+    if (!quality.passed) return { count: 0, readyForPublication: false, issues: quality.issues };
+    const contentHash = publicationArtifactHash(candidate), at = Date.now();
+    await ctx.db.patch(article._id, { markdown: args.markdown, internalLinks: args.internalLinks, publicationGateIssues: quality.issues,
+      publicationGateWarnings: quality.warnings, publicationCheckedAt: at, auditedContentHash: contentHash, auditedAt: at, updatedAt: at });
+    await syncSummary(ctx, article._id);
+    await ctx.db.patch(job._id, { contentWork: { ...cw, approvedArtifactHash: contentHash, relinkedFromHash: cw.relinkedFromHash ?? args.expectedContentHash } });
+    return { count: args.internalLinks.length, readyForPublication: true, contentHash, issues: [] };
+  },
+});
+
 export const advanceOwnerDraft = internalMutation({ args: { jobId: v.id("jobs") }, handler: async (ctx, { jobId }) => {
   const job = await ctx.db.get(jobId), site = job?.siteId ? await ctx.db.get(job.siteId) : null;
   if (!job?.contentWork?.ownerRequest || !site || !jobAuthorizedForExecution(site, job) || job.status !== "done" ||
@@ -2522,6 +2564,7 @@ export const advance = internalMutation({
       return { scheduled: 0, mode: "public_url_pending" };
     }
     if (restoration && ["pending", "running"].includes(restoration.status)) return { scheduled: 0, mode: "work_in_progress", activeJobId: restoration._id };
+    await relinkWaitingArticles(ctx, siteId, waiting);
     // A prepared article is never left behind the schedule or off its grid.
     const rebound = await rebindStrandedReadyWork(ctx, site, schedule, waiting);
     if (rebound) {
