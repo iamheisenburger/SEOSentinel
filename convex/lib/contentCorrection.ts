@@ -158,22 +158,31 @@ export function relatedReadingRepairProposal(markdown: string, titleByHref: Map<
  * clause, so the advice around it stays word for word and nothing is added; readerTextRepair then proves it. */
 /** P272 (Oct 31 2026): the stock disclaimer's shapes on the 23 live owner-site pages that carry it (29 sentences), in the
  * order they are removed. Only the contrast with a standard goes; the advice around it stays word for word. */
-const STOCK_STANDARD = String.raw`(?:an?\s+)?(?:industry|official|universal|established|formal)\s+(?:standards?|rules?|benchmarks?|requirements?|best[- ]practices?|taxonom(?:y|ies)|facts?)`;
+// P279: with two modifiers too ("not an established industry standard", "not an established industry statistic").
+const STOCK_STANDARD = String.raw`(?:an?\s+)?(?:(?:industry|official|universal|established|formal)\s+){1,2}(?:standards?|rules?|benchmarks?|requirements?|best[- ]practices?|taxonom(?:y|ies)|facts?|statistics?)`;
 const STOCK_TAIL = String.raw`(?:\s+or\s+(?:an?\s+)?(?:[\w-]+\s+)?(?:standards?|rules?|benchmarks?|taxonom(?:y|ies)))?(?:,?\s+(?:and|or)\s+not\s+[^.!?\u2014\u2013:;]+)?`;
-const STOCK_REPAIRS: [RegExp, string][] = [
+const STOCK_REPAIRS: [RegExp, string | ((match: string, ...groups: string[]) => string)][] = [
+  // P279: the disclaimer as a sentence of its own after the proposal.
+  // "It is not an established industry standard, so verify each rule \u2026" \u2192 "Verify each rule \u2026"
+  [new RegExp(String.raw`\b(?:It|This|That|They|These)\s+(?:is|are)\s+not\s+${STOCK_STANDARD},?\s+so\s+(\w)`, "g"), (_match, first) => first.toUpperCase()],
+  // "\u2026 for you to adapt. They are not industry standards or benchmarks." \u2192 "\u2026 for you to adapt."
+  [new RegExp(String.raw`\s+(?:It|This|That|They|These)\s+(?:is|are)\s+not\s+${STOCK_STANDARD}${STOCK_TAIL}\s*\.`, "g"), ""],
   // "The grouping below is not an industry standard or a formal taxonomy — it's a way of …" → "The grouping below is a way of …"
   [new RegExp(String.raw`\b(is|are)\s+not\s+${STOCK_STANDARD}${STOCK_TAIL}\s*[\u2014\u2013]\s*(?:it(?:'|\u2019)?s|it is|they(?:'|\u2019)?re|they are)\s+`, "gi"), "$1 "],
   // "… run yourself — not an industry standard — so treat …" → "… run yourself, so treat …"
   [new RegExp(String.raw`\s*[\u2014\u2013]\s*not\s+${STOCK_STANDARD}${STOCK_TAIL}\s*[\u2014\u2013]\s*`, "gi"), ", "],
   // "… your own data — not a universal standard, but a reader-usable starting point" → "… your own data — a reader-usable starting point"
-  [new RegExp(String.raw`\bnot\s+${STOCK_STANDARD},?\s+but\s+`, "gi"), ""],
+  // (P279: after a dash only; "This is a recommendation, not an established industry rule, but it holds up …" keeps "but".)
+  [new RegExp(String.raw`([—–]\s*)not\s+${STOCK_STANDARD},?\s+but\s+`, "gi"), "$1"],
   // "… a reasonable starting point to adapt — not a universal standard, and not a guarantee of specific outcomes." → "… to adapt."
-  [new RegExp(String.raw`\s*[\u2014\u2013]\s*not\s+${STOCK_STANDARD}${STOCK_TAIL}(?=\s*[.!?:]|$)`, "gi"), ""],
+  // P279: "\u2026 against your own flow \u2014 not an established industry standard or a claim about how all \u2026 behave." \u2192 "\u2026 flow."
+  [new RegExp(String.raw`\s*[\u2014\u2013]\s*not\s+${STOCK_STANDARD}${STOCK_TAIL}(?:\s+or\s+[^.!?\u2014\u2013:;]+)?(?=\s*[.!?:]|$)`, "gi"), ""],
   // "…, not an industry standard." / "…, not an industry rule: decide …" / "… a recommendation rather than an established standard."
   [new RegExp(String.raw`(?:,\s*not|,?\s+rather than)\s+${STOCK_STANDARD}${STOCK_TAIL}(?=\s*[,.;:!?)\u2014\u2013]|$)`, "gi"), ""],
 ];
 export function withoutStockContrast(text: string): string {
-  return STOCK_REPAIRS.reduce((value, [pattern, replacement]) => value.replace(pattern, replacement), text);
+  return STOCK_REPAIRS.reduce((value, [pattern, replacement]) =>
+    typeof replacement === "string" ? value.replace(pattern, replacement) : value.replace(pattern, replacement), text);
 }
 export function stockDisclaimerRepairProposal(markdown: string): { before: string; replacement: string } | null {
   for (const block of markdown.split(/\n\s*\n/).map(part => part.trim())) {
@@ -253,7 +262,7 @@ export const RELATED_REPAIR_SLOT_LEAD_MS = 6 * 3_600_000, RELATED_REPAIR_SPACING
 /** P220 (Oct 26 2026): the rules the link repair runs by. A change to them (2, P218: links to consolidated pages)
  * makes every page due once more: a pass records the rules it started under, and a site whose last finished pass
  * ran under earlier rules runs a fresh one, instead of resting a week with pages passed under the old rules. */
-export const RELATED_REPAIR_VERSION = 5; // 3: P221 (a title cut after a dropped leading question word); 4: P250 (the stock disclaimer); 5: P272 (its variants)
+export const RELATED_REPAIR_VERSION = 6; // 3: P221 (a title cut after a dropped leading question word); 4: P250 (the stock disclaimer); 5: P272 (its variants); 6: P279 (two modifiers, a sentence of its own)
 export function relatedRepairAllowed(site: Doc<"sites">, now: number): boolean {
   const s = site.contentSchedule;
   return Boolean(s && site.serviceMode === "growth_first" && site.autopilotEnabled && s.autopilotSelectedAt && s.autopublishConsentAt &&

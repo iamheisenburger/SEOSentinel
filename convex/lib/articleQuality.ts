@@ -2115,7 +2115,14 @@ const READER_VISIBLE_PIPELINE_TEXT: RegExp[] = [
   // view or checklist set against a standard ("This breakdown is an author-proposed way to organize your stack, not an
   // industry standard", "The grouping below is not an industry standard or a formal taxonomy"). A cue that the sentence is
   // about the article's own proposal is required: "Markdown itself is not a formal standard" is a fact, not a disclaimer.
-  /\b(?:author|recommend|propos|suggest|framework|method|approach|grid|checklist|structure|grouping|breakdown|template|diagnostic|following|below|view|working)\w*[^.!?\n]{0,200}?\b(?:not|rather than)\s+(?:an?\s+)?(?:industry|official|universal|established|formal)\s+(?:standards?|rules?|benchmarks?|requirements?|best[- ]practices?|taxonom(?:y|ies)|facts?)\b/i,
+  // P279 (Nov 1 2026): 11 more on live owner-site pages said it with two modifiers ("not an established industry
+  // standard", "not established industry fact", "not an established industry statistic") or in a sentence of its own
+  // after the proposal ("The framework is the author's recommendation, … . It is not an established industry standard,
+  // so verify each rule …"; "… recommendations for you to adapt. They are not industry standards or benchmarks.").
+  /\b(?:author|recommend|propos|suggest|framework|method|approach|grid|checklist|structure|grouping|breakdown|template|diagnostic|following|below|view|working)\w*[^.!?\n]{0,200}?\b(?:not|rather than)\s+(?:an?\s+)?(?:(?:industry|official|universal|established|formal)\s+){1,2}(?:standards?|rules?|benchmarks?|requirements?|best[- ]practices?|taxonom(?:y|ies)|facts?|statistics?)\b/i,
+  // A sentence of its own needs the proposal named just before it: "We follow the Markdown approach. It is not a formal
+  // standard, so renderers differ." is a fact.
+  /\b(?:author|recommend|propos|suggest)\w*[^.!?\n]{0,200}[.!?]\s+(?:It|They|This|These)\s+(?:is|are)\s+not\s+(?:an?\s+)?(?:(?:industry|official|universal|established|formal)\s+){1,2}(?:standards?|rules?|benchmarks?|requirements?|best[- ]practices?|taxonom(?:y|ies)|facts?|statistics?)\b/i,
   /\bthe\s+(?:cited\s+|listed\s+|above\s+)?sources?\s+(?:do|does|did)\s*(?:not|n't)\s+(?:give|say|state|specify|provide|cover|offer|mention|include|list)\b/i,
   // P168 (Oct 23 2026): told to leave out the company behind a cited help page
   // (P162), a LeadPilot draft wrote "That documentation says a lead is ..." and

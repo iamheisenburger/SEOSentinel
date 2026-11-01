@@ -58,7 +58,7 @@ test("P272 every live shape of the stock disclaimer is pipeline text, and the re
       reason: "Autopilot removes the stock clause its writer added before P248." });
     assert.equal(patch.sourceAfter, expected, "the GitHub source changes in exactly that paragraph");
   }
-  assert.equal(RELATED_REPAIR_VERSION, 5, "a fresh pass re-checks every page");
+  assert.ok(RELATED_REPAIR_VERSION >= 5, "a fresh pass re-checks every page (P279: 6, two modifiers and a sentence of its own)");
 });
 
 test("P272 a sentence that states a fact about a standard is not the disclaimer", () => {
