@@ -108,9 +108,8 @@ Running any candidate platform — Pentra included — through this five-step se
 
 ## Related reading
 
-- [AI SEO Tools: Comparing Your Options and How to Choose the Right Platform](/blog/ai-seo-tools-comparison-guide)
-- [Best Free SEO Tools for Small Teams](/blog/best-free-seo-tools-for-small-teams)
-- [AI Content Generator for SEO: Automated Article Writing That Ranks](/blog/ai-content-generator-seo-automated-article-writing)
+- [Free AI Tools for SEO Optimization: What They Can and Can't Do](/blog/free-ai-tools-for-seo-optimization)
+- [AI Blog Post Generator: What It Does, Where It Fails, and How to Use One Well](/blog/ai-blog-post-generator-what-it-does-and-how-to-use-one)
 
 ## Sources
 
