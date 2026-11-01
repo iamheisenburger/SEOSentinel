@@ -39,7 +39,7 @@ const live: [string, string][] = [
 ];
 
 test("P279 the stock disclaimer with two modifiers or in a sentence of its own is caught and repaired, the advice kept", () => {
-  assert.equal(RELATED_REPAIR_VERSION, 6, "a fresh repair pass runs under the new rules");
+  assert.ok(RELATED_REPAIR_VERSION >= 6, "a fresh repair pass runs under the new rules (P280: 7)");
   for (const [paragraph, repair] of live) {
     assert.ok(flagged(paragraph), `caught: ${paragraph}`);
     assert.equal(repaired(paragraph), repair);

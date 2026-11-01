@@ -177,6 +177,8 @@ const STOCK_REPAIRS: [RegExp, string | ((match: string, ...groups: string[]) => 
   // "… a reasonable starting point to adapt — not a universal standard, and not a guarantee of specific outcomes." → "… to adapt."
   // P279: "\u2026 against your own flow \u2014 not an established industry standard or a claim about how all \u2026 behave." \u2192 "\u2026 flow."
   [new RegExp(String.raw`\s*[\u2014\u2013]\s*not\s+${STOCK_STANDARD}${STOCK_TAIL}(?:\s+or\s+[^.!?\u2014\u2013:;]+)?(?=\s*[.!?:]|$)`, "gi"), ""],
+  // P280: "… for prioritizing your effort, not measured data and not an industry taxonomy." → "… for prioritizing your effort."
+  [new RegExp(String.raw`,\s*not\s+[\w-]+(?:\s+[\w-]+){0,2}\s+(?:and|or)\s+not\s+${STOCK_STANDARD}${STOCK_TAIL}(?=\s*[,.;:!?)—–]|$)`, "gi"), ""],
   // "…, not an industry standard." / "…, not an industry rule: decide …" / "… a recommendation rather than an established standard."
   [new RegExp(String.raw`(?:,\s*not|,?\s+rather than)\s+${STOCK_STANDARD}${STOCK_TAIL}(?=\s*[,.;:!?)\u2014\u2013]|$)`, "gi"), ""],
 ];
@@ -262,7 +264,7 @@ export const RELATED_REPAIR_SLOT_LEAD_MS = 6 * 3_600_000, RELATED_REPAIR_SPACING
 /** P220 (Oct 26 2026): the rules the link repair runs by. A change to them (2, P218: links to consolidated pages)
  * makes every page due once more: a pass records the rules it started under, and a site whose last finished pass
  * ran under earlier rules runs a fresh one, instead of resting a week with pages passed under the old rules. */
-export const RELATED_REPAIR_VERSION = 6; // 3: P221 (a title cut after a dropped leading question word); 4: P250 (the stock disclaimer); 5: P272 (its variants); 6: P279 (two modifiers, a sentence of its own)
+export const RELATED_REPAIR_VERSION = 7; // 3: P221 (a title cut after a dropped leading question word); 4: P250 (the stock disclaimer); 5: P272 (its variants); 6: P279 (two modifiers, a sentence of its own); 7: P280 ("not X and not a standard")
 export function relatedRepairAllowed(site: Doc<"sites">, now: number): boolean {
   const s = site.contentSchedule;
   return Boolean(s && site.serviceMode === "growth_first" && site.autopilotEnabled && s.autopilotSelectedAt && s.autopublishConsentAt &&
