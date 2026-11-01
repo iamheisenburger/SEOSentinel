@@ -35,7 +35,7 @@ internalLinks:
 
 SaaS keyword research works best when you start from the problems your buyers are trying to solve and work toward your product, not the other way around. Build a seed list from your own product facts, sort it by what the searcher wants to do next, expand it with Google's free tools, and check it against the queries your site already appears for. Then give each keyword group one page with one job.
 
-This guide walks through that process step by step. The framework is the author's recommendation, not an industry standard. Every step uses data you can pull yourself, mostly from free Google tools.
+This guide walks through that process step by step. The framework is the author's recommendation. Every step uses data you can pull yourself, mostly from free Google tools.
 
 ## Why SaaS keyword research is different
 
