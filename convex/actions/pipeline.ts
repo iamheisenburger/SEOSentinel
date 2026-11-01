@@ -38,6 +38,7 @@ import {
   relatedReadingTitle,
   selectRelatedInternalLinks, type ClickZone,
   stripGeneratedInternalLinks,
+  unlinkedDestinations,
   validateInternalLinkSuggestions,
 } from "../lib/internalLinks";
 import { servedDestinations } from "../lib/pentraConsolidation";
@@ -6316,12 +6317,22 @@ async function handleLinks(
   // P278 (Nov 1 2026): siblings come from the pages served on their own URL only. The best matches for pentra.dev's
   // "seo optimization automation" were articles merged away (P193); they filled the top 3, the check after the choice
   // dropped them, and the list fell back to two homepage sections.
+  const servedSiblings = servedDestinations(site.domain, relatedArticles);
+  // P281: pages no other article links to come first among siblings about as related, counted from the live Markdown of
+  // the site's pages this step already read (no extra read).
+  const linkingPages = pages.flatMap((page: { slug: string; editable?: { markdown?: string } }) => {
+    if (!page.editable?.markdown) return [];
+    let href: string | undefined;
+    try { href = publishedArticleInternalHref(site.urlStructure, page.slug); } catch { href = undefined; }
+    return [{ href, markdown: page.editable.markdown }];
+  });
   const siblingLinks = selectRelatedInternalLinks({
     currentTitle: article.title,
     currentKeywords: article.metaKeywords,
-    destinations: servedDestinations(site.domain, relatedArticles),
+    destinations: servedSiblings,
     limit: 3,
     clickZone,
+    unlinked: unlinkedDestinations(servedSiblings, linkingPages),
   });
   const pageLinks = selectRelatedInternalLinks({
     currentTitle: article.title,

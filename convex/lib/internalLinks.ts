@@ -248,6 +248,22 @@ function relatedTokens(value: string): Set<string> {
  * terms. The destination title becomes the visible related-reading anchor;
  * no copy or URL is invented.
  */
+/** P281 (Nov 1 2026): the destinations no other article links to. 5 of pentra.dev's 38 live articles had no inbound link
+ * from another article (P193's merges removed theirs), and one of them, keyword-research-tracking-2, stayed unindexed.
+ * Counted from the site's own pages (their live Markdown), never a page's link to itself. */
+export function unlinkedDestinations(destinations: Pick<RelatedInternalDestination, "href">[],
+  linkingPages: { href?: string; markdown: string }[]): Set<string> {
+  const linked = new Set<string>();
+  for (const page of linkingPages) {
+    const self = page.href ? normalizeInternalHref(page.href) : null;
+    for (const match of page.markdown.matchAll(/\]\((\/[^)\s]+)\)/g)) {
+      const href = normalizeInternalHref(match[1]);
+      if (href && href !== self) linked.add(href);
+    }
+  }
+  return new Set(destinations.map((destination) => normalizeInternalHref(destination.href)).filter((href): href is string => href !== null && !linked.has(href)));
+}
+
 export function selectRelatedInternalLinks(args: {
   currentTitle: string;
   currentKeywords?: string[];
@@ -255,6 +271,8 @@ export function selectRelatedInternalLinks(args: {
   limit?: number;
   /** P251: pages near the click zone come first among destinations about as related. */
   clickZone?: ClickZone;
+  /** P281: so do pages no other article links to (unlinkedDestinations). */
+  unlinked?: ReadonlySet<string>;
 }): InternalLink[] {
   const wanted = relatedTokens(
     [args.currentTitle, ...(args.currentKeywords ?? [])].join(" "),
@@ -281,7 +299,8 @@ export function selectRelatedInternalLinks(args: {
         destination.keywords,
       )[0];
       const zone = clickZonePosition(args.clickZone, destination.href);
-      return { destination, anchor, score, rank: score + (zone === null ? 0 : 1), zone: zone ?? Infinity };
+      const unlinked = args.unlinked?.has(normalizeInternalHref(destination.href) ?? destination.href) ? 1 : 0;
+      return { destination, anchor, score, rank: score + (zone === null ? 0 : 1) + unlinked, zone: zone ?? Infinity };
     })
     .filter(
       (candidate): candidate is typeof candidate & { anchor: string } =>
