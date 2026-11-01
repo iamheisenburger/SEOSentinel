@@ -98,7 +98,9 @@ export const AUTOPILOT_ACCEPTANCE = "pentra-autopilot";
 /** The version of the blocking publication checks. Bump it when a blocking
  * check is corrected: a quality failure judged by an older version is no
  * evidence that today's drafts keep failing (P181, Oct 25 2026). */
-export const CONTENT_CHECKS_VERSION = 1;
+// 2: P273/P275 (Nov 1 2026): a list's option count and a Sources entry's title no longer block; pentra.dev's Nov 1 and
+// Nov 2 drafts failed on them, and with a third failure replacements would stop and the site would miss more days.
+export const CONTENT_CHECKS_VERSION = 2;
 export const UNCITED_QUANTITY_ISSUE = /^\d+ quantified outcome or operational claim\(s\) lack an inline citation\.$/;
 export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number; claimEvidenceStatus?: string; markdown?: string } &
   Partial<Pick<PublicationArticle, "claimEvidence" | "productEvidenceSnapshot" | "productEvidenceHash">>): boolean {
