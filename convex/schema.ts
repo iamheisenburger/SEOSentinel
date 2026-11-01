@@ -1408,6 +1408,10 @@ export default defineSchema({
       checksVersion: v.optional(v.number()),
       // Autopilot: this job is the single replacement for a failed job's slot.
       replacesJobId: v.optional(v.id("jobs")),
+      // P277: this job delivers a draft held under checks since corrected, re-checked with today's checks (no writing).
+      // The held job and its verdict stay on record there; this copy keeps the verdict next to the delivery.
+      reusedDraft: v.optional(v.object({ fromJobId: v.id("jobs"), previousIssues: v.array(v.string()),
+        previousChecksVersion: v.number(), at: v.number() })),
       // A ready article moved to the current cadence slot after the schedule
       // passed (or never matched) its original deadline. Kept as the record.
       slotRebinds: v.optional(v.array(v.object({ fromDeadlineAt: v.number(), toDeadlineAt: v.number(),

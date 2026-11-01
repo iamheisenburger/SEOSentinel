@@ -1839,6 +1839,72 @@ test("P274 after a slot is parked a day ahead, the next article lands just after
   f.assertOffline();
 });
 
+// P277 (Nov 1 2026): pentra.dev's Nov 1 and Nov 2 drafts were held by checks corrected since (P268's list floor became a
+// note in P273; a Sources entry read as a cited claim, P275). Their topics were retired and their slots left to be missed.
+// A draft held under older checks that today's checks pass is delivered in a slot as written, its review repeated by code
+// with no model call. One held under today's checks, or one that repeats a live page, is not (P259, Arshad's cost rule).
+test("P277 a draft held under checks since corrected fills its slot, re-checked at no cost; today's verdicts and repeats stay held", async () => {
+  for (const variant of ["older_checks", "todays_checks", "repeats_live_page"] as const) {
+    const f = setup({ growthFirst: true, articlePlan: true, businesses: [slcBusinesses[1]] });
+    const site = await selectGrowth(f, 24 * 3_600_000);
+    Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
+    await pumpUntil(f, () => f.tables.jobs?.some(j => ["ready", "failed"].includes(j.contentWork?.stage)));
+    const held = f.tables.jobs.find(j => j.contentWork?.stage === "ready");
+    assert.ok(held, diagnostic(f));
+    for (const other of f.tables.jobs) if (other.contentWork && other._id !== held._id) Object.assign(other, { status: "failed", contentWork: { ...other.contentWork, stage: "failed", retiredAt: f.now() } });
+    const article = f.get(held.articleId)!, topic = f.get(article.topicId)!;
+    assert.equal(article.qualityPlan, "fixed_v1");
+    // Held under the checks of its day, a slot half a day ahead: the job failed, the draft went to its owner, the topic retired.
+    const old = "Plan check: A list needs at least 6 items (it has 5).", shift = f.now() + 12 * 3_600_000 - held.contentWork.deadlineAt;
+    Object.assign(held, { status: "failed", updatedAt: f.now() });
+    Object.assign(held.contentWork, { stage: "failed", failure: "bounded_content_quality_exhausted", approvedArtifactHash: undefined,
+      checksVersion: variant === "todays_checks" ? CONTENT_CHECKS_VERSION : 1, deadlineAt: held.contentWork.deadlineAt + shift,
+      windowStartAt: held.contentWork.windowStartAt + shift, windowWakeId: undefined });
+    f.get(site.id)!.contentSchedule.nextDeadlineAt = held.contentWork.deadlineAt;
+    Object.assign(article, { status: "review", publicationGateStatus: "blocked", publicationGateIssues: [old], qualityRevisionCount: 1 });
+    Object.assign(topic, { status: "disqualified", contentFeasibilityStatus: "quality_exhausted", contentFeasibilityIssues: [old],
+      disqualifiedReason: "Autopilot drafts of this topic failed review on every pass; it is not retried automatically." });
+    if (variant === "repeats_live_page") {
+      const saved = f.get(site.id)!;
+      f.add("article_summaries", { articleId: "articles:live-copy", siteId: site.id, canonicalDomain: saved.canonicalDomain ?? saved.domain,
+        domainRevision: saved.canonicalDomainRevision ?? 0, status: "published", title: topic.primaryKeyword, slug: "live-copy", createdAt: f.now(), updatedAt: f.now() });
+    }
+    const calls = f.modelCalls.length;
+    const result = await f.invoke("contentWork:advance", { siteId: site.id });
+    const reuse = f.tables.jobs.find(j => j.contentWork?.reusedDraft);
+    assert.equal(f.get(held._id)!.contentWork.failure, "bounded_content_quality_exhausted", "the held job stays on record");
+    if (variant !== "older_checks") {
+      assert.equal(reuse, undefined, `${variant}: the draft stays with its owner (${JSON.stringify(result)})`);
+      assert.ok(!f.tables.jobs.some(j => j.contentWork?.replacesJobId === held._id), "and nothing new is written for its slot");
+      if (variant === "repeats_live_page") assert.equal(f.get(held._id)!.contentWork.checksVersion, 1, "a repeat is not a verdict of today's checks");
+      f.assertOffline();
+      continue;
+    }
+    assert.equal(result.mode, "buffer_replacement", JSON.stringify(result));
+    assert.ok(reuse, diagnostic(f));
+    assert.equal(reuse.articleId, article._id);
+    assert.equal(reuse.contentWork.replacesJobId, held._id);
+    assert.equal(reuse.contentWork.deadlineAt, held.contentWork.deadlineAt, "the draft fills its own slot");
+    assert.equal(reuse.contentWork.stage, "review");
+    assert.equal(reuse.contentWork.revisions, 1, "its one fix was spent: a failed re-check is held, never rewritten");
+    assert.deepEqual(reuse.contentWork.reusedDraft.previousIssues, [old], "the verdict it was held under is kept");
+    assert.equal(reuse.contentWork.reusedDraft.previousChecksVersion, 1);
+    assert.equal(f.get(topic._id)!.status, "queued");
+    assert.equal(f.get(topic._id)!.contentFeasibilityStatus, undefined);
+    await f.invoke("actions/pipeline:processNextJob", { siteId: site.id, jobId: reuse._id });
+    assert.equal(f.get(reuse._id)!.contentWork.stage, "ready", diagnostic(f));
+    assert.equal(f.modelCalls.length, calls, "re-checked by code: no writing, no fix, no claims check");
+    assert.equal(f.get(article._id)!.status, "ready");
+    assert.equal(f.get(article._id)!.publicationGateStatus, "passed", JSON.stringify(f.get(article._id)!.publicationGateIssues));
+    assert.ok(f.get(article._id)!.editorialQualityNotes.includes("Plan note: A list needs at least 6 items (it has 5).") ||
+      !f.get(article._id)!.editorialQualityNotes.some((note: string) => /^Plan check:/.test(note)), "no old plan check remains a blocker");
+    // Used once: another pass finds no draft to reuse.
+    assert.notEqual((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "buffer_replacement");
+    assert.equal(f.tables.jobs.filter(j => j.contentWork?.reusedDraft).length, 1);
+    f.assertOffline();
+  }
+});
+
 test("SLC66 an Autopilot site goes live with its first reviewed article, even when the plan allows only one", async () => {
   const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const site = await createEmptyContentSite(f), saved = f.get(site.id)!;

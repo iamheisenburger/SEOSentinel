@@ -20,7 +20,10 @@ test("P259 at most one rewrite, only for an objective problem, and a failed arti
   assert.match(work, /draft\.publicationGateIssues!\.every\(issue => ownerWaivableIssue\(issue, draft\)\) && readerVisibleIssues\(draft\)\.length === 0\);/);
   const revise = work.slice(work.indexOf("async function reviseFailedWork"), work.indexOf("async function retireQualityExhaustedTopics"));
   assert.doesNotMatch(revise, /chooseTopic\(/, "no replacement draft on another topic");
-  assert.match(work, /cw\.failure !== "bounded_content_quality_exhausted" &&\n    \(!cw\.replacesJobId \|\| HELD_BACK_FAILURES\.has/, "a slot whose article failed its checks is never refilled");
+  // P277: except by a held draft that checks since corrected had stopped and today's checks pass (nothing new is written).
+  assert.match(work, /\(cw\.failure !== "bounded_content_quality_exhausted" \|\| rejudged\) &&\n    \(!cw\.replacesJobId \|\| HELD_BACK_FAILURES\.has\(cw\.failure \?\? ""\) \|\| rejudged\)/,
+    "a slot whose article failed its checks is never refilled with a new article");
+  assert.match(work, /const rejudged = reusesHeldDraft && outdatedQualityVerdict\(job\);/);
 });
 
 test("P259 research gathers 3 to 5 real sources before writing", () => {

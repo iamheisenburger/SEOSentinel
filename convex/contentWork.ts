@@ -35,7 +35,7 @@ import { authorizedWorkPage, chooseImprovement, contentWorkConnection, enrollVer
 import { noteDraftReady, noteFirstArticleLive } from "./customerEmails";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes } from "./articles";
-import { AUTOPILOT_ACCEPTANCE, CONTENT_CHECKS_VERSION, ownerWaivableIssue, readerVisibleIssues } from "./lib/articleQuality";
+import { AUTOPILOT_ACCEPTANCE, CONTENT_CHECKS_VERSION, evaluatePublicationQuality, issuesBlockingPreLinkReview, ownerWaivableIssue, readerVisibleIssues } from "./lib/articleQuality";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
 import { auditResultHash, clarifiableContentAudit, inconsistentAuditFeedback, internalContentProcessingError, retainedContradictoryContentAudit, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 import { contentJobUsesAllowance } from "./lib/contentUsage";
@@ -154,16 +154,18 @@ const AUTOPILOT_REPLACEMENT_LEAD_MS = 60 * 60_000;
 /** The failure backoff spaces retries; it never takes a slot's first attempt.
  * A slot due within this lead that no work has tried yet is prepared at once. */
 export const SLOT_PREP_LEAD_MS = 6 * 3_600_000;
-function autopilotReplaceable(job: Doc<"jobs">) {
+function autopilotReplaceable(job: Doc<"jobs">, reusesHeldDraft = false) {
   const cw = job.contentWork;
   // P204: a replacement that Pentra itself held back (a copy of a live page, a reader check added since) is replaceable
   // once more; any other failed replacement is not. SLOT_MAX_JOBS bounds a slot's jobs either way.
   // P259 (Oct 30 2026), Arshad's cost rule: an article that failed its checks after its one rewrite is held, never
   // regenerated, so its slot gets no replacement. A slot whose ready article the nightly sweep held back (a copy of a
   // live page, a reader check added since) or whose writing never ran still gets one new article, written once.
+  // P277: a slot whose draft was held by checks since corrected takes a held draft that today's checks pass, nothing new.
+  const rejudged = reusesHeldDraft && outdatedQualityVerdict(job);
   return Boolean(cw && cw.stage === "failed" && !cw.ownerRequest && cw.retiredAt === undefined &&
-    cw.failure !== "bounded_content_quality_exhausted" &&
-    (!cw.replacesJobId || HELD_BACK_FAILURES.has(cw.failure ?? "")) &&
+    (cw.failure !== "bounded_content_quality_exhausted" || rejudged) &&
+    (!cw.replacesJobId || HELD_BACK_FAILURES.has(cw.failure ?? "") || rejudged) &&
     (cw.intent === "create" ? autopilotSkippableFailure(job) : automaticImprovement(cw)));
 }
 /** P204 (Oct 26 2026): the first plan audit (P194) held back pentra.dev's Oct 27 article, the replacement for that
@@ -175,14 +177,18 @@ function latestFailedAt(work: Doc<"jobs">[], deadlineAt: number) {
   return work.filter(j => j.contentWork!.stage === "failed" && j.contentWork!.deadlineAt === deadlineAt)
     .sort((a, b) => b._creationTime - a._creationTime)[0];
 }
-function slotReplacementCandidate(work: Doc<"jobs">[], deadlineAt: number) {
+function slotReplacementCandidate(work: Doc<"jobs">[], deadlineAt: number, reusesHeldDraft = false) {
   if (work.filter(j => j.contentWork!.deadlineAt === deadlineAt).length >= SLOT_MAX_JOBS) return null;
   const failed = latestFailedAt(work, deadlineAt);
   // P234: a replacement covers the failed job's slot only while it is still in that slot. One moved up into an earlier
   // empty slot (P173) left this one with nothing (pentra.dev Oct 28 02:42Z: both waiting articles held back, the second
   // slot's replacement moved up, and the second slot returned "content_failed_slot").
-  return failed && autopilotReplaceable(failed) && !work.some(j => j.contentWork!.replacesJobId === failed._id && j.contentWork!.deadlineAt === deadlineAt)
+  return failed && autopilotReplaceable(failed, reusesHeldDraft) && !work.some(j => j.contentWork!.replacesJobId === failed._id && j.contentWork!.deadlineAt === deadlineAt)
     ? failed : null;
+}
+/** A failed slot judged by checks since corrected, which a reusable held draft may fill (P277). */
+function rejudgeableSlot(job: Doc<"jobs"> | undefined) {
+  return Boolean(job && job.contentWork!.intent === "create" && outdatedQualityVerdict(job));
 }
 /** Autopilot chose this page improvement or refresh itself. Its failure never
  * holds the slot: nothing was published for it, so the slot gets a new
@@ -1778,6 +1784,48 @@ async function retireQualityExhaustedTopics(ctx: MutationCtx, site: Doc<"sites">
   }
 }
 
+/** P277 (Nov 1 2026): pentra.dev's Nov 1 and Nov 2 drafts were held by checks corrected since (P268's list floor, a note
+ * since P273, and a Sources entry read as a cited claim, P275); their topics were retired (one a 1,900-a-month search)
+ * and their slots were left to be missed. A draft held under older checks is not a failed article. A slot that needs a
+ * new Autopilot article first takes such a draft when today's checks pass it: it is delivered as written, its review
+ * repeated by code at no cost (its one fix was spent, so nothing is rewritten), once. The held job and its verdict stay
+ * on record. A draft today's checks still stop stays with its owner, and one that repeats a live page is never used. */
+const HELD_DRAFT_REUSE_MAX_AGE_MS = 7 * 86_400_000;
+type ReusableHeldDraft = { job: Doc<"jobs">; article: Doc<"articles">; topic: Doc<"topic_clusters"> };
+async function reusableHeldDraft(ctx: MutationCtx, site: Doc<"sites">, preferJobId?: Id<"jobs">): Promise<ReusableHeldDraft | null> {
+  // A week of failures only (their documents are small since P118), most recent first.
+  const held = (await ctx.db.query("jobs").withIndex("by_site_status", q => q.eq("siteId", site._id).eq("status", "failed")
+    .gte("_creationTime", Date.now() - HELD_DRAFT_REUSE_MAX_AGE_MS)).order("desc").take(20))
+    .filter(j => j.articleId && j.contentWork && !j.contentWork.ownerRequest && !j.contentWork.operation && j.contentWork.retiredAt === undefined &&
+      rejudgeableSlot(j))
+    .sort((a, b) => Number(b._id === preferJobId) - Number(a._id === preferJobId) || a.contentWork!.deadlineAt - b.contentWork!.deadlineAt)
+    .slice(0, 3);
+  let live: { primaryKeyword: string }[] | null = null;
+  for (const job of held) {
+    const article = await ctx.db.get(job.articleId!);
+    if (!article || article.siteId !== site._id || article.status !== "review" || article.qualityPlan !== "fixed_v1" || !article.topicId ||
+      (article.qualityRevisionCount ?? 0) < 1 || article.publicationAttemptedAt || article.publicationLeaseOwner) continue;
+    // Used once: a later job carries this draft (delivered, or held again under today's checks).
+    if ((await ctx.db.query("jobs").withIndex("by_site_article", q => q.eq("siteId", site._id).eq("articleId", article._id)).take(3))
+      .some(j => j._id !== job._id)) continue;
+    // Today's checks, as the review that seals it computes them (that review repeats them before anything is published).
+    const candidate: Doc<"articles"> = { ...article, claimEvidence: [], claimEvidenceStatus: "not_applicable", factCheckScore: undefined,
+      editorialQualityScore: undefined };
+    if (issuesBlockingPreLinkReview([...evaluatePublicationQuality(candidate, "strict").issues, ...readerVisibleIssues(candidate)]).length) {
+      // Held under today's checks too: the verdict is current, so it is not looked at again.
+      await ctx.db.patch(job._id, { contentWork: { ...job.contentWork!, checksVersion: CONTENT_CHECKS_VERSION } });
+      continue;
+    }
+    const topic = await ctx.db.get(article.topicId);
+    if (!topic || topic.siteId !== site._id) continue;
+    live ??= (await ctx.db.query("article_summaries").withIndex("by_site_status_created", q => q.eq("siteId", site._id).eq("status", "published")).take(500))
+      .flatMap(page => [page.title, ...(page.metaKeywords ?? []).slice(0, 1)]).filter(Boolean).map(primaryKeyword => ({ primaryKeyword }));
+    if (live.some(page => contentIntentConflicts({ primaryKeyword: topic.primaryKeyword }, page))) continue;
+    return { job, article, topic };
+  }
+  return null;
+}
+
 export const advanceOwnerDraft = internalMutation({ args: { jobId: v.id("jobs") }, handler: async (ctx, { jobId }) => {
   const job = await ctx.db.get(jobId), site = job?.siteId ? await ctx.db.get(job.siteId) : null;
   if (!job?.contentWork?.ownerRequest || !site || !jobAuthorizedForExecution(site, job) || job.status !== "done" ||
@@ -2577,8 +2625,12 @@ export const advance = internalMutation({
     // Autopilot's own page improvements never hold a slot, whatever the
     // site's contract: nothing was published for them.
     const improvementFailed = Boolean(failedSlot && automaticImprovement(failedSlot.contentWork!));
+    // P277: a slot whose draft was held by checks since corrected takes a held draft today's checks pass (its own first).
+    let heldDraft: ReusableHeldDraft | null | undefined;
+    if (failedSlot && schedule.autopilotSelectedAt && waiting.length === 0 && rejudgeableSlot(failedSlot) &&
+      failedSlot.contentWork!.deadlineAt - Date.now() >= AUTOPILOT_REPLACEMENT_LEAD_MS) heldDraft = await reusableHeldDraft(ctx, site, failedSlot._id);
     const replaceNextSlot = Boolean(failedSlot && (schedule.autopilotSelectedAt || improvementFailed) && waiting.length === 0 &&
-      slotReplacementCandidate(work, schedule.nextDeadlineAt)?._id === failedSlot._id && replacementsHealthy(work) &&
+      slotReplacementCandidate(work, schedule.nextDeadlineAt, Boolean(heldDraft))?._id === failedSlot._id && replacementsHealthy(work) &&
       failedSlot.contentWork!.deadlineAt - Date.now() >= AUTOPILOT_REPLACEMENT_LEAD_MS);
     if (failedSlot && !replaceNextSlot && !failedSlot.contentWork!.ownerRequest && (improvementFailed ||
       (schedule.autopilotSelectedAt && autopilotSkippableFailure(failedSlot) &&
@@ -2646,7 +2698,10 @@ export const advance = internalMutation({
     // while each pass marked refresh candidates reviewed and left an unused
     // topic (P163, Oct 22 2026: LeadPilot's Oct 24 slot after its refresh failed).
     const nextOpenSlot = schedule.nextDeadlineAt + waiting.length * schedule.intervalMs;
-    const replacementDue = Boolean(schedule.autopilotSelectedAt) && Boolean(slotReplacementCandidate(work, nextOpenSlot));
+    const openSlotFailed = latestFailedAt(work, nextOpenSlot);
+    if (heldDraft === undefined && schedule.autopilotSelectedAt && rejudgeableSlot(openSlotFailed) &&
+      nextOpenSlot - Date.now() >= AUTOPILOT_REPLACEMENT_LEAD_MS) heldDraft = await reusableHeldDraft(ctx, site, openSlotFailed!._id);
+    const replacementDue = Boolean(schedule.autopilotSelectedAt) && Boolean(slotReplacementCandidate(work, nextOpenSlot, Boolean(heldDraft)));
     // P190 (Oct 25 2026): the site's pages and topics are read once for this pass.
     // The improvement choice and each topic choice read them again: on LeadPilot
     // a preparation pass read its 64 pages (1.5 MB, with their full text) three
@@ -2655,7 +2710,11 @@ export const advance = internalMutation({
       topics: await takeCurrentDomainTopics(ctx, site, LIMIT + 1) };
     const improvement = replaceNextSlot || replacementDue ? null : await chooseImprovement(ctx, site, work, preloaded.pages);
     const runway = { planned: 0, searched: 0 };
-    let topic = improvement ? null : await chooseTopic(ctx, site, undefined, [], { demandOnly: Boolean(schedule.autopilotSelectedAt), runway, preloaded });
+    // P277: a held draft today's checks pass is delivered before anything new is written (no writing, no spend).
+    if (!improvement && heldDraft === undefined && schedule.autopilotSelectedAt) heldDraft = await reusableHeldDraft(ctx, site);
+    const reuse = improvement ? null : heldDraft ?? null;
+    let topic = improvement ? null : reuse ? reuse.topic
+      : await chooseTopic(ctx, site, undefined, [], { demandOnly: Boolean(schedule.autopilotSelectedAt), runway, preloaded });
     if (!improvement && !topic && schedule.autopilotSelectedAt) {
       // No searched keyword is left: research new ones for the confirmed
       // business (within the ordinary spend limits). When the slot allows, the
@@ -2721,7 +2780,7 @@ export const advance = internalMutation({
     }
     const deadlineAt = slot.nextDeadlineAt + waiting.length * slot.intervalMs;
     const atDeadline = work.filter(j => j.contentWork!.deadlineAt === deadlineAt);
-    const candidate = slotReplacementCandidate(work, deadlineAt);
+    const candidate = slotReplacementCandidate(work, deadlineAt, Boolean(reuse));
     const replacing = schedule.autopilotSelectedAt && !improvement && candidate &&
       replacementsHealthy(work) && deadlineAt - Date.now() >= AUTOPILOT_REPLACEMENT_LEAD_MS ? candidate : null;
     if (atDeadline.length && !replacing) return { scheduled: 0, mode: "content_failed_slot" };
@@ -2743,28 +2802,36 @@ export const advance = internalMutation({
       priority: 1, status: "planned", notes: improvement.reason, createdAt: Date.now(), updatedAt: Date.now(),
     }));
     if (!topic) throw new Error("Content work topic unavailable");
+    // P277: a reused held draft starts at its review (code checks only: its one fix was spent, so revisions start used up)
+    // and keeps the verdict it was held under.
+    const reused = reuse ? { articleId: reuse.article._id, reusedDraft: { fromJobId: reuse.job._id,
+      previousIssues: (reuse.article.publicationGateIssues ?? []).slice(0, 8), previousChecksVersion: reuse.job.contentWork!.checksVersion ?? 0, at: Date.now() } } : null;
     const jobId = await ctx.db.insert("jobs", { siteId, canonicalDomain: siteCanonicalDomain(site)!, domainRevision: siteCanonicalDomainRevision(site),
       rolloutEpoch: site.autopilotRolloutEpoch ?? 0, type: "article", status: "pending", workerAttempts: 0, publicationAttempts: 0,
-      payload: { topicId: topic._id, bufferFill: true, options: { includeImages: false, includeYouTube: false } },
+      ...(reused ? { articleId: reused.articleId } : {}),
+      payload: { topicId: topic._id, bufferFill: true, ...(reused ? { articleId: reused.articleId, qualityRetry: true } : {}),
+        options: { includeImages: false, includeYouTube: false } },
       contentWork: { validationAuthorizationId: schedule.validationAuthorizationId, intent: improvement ? "improve" : "create", ...(improvement ? { targetPageId: improvement.page._id,
           baseRevision: improvement.page.editable!.sourceRevision, permissionVersion: improvement.page.editable!.version, opportunity: improvement.reason,
           editTarget: improvement.editTarget } : {}),
-        stage: "prepare", deadlineAt, windowStartAt: deadlineAt - CONTENT_DELIVERY_WINDOW_MS,
-        profileHash: schedule.profileHash, connectionHash: schedule.connectionHash, revisions: 0, replacements: 0,
-        ...(replacing ? { replacesJobId: replacing._id } : {}),
+        stage: reused ? "review" : "prepare", deadlineAt, windowStartAt: deadlineAt - CONTENT_DELIVERY_WINDOW_MS,
+        profileHash: schedule.profileHash, connectionHash: schedule.connectionHash, revisions: reused ? MAX_CONTENT_REWRITES : 0, replacements: 0,
+        ...(replacing ? { replacesJobId: replacing._id } : {}), ...(reused ? { reusedDraft: reused.reusedDraft } : {}),
         discardedArticleIds: [], budgetMicroUsd, pricing: price, providerCalls: [] }, createdAt: Date.now(), updatedAt: Date.now() });
     // The provisional job and its receipt commit together. The preceding read
     // uses the same transaction; an unexpected denial rolls back both.
     const reserved = await reserveSharedProviderBudget(ctx, { ...budgetRequest, contentWorkJobId: jobId });
     if (!reserved.ok) throw new Error("Content reservation changed inside admission");
     await ctx.db.patch(jobId, { providerSpendReservationId: reserved.reservationId });
-    await ctx.db.patch(topic._id, { status: "queued", updatedAt: Date.now() });
+    // A reused draft's topic was retired on the verdict since corrected (that verdict stays on this job and the held one).
+    await ctx.db.patch(topic._id, { status: "queued", ...(reused ? { contentFeasibilityStatus: undefined, contentFeasibilityVersion: undefined,
+      contentFeasibilityIssues: undefined, contentFeasibilityCheckedAt: undefined, disqualifiedReason: undefined } : {}), updatedAt: Date.now() });
     if (!improvement) await refreshAccountUsage(ctx, site, replacing ? 0 : 1);
     if (improvement) await ctx.db.patch(improvement.page._id, { editable: { ...improvement.page.editable!, lastWorkJobId: jobId } });
     // Research the next keywords before the searched ones run out, instead of
     // waiting for an empty inventory (which costs slots at a fast cadence).
     // It never takes the room the next article needs.
-    if (schedule.autopilotSelectedAt && !improvement && (researchMethodOutdated(schedule) ||
+    if (schedule.autopilotSelectedAt && !improvement && !reused && (researchMethodOutdated(schedule) ||
       runway.searched - ((topic.searchVolume ?? 0) > 0 ? 1 : 0) < topicRunwayTarget(slot.intervalMs))) {
       const fresh = await ctx.db.get(siteId);
       if (fresh) await startTopicResearchIfDue(ctx, fresh, pricing.budgetMicroUsd);
