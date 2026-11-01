@@ -153,9 +153,9 @@ There is no fixed timeline. Google states that some changes can take effect with
 
 ## Related reading
 
-- [AI Content Generator vs Manual Article Writing: Which Wins for Rankings](/blog/ai-content-generator-vs-manual-writing-rankings)
-- [Automated SEO Workflow: From Crawling to Publishing — The Complete 8-Step Pipeline](/blog/automated-seo-workflow-complete-guide)
-- [AI Content Generator for SEO: Automated Article Writing That Ranks](/blog/ai-content-generator-seo-automated-article-writing)
+- [Is AI-Written Content Safe for SEO? What Actually Matters](/blog/is-ai-written-content-safe-for-seo)
+- [Intelligent Content Automation: What It Actually Means and How the Loop Works](/blog/intelligent-content-automation)
+- [AI Blog Post Generator: What It Does, Where It Fails, and How to Use One Well](/blog/ai-blog-post-generator-what-it-does-and-how-to-use-one)
 
 ## Sources
 
