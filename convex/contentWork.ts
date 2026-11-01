@@ -2826,7 +2826,13 @@ export const advance = internalMutation({
     const candidate = slotReplacementCandidate(work, deadlineAt, Boolean(reuse));
     const replacing = schedule.autopilotSelectedAt && !improvement && candidate &&
       replacementsHealthy(work) && deadlineAt - Date.now() >= AUTOPILOT_REPLACEMENT_LEAD_MS ? candidate : null;
-    if (atDeadline.length && !replacing) return { scheduled: 0, mode: "content_failed_slot" };
+    if (atDeadline.length && !replacing) {
+      // P283 (Nov 1 2026): a slot ahead whose article was held (no replacement under the cost rule) stops only that slot.
+      // The repair chain started only from a full buffer, so LeadPilot's stock-disclaimer repairs stalled from 13:55Z
+      // behind its held Nov 3 refresh; it now starts here too, within its own spacing and slot-lead limits.
+      if (relatedRepairAllowed(site, Date.now())) await ctx.scheduler.runAfter(0, internal.contentImprovements.requestRelatedReadingRepair, { siteId });
+      return { scheduled: 0, mode: "content_failed_slot" };
+    }
     const budgetRequest = { siteId, userId: site.userId!, purpose: "content_work" as const,
       trigger: `content_slot:${deadlineAt}${replacing ? ":replacement" : ""}`, reservedMicroUsd: pricing.budgetMicroUsd, timestamp: Date.now() };
     let budget = await inspectSharedProviderBudget(ctx, budgetRequest);

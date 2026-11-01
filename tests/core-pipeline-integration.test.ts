@@ -1905,6 +1905,23 @@ test("P277 a draft held under checks since corrected fills its slot, re-checked 
   }
 });
 
+// P283 (Nov 1 2026): LeadPilot's Nov 3 refresh was held (the cost rule: no replacement), and every scheduler pass after
+// its Nov 1 delivery stopped at that slot with "content_failed_slot". The repair chain started only from a full buffer,
+// so its stock-disclaimer repairs stalled from 13:55Z. A pass that stops at a held slot ahead now starts the chain too.
+test("P283 a held slot ahead stops only that slot: the repair chain still starts", async () => {
+  const { f, site, waiting } = await p173TwoWaiting();
+  const [, second] = waiting();
+  Object.assign(second, { status: "failed", updatedAt: f.now() });
+  Object.assign(second.contentWork, { stage: "failed", failure: "bounded_content_quality_exhausted", approvedArtifactHash: undefined, checksVersion: CONTENT_CHECKS_VERSION });
+  const repairs = () => f.tables._scheduled_functions.filter(row => row.name === "contentImprovements:requestRelatedReadingRepair" && row.state.kind === "pending").length;
+  const before = repairs();
+  const result = await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(result.mode, "content_failed_slot", JSON.stringify(result));
+  assert.ok(!f.tables.jobs.some(j => j.contentWork?.replacesJobId === second._id), "the held slot gets no replacement (cost rule)");
+  assert.equal(repairs(), before + 1, "the repair chain starts");
+  f.assertOffline();
+});
+
 // P278 (Nov 1 2026): pentra.dev's reused /seo-optimization-automation was sealed with "[SEO automation](/#features)" and
 // "[How It](/#pipeline)" as its Related reading. A draft P277 reused before P278 is linked once more before its slot:
 // the article and its job's sealed hash change together, the first hash stays on record, and nothing else is rewritten.
