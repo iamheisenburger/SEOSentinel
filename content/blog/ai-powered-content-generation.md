@@ -121,8 +121,8 @@ The right AI-powered content generation product is not simply the one that produ
 
 ## Related reading
 
-- [AI Content Generator for SEO: Automated Article Writing That Ranks](/blog/ai-content-generator-seo-automated-article-writing)
-- [AI SEO Tools: Comparing Your Options and How to Choose the Right Platform](/blog/ai-seo-tools-comparison-guide)
+- [AI Blog Post Generator: What It Does, Where It Fails, and How to Use One Well](/blog/ai-blog-post-generator-what-it-does-and-how-to-use-one)
+- [Free AI Tools for SEO Optimization: What They Can and Can't Do](/blog/free-ai-tools-for-seo-optimization)
 
 ## Sources
 
