@@ -119,6 +119,6 @@ For your website research process, the related guides below provide additional r
 
 ## Related reading
 
-- [Keyword Research for Content Creators: A Step-by-Step Guide](/blog/keyword-research-for-content-creators-guide)
-- [On-Page and Off-Page SEO: Complete Strategy Guide for Rankings](/blog/on-page-off-page-seo-strategy-guide)
-- [B2B SaaS Content Strategy for Ranking and Lead Generation: A Complete Guide](/blog/b2b-saas-content-strategy-ranking-lead-generation)
+- [Keywords for Research: How to Find Search Terms Worth Writing About](/blog/keywords-for-research-how-to-find-search-terms)
+- [How to Increase SEO Ranking: What to Fix First, in Order](/blog/increase-seo-ranking)
+- [SaaS Keyword Research: Start From Buyer Problems, Not Product Terms](/blog/saas-keyword-research)
