@@ -65,7 +65,7 @@ Google's Query groups in the Insights report group similar queries for you. The 
 
 ## Reason 3: It tells you which pages to create and which to skip
 
-Keyword research is as much a pruning tool as a discovery tool. The following is an author-proposed decision framework, not an industry standard. For each candidate topic, a quick review should end in one of four decisions:
+Keyword research is as much a pruning tool as a discovery tool. The following is an author-proposed decision framework. For each candidate topic, a quick review should end in one of four decisions:
 
 - **Write a new page** if people search for the topic and no page on your site answers it.
 - **Improve an existing page** if you already have a page on it, but its wording or structure misses how people phrase the need.
