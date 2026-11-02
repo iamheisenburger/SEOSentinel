@@ -26,7 +26,7 @@ internalLinks:
 
 Competitive keyword research is the process of finding which searches other sites already win, then deciding which of those searches your site can realistically compete for. The second half is where most people go wrong. A list of competitor keywords is easy to collect. Knowing which ones to pursue, and which to leave alone, is the actual skill.
 
-This guide walks through a method you can run with free tools: identify the right competitors, collect candidate searches, read the results pages, and turn what you find into a short, ranked list of articles to write. The method is a recommendation, not an industry standard, and every judgement call in it is something you can check against your own Search Console data.
+This guide walks through a method you can run with free tools: identify the right competitors, collect candidate searches, read the results pages, and turn what you find into a short, ranked list of articles to write. The method is a recommendation, and every judgement call in it is something you can check against your own Search Console data.
 
 ## Start with search competitors, not business competitors
 
