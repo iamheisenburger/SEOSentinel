@@ -33,7 +33,7 @@ Promote a new blog post in the places where your likely customers already read, 
 
 Google primarily finds pages through links from other pages it has already crawled, and those links often come from other websites. Google's guidance says links from other sites happen naturally over time and that you can also encourage people to discover your content by promoting your site ([source 1](https://developers.google.com/search/docs/fundamentals/seo-starter-guide)). Promotion is therefore worth treating as part of publishing, not an optional extra.
 
-This guide orders channels by how directly they connect a post to the right readers. The order is the author's proposed framework, not an industry standard. It also covers how to promote without spamming, how to check the post first, and how to tell which channel worked.
+This guide orders channels by how directly they connect a post to the right readers. The order is the author's proposed framework. It also covers how to promote without spamming, how to check the post first, and how to tell which channel worked.
 
 ## Why promotion matters after you hit publish
 
