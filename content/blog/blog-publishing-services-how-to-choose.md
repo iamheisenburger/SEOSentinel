@@ -147,7 +147,7 @@ Pick the category first, run the checklist on one or two candidates, and let a s
 ## Related reading
 
 - [AI Blog Post Generator: What It Does, Where It Fails, and How to Use One Well](/blog/ai-blog-post-generator-what-it-does-and-how-to-use-one)
-- [AI SEO Tools: Comparing Your Options and How to Choose the Right Platform](/blog/ai-seo-tools-comparison-guide)
+- [Free AI Tools for SEO Optimization: What They Can and Can't Do](/blog/free-ai-tools-for-seo-optimization)
 
 ## Sources
 
