@@ -143,9 +143,9 @@ When steps 4 through 6 start to feel like the bottleneck rather than the ideas, 
 
 ## Related reading
 
-- [AI Content Generator for SEO: Automated Article Writing That Ranks](/blog/ai-content-generator-seo-automated-article-writing)
+- [AI Blog Post Generator: What It Does, Where It Fails, and How to Use One Well](/blog/ai-blog-post-generator-what-it-does-and-how-to-use-one)
 - [Free SEO Content Writing Software: What It Can and Cannot Do for Your Site](/blog/free-seo-content-writing-software)
-- [SEO Content Calendar Tools for Small Teams: Pentra vs. Manual Planning](/blog/seo-content-calendar-tools-small-teams)
+- [How Often Should a Small Business Publish Blog Posts?](/blog/how-often-should-small-business-publish-blog-posts)
 
 ## Sources
 
