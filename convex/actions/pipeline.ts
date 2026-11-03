@@ -9,7 +9,8 @@ import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWor
 import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, planCheckIssues, planCheckNotes, runPlanChecks, statedNumbers, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
 import { assembledArticle, assembledFormat, comparedSides, enrichedExcerpt, orderedStepsText, ownerPageText, PROSE_INPUT_SCHEMA, ProseSchema, pricingText, proseRequest, RECORDS_INPUT_SCHEMA,
   RecordsSchema, recordsRequest, skeletonFor, verifiedRecords } from "../lib/articleAssembly";
-import { backedFactsOnly, renumberCitations, withFaqLast, withoutEmptyFigureSections, withPriceDate, type BackingInput, type BackingRemoval } from "../lib/backedFacts";
+import { backedFactsOnly, rebuildSourcesSection, withFaqLast, withoutEmptyFigureSections, withPriceDate, type BackingInput, type BackingRemoval } from "../lib/backedFacts";
+import { fetchPublicTextRendered } from "../lib/tregFetch";
 import { sourcingGaps, TopicNotSourceable, undocumentedCodeNames, type SourcingCounts } from "../lib/topicSourcing";
 import { withoutStockDisclaimers } from "../lib/contentCorrection";
 import { articlePlanEnabled, contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
@@ -2213,11 +2214,11 @@ const PLAN_SERP_READER = 2;
 async function readSerpPages(results: SerpBrief["results"]): Promise<{ results: SerpBrief["results"]; pages: SerpPage[] }> {
   const read = await Promise.all(results.slice(0, 10).map(async (result) => {
     if (googleRedirect(result.url)) return { result, page: null };
-    try {
-      const fetched = await fetchPublicText(result.url, { timeoutMs: 6_000, maxBytes: 3_000_000, sameHostRedirects: true,
-        allowedContentTypes: [/^text\/html(?:;|$)/i, /^application\/xhtml\+xml(?:;|$)/i] });
-      return { result, page: pageShape(result.url, fetched.text) };
-    } catch { return { result, page: null }; }
+    // v3.1: the pinned fetch first; a page that fails or reads thin gets the rendered fallback (treg), so the brief's
+    // listicles arrive on any run and a list's seed options are the union of what the results name.
+    const fetched = await fetchPublicTextRendered(result.url, 800);
+    const page = fetched.text ? pageShape(result.url, fetched.text) : null;
+    return { result, page };
   }));
   // The first 5 readable pages, by rank, are the brief's.
   return { results: read.map((entry) => entry.result).slice(0, 10),
@@ -5223,7 +5224,7 @@ async function handleArticle(
     // read in full around its figures ($0): research quotes a line or two of a page, and a table of fees or plans needs it all.
     const owners = researchSources.filter((source) => researchSourceRoles.get(source.url) === "owner").slice(0, 8);
     const reads = await Promise.allSettled(owners.map(async (source) => ({ url: source.url,
-      text: ownerPageText((await fetchPublicText(source.url, { sameHostRedirects: true })).text, 4000) })));
+      text: ownerPageText((await fetchPublicTextRendered(source.url, 800)).text, 4000) })));
     let enriched = 0;
     for (const read of reads) {
       if (read.status !== "fulfilled" || read.value.text.length < 160) continue;
@@ -5245,7 +5246,7 @@ async function handleArticle(
     let procedures = 0;
     if (articlePlan?.format === "how-to") {
       const reads = await Promise.allSettled(researchSources.slice(0, 6).map(async (source) => ({ url: source.url,
-        text: orderedStepsText((await fetchPublicText(source.url, { sameHostRedirects: true })).text, 3000) })));
+        text: orderedStepsText((await fetchPublicTextRendered(source.url, 800)).text, 3000) })));
       for (const read of reads) {
         if (read.status !== "fulfilled" || read.value.text.length < 80) continue;
         const at = researchSources.findIndex((source) => source.url === read.value.url);
@@ -7545,12 +7546,26 @@ async function ownerPricingPages(options: readonly string[], sources: readonly {
       targets.set(/\/(?:pricing|plans|prices)\b/i.test(url.pathname) ? hit.url : `${url.origin}/pricing`, option);
     } catch { /* a search that fails leaves the option unpriced, never blocks the article */ }
   }
-  const read = await Promise.allSettled([...targets].map(async ([url, option]) => {
-    const page = await fetchPublicText(url, { sameHostRedirects: true });
+  const readPage = async (url: string, option: string): Promise<PreservedSource | null> => {
+    const page = await fetchPublicTextRendered(url, 800);
     const excerpt = pricingText(page.text, 4000);
     return excerpt.length < 160 ? null : { url: page.url, title: `${option} pricing`, excerpt, contentHash: sha256Hex(excerpt), capturedAt: contentProviderPromptTime() };
-  }));
-  return read.flatMap((result) => result.status === "fulfilled" && result.value ? [result.value] : []);
+  };
+  const read = await Promise.allSettled([...targets].map(([url, option]) => readPage(url, option)));
+  const pages = read.flatMap((result) => result.status === "fulfilled" && result.value ? [result.value] : []);
+  // A vendor whose /pricing page stayed empty gets one targeted search for its real pricing page (JS-rendered, then treg).
+  const missing2 = missing.filter((option) => !pages.some((page) => page.title === `${option} pricing`));
+  for (const option of missing2.slice(0, 4)) {
+    try {
+      const found = await analyzeSERPFromDataForSEO(`"${option}" pricing page`, locale?.locationCode ?? 2840, locale?.languageCode ?? "en");
+      const key = option.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const hit = found.results.find((result) => firstPartyProductPage(result.url, [key]));
+      if (!hit) continue;
+      const page = await readPage(hit.url, option);
+      if (page) pages.push(page);
+    } catch { /* a search that fails leaves the option unpriced */ }
+  }
+  return pages;
 }
 
 /** P299: article assembly v3 (lib/articleAssembly): one records call, code checks and places every fact once, one prose call
@@ -7574,7 +7589,9 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
     `code dropped ${verified.dropped.length} record(s) its excerpt doesn't state.`);
   const thin = args.plan.format === "list" ? verified.options.filter((option) => !option.business).length < 3
     : new Set(verified.facts.map((fact) => fact.section)).size < 2;
-  if (thin && contentProviderAutopilotDraft()) throw new TopicNotSourceable([args.plan.format === "list" ? "fewer than 3 options with checked records" : "fewer than 2 sections with checked records"]);
+  // v3.1 (batch 7): a topic with too few checked records is not sourceable in ANY mode — a 43-word article reached the
+  // gate in owner-review mode and burned its quality attempts. The slot takes the next topic instead.
+  if (thin) throw new TopicNotSourceable([args.plan.format === "list" ? "fewer than 3 options with checked records" : "fewer than 2 sections with checked records"]);
   const skeleton = skeletonFor({ format: args.plan.format, sections: args.plan.sections, records: verified, sources, readAt: contentProviderPromptTime(), sides });
   const proseCall = proseRequest({ search: args.topic.primaryKeyword, productName: args.productName, businessSummary: args.site.siteSummary ?? args.site.niche ?? "",
     audience: args.site.targetAudienceSummary ?? "", profile: args.profile, skeleton, records: verified, sources });
@@ -7714,9 +7731,9 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
   // yes-or-no answer as an empty figure section and left the FAQ heading bare.
   const emptied = assembled ? { markdown: fields.markdown, removed: [] as string[] } : withoutEmptyFigureSections(fields.markdown);
   if (emptied.removed.length) fixNotes.push(`Removed by code: ${emptied.removed.length} empty section(s) or table(s): ${emptied.removed.join("; ").slice(0, 300)}.`);
-  // v3.1 (batch 6, A4): after any deletion the citations renumber 1..n in first-use order and the Sources list follows (the
-  // python tutorial's list skipped [3]).
-  fields = { ...fields, markdown: renumberCitations(withPriceDate(withFaqLast(emptied.markdown), article.createdAt ?? Date.now())) };
+  // v3.1 (batch 6, A4; revised after batch 7): citation numbers stay stable against the article's sources array, and the
+  // Sources list is rebuilt canonically from it (never a gap, never a disagreement with the stored array).
+  fields = { ...fields, markdown: rebuildSourcesSection(withPriceDate(withFaqLast(emptied.markdown), article.createdAt ?? Date.now()), article.sources ?? []) };
   const candidate = candidateFor(fields);
   const quality = evaluatePublicationQuality(candidate, "strict");
   const failures = planChecksForArticle(candidate);

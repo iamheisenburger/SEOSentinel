@@ -23,7 +23,7 @@ test("P294 a planned article's prices say when they were read, inline beside the
   assert.equal(withPriceDate("## Documents you need\n\nPrices as of November 2026.\n\nGather these.", at),
     "## Documents you need\n\nGather these.");
   // P295 runs the empty-section and FAQ-order fixes in the same line, before the gate; v3.1 renumbers citations after them.
-  assert.match(readFileSync("convex/actions/pipeline.ts", "utf8"), /markdown: renumberCitations\(withPriceDate\(withFaqLast\(emptied\.markdown\), article\.createdAt \?\? Date\.now\(\)\)\) \};\n\s+const candidate = candidateFor\(fields\);/);
+  assert.match(readFileSync("convex/actions/pipeline.ts", "utf8"), /markdown: rebuildSourcesSection\(withPriceDate\(withFaqLast\(emptied\.markdown\), article\.createdAt \?\? Date\.now\(\)\), article\.sources \?\? \[\]\) \};\n\s+const candidate = candidateFor\(fields\);/);
 });
 
 test("P294 an owner's held planned draft gets the next topic once, never a third draft", () => {

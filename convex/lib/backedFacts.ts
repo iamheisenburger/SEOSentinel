@@ -308,7 +308,7 @@ export function backedFactsOnly(article: string, input: BackingInput): { markdow
  * bank-reconciliation article carried one under "Documents you need", a section with no price. A standalone "Prices as of…"
  * line the writer left anywhere is removed first: it is pipeline text. */
 const PRICE = /(?:[$€£]\s?\d|\b\d[\d,.]*\s?(?:USD|EUR|GBP)\b)/;
-const PRICE_TOKEN = /[$€£]\s?\d[\d,.]*(?:\s*(?:[-–—]|to)\s*[$€£]?\s?\d[\d,.]*)?/;
+const PRICE_TOKEN = /[$€£]\s?\d[\d,]*(?:\.\d+)?(?:\s*(?:[-–—]|to)\s*[$€£]?\s?\d[\d,]*(?:\.\d+)?)?/;
 const DATED = /\bas of [A-Z][a-z]+ \d{4}\b/;
 const STANDALONE_PRICE_DATE = /^\s*Prices?(?:\s+and\s+(?:fees|prices))?\s+as\s+of\s+[A-Z][a-z]+\s+\d{4}\.?\s*$/;
 export function withPriceDate(article: string, readAt: number): string {
@@ -317,11 +317,15 @@ export function withPriceDate(article: string, readAt: number): string {
   const stripped = lines.join("\n").replace(/\n{3,}/g, "\n\n");
   if (DATED.test(stripped)) return `${stripped}${tail}`;
   const month = new Date(readAt).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+  // A worked example's amounts are illustrations (batch 7: "(as of November 2026)" landed inside the hypothetical
+  // correction "$90.00 ($540.00 − $450.00)"); the date goes beside the first real price.
+  const examples = exampleSections(stripped).filter((x) => x.trim());
+  const inExample = (line: string) => examples.some((x) => x.includes(line.trim().slice(0, 60)));
   let fence = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (/^\s*```/.test(line)) { fence = !fence; continue; }
-    if (fence || !line.trim() || /^\s*(?:#|\||-\s|\d+[.)])/.test(line)) continue;
+    if (fence || !line.trim() || /^\s*(?:#|\||-\s|\d+[.)])/.test(line) || inExample(line)) continue;
     const at = PRICE_TOKEN.exec(line);
     if (!at) continue;
     const end = at.index + at[0].length;
@@ -331,43 +335,24 @@ export function withPriceDate(article: string, readAt: number): string {
   return `${stripped}${tail}`;
 }
 
-/** v3.1 (batch 6, Cowork's A4): citations renumber 1..n in first-use order after any deletion, and the Sources list follows,
- * with nothing cited left out (batch 6's python article skipped [3]). Only the two formats Pentra prints are rewritten; any
- * other shape leaves the article unchanged. */
-const TAIL_SOURCE = /^\s*(?:(\d+)[.)]\s+|[-*]\s+\[(\d+)\]\s+)(\[.*\)\s*|\S.*)$/;
-export function renumberCitations(article: string): string {
-  const split = SOURCES_HEADING.exec(article);
-  if (!split) return article;
-  const body = article.slice(0, split.index), tail = article.slice(split.index);
-  const order: number[] = [];
-  for (const m of body.matchAll(CITATION)) for (const n of m[1].split(/\s*,\s*/).map(Number)) if (n > 0 && !order.includes(n)) order.push(n);
-  if (order.length < 2) return article;
-  const lines = tail.split("\n");
-  const entries = new Map<number, string>();
-  const slots: number[] = [];
-  lines.forEach((line, i) => {
-    const m = TAIL_SOURCE.exec(line);
-    if (!m) return;
-    const n = Number(m[1] ?? m[2]);
-    if (!Number.isInteger(n) || n <= 0) return;
-    entries.set(n, m[3]);
-    slots.push(i);
-  });
-  if (order.some((n) => !entries.has(n))) return article;
-  const map = new Map(order.map((n, i) => [n, i + 1]));
-  if ([...map.entries()].every(([n, next]) => n === next)) return article;
-  const renumbered = body.replace(CITATION, (_all, list: string) =>
-    `[${list.split(/\s*,\s*/).map(Number).map((n) => map.get(n) ?? n).join(", ")}]`);
-  let next = 0;
-  const newTail = lines.map((line, i) => {
-    const m = TAIL_SOURCE.exec(line);
-    if (!m || slots.indexOf(i) < 0) return line;
-    const n = order[next++];
-    return `${next}. ${entries.get(n)}`;
-  });
-  return `${renumbered}${newTail.join("\n")}`.replace(/\n{3,}/g, "\n\n");
+/** v3.1 (batch 6, Cowork's A4, revised after batch 7): citation numbers are STABLE — [n] is always the n-th source of the
+ * article's own sources array — and after any deletion the Sources list is rebuilt canonically from that array, so the
+ * list never has gaps (batch 6's python article skipped [3]) and never disagrees with the array (batch 7's first run
+ * renumbered the body by first use while the stored array kept research order: every shifted citation then failed the
+ * cited-number check against the wrong source). */
+export function rebuildSourcesSection(markdown: string, sources: readonly { url: string; title?: string }[]): string {
+  if (!sources.length) return markdown;
+  const split = SOURCES_HEADING.exec(markdown);
+  const body = (split ? markdown.slice(0, split.index) : markdown).trimEnd();
+  if (!/\[\d+(?:\s*,\s*\d+)*\]/.test(body)) return markdown;
+  const name = (source: { url: string; title?: string }) => {
+    const title = source.title?.replace(/[[\]]/g, "").replace(/\s+/g, " ").trim();
+    if (title) return title;
+    try { return new URL(source.url).hostname.replace(/^www\./, ""); } catch { return source.url; }
+  };
+  const tail = `## Sources\n\n${sources.map((source, index) => `${index + 1}. [${name(source)}](${source.url})`).join("\n")}`;
+  return `${body}\n\n${tail}\n`;
 }
-
 /** P295 (Cowork's batch 4, fix 2): a heading that promises a figure (costs, prices, fees, rebates, lifespan, timeline,
  * temperatures) over a section with no figure is an empty promise ("Rebates and incentives" with no rebate): the section
  * goes. A table column that is mostly dashes is missing data: the column goes (the table, when one column is left). */

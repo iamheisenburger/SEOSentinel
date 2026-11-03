@@ -6,7 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { assembledArticle, endedProgram, proseParagraphs, skeletonFor, verifiedRecords, LIST_HEADING_GUARD } from "../convex/lib/articleAssembly.ts";
-import { backedFactsOnly, renumberCitations } from "../convex/lib/backedFacts.ts";
+import { backedFactsOnly, rebuildSourcesSection } from "../convex/lib/backedFacts.ts";
 
 const now = Date.UTC(2026, 10, 3);
 
@@ -55,26 +55,31 @@ test("P301 R8: in a unit conflict the .gov figure wins; with no authority both s
   assert.equal(both.markdown, "One guide says to use 40 psi [1]. Another says 60 psi works [2].", "no authority: the conflict is shown, not picked");
 });
 
-test("P301 A4: citations renumber in first-use order and the Sources list follows, with nothing cited left out", () => {
+test("P301 A4: citation numbers stay stable and the Sources list is rebuilt canonically from the article's sources", () => {
+  // Batch 7's first run renumbered the body by first use while the stored sources array kept research order: every shifted
+  // citation then failed the cited-number check against the wrong source. Numbers are now stable — [n] is always the n-th
+  // source of the array — and the tail is rebuilt from that array (batch 6's skipped [3] also cannot happen).
+  const sources = [
+    { url: "https://getpino.io", title: "Pino docs" },
+    { url: "https://urllib3.readthedocs.io/util.html", title: "urllib3 utilities" },
+    { url: "https://unused.example", title: "Unused page" },
+    { url: "https://urllib3.readthedocs.io/retry.html", title: "urllib3 retry module" },
+  ];
   const article = [
-    "Pino logs at level 30 [2]. urllib3 retries with backoff [4]. The default connect timeout is 4 seconds [5].",
+    "Pino logs at level 30 [1]. urllib3 retries with backoff [4].",
     "",
     "## Sources",
     "",
-    "- [2] [Pino docs](https://getpino.io)",
-    "- [4] [urllib3 utilities](https://urllib3.readthedocs.io/util.html)",
-    "- [5] [urllib3 retry module](https://urllib3.readthedocs.io/retry.html)",
-    "- [6] [Unused page](https://unused.example)",
+    "- [1] [Pino docs](https://getpino.io)",
+    "- [4] [urllib3 retry module](https://urllib3.readthedocs.io/retry.html)",
   ].join("\n");
-  const out = renumberCitations(article);
+  const out = rebuildSourcesSection(article, sources);
   assert.match(out, /Pino logs at level 30 \[1\]/);
-  assert.match(out, /urllib3 retries with backoff \[2\]/);
-  assert.match(out, /4 seconds \[3\]/);
-  assert.doesNotMatch(out, /\[4\]|\[5\]|\[6\]/);
-  assert.match(out, /1\. \[Pino docs\]\(https:\/\/getpino\.io\)/);
-  assert.equal(renumberCitations("No sources section [1]."), "No sources section [1].", "without a Sources list nothing is renumbered");
-  const identity = renumberCitations("A [1]. B [2].\n\n## Sources\n\n1. [A](https://a.example)\n2. [B](https://b.example)");
-  assert.equal(identity, "A [1]. B [2].\n\n## Sources\n\n1. [A](https://a.example)\n2. [B](https://b.example)", "already in order: unchanged");
+  assert.match(out, /urllib3 retries with backoff \[4\]/, "body numbers never shift");
+  assert.doesNotMatch(out, /- \[1\]/, "the writer's gapped tail is replaced");
+  assert.match(out, /## Sources\n\n1\. \[Pino docs\]\(https:\/\/getpino\.io\)\n2\. \[urllib3 utilities\]\(https:\/\/urllib3\.readthedocs\.io\/util\.html\)\n3\. \[Unused page\]\(https:\/\/unused\.example\)\n4\. \[urllib3 retry module\]\(https:\/\/urllib3\.readthedocs\.io\/retry\.html\)\n$/,
+    "the canonical list covers every number, in array order");
+  assert.equal(rebuildSourcesSection("No citations here.", sources), "No citations here.", "nothing cited: unchanged");
 });
 
 test("P301 prose: a placeholder fills with its value and citation; a raw figure, an unknown record or talk about the article drops the paragraph whole", () => {
@@ -149,4 +154,45 @@ test("P301 a comparison row whose quote names one maker's product stays out of t
   assert.match(skeleton.sections[0].body, /600°F/, "the material-generic row keeps both sides");
   const productRecord = skeleton.sections.find((s) => s.heading === "Heat and oven limits")!;
   assert.equal(productRecord.records.filter((r) => r.value.includes("500")).length, 1, "the product fact stays a prose record for its section");
+});
+
+test("P301 the rendered fallback's payload parser digs the page text out of treg's response shapes", async () => {
+  const { tregExtractedText } = await import("../convex/lib/tregFetch.ts");
+  const page = "word ".repeat(120);
+  assert.equal(tregExtractedText({ data: { content: page } }), page);
+  assert.equal(tregExtractedText({ content: page }), page);
+  assert.equal(tregExtractedText({ result: { markdown: page } }), page);
+  assert.equal(tregExtractedText({ data: { items: [page, page] } }), page + "\n" + page);
+  assert.equal(tregExtractedText({ error: "nope" }), "", "an error payload yields no text");
+});
+
+test("P301 pageShape reads a rendered (Markdown) page too: headings, list entries as option names", async () => {
+  const { pageShape, listedOptions } = await import("../convex/lib/serpBrief.ts");
+  const md = [
+    "# Best Yoga Studio Software", "",
+    "1. **WellnessLiving** — an all-in-one for bigger studios.",
+    "2. **Mindbody** — the established name.",
+    "3. **Momence** — best for video.",
+    "4. **Vagaro** — budget pick for small studios.",
+    "", "## How we chose", "We weighed pricing and waitlists.",
+  ].join("\n");
+  const page = pageShape("https://listicle.example/best", md);
+  assert.deepEqual(page.headings, ["How we chose"]);
+  assert.ok((page.names ?? []).includes("WellnessLiving") && (page.names ?? []).includes("Vagaro"));
+  const options = listedOptions({ pages: [page] });
+  assert.ok(options.length >= 4, `the listicle's entries become seed options: ${JSON.stringify(options)}`);
+});
+
+test("P301 the inline price date never lands inside a worked example (batch 7's bank-rec article)", async () => {
+  const { withPriceDate } = await import("../convex/lib/backedFacts.ts");
+  const at = Date.UTC(2026, 10, 3);
+  const md = [
+    "## Worked example", "",
+    "In the hypothetical correction, the books understated cash by $90.00 ($540.00 − $450.00), so cash goes up.", "",
+    "## Real prices", "",
+    "Permits in town cost $119.",
+  ].join("\n");
+  const out = withPriceDate(md, at);
+  assert.doesNotMatch(out, /\$90\.00 \(as of/, "an illustration's amount is never dated");
+  assert.match(out, /Permits in town cost \$119 \(as of November 2026\)\./, "the first real price carries the date");
 });

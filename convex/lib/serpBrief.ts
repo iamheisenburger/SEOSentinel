@@ -80,6 +80,16 @@ export function googleRedirect(url: string): boolean {
 }
 
 export function pageShape(url: string, html: string): SerpPage {
+  // v3.1: a rendered read (treg) arrives as Markdown, a direct read as HTML; both shapes are parsed.
+  if (!/<[a-z][\s\S]*>/i.test(html)) {
+    const lines = html.split("\n").map((line) => line.trim());
+    const headings = lines.filter((line) => /^#{2,3}\s+/.test(line)).map((line) => line.replace(/^#+\s+/, "").slice(0, 100)).filter((h) => h.length > 1).slice(0, 24);
+    const names = lines.map((line) => /^\s*(?:\d{1,2}[.)]|[-*])\s+\*\*(.{2,60}?)\*\*/.exec(line)?.[1] ?? /^\s*(?:\d{1,2}[.)]|[-*])\s+([A-Z][\w&'.+-]{1,30})\s*[:–—]/.exec(line)?.[1] ?? "")
+      .map((n) => n.trim()).filter(Boolean).slice(0, 30);
+    return { url, headings, words: html.split(/\s+/).filter(Boolean).length,
+      codeBlocks: lines.filter((line) => /^```/.test(line)).length / 2 | 0, tables: 0,
+      items: lines.filter((line) => /^(?:\d{1,2}[.)]|[-*])\s+/.test(line)).length, ...(names.length ? { names } : {}) };
+  }
   const clean = html.replace(/<(script|style|noscript|svg|nav|header|footer|aside|form)\b[\s\S]*?<\/\1>/gi, " ");
   const main = /<(main|article)\b[\s\S]*?<\/\1>/i.exec(clean)?.[0] ?? /<body\b[\s\S]*<\/body>/i.exec(clean)?.[0] ?? clean;
   const headings = [...main.matchAll(/<h([23])\b[^>]*>([\s\S]*?)<\/h\1>/gi)].map((m) => text(m[2]).slice(0, 100)).filter((h) => h.length > 1).slice(0, 24);
