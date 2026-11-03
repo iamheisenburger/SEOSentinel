@@ -2427,8 +2427,10 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
       excludedKnown: v.optional(v.number()), excludedFit: v.optional(v.number()), excludedIntent: v.optional(v.number()),
       // P171: where the seeds came from ("model": read from the confirmed profile) and the buyer-fit call's verdicts.
       seedSource: v.optional(v.union(v.literal("model"), v.literal("site"))), judged: v.optional(v.number()), kept: v.optional(v.number()),
-      method: v.optional(v.number()), grouped: v.optional(v.number()), coveredByExisting: v.optional(v.number()) })) },
-  handler: async (ctx, { siteId, keywords, research }) => {
+      method: v.optional(v.number()), grouped: v.optional(v.number()), coveredByExisting: v.optional(v.number()) })),
+    // P284: the research run audits the new topics before the scheduler is woken (actions/growthTopics replenish).
+    deferWake: v.optional(v.boolean()) },
+  handler: async (ctx, { siteId, keywords, research, deferWake }) => {
     const site = await ctx.db.get(siteId);
     if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return { added: 0 };
     // P172: what the buyer-fit model dropped is remembered for this profile, so the next run reaches new searches.
@@ -2452,7 +2454,7 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
       skippedCompetitor: skipped.competitor, skippedFit: skipped.fit, skippedIntent: skipped.intent, skippedBuyerFit: skipped.buyerFit };
     if (site.contentSchedule) await ctx.db.patch(siteId, { contentSchedule: { ...site.contentSchedule, topicsReplenishAdded: added,
       topicsResearchReceipt: receipt }, updatedAt: Date.now() });
-    await wake(ctx, siteId);
+    if (!deferWake) await wake(ctx, siteId);
     return { added };
   } });
 

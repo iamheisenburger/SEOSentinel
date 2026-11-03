@@ -35,6 +35,8 @@ const defaultBusinesses = [
       "ceramic batch traceability checklist", "ceramic glaze test documentation",
     ] },
 ];
+// P284: a research run is followed by a plan audit that also reserves under topic_plan; research runs are the rest.
+const isResearch = (r: Fields) => r.purpose === "topic_plan" && !String(r.trigger ?? "").startsWith("plan_audit:");
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 const sha = (text: string) => createHash("sha1").update(text).digest("hex");
 const blobSha = (text: string) => createHash("sha1").update(`blob ${Buffer.byteLength(text)}\0`).update(text).digest("hex");
@@ -1460,9 +1462,9 @@ test("SLC62 autopilot keeps prepared slots across a switch, honours the monthly 
     assert.equal(first.mode, "topics_researching", "the slot waits for keyword research while it has time");
     const stamped = f.get(site.id)!.contentSchedule.topicsReplenishedAt;
     assert.ok(stamped, "keyword research is scheduled");
-    assert.equal(f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan").length, 1, "research spend is reserved within the limits");
+    assert.equal(f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && isResearch(r)).length, 1, "research spend is reserved within the limits");
     // The reservation is closed at DataForSEO's reported cost, never held forever.
-    const research = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && r.purpose === "topic_plan")!;
+    const research = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && isResearch(r))!;
     await f.invoke("contentWork:closeTopicResearchReservation", { siteId: site.id, reservationId: research._id, sent: true, actualMicroUsd: 5_000_000 });
     assert.equal(f.get(research._id)!.settledAt, undefined, "a reported cost above the reservation is never rounded down into a receipt");
     await f.invoke("contentWork:closeTopicResearchReservation", { siteId: site.id, reservationId: research._id, sent: true, actualMicroUsd: 231_400 });
@@ -1903,6 +1905,28 @@ test("P277 a draft held under checks since corrected fills its slot, re-checked 
     assert.equal(f.tables.jobs.filter(j => j.contentWork?.reusedDraft).length, 1);
     f.assertOffline();
   }
+});
+
+// P284 (Nov 3 2026): a topic researched and written the same day reached the 02:40Z plan audit only as a paid draft, and was
+// held as a repeat of a live page (pentra.dev Nov 1 and Nov 3). The research run records its topics without waking the
+// scheduler, audits them, then wakes it; other callers still wake it at once.
+test("P284 research records its topics without waking the scheduler, so it can audit them first", async () => {
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  const wakes = () => f.tables._scheduled_functions.filter(row => row.name === "autopilot:dispatchSiteFollowup" && row.state.kind === "pending").length;
+  const before = wakes();
+  const deferred = await f.invoke("contentWork:addResearchedTopics", { siteId: site.id, deferWake: true, keywords: [
+    { keyword: `${slcBusinesses[0].keywords[0]} pricing guide`, searchVolume: 480, difficulty: 14, difficultyMeasured: true }] });
+  assert.equal(deferred.added, 1);
+  assert.equal(wakes(), before, "no wake: the research run audits the new topics first");
+  await f.invoke("contentWork:addResearchedTopics", { siteId: site.id, keywords: [
+    { keyword: `${slcBusinesses[0].keywords[1]} setup checklist`, searchVolume: 320, difficulty: 12, difficultyMeasured: true }] });
+  assert.equal(wakes(), before + 1, "any other caller still wakes it at once");
+  f.setIdentity(null);
+  f.assertOffline();
 });
 
 // P283 (Nov 1 2026): LeadPilot's Nov 3 refresh was held (the cost rule: no replacement), and every scheduler pass after
@@ -5139,7 +5163,7 @@ test("P105 Autopilot writes only searches the business can serve", async t => {
     // P171: the receipt counts the model's verdicts (skips are counted only up to the run's 15 additions).
     const receipt = f.get(site.id)!.contentSchedule.topicsResearchReceipt;
     assert.ok(receipt.judged > receipt.kept && receipt.kept >= topics.length, JSON.stringify(receipt));
-    const reservation = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && r.purpose === "topic_plan")!;
+    const reservation = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && isResearch(r))!;
     assert.ok(reservation.settledMicroUsd >= 60, "the fit call is part of the research's settled cost");
     f.assertOffline();
   });
@@ -8066,7 +8090,7 @@ test("P55 research looks past keywords the site already has", async () => {
   const planned = f.tables.topic_clusters.filter(t => t.siteId === site.id && t.status === "planned").map(t => t.primaryKeyword);
   assert.ok(planned.every(k => !P55_RESEARCH.slice(0, 6).includes(k)), `only keywords the site did not have: ${planned}`);
   assert.ok(planned.some(k => P55_RESEARCH.slice(6).includes(k)), `keywords from the next source were added: ${planned}`);
-  const reservation = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && r.purpose === "topic_plan")!;
+  const reservation = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && isResearch(r))!;
   assert.ok(reservation.settledAt !== undefined, "the research reservation is settled at the reported cost");
   f.assertOffline();
 });
@@ -8099,7 +8123,7 @@ test("P55 soak: seven days at 21 a week with six starting topics never run dry",
   const published = f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "verified" && j.contentWork.intent === "create")
     .map(j => j.contentWork.publishedAt).sort((a, b) => a - b);
   const perDay = Array.from({ length: 7 }, (_, d) => published.filter(t => t >= START + d * day && t < START + (d + 1) * day).length);
-  const research = f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan").map(r => r.createdAt ?? r.reservedAt ?? 0).sort((a, b) => a - b);
+  const research = f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && isResearch(r)).map(r => r.createdAt ?? r.reservedAt ?? 0).sort((a, b) => a - b);
   const s = f.get(site.id)!.contentSchedule;
   const summary = JSON.stringify({ perDay, total: published.length, researchH: research.map(t => +((t - START) / hour).toFixed(1)),
     handed: state.handed.length, rounds: s.topicsResearchRound, lastAdded: s.topicsReplenishAdded,
@@ -8221,7 +8245,7 @@ test("P171 research reads the business's searches from its confirmed profile and
   assert.equal(receipt.judged - receipt.kept, 1, "only the twitch overlay reached the model and was dropped");
   assert.ok(receipt.excludedFit >= 2, JSON.stringify(receipt));
   assert.deepEqual(receipt.seeds.slice(0, 3), ["sprinkler maintenance", "irrigation scheduling", "landscape irrigation repair"]);
-  const reservation = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && r.purpose === "topic_plan")!;
+  const reservation = f.tables.provider_spend_reservations.find(r => r.siteId === site.id && isResearch(r))!;
   assert.ok(reservation.settledMicroUsd >= 120, "both model calls are part of the research's settled cost");
   // Autopilot writes one of them: the word-match gates before and after the draft do not drop a search the model kept.
   await pumpUntil(f, () => f.tables.jobs?.some(j => j.siteId === site.id && j.contentWork?.stage === "ready"), 120, f.now() + 6 * hour);
@@ -8238,7 +8262,7 @@ test("P171/P172 a site researched by an earlier method researches again once, an
   const site = await selectGrowth(f, 8 * hour);
   Object.assign(f.get(site.id)!.contentSchedule, { autopilotSelectedAt: START, autopublishConsentAt: START });
   await pumpUntil(f, () => (f.tables.jobs ?? []).filter(j => j.siteId === site.id && j.contentWork?.stage === "ready").length === 2, 200, f.now() + 12 * hour);
-  const research = () => f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan").length;
+  const research = () => f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && isResearch(r)).length;
   const base = { seeds: ["irrigation valve leak checklist"], searchConsole: 0, offered: 3, added: 3,
     skippedShape: 0, skippedDifficulty: 0, skippedCompetitor: 0, skippedFit: 0, skippedIntent: 0 };
   // Before P171 (no seed source), and P171's own first runs (seed source, no method: rotated seeds).
@@ -8345,7 +8369,9 @@ test("P179 research keeps one search per article: other wordings become secondar
   assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "topics_researching");
   await pumpUntil(f, () => f.get(site.id)!.contentSchedule.topicsReplenishAdded !== undefined, 20, f.now() + hour);
   const groupCalls = f.modelCalls.filter(c => c.tools?.[0]?.name === "submit_search_groups");
-  assert.equal(groupCalls.length, 1);
+  // P284: research groups its searches once, then the plan audit checks the new topics against the live articles.
+  assert.equal(groupCalls.length, 2);
+  assert.match(String(groupCalls[1].messages[0].content), /Fixing an Irrigation Controller That Won't Start/, "the audit sees the site's articles too");
   assert.match(String(groupCalls[0].messages[0].content), /Fixing an Irrigation Controller That Won't Start/, "the call sees the site's articles");
   const planned = f.tables.topic_clusters.filter(t => t.siteId === site.id && t.status === "planned");
   const repairTopics = planned.filter(t => repair.includes(t.primaryKeyword));
@@ -8697,7 +8723,7 @@ test("P57 soak: fourteen days at 21 a week keep publishing through five kinds of
   const s = f.get(site.id)!.contentSchedule;
   const stranded = f.tables.jobs.filter(j => j.siteId === site.id && j.status === "done" && j.contentWork?.stage === "ready" &&
     !j.contentWork.ownerRequest && j.contentWork.retiredAt === undefined && j.contentWork.deadlineAt < s.nextDeadlineAt);
-  const research = f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan")
+  const research = f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && isResearch(r))
     .map(r => r.createdAt ?? 0).sort((a, b) => a - b);
   const summary = JSON.stringify({ perDay, total: published.length, research: research.length, handed: state.handed.length,
     failed: f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.stage === "failed").map(j => j.contentWork.failure),
@@ -8750,10 +8776,10 @@ test("P58 a site out of topics wakes exactly when keyword research may run again
   assert.equal(result.mode, "content_inputs_exhausted"); assert.equal(result.eligibleAt, due);
   const wake = f.tables._scheduled_functions.find(r => r.state.kind === "pending" && r.args?.reason === "topic_research_due");
   assert.ok(wake && wake.at === due, "a wake is set for the moment research is allowed");
-  const before = f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan").length;
+  const before = f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && isResearch(r)).length;
   f.setTime(due);
   await f.invoke(wake.name, wake.args); wake.state = { kind: "success" };
-  await pumpUntil(f, () => f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && r.purpose === "topic_plan").length > before,
+  await pumpUntil(f, () => f.tables.provider_spend_reservations.filter(r => r.siteId === site.id && isResearch(r)).length > before,
     20, due + hour);
   f.assertOffline();
 });

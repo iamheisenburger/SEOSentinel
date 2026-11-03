@@ -239,7 +239,18 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
       excludedKnown: discovery.excluded.already_known, excludedFit: discovery.excluded.product_fit, excludedIntent: discovery.excluded.existing_intent,
       seedSource: read ? "model" as const : "site" as const, judged: fit.size, kept: [...fit.values()].filter(verdict => verdict.keep).length,
       method: TOPIC_RESEARCH_METHOD, grouped: grouping.merged, coveredByExisting: grouping.covered };
-    const result: { added: number } = await ctx.runMutation(internal.contentWork.addResearchedTopics, { siteId, keywords, research });
+    const result: { added: number } = await ctx.runMutation(internal.contentWork.addResearchedTopics, { siteId, keywords, research, deferWake: true });
+    // P284 (Nov 3 2026): the new topics are audited against the live articles before any is written. A topic researched
+    // and written the same day reached the daily 02:40Z audit only as a paid draft: pentra.dev's /automate-blog-posts
+    // (Nov 1) and /wordpress-seo-automation-what-to-automate (Nov 3) were both held as repeats of a live page.
+    if (result.added > 0) {
+      try {
+        const audit = await auditPlan(ctx, siteId);
+        if (audit && audit.dropped + audit.merged + audit.heldBack > 0) console.log(`Plan audit after research ${siteId}: ${JSON.stringify(audit)}`);
+      } catch (error) { console.warn(`Plan audit after research skipped ${siteId}: ${error instanceof Error ? error.message : "unknown"}`); }
+    }
+    // Always report back (even empty) so a waiting Autopilot slot continues.
+    await ctx.scheduler.runAfter(0, internal.autopilot.dispatchSiteFollowup, { siteId, trigger: "content_work", reason: "content_work_stage_changed" });
     return result;
   } });
 
