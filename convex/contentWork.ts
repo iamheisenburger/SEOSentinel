@@ -35,7 +35,7 @@ import { authorizedWorkPage, chooseImprovement, contentWorkConnection, enrollVer
 import { noteDraftReady, noteFirstArticleLive } from "./customerEmails";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes, syncSummary } from "./articles";
-import { AUTOPILOT_ACCEPTANCE, CONTENT_CHECKS_VERSION, evaluatePublicationQuality, issuesBlockingPreLinkReview, ownerWaivableIssue, readerVisibleIssues } from "./lib/articleQuality";
+import { AUTOPILOT_ACCEPTANCE, CONTENT_CHECKS_VERSION, evaluatePublicationQuality, issuesBlockingPreLinkReview, ownerWaivableIssue, readerVisibleIssues, withoutUnsupportedMetaYears } from "./lib/articleQuality";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
 import { auditResultHash, clarifiableContentAudit, inconsistentAuditFeedback, internalContentProcessingError, retainedContradictoryContentAudit, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 import { contentJobUsesAllowance } from "./lib/contentUsage";
@@ -1810,7 +1810,7 @@ async function reusableHeldDraft(ctx: MutationCtx, site: Doc<"sites">, preferJob
       .some(j => j._id !== job._id)) continue;
     // Today's checks, as the review that seals it computes them (that review repeats them before anything is published).
     const candidate: Doc<"articles"> = { ...article, claimEvidence: [], claimEvidenceStatus: "not_applicable", factCheckScore: undefined,
-      editorialQualityScore: undefined };
+      editorialQualityScore: undefined, metaTitle: withoutUnsupportedMetaYears(article.metaTitle, article.title) };
     if (issuesBlockingPreLinkReview([...evaluatePublicationQuality(candidate, "strict").issues, ...readerVisibleIssues(candidate)]).length) {
       // Held under today's checks too: the verdict is current, so it is not looked at again.
       await ctx.db.patch(job._id, { contentWork: { ...job.contentWork!, checksVersion: CONTENT_CHECKS_VERSION } });

@@ -100,7 +100,9 @@ export const AUTOPILOT_ACCEPTANCE = "pentra-autopilot";
  * evidence that today's drafts keep failing (P181, Oct 25 2026). */
 // 2: P273/P275 (Nov 1 2026): a list's option count and a Sources entry's title no longer block; pentra.dev's Nov 1 and
 // Nov 2 drafts failed on them, and with a third failure replacements would stop and the site would miss more days.
-export const CONTENT_CHECKS_VERSION = 2;
+// 3: P287 (Nov 3 2026): a hyphenated last word ("no-shows") is no unfinished search description, and a year the title
+// doesn't give leaves the search title in code; a draft held for either is judged again.
+export const CONTENT_CHECKS_VERSION = 3;
 export const UNCITED_QUANTITY_ISSUE = /^\d+ quantified outcome or operational claim\(s\) lack an inline citation\.$/;
 export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number; claimEvidenceStatus?: string; markdown?: string } &
   Partial<Pick<PublicationArticle, "claimEvidence" | "productEvidenceSnapshot" | "productEvidenceHash">>): boolean {
@@ -1216,8 +1218,10 @@ const EXTERNAL_LINK_PATTERN = /\[[^\]]+\]\(https:\/\/[^)]+\)|https:\/\/\S+/;
 // Quantifiers that can't end a sentence (P143, Oct 21 2026: a 155-character
 // cut left pentra.dev's snippet "...your own Search Console data over several.").
 // "more", "each", "all" and "both" can ("...and more."), so they are not here.
+// P287 (Nov 3 2026): an ending word joined by a hyphen ("no-shows", "drop-in", "how-to", "check-in") is a complete word,
+// never a dangling one: the yoga list's "...and ways to reduce no-shows." was held as an unfinished sentence.
 const DANGLING_META_END_PATTERN =
-  /\b(?:a|about|across|after|an|and|as|at|before|by|for|from|in|into|of|on|or|over|the|through|to|toward|towards|under|via|while|with|without|which|that|your|our|their|its|my|whether|than|because|although|unless|if|several|various|multiple|numerous|certain|every)$/i;
+  /(?<![\w-])(?:a|about|across|after|an|and|as|at|before|by|for|from|in|into|of|on|or|over|the|through|to|toward|towards|under|via|while|with|without|which|that|your|our|their|its|my|whether|than|because|although|unless|if|several|various|multiple|numerous|certain|every)$/i;
 /** Where an over-long meta description is cut: its last sentence end, else
  * its last clause break, at or after `minLength` (the strict gate's snippet
  * floor) and inside `window`. -1 when there is none. */
@@ -1229,9 +1233,9 @@ function lastMetaBoundary(window: string, minLength: number): number {
   return best;
 }
 const INCOMPLETE_META_PHRASE_END_PATTERN =
-  /\b(?:with|for|to|of)\s+(?:full|complete|detailed|relevant|useful|better|clear|strong)$/i;
+  /(?<![\w-])(?:with|for|to|of)\s+(?:full|complete|detailed|relevant|useful|better|clear|strong)$/i;
 const INCOMPLETE_TRANSITIVE_META_END_PATTERN =
-  /\b(?:captures?|compares?|covers?|delivers?|explains?|includes?|offers?|provides?|reveals?|requires?|shows?)$/i;
+  /(?<![\w-])(?:captures?|compares?|covers?|delivers?|explains?|includes?|offers?|provides?|reveals?|requires?|shows?)$/i;
 
 /** Publication floor for strict (autonomous) articles. Deleting unsupported
  * sentences is how a draft gets safe, so a draft that was written to depth
@@ -1424,9 +1428,29 @@ export function clampMetaDescription(
   return `${complete}.`;
 }
 
-export function clampMetaTitle(value: string | undefined, maxLength = 60): string | undefined {
+/**
+ * P287 (Nov 3 2026): a year in the search title that the article's own title doesn't give is removed in code, never a
+ * reason to hold the article (the strict check "Meta title introduces unsupported year" held the yoga list for "(2026)").
+ */
+export function withoutUnsupportedMetaYears(metaTitle: string | undefined, title: string | undefined): string | undefined {
+  if (!metaTitle) return metaTitle;
+  const titleYears = new Set(title?.match(/\b20\d{2}\b/g) ?? []);
+  let next = metaTitle;
+  for (const year of new Set(metaTitle.match(/\b20\d{2}\b/g) ?? [])) {
+    if (titleYears.has(year)) continue;
+    next = next.replace(new RegExp(`\\s*[([]${year}[)\\]]`, "g"), "")
+      .replace(new RegExp(`\\s+(?:in|for|of)\\s+${year}\\b`, "gi"), "")
+      .replace(new RegExp(`\\s*[-\u2013\u2014|:,]\\s*${year}\\b`, "g"), "")
+      .replace(new RegExp(`\\b${year}\\s+`, "g"), "")
+      .replace(new RegExp(`\\s*\\b${year}\\b`, "g"), "");
+  }
+  next = next.replace(/\s{2,}/g, " ").replace(/^[\s,;:|\u2013\u2014-]+|[\s,;:|\u2013\u2014-]+$/g, "").trim();
+  return next || metaTitle;
+}
+
+export function clampMetaTitle(value: string | undefined, maxLength = 60, title?: string): string | undefined {
   if (!value) return undefined;
-  const normalized = value.trim().replace(/\s+/g, " ");
+  const normalized = (title === undefined ? value : withoutUnsupportedMetaYears(value, title) ?? value).trim().replace(/\s+/g, " ");
   if (normalized.length <= maxLength) return normalized;
   const candidate = normalized.slice(0, maxLength + 1);
   const lastSpace = candidate.lastIndexOf(" ");

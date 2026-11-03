@@ -48,6 +48,7 @@ import {
   articleReviewImprovesWithoutRegression,
   clampMetaDescription,
   clampMetaTitle,
+  withoutUnsupportedMetaYears,
   evidenceSafeLengthRecoveryTarget,
   evidenceRequiredParagraphs,
   initialArticleDepthTarget,
@@ -6053,7 +6054,7 @@ async function handleArticle(
       sources: finalSources,
     });
     article.title = metadata.title.trim();
-    article.metaTitle = clampMetaTitle(metadata.metaTitle);
+    article.metaTitle = clampMetaTitle(metadata.metaTitle, 60, article.title);
     article.metaDescription = clampMetaDescription(metadata.metaDescription);
     console.log(
       `Final metadata regenerated: title=${article.metaTitle?.length ?? 0} chars, description=${article.metaDescription?.length ?? 0} chars.`,
@@ -6061,7 +6062,7 @@ async function handleArticle(
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown metadata error";
     editorialQualityNotes.push(`Final metadata generation failed: ${message}`);
-    article.metaTitle = clampMetaTitle(article.metaTitle || article.title);
+    article.metaTitle = clampMetaTitle(article.metaTitle || article.title, 60, article.title);
     article.metaDescription = clampMetaDescription(article.metaDescription);
     console.error(`Final metadata fallback used: ${message}`);
   }
@@ -7413,7 +7414,8 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
         reviewedMediaUrls: article.reviewedMediaUrls ?? [], productEvidenceStatus }), factCheckScore: undefined, editorialQualityScore: undefined,
       publicationConfigHash: deliveryConfigHash };
   };
-  let fields = { title: article.title, markdown: article.markdown, metaTitle: article.metaTitle, metaDescription: article.metaDescription };
+  // P287: a year the title doesn't give leaves the search title in code, so a held draft re-checked at $0 is not held for it.
+  let fields = { title: article.title, markdown: article.markdown, metaTitle: withoutUnsupportedMetaYears(article.metaTitle, article.title), metaDescription: article.metaDescription };
   const fixNotes: string[] = [];
   // P268 (Oct 31 2026): the one fix runs on the first review whenever anything is found to fix, not only when the gate
   // blocks (Cowork's batch 2 failures were mostly things no gate blocks: repeats, referrals, wrong science, garbled prices).
@@ -7477,7 +7479,7 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
           sources: article.sources ?? [], rejected: { metadata: { title: fields.title, metaTitle: fields.metaTitle ?? fields.title,
             metaDescription: fields.metaDescription ?? "" }, defects: metadataDefects } })
           .catch((error: unknown) => { if (costCapRefusal(error)) return null; throw error; });
-        if (metadata) fields = { ...fields, metaTitle: clampMetaTitle(metadata.metaTitle) ?? fields.metaTitle,
+        if (metadata) fields = { ...fields, metaTitle: clampMetaTitle(metadata.metaTitle, 60, fields.title) ?? fields.metaTitle,
           metaDescription: clampMetaDescription(metadata.metaDescription) ?? fields.metaDescription };
       }
     }
@@ -7772,7 +7774,7 @@ async function reviewExistingArticleHandler(
       // Store exactly what the auditor reviews.
       reviewMetadata = {
         title: rewritten.title.trim() || reviewMetadata.title,
-        metaTitle: clampMetaTitle(rewritten.metaTitle) ?? reviewMetadata.metaTitle,
+        metaTitle: clampMetaTitle(rewritten.metaTitle, 60, rewritten.title.trim() || reviewMetadata.title) ?? reviewMetadata.metaTitle,
         metaDescription: clampMetaDescription(rewritten.metaDescription) ?? reviewMetadata.metaDescription,
       };
     }
@@ -8292,7 +8294,7 @@ async function reviewExistingArticleHandler(
     if (contentProviderMayRepairDraft() && nextTitle !== article.title) {
       finalReviewMarkdown = normalizeArticleHeadings(finalReviewMarkdown, nextTitle);
     }
-    const nextMetaTitle = clampMetaTitle(metadata.metaTitle);
+    const nextMetaTitle = clampMetaTitle(metadata.metaTitle, 60, nextTitle);
     const nextMetaDescription = clampMetaDescription(metadata.metaDescription);
     finalReviewMarkdown = keepRefreshSection(finalReviewMarkdown);
     const finalStats = calculateArticleStats(finalReviewMarkdown);

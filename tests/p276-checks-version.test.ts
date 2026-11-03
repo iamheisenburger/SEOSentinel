@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { CONTENT_CHECKS_VERSION } from "../convex/lib/articleQuality.ts";
 
 test("P276 failures judged before P273 and P275 corrected the checks are no failing streak", () => {
-  assert.equal(CONTENT_CHECKS_VERSION, 2);
+  assert.ok(CONTENT_CHECKS_VERSION >= 2, "2 since P276 (3 since P287)");
   const work = readFileSync("convex/contentWork.ts", "utf8");
   assert.match(work, /return job\.contentWork!\.failure === "bounded_content_quality_exhausted" && \(job\.contentWork!\.checksVersion \?\? 0\) < CONTENT_CHECKS_VERSION;/,
     "a failure recorded under version 1 reads as outdated");
