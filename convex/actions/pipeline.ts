@@ -9,7 +9,7 @@ import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWor
 import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, planCheckIssues, planCheckNotes, runPlanChecks, statedNumbers, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
 import { assembledArticle, assembledFormat, comparedSides, enrichedExcerpt, orderedStepsText, ownerPageText, PROSE_INPUT_SCHEMA, ProseSchema, pricingText, proseRequest, RECORDS_INPUT_SCHEMA,
   RecordsSchema, recordsRequest, skeletonFor, verifiedRecords } from "../lib/articleAssembly";
-import { backedFactsOnly, rebuildSourcesSection, withFaqLast, withoutEmptyFigureSections, withPriceDate, type BackingInput, type BackingRemoval } from "../lib/backedFacts";
+import { backedFactsOnly, rebuildSourcesSection, withFaqLast, withoutEmptyFigureSections, withoutUntimedSections, withPriceDate, type BackingInput, type BackingRemoval } from "../lib/backedFacts";
 import { fetchPublicTextRendered } from "../lib/tregFetch";
 import { sourcingGaps, TopicNotSourceable, undocumentedCodeNames, type SourcingCounts } from "../lib/topicSourcing";
 import { withoutStockDisclaimers } from "../lib/contentCorrection";
@@ -4608,6 +4608,8 @@ async function handleArticle(
   let researchSourceRoles = new Map<string, SourceRole>();
   // P291: what research found for a planned article, by publisher (step 0 decides from it before anything is written).
   let plannedSourcing: SourcingCounts | null = null;
+  // P305: every page research accepted with a readable excerpt, before ranking capped it (assembly v3's records call).
+  let readableResearchPool: PreservedSource[] = [];
 
   if (topic && !contentProviderActive()) {
     try {
@@ -4797,7 +4799,7 @@ async function handleArticle(
         const strict = strictEvidenceSources(pool, { firstPartyProducts: namedProducts, reputableSecondary: planned });
         const accepted = strict.accepted.map(source => {
           const excerpt = (source.excerpt ?? source.excerpts.join(" … ")).slice(0, EVIDENCE_EXCERPT_MAX_CHARS);
-          return { url: source.url, title: readableSourceTitle(source.title, source.url), excerpt, contentHash: sha256Hex(excerpt), capturedAt: contentProviderPromptTime() };
+          return { url: source.url, title: readableSourceTitle(source.title, source.url, excerpt), excerpt, contentHash: sha256Hex(excerpt), capturedAt: contentProviderPromptTime() };
         });
         return { strict, accepted, readable: accepted.filter(source => source.excerpt.length >= 160) };
       };
@@ -4894,6 +4896,7 @@ async function handleArticle(
       // P268: a list's 10 sources fit (30,000 characters cut its last options' pricing pages).
       ].join("\n\n").slice(0, planned ? 60000 : 30000) : "";
       console.log(`Autopilot research: ${searches} searches, ${cited} cited pages, ${researchSources.length} strict sources`);
+      readableResearchPool = readable;
     } catch (err) {
       researchQualityNotes.push(`Web research unavailable for this article: ${err instanceof Error ? err.message.slice(0, 200) : "unknown"}`);
       console.error(`Autopilot web research failed (continuing without): ${err instanceof Error ? err.message : "unknown"}`);
@@ -5264,11 +5267,20 @@ async function handleArticle(
     }
     researchQualityNotes.push(`Assembly v3: ${enriched} owner page(s), ${pages.length} option pricing page(s) and ${procedures} procedure page(s) read in full.`);
   }
+  // P305 (the seesaw, batch 8 vs 9): the records call sees EVERY readable research page, not only the ranked few — the
+  // cap forced a choice between the authority's rule pages and the cost/vendor pages, and each run's ranking flipped
+  // which side won (batch 8 kept cost and lost permits; batch 9 kept austintexas.gov three times and lost every dollar
+  // figure). Ranked sources keep their order and roles; up to 8 more readable pages ride along for the records call
+  // (their prices still need the vendor's own page, R10, and .gov still wins figure conflicts, R8).
+  const assemblyExtras = assembleV3
+    ? readableResearchPool.filter((source) => !researchSources.some((keptSource) => keptSource.url === source.url)).slice(0, 8)
+    : [];
+  if (assemblyExtras.length) researchQualityNotes.push(`Assembly v3: ${assemblyExtras.length} further readable page(s) included for the records call.`);
   if (assembleV3 && articlePlan) articlePlan.assembly = "v3";
   const article = assembleV3 && articlePlan && topic ? await assembleArticleV3({ site, topic, plan: articlePlan, covers: outlineCovers,
-      questions: serpBrief?.questions ?? [], options: plannedListOptions, productName,
-      profile: productEvidence, sources: researchSources,
-      owner: (url) => researchSourceRoles.get(url) === "owner", notes: researchQualityNotes })
+    questions: serpBrief?.questions ?? [], options: plannedListOptions, productName,
+    profile: productEvidence, sources: [...researchSources, ...assemblyExtras],
+    owner: (url) => researchSourceRoles.get(url) === "owner", notes: researchQualityNotes })
     : await callClaudeStructured({
     system: `${UNTRUSTED_EVIDENCE_INSTRUCTION}\n\n${systemPrompt}`,
     userMessage,
@@ -7561,15 +7573,20 @@ async function ownerPricingPages(options: readonly string[], sources: readonly {
   const read = await Promise.allSettled([...targets].map(([url, option]) => readPage(url, option)));
   const pages = read.flatMap((result) => result.status === "fulfilled" && result.value ? [result.value] : []);
   // A vendor whose /pricing page stayed empty gets one targeted search for its real pricing page (JS-rendered, then treg).
+  // P305: the search's own first-party hit is tried before any reconstructed /pricing URL — batch 9's yoga list lost
+  // options whose real pricing page was not at origin/pricing, and a list needs every option its sources name.
   const missing2 = missing.filter((option) => !pages.some((page) => page.title === `${option} pricing`));
-  for (const option of missing2.slice(0, 4)) {
+  for (const option of missing2.slice(0, 6)) {
     try {
-      const found = await analyzeSERPFromDataForSEO(`"${option}" pricing page`, locale?.locationCode ?? 2840, locale?.languageCode ?? "en");
+      const found = await analyzeSERPFromDataForSEO(`"${option}" pricing`, locale?.locationCode ?? 2840, locale?.languageCode ?? "en");
       const key = option.toLowerCase().replace(/[^a-z0-9]/g, "");
-      const hit = found.results.find((result) => firstPartyProductPage(result.url, [key]));
-      if (!hit) continue;
-      const page = await readPage(hit.url, option);
-      if (page) pages.push(page);
+      const firstParty = found.results.filter((result) => firstPartyProductPage(result.url, [key]));
+      for (const hit of firstParty.slice(0, 2)) {
+        const page = await readPage(hit.url, option);
+        if (page) { pages.push(page); break; }
+        try { const url = new URL(hit.url); const constructed = await readPage(`${url.origin}/pricing`, option); if (constructed) { pages.push(constructed); break; } }
+        catch { /* the hit's origin was not a URL either */ }
+      }
     } catch { /* a search that fails leaves the option unpriced */ }
   }
   return pages;
@@ -7738,9 +7755,13 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
   // yes-or-no answer as an empty figure section and left the FAQ heading bare.
   const emptied = assembled ? { markdown: fields.markdown, removed: [] as string[] } : withoutEmptyFigureSections(fields.markdown);
   if (emptied.removed.length) fixNotes.push(`Removed by code: ${emptied.removed.length} empty section(s) or table(s): ${emptied.removed.join("; ").slice(0, 300)}.`);
+  // P305: a timing heading over no timing fact goes, on both paths (batch 9's sprinkler said only "if you are reading
+  // this in early November" — the writer, not a source).
+  const untimed = withoutUntimedSections(emptied.markdown);
+  if (untimed.removed.length) fixNotes.push(`Removed by code: timing section(s) with no timing fact: ${untimed.removed.join("; ").slice(0, 200)}.`);
   // v3.1 (batch 6, A4; revised after batch 7): citation numbers stay stable against the article's sources array, and the
   // Sources list is rebuilt canonically from it (never a gap, never a disagreement with the stored array).
-  fields = { ...fields, markdown: rebuildSourcesSection(withPriceDate(withFaqLast(emptied.markdown), article.createdAt ?? Date.now()), article.sources ?? []) };
+  fields = { ...fields, markdown: rebuildSourcesSection(withPriceDate(withFaqLast(untimed.markdown), article.createdAt ?? Date.now()), article.sources ?? []) };
   const candidate = candidateFor(fields);
   const quality = evaluatePublicationQuality(candidate, "strict");
   const failures = planChecksForArticle(candidate);

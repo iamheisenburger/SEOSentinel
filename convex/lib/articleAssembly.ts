@@ -583,9 +583,29 @@ export function keptProse(text: string, scope: { allowedText: string }): { kept:
 }
 
 const PLACEHOLDER = /\{\{(r\d+)\}\}/g;
+/** P305 (batch 9, roof): a record's prose display is its value normalized, never its evidence wording. "$4 and $11" is the
+ * range "$4–$11"; a space before a range dash goes; digits are only ever reformatted, never new — a normalization whose
+ * numbers are not all in the value falls back to the trimmed value. */
+export function proseDisplay(value: string): string {
+  const trimmed = value.replace(/\s+/g, " ").trim().replace(/[.;,]+$/, "");
+  const out = trimmed.replace(/(\d[\d,]*(?:\.\d+)?)\s*(?:dollars?)?\s*(?:\band\b|\bto\b|[–—-])\s*[$€£]?\s*(\d[\d,]*(?:\.\d+)?)/g, "$1–$2")
+    .replace(/\s+([–—])/g, "$1");
+  const digits = (s: string) => [...s.matchAll(/\d[\d,]*(?:\.\d+)?/g)].map((m) => m[0]).join(" ");
+  const had = new Set(digits(trimmed).split(" "));
+  return digits(out).split(" ").every((d) => had.has(d)) ? out : trimmed;
+}
+/** Content words (≥4 letters) a fill and its sentence would both carry. */
+const overlapWords = (a: string, b: string) => {
+  const words = (s: string) => new Set([...s.toLowerCase().matchAll(/[a-z][a-z'-]{3,}/g)].map((m) => m[0]));
+  const other = words(b);
+  return [...words(a)].filter((w) => other.has(w));
+};
 /** v3.1: one prose paragraph with placeholders. The unit of deletion is the whole paragraph (batch 6's rule): a paragraph
  * that states a raw figure, references an unknown record, overuses a fact, names something its records don't, or talks
- * about the article is dropped whole and its facts fall back to the section's data block. */
+ * about the article is dropped whole and its facts fall back to the section's data block. P305: a record is stated in
+ * prose at most once (batch 9's roof article printed the same record sentence in two sections — the used map was cleared
+ * after every paragraph, so it never accumulated), and a value that repeats the sentence's own words is a paragraph
+ * defect (its parenthetical aside goes first). */
 export function proseParagraphs(text: string, args: { pool: Record<string, { display: string; source: number; label?: string }>; scope: readonly ProseRecord[];
   used: Map<string, number>; allowedText: string; limit?: number }): { kept: string; dropped: string[] } {
   const paragraph = text.replace(/\s+/g, " ").trim();
@@ -605,22 +625,32 @@ export function proseParagraphs(text: string, args: { pool: Record<string, { dis
     }
   }
   if (namedEntities(bare).some((name) => key(name).length >= 3 && !mentions(args.allowedText, name))) return bad("a name its records don't give");
-  const limit = args.limit ?? 2;
-  if (ids.some((id) => (args.used.get(id) ?? 0) >= limit)) return bad("a fact used too many times");
-  // Fill each placeholder with its value and citation, walking the original text with a cursor (replacement lengths
-  // shift later indices); a quoted fragment landing mid-sentence reads as prose ("… deals with automated waitlists…" —
-  // batch 8's glued capitals), so its first letter follows the sentence's case.
-  let filled = "", cursor = 0;
+  const limit = args.limit ?? 1;
+  if (ids.some((id) => (args.used.get(id) ?? 0) >= limit)) return bad("a fact stated already");
+  // The fills, normalized and checked against the sentence around them (P305).
+  const fills: { match: RegExpMatchArray; text: string }[] = [];
   for (const match of [...paragraph.matchAll(PLACEHOLDER)]) {
     const record = args.pool[match[1]]!;
-    const before = paragraph.slice(0, match.index).replace(/[\s(\[]+$/, "");
-    const follow = before.length > 0 && /[a-z,;]$/.test(before) && /^[A-Z][a-z]/.test(record.display)
-      ? record.display.charAt(0).toLowerCase() + record.display.slice(1) : record.display;
-    filled += paragraph.slice(cursor, match.index) + `${follow}${cite(record.source)}`;
-    cursor = match.index + match[0].length;
+    let display = proseDisplay(record.display);
+    const aside = /\s*\(([^)]*)\)/.exec(display);
+    if (aside && overlapWords(aside[1], bare).length >= 2) display = proseDisplay(display.replace(aside[0], ""));
+    if (overlapWords(display, bare).length >= 2) return bad("a value repeating the sentence's words");
+    fills.push({ match, text: display });
+  }
+  // Fill each placeholder with its value and citation, walking the original text with a cursor (replacement lengths
+  // shift later indices); a value landing mid-sentence or after a colon reads as prose ("… deals with automated
+  // waitlists…", "pattern: almost always full tear-offs"), so its first letter follows the sentence's case.
+  let filled = "", cursor = 0;
+  for (const { match, text: display } of fills) {
+    const record = args.pool[match[1]]!;
+    const before = paragraph.slice(0, match.index ?? 0).replace(/[\s(\[]+$/, "");
+    const follow = before.length > 0 && /[a-z,;:]$/.test(before) && /^[A-Z][a-z]/.test(display)
+      ? display.charAt(0).toLowerCase() + display.slice(1) : display;
+    const at = match.index ?? 0;
+    filled += paragraph.slice(cursor, at) + `${follow}${cite(record.source)}`;
+    cursor = at + match[0].length;
   }
   const kept = filled + paragraph.slice(cursor);
-  args.used.clear();
   for (const id of ids) args.used.set(id, (args.used.get(id) ?? 0) + 1);
   return { kept: kept.replace(/\s+([,.;:])/g, "$1").replace(/\(\s+/g, "(").replace(/\s+\)/g, ")").replace(/\s{2,}/g, " ").trim(), dropped: [] };
 }

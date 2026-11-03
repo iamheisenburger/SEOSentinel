@@ -145,13 +145,16 @@ export function deleteSentencesCoherently(
     removedAt[i] = flaggedText;
   }
   // v3.1 cascades: a ":" paragraph whose introduced list or table went with it, and a heading left with nothing under it.
+  // P305: only prose lines are candidates (fence[i]) — a Python "def f():" ends in ":" and is followed by fenced code,
+  // which batch 9 read as a dangling intro and blanked, taking every block header out of the code examples. A code
+  // fence after a ":" line is content that answers it, so fence[j] no longer deletes the intro either.
   if (removedAt.some((x) => x)) {
     for (let i = 0; i < lines.length; i++) {
       const text = lines[i].trim();
-      if (!text || headingLevel(lines[i]) || /^\s*(?:\||```)/.test(lines[i]) || !/:\s*$/.test(text)) continue;
+      if (!text || fence[i] || headingLevel(lines[i]) || /^\s*(?:\||```)/.test(lines[i]) || !/:\s*$/.test(text)) continue;
       let j = i + 1;
       while (j < lines.length && !lines[j].trim()) j++;
-      if (j >= lines.length || headingLevel(lines[j]) || fence[j]) lines[i] = "";
+      if (j >= lines.length || headingLevel(lines[j])) lines[i] = "";
     }
     for (let i = 0; i < lines.length; i++) {
       const h = headingLevel(lines[i]);

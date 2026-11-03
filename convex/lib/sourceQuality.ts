@@ -185,19 +185,29 @@ export function firstPartyProductPage(url: string, products: readonly string[]):
   if (!normalized) return false;
   const host = new URL(normalized).hostname.toLowerCase();
   // P262: "Mindbody" is mindbodyonline.com and "Walla" hellowalla.com: the name with an affix brands use for their own
-  // domain counts; a review or comparison site that contains the name ("seobotreview") does not.
+  // domain counts; a review or comparison site that contains the name ("seobotreview") does not. P305: "apps" and "up"
+  // are brand affixes too — batch 9's invoicing list lost Wave (waveapps.com) and Square (squareup.com) as options
+  // because their own domains failed this check, and the article then had too few options to deliver.
   const site = websiteName(host);
   return !matchesAnyHost(host, LOW_AUTHORITY_HOSTS) && products.some((product) => site === product ||
-    (product.length >= 4 && new RegExp(`^(?:get|try|use|go|hello|join|my)?${product.replace(/[^a-z0-9]/g, "")}(?:app|hq|online|labs|software|hub|cloud|now)?$`).test(site)));
+    (product.length >= 4 && new RegExp(`^(?:get|try|use|go|hello|join|my)?${product.replace(/[^a-z0-9]/g, "")}(?:app|apps|hq|online|labs|software|hub|cloud|now|up)?$`).test(site)));
 }
 
 /** A source's title as readers see it in the Sources list. Web search often
  * titles a PDF with its file name ("C 1097 2" for a University of Georgia
  * Extension circular on the Compost Notes test site, Oct 21 2026); a title
- * without two real words becomes the site it comes from (P153). */
-export function readableSourceTitle(title: string | undefined, url: string): string {
+ * without two real words becomes the site it comes from (P153). P305 (batch 9):
+ * a nav label ("Back to Garden & Landscape") or a title partly in another
+ * script ("urllib3.util.retry 源代码") is not a title either — the page's first
+ * heading from its excerpt is used, then the site. */
+const NAV_LABEL_TITLE = /^(?:back|return|go)\s+to\b/i;
+const OTHER_SCRIPT = /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}|\p{Script=Cyrillic}|\p{Script=Arabic}/u;
+export function readableSourceTitle(title: string | undefined, url: string, excerpt = ""): string {
   const clean = (title ?? "").replace(/\s+/g, " ").trim();
-  if ((clean.match(/\p{L}{3,}/gu) ?? []).length >= 2) return clean;
+  const words = clean.match(/\p{L}{3,}/gu) ?? [];
+  if (words.length >= 2 && !NAV_LABEL_TITLE.test(clean) && !OTHER_SCRIPT.test(clean)) return clean;
+  const heading = /^\s*#{1,3}\s+(.{4,120})\s*$/m.exec(excerpt)?.[1]?.replace(/[#*`[\]]/g, "").replace(/\s+/g, " ").trim() ?? "";
+  if ((heading.match(/\p{L}{3,}/gu) ?? []).length >= 2 && !OTHER_SCRIPT.test(heading)) return heading;
   let host: string;
   try { host = new URL(url).hostname.replace(/^(?:www|secure)\d*\./i, ""); } catch { return clean || url; }
   return `${host}${/\.pdf(?:$|[?#])/i.test(url) ? " (PDF)" : ""}`;

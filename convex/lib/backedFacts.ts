@@ -307,9 +307,8 @@ export function backedFactsOnly(article: string, input: BackingInput): { markdow
  * were read, INLINE beside the first price ("$11,712 (as of November 2026)"), never as a line of its own — batch 6's
  * bank-reconciliation article carried one under "Documents you need", a section with no price. A standalone "Prices as of…"
  * line the writer left anywhere is removed first: it is pipeline text. */
-const PRICE = /(?:[$€£]\s?\d|\b\d[\d,.]*\s?(?:USD|EUR|GBP)\b)/;
 const PRICE_TOKEN = /[$€£]\s?\d[\d,]*(?:\.\d+)?(?:\s*(?:[-–—]|to)\s*[$€£]?\s?\d[\d,]*(?:\.\d+)?)?/;
-const DATED = /\bas of [A-Z][a-z]+ \d{4}\b/;
+const DATED = /\bas of [A-Z][a-z]+ \d{4}\b/i;
 const STANDALONE_PRICE_DATE = /^\s*Prices?(?:\s+and\s+(?:fees|prices))?\s+as\s+of\s+[A-Z][a-z]+\s+\d{4}\.?\s*$/;
 export function withPriceDate(article: string, readAt: number): string {
   const split = SOURCES_HEADING.exec(article), body = split ? article.slice(0, split.index) : article, tail = split ? article.slice(split.index) : "";
@@ -357,6 +356,33 @@ export function rebuildSourcesSection(markdown: string, sources: readonly { url:
  * temperatures) over a section with no figure is an empty promise ("Rebates and incentives" with no rebate): the section
  * goes. A table column that is mostly dashes is missing data: the column goes (the table, when one column is left). */
 export const FIGURE_HEADING = /\b(?:costs?|prices?|pricing|fees?|rebates?|incentives?|tax credits?|how much|lifespans?|how long|timeline|temperatures?|heat limits?|savings)\b/i;
+/** P305 (batch 9, sprinkler): a heading that promises WHEN ("When to winterize…") over a section with no timing fact (a
+ * month, a freeze or frost event, a temperature) is the same empty promise: the section goes. "If you are reading this
+ * in early November" is the writer, not a source. */
+export const TIMING_HEADING = /\b(?:when to|best time to|timing of|how early|how late|what time of year)\b/i;
+const MONTH_OR_EVENT = /\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b|\bfrost\b|\bfreez/i;
+/** "If you are reading this in early November" names a month but is the writer addressing the reader, not a source's
+ * timing fact; it does not satisfy a timing heading. */
+const READER_NOW = /\b(?:if you|you(?:'re| are)?\s+(?:reading|seeing|viewing)|reading this|at the time of (?:this )?(?:writing|publish))\b/i;
+export function withoutUntimedSections(article: string): { markdown: string; removed: string[] } {
+  const split = SOURCES_HEADING.exec(article), body = split ? article.slice(0, split.index) : article, tail = split ? article.slice(split.index) : "";
+  const lines = body.split("\n");
+  const removed: string[] = [];
+  const level = (line: string) => /^(#{2,3})\s/.exec(line)?.[1].length ?? 0;
+  for (let i = 0; i < lines.length; i++) {
+    const h = level(lines[i]);
+    if (!h || !TIMING_HEADING.test(lines[i])) continue;
+    let end = i + 1;
+    while (end < lines.length && !(level(lines[end]) && level(lines[end]) <= h)) end++;
+    const content = lines.slice(i + 1, end).filter((line) => line.trim() && !level(line));
+    if (!content.some((line) => MONTH_OR_EVENT.test(line) && !READER_NOW.test(line))) {
+      removed.push(lines[i].replace(/^#+\s*/, "").trim());
+      lines.splice(i, end - i);
+      i--;
+    }
+  }
+  return { markdown: `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}${tail}`, removed };
+}
 const EMPTY_CELL = /^\s*(?:—|–|-|n\/a|not (?:covered|stated|listed|published)(?: here)?)?\s*$/i;
 export function withoutEmptyFigureSections(article: string): { markdown: string; removed: string[] } {
   const split = SOURCES_HEADING.exec(article), body = split ? article.slice(0, split.index) : article, tail = split ? article.slice(split.index) : "";
