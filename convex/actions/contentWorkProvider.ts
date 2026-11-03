@@ -157,7 +157,7 @@ export async function contentResearchCall(args: { system: string; userMessage: s
   /** Products a comparison search names: their own pages are fetched as evidence too (P160). */
   firstPartyProducts?: string[];
   /** P256: the second, primary-sources-only pass has its own receipt (its key keeps ":web_research:"). */
-  pass?: "primary";
+  pass?: "primary" | "gap";
   /** P264: reputable secondary pages are evidence too (the fixed plan), so their passages are read as well. */
   reputableSecondary?: boolean }): Promise<ContentResearchResult> {
   const s = scope.getStore();

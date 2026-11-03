@@ -44,7 +44,8 @@ test("P261 a search naming a programming tool is a tutorial; \"best practices\" 
 });
 
 test("P261 the one fix's output bound follows the article's length, so it fits the $0.50 cap", () => {
-  assert.match(pipeline, /export const plannedFixMaxTokens = \(markdown: string\) => Math\.min\(16_384, Math\.max\(4_000, Math\.ceil\(markdown\.length \/ 2\.5\) \+ 2_000\)\);/);
+  // P298: about 2 characters a token, code counted twice, up to the planned writer's 24,576.
+  assert.match(pipeline, /return Math\.min\(PLANNED_WRITER_MAX_TOKENS, Math\.max\(4_000, Math\.ceil\(markdown\.length \/ 2\) \+ Math\.ceil\(code \/ 2\) \+ 2_000\)\);/);
   assert.match(pipeline, /maxTokens: plannedFixMaxTokens\(fields\.markdown\) \}\)/);
   assert.match(pipeline, /\.\.\.\(args\.maxTokens \? \{ maxTokens: args\.maxTokens \} : \{\}\),/);
 });

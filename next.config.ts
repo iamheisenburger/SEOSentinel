@@ -10,6 +10,13 @@ const nextConfig: NextConfig = {
     "/blog/*": ["./content/blog/**/*"],
     "/sitemap.xml": ["./content/blog/**/*"],
   },
+  // P296 (Nov 3 2026): the pages bots read most are served from Vercel's CDN for 5 minutes (stale up to a day while one
+  // refresh runs), not a server render and a Convex read per request. A new article's address is never cached before its
+  // first request, and Pentra's live checks retry for hours, so publication checks are unaffected.
+  async headers() {
+    const cdn = [{ key: "Vercel-CDN-Cache-Control", value: "max-age=300, stale-while-revalidate=86400" }];
+    return [{ source: "/blog", headers: cdn }, { source: "/blog/:path*", headers: cdn }, { source: "/sitemap.xml", headers: cdn }];
+  },
 };
 
 export default nextConfig;

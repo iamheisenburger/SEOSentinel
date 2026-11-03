@@ -143,7 +143,9 @@ test("P268 code finds what Cowork marked: a passage said again, a reader sent el
 });
 
 test("P268 the one fix runs on the first review with the claims check and the code findings; a later review never fixes twice", () => {
-  assert.match(pipeline, /const fixedBefore = \(article\.qualityRevisionCount \?\? 0\) >= 1;\n\s+let fixedNow = false;\n\s+if \(!fixedBefore\) \{/);
+  // P297: a re-review runs code deletion only ($0); the one fix stays on the first review.
+  assert.match(pipeline, /const fixedBefore = \(article\.qualityRevisionCount \?\? 0\) >= 1;\n\s+let fixedNow = false;\n/);
+  assert.match(pipeline, /\n\s+if \(!fixedBefore\) \{\n\s+const plan = article\.articlePlan;\n\s+const claims = plan \? await checkPlannedClaims\(/);
   assert.match(pipeline, /const qualityRevisionCount = \(article\.qualityRevisionCount \?\? 0\) \+ \(incrementRevision \|\| fixedNow \? 1 : 0\);/);
   assert.match(pipeline, /const claims = plan \? await checkPlannedClaims\(/);
   // P289: what the claims check finds is deleted by code (tests/p289-code-keeps-backed-facts.test.ts), not sent to the fix.

@@ -3,7 +3,7 @@ import { publicationArtifactHash, sha256Hex } from "./publicationArtifact.ts";
 import { markdownCitationMarkers, removeUnverifiedMarkdownCitations } from "./markdownCitations.ts";
 import { deleteSentencesCoherently } from "./coherentDeletion.ts";
 import { SOURCES_HEADING } from "./sourcesHeading.ts";
-import { exampleSections, illustrativeNumbers, numbersOutsideFactSheet, planCheckIssues, runPlanChecks, type PlanCheckFailure, type PlanFormat } from "./articlePlanChecks.ts";
+import { AS_OF_DATE, exampleSections, illustrativeNumbers, numbersOutsideFactSheet, planCheckIssues, runPlanChecks, type PlanCheckFailure, type PlanFormat } from "./articlePlanChecks.ts";
 
 export type PublicationQualityMode = "standard" | "strict";
 
@@ -2283,7 +2283,9 @@ function readableNumbers(sentence: string): Set<string> {
     // a pentra.dev draft whose seven cited sentences stated no number at all).
     .replace(/\[\d+(?:\s*,\s*\d+)*\]\([^)]*\)/g, " ")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/https?:\/\/\S+/g, " "));
+    .replace(/https?:\/\/\S+/g, " ")
+    // P298: "as of November 2026" says when a price was read, not what its source states.
+    .replace(AS_OF_DATE, " "));
 }
 
 /** A list item or line that is only a link ("Related reading") is navigation, not a claim. */
@@ -2601,8 +2603,10 @@ export function evaluatePublicationQuality(
     if (paragraphsWithOutcomes.length > 0 && validSources.length < 2) {
       issues.push("Quantified outcome claims require at least two valid sources.");
     }
+    // P298 (Nov 3 2026): in a planned article each cited number is checked against its own excerpt (rule 2a), so who
+    // publishes the sources is a note, not a hold: batch 5's invoicing list was held on it with every figure backed.
     if (paragraphsWithOutcomes.length > 0 && strictEvidenceSourceCount < 2) {
-      issues.push(
+      (planned ? warnings : issues).push(
         "Quantified outcome claims require at least two primary or authoritative evidence sources.",
       );
     }

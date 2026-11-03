@@ -5,7 +5,9 @@ import { forcedToolChoiceSupported, structuredToolChoice, toolOnlyInstruction } 
 
 export function contentToolRequest(args: { model: string; system: string; userMessage: string;
   toolName: string; toolDescription: string; inputSchema: Anthropic.Tool.InputSchema; maxTokens?: number }, savedRequestHash?: string) {
-  const legacy = { model: args.model, max_tokens: Math.min(args.maxTokens ?? 8192, 16384), system: args.system,
+  // P298: a planned writer may ask for 20,000 (code tutorials); every other call keeps its bytes. The SDK refuses a
+  // non-streaming request above about 21,333 output tokens (it expects it to run past 10 minutes).
+  const legacy = { model: args.model, max_tokens: Math.min(args.maxTokens ?? 8192, 20000), system: args.system,
     messages: [{ role: "user" as const, content: args.userMessage }],
     tools: [{ name: args.toolName, description: args.toolDescription, input_schema: args.inputSchema }],
     tool_choice: { type: "tool" as const, name: args.toolName, disable_parallel_tool_use: true } };

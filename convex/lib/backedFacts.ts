@@ -25,6 +25,9 @@ export type BackingInput = {
   topic?: string;
   /** Sentences the claims check found wrong by established knowledge. */
   wrongClaims?: readonly string[];
+  /** P295: sentences the reader check (a cited number its source doesn't contain) or the plan check (a number in no source)
+   * flags; their number matching differs from step 4's, and a flagged sentence held the whole article (batch 5). */
+  unbacked?: readonly string[];
 };
 export type BackingRemoval = { sentence: string; reason: "number" | "name" | "cause" | "repeat" | "referral" | "claim" | "table" };
 
@@ -146,6 +149,30 @@ function withoutUnbackedRows(markdown: string, haystack: string, illustrative: R
   return { markdown: lines.filter((line) => line !== "\u0000").join("\n"), removed };
 }
 
+const FIND_OUT_YOURSELF = /\b(?:ask (?:your|the|an?|for an?)\s+(?:[\w-]+\s+){0,2}?(?:installer|contractor|plumber|provider|seller|vendor|dealer|technician|accountant|bookkeeper|pro|professional|expert|utility|estimate|quote)s?\b|(?:installer|contractor|plumber|technician)['’]s assessment|check (?:it |this )?(?:in|during) (?:a|the|your) (?:free )?trial|(?:test|try) (?:it|this|them) yourself|get (?:an? )?(?:written )?(?:estimate|quote)s?\b|confirm (?:it |this |that |the [\w-]+ )?with (?:your|the)\b)/i;
+const QUANTITY = /(?:[$€£]\s?\d[\d,.]*(?:\s?(?:k|million|billion))?|\d[\d,.]*(?:\s?-\s?\d[\d,.]*)?\s?(?:°\s?[FC]\b|%|percent\b|years?\b|months?\b|weeks?\b|days?\b|hours?\b|minutes?\b|mph\b|psi\b|gpm\b|kwh?\b|btu\b|seer2?\b|hspf2?\b|afue\b|amps?\b|gallons?\b|feet\b|ft\b|inches\b|lbs?\b|pounds?\b))/gi;
+/** Later sentences that restate an earlier one: the same quantities (numbers and units), none new, with three or more of its
+ * words and half of them, or the same claim (six or more of its words, most of the later sentence's). Option entries (a bold
+ * label) and questions stay. P298 (Nov 3 2026): a sentence that adds a figure of its own is a comparison, not a repeat (the
+ * cast-iron pan's "$50 that lasts the same 9 years costs about $5.56 per year" beside the ceramic pan's "9 years"). */
+function restatements(segments: readonly string[]): Set<string> {
+  const seen: { quantities: Set<string>; words: Set<string> }[] = [], later = new Set<string>();
+  for (const segment of segments) {
+    if (/^\s*(?:\*\*|__)[^*_]{1,80}(?:\*\*|__)/.test(segment) || /\?\s*(?:\*\*|__)?$/.test(segment)) continue;
+    const plain = prose(segment);
+    const quantities = new Set((plain.match(QUANTITY) ?? []).map((q) => q.toLowerCase().replace(/\s+/g, "").replace(/percent/, "%")));
+    const words = new Set(contentWords(plain.replace(QUANTITY, " ")));
+    if (words.size < 3) { seen.push({ quantities, words }); continue; }
+    const repeats = seen.some((prior) => {
+      const shared = [...words].filter((w) => prior.words.has(w)).length;
+      const sameFigures = quantities.size > 0 && [...quantities].every((q) => prior.quantities.has(q));
+      return (sameFigures && shared >= Math.max(3, 0.5 * words.size)) || (shared >= 6 && shared >= 0.7 * words.size);
+    });
+    if (repeats) later.add(segment.trim()); else seen.push({ quantities, words });
+  }
+  return later;
+}
+
 export function backedFactsOnly(article: string, input: BackingInput): { markdown: string; removed: BackingRemoval[]; held: string[] } {
   // The Sources list is a bibliography, never edited.
   const split = SOURCES_HEADING.exec(article), markdown = split ? article.slice(0, split.index) : article, tail = split ? article.slice(split.index) : "";
@@ -178,6 +205,21 @@ export function backedFactsOnly(article: string, input: BackingInput): { markdow
     });
     if (later) laterCopies.set(segment, (laterCopies.get(segment) ?? 0) + 1);
   }
+  // P295 (fix 3): the same number and unit, or the same claim, said again in other words: the later sentence goes ("below
+  // ~40°F" 5 times, the acidic-foods rule 4 times). Fix 4: in a section that promises a figure, a reader sent to someone
+  // else or told to find out themselves ("Ask your installer to confirm", "check in a trial", "ask for an estimate").
+  const restated = restatements(segmentsInOrder);
+  const figureSection = new Set<string>();
+  {
+    let inFigure = false, fenced = false;
+    for (const line of text.split("\n")) {
+      if (/^\s*```/.test(line)) { fenced = !fenced; continue; }
+      const heading = /^(#{2,3})\s+(.+)$/.exec(line);
+      if (heading) { inFigure = FIGURE_HEADING.test(heading[2]); continue; }
+      if (inFigure && !fenced) for (const segment of lineSegments(line)) figureSection.add(segment);
+    }
+  }
+  const flagged = (input.unbacked ?? []).map((s) => lower(prose(s)).replace(/\s+/g, " ").trim()).filter((s) => s.length >= 12);
   const wrong = (input.wrongClaims ?? []).map((s) => lower(prose(s)).replace(/\s+/g, " ").trim()).filter((s) => s.length >= 12);
   const blockCitations = lineCitations(text);
   // A person or company the sources, the business details and the search never name ("According to Jane Doe, ..."): a named
@@ -188,12 +230,15 @@ export function backedFactsOnly(article: string, input: BackingInput): { markdow
     const sentence = segment.trim(), plain = lower(prose(sentence)).replace(/\s+/g, " ").trim();
     if (!plain || /\?\s*(?:\*\*|__)?$/.test(sentence)) return null;
     if (wrong.some((claim) => plain.includes(claim) || (plain.length >= 24 && claim.includes(plain)))) return "claim";
+    if (invented.some((line) => plain === line || plain.includes(line) || (plain.length >= 24 && line.includes(plain)))) return "name";
+    if (flagged.some((line) => plain.includes(line) || (plain.length >= 24 && line.includes(plain)))) return "number";
     // A list option's own entry is never dropped as a repeat (its template wording repeats; the option doesn't).
     if (laterCopies.get(sentence) && !/^\s*(?:\*\*|__)[^*_]{1,80}(?:\*\*|__)/.test(sentence)) {
       laterCopies.set(sentence, laterCopies.get(sentence)! - 1); return "repeat";
     }
     if (DEFLECTION.test(prose(sentence))) return "referral";
-    if (invented.some((line) => plain === line || plain.includes(line) || (plain.length >= 24 && line.includes(plain)))) return "name";
+    if (figureSection.has(sentence) && FIND_OUT_YOURSELF.test(prose(sentence))) return "referral";
+    if (restated.has(sentence) && !inExample(sentence)) return "repeat";
     if (inExample(sentence)) return null;
     const own = citations(sentence), cited = own.length ? own : blockCitations.get(sentence) ?? [];
     const quote = cited.length ? quoteFor(cited) : "";
@@ -227,4 +272,85 @@ export function backedFactsOnly(article: string, input: BackingInput): { markdow
   }, { dropStrandedQuestion: true });
   removed.push(...result.removed.map((sentence) => ({ sentence, reason: reasons.get(sentence.trim()) ?? "number" })));
   return { markdown: `${result.markdown}${tail}`, removed, held: result.held };
+}
+
+/** P294 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md step 2): a planned article that states prices says when they were read, in code
+ * (the writer was told to and didn't: LeadPilot's Nov 4 chatbot list gave Tidio's and Zendesk's prices undated). One line,
+ * "Prices as of November 2026.", opens the section where the first price appears; an article that dates them already, or
+ * states none, is unchanged. */
+const PRICE = /(?:[$€£]\s?\d|\b\d[\d,.]*\s?(?:USD|EUR|GBP)\b)/;
+const DATED = /\bas of [A-Z][a-z]+ \d{4}\b/;
+export function withPriceDate(article: string, readAt: number): string {
+  const split = SOURCES_HEADING.exec(article), body = split ? article.slice(0, split.index) : article, tail = split ? article.slice(split.index) : "";
+  if (DATED.test(body)) return article;
+  const lines = body.split("\n");
+  let fence = false, first = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*```/.test(lines[i])) { fence = !fence; continue; }
+    if (!fence && !/^\s*#/.test(lines[i]) && PRICE.test(lines[i])) { first = i; break; }
+  }
+  if (first < 0) return article;
+  const month = new Date(readAt).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+  let heading = -1;
+  for (let i = first; i >= 0; i--) if (/^##\s/.test(lines[i])) { heading = i; break; }
+  let at = heading + 1;
+  if (heading < 0) { at = first; while (at > 0 && lines[at - 1].trim()) at--; }
+  lines.splice(at, 0, ...(heading >= 0 ? ["", `Prices as of ${month}.`] : [`Prices as of ${month}.`, ""]));
+  return `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}${tail}`;
+}
+
+/** P295 (Cowork's batch 4, fix 2): a heading that promises a figure (costs, prices, fees, rebates, lifespan, timeline,
+ * temperatures) over a section with no figure is an empty promise ("Rebates and incentives" with no rebate): the section
+ * goes. A table column that is mostly dashes is missing data: the column goes (the table, when one column is left). */
+export const FIGURE_HEADING = /\b(?:costs?|prices?|pricing|fees?|rebates?|incentives?|tax credits?|how much|lifespans?|how long|timeline|temperatures?|heat limits?|savings)\b/i;
+const EMPTY_CELL = /^\s*(?:—|–|-|n\/a|not (?:covered|stated|listed|published)(?: here)?)?\s*$/i;
+export function withoutEmptyFigureSections(article: string): { markdown: string; removed: string[] } {
+  const split = SOURCES_HEADING.exec(article), body = split ? article.slice(0, split.index) : article, tail = split ? article.slice(split.index) : "";
+  let lines = body.split("\n");
+  const removed: string[] = [];
+  const level = (line: string) => /^(#{2,3})\s/.exec(line)?.[1].length ?? 0;
+  for (let i = 0; i < lines.length; i++) {
+    const h = level(lines[i]);
+    if (!h || !FIGURE_HEADING.test(lines[i])) continue;
+    let end = i + 1;
+    while (end < lines.length && !(level(lines[end]) && level(lines[end]) <= h)) end++;
+    const content = lines.slice(i + 1, end).filter((line) => line.trim() && !level(line));
+    if (!content.some((line) => /\d/.test(line.replace(/\[\d+(?:\s*,\s*\d+)*\]/g, "")))) {
+      removed.push(lines[i].replace(/^#+\s*/, "").trim());
+      lines = [...lines.slice(0, i), ...lines.slice(end)];
+      i--;
+    }
+  }
+  // Tables: a column whose body cells are mostly empty or dashes goes.
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*\|/.test(lines[i]) || !/^\s*\|?\s*:?-{3,}/.test(lines[i + 1] ?? "")) continue;
+    let end = i + 2;
+    while (end < lines.length && /^\s*\|/.test(lines[end])) end++;
+    const cells = (line: string) => line.trim().replace(/^\||\|$/g, "").split("|");
+    const rows = lines.slice(i + 2, end).map(cells), width = cells(lines[i]).length;
+    const drop = Array.from({ length: width }, (_, c) => c > 0 && rows.length > 0 && rows.filter((row) => EMPTY_CELL.test(row[c] ?? "")).length * 2 >= rows.length);
+    if (drop.some(Boolean)) {
+      const keepCols = (row: string[]) => row.filter((_, c) => !drop[c]);
+      if (keepCols(cells(lines[i])).length < 2) { removed.push(`table: ${lines[i].trim()}`); lines.splice(i, end - i); i--; continue; }
+      removed.push(...drop.map((d, c) => d ? `column: ${cells(lines[i])[c].trim()}` : "").filter(Boolean));
+      const render = (row: string[]) => `| ${keepCols(row).map((cell) => cell.trim()).join(" | ")} |`;
+      lines.splice(i, end - i, render(cells(lines[i])), render(cells(lines[i + 1])), ...rows.map(render));
+    }
+    i = end - 1;
+  }
+  return { markdown: `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}${tail}`, removed };
+}
+
+/** P295 (fix 5): the FAQ is the article's last section (before its Sources and Related reading); a step or section that
+ * sat after it moves above it. */
+const FAQ_SECTION = /^##\s+(?:frequently asked questions|faqs?|common questions)\b.*$/im;
+export function withFaqLast(article: string): string {
+  const split = SOURCES_HEADING.exec(article), body = split ? article.slice(0, split.index) : article, tail = split ? article.slice(split.index) : "";
+  const faq = FAQ_SECTION.exec(body);
+  if (!faq) return article;
+  const after = body.slice(faq.index + faq[0].length), next = /^##\s/m.exec(after);
+  if (!next) return article;
+  const faqSection = body.slice(faq.index, faq.index + faq[0].length + next.index).trimEnd();
+  const rest = `${body.slice(0, faq.index)}${after.slice(next.index)}`.trimEnd();
+  return `${rest}\n\n${faqSection}\n\n${tail}`.replace(/\n{3,}/g, "\n\n").replace(/\n+$/, split ? "" : "\n").replace(/\n\n$/, "\n\n");
 }

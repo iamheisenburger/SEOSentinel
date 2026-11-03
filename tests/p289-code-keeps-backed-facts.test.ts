@@ -123,7 +123,7 @@ test("P289 the planned review deletes by code before the one fix and again after
   const { readFileSync } = await import("node:fs");
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
   const review = pipeline.slice(pipeline.indexOf("async function reviewPlannedArticle("), pipeline.indexOf("const candidate = candidateFor(fields);\n  const quality = evaluatePublicationQuality(candidate, \"strict\");"));
-  const deleted = review.indexOf("const cleaned = backedFactsOnly(fields.markdown, backing);"), fix = review.indexOf("await remediateFinalArticle(");
+  const deleted = review.indexOf("const cleaned = backedFactsOnly(fields.markdown, { ...backing, unbacked: flaggedNow(fields.markdown) });"), fix = review.indexOf("await remediateFinalArticle(");
   assert.ok(deleted > 0 && fix > deleted, "code deletes first, then the one fix");
   assert.match(review, /const refixed = fixed \? backedFactsOnly\(/, "the fix's output is checked by code again");
   assert.doesNotMatch(review, /Correct this sentence \(/, "the claims check's finds are deleted, not sent to the fix");

@@ -122,9 +122,13 @@ export default function proxy(
     : clerkAppMiddleware(request, event);
 }
 
+// P296 (Nov 3 2026): Vercel paused both sites on Nov 2 for the Hobby plan's Fluid Active CPU limit. In Next 16 this proxy
+// runs as a Node function, so Clerk ran on every request, bots crawling the blog and sitemap included. Public pages that
+// never read the session (the blog, the sitemap, robots.txt, the legal pages, the free check's reports, text and XML files)
+// no longer pass through it; the dashboard, sign-in, the API and custom blog hosts' paths still do.
 export const config = {
   matcher: [
-    "/((?!_next|[^?]*\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+    "/((?!_next|blog(?:/|$)|check(?:/|$)|legal(?:/|$)|sitemap\\.xml|robots\\.txt|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest|txt|xml)).*)",
     "/(api|trpc)(.*)",
   ],
 };

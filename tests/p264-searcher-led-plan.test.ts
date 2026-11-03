@@ -67,7 +67,7 @@ test("P264 a draft that cites [n] keeps its Sources list on every platform", () 
   // P268: the fixed draft (kept unless it fails more objective checks) keeps its Sources list.
   // P282: a stock disclaimer the fix wrote is removed in code first.
   // P289: the fixed draft keeps its Sources list and then goes through code's backing check again.
-  assert.match(pipeline, /const refixed = fixed \? backedFactsOnly\(withSourcesSection\(withoutStockDisclaimers\(fixed\.markdown\), article\.sources \?\? \[\]\), backing\) : null;/);
+  assert.match(pipeline, /const fixedMarkdown = fixed \? withSourcesSection\(withoutStockDisclaimers\(fixed\.markdown\), article\.sources \?\? \[\]\) : "";/);
 });
 
 test("P264 planned research has room for its cited brief; a programming search is a tutorial unless 3 pages show no code", async () => {

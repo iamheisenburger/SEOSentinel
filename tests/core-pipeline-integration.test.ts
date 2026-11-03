@@ -11338,6 +11338,43 @@ test("P260 an owner's planned draft: an invented attribution is deleted by code,
   f.assertOffline();
 });
 
+// P294 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md step 6): a new signup's first draft that is still held after its one fix was
+// handed back as "Open it to see what to check" (homework, and since P289 nothing in it is marked). It is now kept
+// internally (its job retired, its article out of the drafts list, its topic retired) and Pentra writes the next topic
+// once; a second held draft is handed back as before, never a third.
+test("P294 an owner's held draft is kept internally and the next topic is written once", async () => {
+  const blocking = "<script>alert(1)</script>";
+  const f = setup({ growthFirst: true, articlePlan: true, businesses: [slcBusinesses[0]],
+    draftResponse: (article: Fields) => ({ ...article, markdown: `${String(article.markdown)}\n\n${blocking}\n` }),
+    remediationResponse: (value: Fields) => ({ ...value, markdown: String(value.markdown).includes(blocking) ? String(value.markdown) : `${String(value.markdown)}\n\n${blocking}\n` }) });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  let r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", ownerReviewedOnly: true,
+    confirmBusinessProfile: true, reviewToken: r.reviewToken });
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  const first = await f.invoke("contentWork:requestDraft", { siteId: site.id, reviewToken: r.reviewToken, maximumMicroUsd: r.ownerDraft.maximumMicroUsd,
+    requestKey: "p294-first-draft" });
+  f.setIdentity(null);
+  const owners = () => f.tables.jobs.filter(j => j.siteId === site.id && j.contentWork?.ownerRequest);
+  await pumpUntil(f, () => owners().length === 2 && ["ready", "failed"].includes(owners().find(j => j._id !== first.jobId)!.contentWork.stage), 300);
+  const held = f.get(first.jobId)!, next = owners().find(j => j._id !== first.jobId)!;
+  assert.equal(held.contentWork.failure, "bounded_content_quality_exhausted", "the first draft was held after its one fix");
+  assert.ok(held.contentWork.retiredAt, "kept internally");
+  assert.equal(f.get(held.articleId)!.status, "revision", "its article leaves the drafts list");
+  assert.equal(f.get(f.get(held.articleId)!.topicId)!.status, "disqualified", "its topic is not picked again");
+  assert.equal(next.contentWork.ownerRequest.key, "p294-first-draft:next-topic");
+  assert.notEqual(f.get(next.articleId)!.topicId, f.get(held.articleId)!.topicId, "the next topic");
+  assert.equal(next.contentWork.stage, "failed", "the second draft was held too (the same blocking defect)");
+  assert.equal(next.contentWork.retiredAt, undefined, "and is handed back, never a third draft");
+  assert.equal(owners().length, 2);
+  f.setIdentity(saved.userId);
+  r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  assert.equal(r.ownerDraft.latest.jobId, next._id, "the owner sees the latest draft");
+  f.setIdentity(null);
+  f.assertOffline();
+});
+
 test("P260 an article's provider spend stops at $0.50: nothing is bought past it, and an optional step runs only if it fits", async t => {
   for (const plan of [true, false]) await t.test(plan ? "fixed_plan" : "plan_off", async () => {
     const f = setup({ growthFirst: true, articlePlan: plan, businesses: [slcBusinesses[0]], budgetMicroUsd: 2_000_000 });

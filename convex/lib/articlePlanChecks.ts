@@ -36,10 +36,13 @@ const normalize = (value: string) => value.toLowerCase().replace(/[‘’]/g, "'
 
 /** The numbers a sentence states, as digits (list and step numbering, citation markers and ordinals in headings are not
  * claims). "40 %", "40%" and "40 percent" are one number; "$1,200" and "1200" too. */
+/** P298 (Nov 3 2026): when a price or rule was read ("as of November 2026", the writer's DATES rule and the line code adds)
+ * is not a claim from a source: batch 5 held three articles on "Prices as of November 2026." and deleted dated prices. */
+export const AS_OF_DATE = /\bas of (?:(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?,? )?(?:19|20)\d{2}\b/gi;
 export function statedNumbers(sentence: string): string[] {
   // P267 (Oct 31 2026): a day of the month ("on the 29th") and a clock time ("9:00 a.m.") are not claims: the live
   // trial's how-to drew a finding for "A check you wrote on the 29th that clears on the 3rd is outstanding on the 31st."
-  const text = sentence.replace(/\[\d+(?:\s*,\s*\d+)*\]/g, " ").replace(/\bstep\s+\d+\b/gi, " ")
+  const text = sentence.replace(/\[\d+(?:\s*,\s*\d+)*\]/g, " ").replace(/\bstep\s+\d+\b/gi, " ").replace(AS_OF_DATE, " ")
     .replace(/\b\d{1,2}(?:st|nd|rd|th)\b/gi, " ").replace(/\b\d{1,2}:\d{2}\b/g, " ");
   return [...new Set([...text.matchAll(/(?<![\w.])\$?\d[\d,]*(?:\.\d+)?/g)].map((m) => m[0].replace(/[$,]/g, "")).filter((n) => n !== ""))];
 }
@@ -53,17 +56,23 @@ export function numberStated(number: string, haystack: string): boolean {
  * number had to come from a source. A section headed as an example (H2 or H3) is exempt from the number check; real
  * statistics elsewhere still need their source, and product facts their confirmed details. */
 export const EXAMPLE_HEADING = /\b(?:worked\s+)?examples?\b|\bsample\b|\bscenarios?\b|\billustrat/i;
+/** P297 (Nov 3 2026): a section whose opening says it is an illustration ("a hypothetical example", "suppose", "invented
+ * amounts") is an example wherever it sits: batch 5's how-to was held for its Stripe fee illustration ($3,500 - $102 =
+ * $3,398), the worked example Cowork asked for, because its heading named the payouts, not an example. */
+export const ILLUSTRATION_OPENING = /\b(?:hypothetical|for illustration|illustrative|invented (?:numbers|amounts|figures)|made-up|suppose|imagine|say you)\b/i;
 export function exampleSections(markdown: string): string[] {
   const lines = markdown.split("\n"), sections: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const heading = /^(#{2,3})\s+(.+)$/.exec(lines[i]);
-    if (!heading || !EXAMPLE_HEADING.test(heading[2])) continue;
+    if (!heading) continue;
     const level = heading[1].length, body: string[] = [];
     for (let j = i + 1; j < lines.length; j++) {
       const next = /^(#{1,6})\s/.exec(lines[j]);
       if (next && next[1].length <= level) break;
       body.push(lines[j]);
     }
+    const opening = body.filter((line) => line.trim() && !/^\s*#/.test(line)).slice(0, 3).join(" ");
+    if (!EXAMPLE_HEADING.test(heading[2]) && !ILLUSTRATION_OPENING.test(opening)) continue;
     sections.push(body.join("\n"));
   }
   return sections;
@@ -346,7 +355,9 @@ export function articleOutlinePrompt(plan: { format: PlanFormat; sections: strin
   // not counted, each price once with its conditions; a tutorial with code in every step; a comparison with numbers.
   const formatRule = {
     list: `FORMAT: a list. In the section that holds the list, name at least ${plan.minItems ?? 6} real options built for this search's audience${productName ? ` (${productName} does not count toward them)` : ""}, each as an H3 (### Name) with its price exactly as its own page states it (the plan name, billing period and any introductory period), what it is, who it suits and one limitation; then compare them in a markdown table. Give each price once in its entry and once in the table, nowhere else.`,
-    tutorial: "FORMAT: a tutorial. Build one runnable example end to end as numbered steps (1., 2., 3.): the install command, then a complete fenced code block for each step (one file, or the lines it adds), how to run it, and the output it prints. Every section that teaches a pattern (configuration, context, middleware, redaction, transports, errors, shutdown, or whatever the top results teach) shows it in code, not only in prose. Use every API name, option and command exactly as the official documentation in the fact sheet gives it; never invent one.",
+    // P298 (Nov 3 2026): code costs about twice the tokens of prose; batch 5's two tutorials ran out of room, so later steps
+    // show only what they add.
+    tutorial: "FORMAT: a tutorial. Build one runnable example end to end as numbered steps (1., 2., 3.): the install command, then a complete fenced code block for each step (one file, or the lines it adds), how to run it, and the output it prints. A later step shows only the lines it adds or changes, never a file already shown in full, and each block stays under about 25 lines. Every section that teaches a pattern (configuration, context, middleware, redaction, transports, errors, shutdown, or whatever the top results teach) shows it in code, not only in prose. Use every API name, option and command exactly as the official documentation in the fact sheet gives it; never invent one.",
     "how-to": "FORMAT: step by step. Give the steps as a numbered list (1., 2., 3.), and finish every worked example with every number.",
     comparison: "FORMAT: a comparison. Say what each option is, compare them in a markdown table on the attributes the top results compare, with each option's key numbers from the fact sheet (temperatures, weights, lifespans, prices), then say which suits whom.",
     guide: "FORMAT: a guide. Answer the search in the first paragraph, then follow the sections.",

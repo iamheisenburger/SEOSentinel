@@ -2,12 +2,12 @@
 import { assertNotMidContentSetup } from "../lib/contentSetupPath";
 import { EVIDENCE_EXCERPT_MAX_CHARS } from "../lib/evidenceExcerpt";
 import { LIST_MIN_OPTIONS, LIST_RESEARCH_SEARCHES, LIST_RESEARCH_SOURCES, MAX_RESEARCH_SOURCES, PLANNED_RESEARCH_SOURCES, PRIMARY_PASS_BELOW,
-  PRIMARY_PASS_SEARCHES, SEARCHER_LED_RESEARCH_SYSTEM, SOURCE_ROLE_LABEL, type SourceRole, coverageSourcesRequest, optionSourcesRequest,
+  PRIMARY_PASS_SEARCHES, SEARCHER_LED_RESEARCH_SYSTEM, SOURCE_ROLE_LABEL, type SourceRole, coverageSourcesRequest, optionSourcesRequest, itemLookupRequest, missingFigureItems,
   primarySourcesRequest, rankedResearchSources, sourceHosts } from "../lib/researchPasses";
 import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWords, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis,
   serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch, FORMAT_DEFAULT_WORDS } from "../lib/serpBrief";
 import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, planCheckIssues, planCheckNotes, runPlanChecks, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
-import { backedFactsOnly, type BackingInput, type BackingRemoval } from "../lib/backedFacts";
+import { backedFactsOnly, withFaqLast, withoutEmptyFigureSections, withPriceDate, type BackingInput, type BackingRemoval } from "../lib/backedFacts";
 import { sourcingGaps, TopicNotSourceable, undocumentedCodeNames, type SourcingCounts } from "../lib/topicSourcing";
 import { withoutStockDisclaimers } from "../lib/contentCorrection";
 import { articlePlanEnabled, contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
@@ -50,6 +50,7 @@ import {
   articleReviewImprovesWithoutRegression,
   clampMetaDescription,
   clampMetaTitle,
+  citedNumberMismatches,
   withoutUnsupportedMetaYears,
   evidenceSafeLengthRecoveryTarget,
   evidenceRequiredParagraphs,
@@ -4830,6 +4831,29 @@ async function handleArticle(
           researchQualityNotes.push(`Primary-source research pass unavailable: ${err instanceof Error ? err.message.slice(0, 200) : "unknown"}`);
         }
       }
+      // P295 (Cowork's batch 4, fix 1): every required item that asks for a figure (a price, fee, rebate, temperature,
+      // lifespan, timeline) and has none in the kept sources, and every list option without its own page, gets a targeted
+      // search on its owner's site before writing: one bounded call, at most two searches an item.
+      if (planned && (coverage.length || listOptions.length)) {
+        const uncoveredOptions = listOptions.filter((option) => !kept.readable.some((source) =>
+          firstPartyProductPage(source.url, [option.toLowerCase().replace(/[^a-z0-9]/g, "")])));
+        const missing = missingFigureItems(coverage, kept.readable, uncoveredOptions);
+        if (missing.length) {
+          try {
+            const lookup = await contentResearchCall({ ...itemLookupRequest({ label: topic.label, primaryKeyword: topic.primaryKeyword, items: missing,
+              targetCountry: site.targetCountry, competitors: competitorList }),
+              maxUses: Math.min(10, 2 * missing.length), firstPartyProducts: namedProducts, pass: "gap", reputableSecondary: true, maxTokens: 8000 });
+            const seen = new Set(candidates.map((source) => source.url));
+            const added = lookup.sources.filter((source) => !seen.has(source.url));
+            candidates = [...candidates, ...added.filter(notCompetitor)];
+            searches += lookup.searches; cited += added.length;
+            kept = keep(candidates);
+            researchQualityNotes.push(`Item lookup: ${missing.length} item(s) without a figure searched on their owners' sites; ${added.length} page(s) added.`);
+          } catch (err) {
+            researchQualityNotes.push(`Item lookup unavailable: ${err instanceof Error ? err.message.slice(0, 160) : "unknown"}`);
+          }
+        }
+      }
       const { strict, accepted, readable } = kept;
       // P268: a planned article keeps owners' pages first, then publications; a blog only as context while fewer than 4
       // stronger sources exist (lib/researchPasses rankedResearchSources). Who publishes each page is one cheap check.
@@ -5222,7 +5246,7 @@ async function handleArticle(
       ],
     },
     outputSchema: ArticleSchema,
-    maxTokens: 16384,
+    maxTokens: articlePlan ? PLANNED_WRITER_MAX_TOKENS : 16384,
   });
   // The other tool fields sometimes leak into the article body as XML-style tags.
   article.markdown = stripDraftProcessNotes(stripLeakedToolFieldTrailer(article.markdown));
@@ -7379,9 +7403,16 @@ export const generateArticle = action({
  * the sources don't name, every outline section, the format's elements), plus the objective gate (reader-visible defects,
  * safe rendering, metadata). Its one revision (MAX_CONTENT_REWRITES) is one targeted fix of exactly the failing lines. No
  * review_article or audit_final_article call and no scores; the gate recomputes the same plan checks at seal and publish. */
-/** P261: the one fix rewrites few lines of an article it returns whole: room for the article (at most 2.5 characters a
- * token) and 2,000 tokens more, never above the writer's 16,384. */
-export const plannedFixMaxTokens = (markdown: string) => Math.min(16_384, Math.max(4_000, Math.ceil(markdown.length / 2.5) + 2_000));
+/** P261: the one fix rewrites few lines of an article it returns whole: room for the article and 2,000 tokens more, never
+ * above the writer's limit. P298 (Nov 3 2026): the writer returns about 2 characters a token, and code about 1.5 (batch 5's
+ * Pino and retry tutorials ran out at 16,384 output tokens, so both failed after $0.26-0.30 of work); a planned writer gets
+ * 20,000, and the fix counts code twice. Never above about 21,333: the SDK refuses a non-streaming request it expects to run
+ * past 10 minutes (a first try at 24,576 failed all ten benchmark drafts before the request was sent). */
+export const PLANNED_WRITER_MAX_TOKENS = 20_000;
+export const plannedFixMaxTokens = (markdown: string) => {
+  const code = (markdown.match(/```[\s\S]*?```/g) ?? []).join("").length;
+  return Math.min(PLANNED_WRITER_MAX_TOKENS, Math.max(4_000, Math.ceil(markdown.length / 2) + Math.ceil(code / 2) + 2_000));
+};
 
 /** P260: the article's $0.50 provider cap refused this call (beginProviderCall). */
 const costCapRefusal = (error: unknown) => error instanceof Error && /Content work cost cap reached/.test(error.message);
@@ -7458,6 +7489,18 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
   // A review after the fix checks again and never fixes twice: at most one fix (Arshad's cost rule).
   const fixedBefore = (article.qualityRevisionCount ?? 0) >= 1;
   let fixedNow = false;
+  // P295: what the reader check (a cited number its source doesn't contain) and the plan check (a number in no source) flag.
+  const flaggedNow = (markdown: string) => [...citedNumberMismatches(markdown, article.sources ?? []),
+    ...planChecksForArticle(candidateFor({ ...fields, markdown })).filter((f) => ["number", "product", "name"].includes(f.check)).map((f) => f.line ?? "")];
+  // P297 (Nov 3 2026): step 4's deletion runs on every review, a re-review included ($0, code only): batch 5's how-to was
+  // re-reviewed after its one fix and held on sentences code would have deleted.
+  if (fixedBefore) {
+    const recheck = backedFactsOnly(fields.markdown, { ...plannedBacking(article, topic, productName, []), unbacked: flaggedNow(fields.markdown) });
+    if (recheck.removed.length) {
+      fields = { ...fields, markdown: recheck.markdown };
+      fixNotes.push(removedByCodeNote(recheck.removed));
+    }
+  }
   if (!fixedBefore) {
     const plan = article.articlePlan;
     const claims = plan ? await checkPlannedClaims({ markdown: fields.markdown, search: topic?.primaryKeyword ?? article.title })
@@ -7467,7 +7510,7 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
     // number, or a cause its cited source doesn't state, a passage said again, a referral and what the claims check found
     // are deleted here at $0, never handed to the fix or to the customer.
     const backing = plannedBacking(article, topic, productName, claims.map((claim) => claim.sentence));
-    const cleaned = backedFactsOnly(fields.markdown, backing);
+    const cleaned = backedFactsOnly(fields.markdown, { ...backing, unbacked: flaggedNow(fields.markdown) });
     if (cleaned.removed.length) {
       fields = { ...fields, markdown: cleaned.markdown };
       fixNotes.push(removedByCodeNote(cleaned.removed));
@@ -7514,7 +7557,8 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
       return issuesBlockingPreLinkReview([...evaluatePublicationQuality(c, "strict").issues, ...readerVisibleIssues(c)]).length; };
     // P282: a stock disclaimer the fix itself wrote is removed in code, the way the live repair removes it. P289: so is
     // anything the fix wrote that its sources don't back (step 5's output goes through step 4 again, code only).
-    const refixed = fixed ? backedFactsOnly(withSourcesSection(withoutStockDisclaimers(fixed.markdown), article.sources ?? []), backing) : null;
+    const fixedMarkdown = fixed ? withSourcesSection(withoutStockDisclaimers(fixed.markdown), article.sources ?? []) : "";
+    const refixed = fixed ? backedFactsOnly(fixedMarkdown, { ...backing, unbacked: flaggedNow(fixedMarkdown) }) : null;
     if (refixed?.removed.length) fixNotes.push(`After the fix: ${removedByCodeNote(refixed.removed)}`);
     const fixedFields = refixed ? { ...fields, markdown: refixed.markdown } : null;
     const [blockingBefore, blockingAfter] = fixedFields ? [blocking(fields), blocking(fixedFields)] : [0, 0];
@@ -7534,6 +7578,11 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
       }
     }
   }
+  // P295 (Cowork's batch 4, fixes 2 and 5): a heading that promises a figure its section doesn't give, and a table column of
+  // dashes, go; the FAQ is the last section. P294 (plan v2 step 2): prices say when they were read, in code.
+  const emptied = withoutEmptyFigureSections(fields.markdown);
+  if (emptied.removed.length) fixNotes.push(`Removed by code: ${emptied.removed.length} empty section(s) or column(s): ${emptied.removed.join("; ").slice(0, 300)}.`);
+  fields = { ...fields, markdown: withPriceDate(withFaqLast(emptied.markdown), article.createdAt ?? Date.now()) };
   const candidate = candidateFor(fields);
   const quality = evaluatePublicationQuality(candidate, "strict");
   const failures = planChecksForArticle(candidate);

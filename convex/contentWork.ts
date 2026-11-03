@@ -1764,6 +1764,13 @@ async function reviseFailedWork(ctx: MutationCtx, site: Doc<"sites">, failed: Do
   // 3, Limit Reached" with its last article spent on a draft that never passed. It follows at once now. P258: Autopilot
   // slots too, now that a held slot has no replacement to carry its count.
   if (countsTowardMonthlyUsage(failed, usageMonthBounds().monthStart)) await refreshAccountUsage(ctx, site, -1);
+  // P294 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md step 6): an owner's new draft still held after its one fix is not handed back
+  // to check; it is kept internally and Pentra writes the next topic once (a held second draft is handed back as before).
+  if (cw.ownerRequest && !cw.ownerRequest.sourceArticleId && cw.intent === "create" && draft?.qualityPlan === "fixed_v1" &&
+    !cw.ownerRequest.key.endsWith(OWNER_NEXT_TOPIC_SUFFIX)) {
+    const next = await ownerNextTopicDraft(ctx, site, (await ctx.db.get(failed._id))!);
+    if (next) return { scheduled: 1, mode: "buffer_fill", activeJobId: next };
+  }
   // The owner's draft is handed back with the checks' notes: they hear it's waiting.
   if (cw.ownerRequest && failed.articleId) await noteDraftReady(ctx, (await ctx.db.get(failed._id))!, Date.now());
   if (!cw.ownerRequest && cw.intent === "create") {
@@ -1772,13 +1779,34 @@ async function reviseFailedWork(ctx: MutationCtx, site: Doc<"sites">, failed: Do
   return { scheduled: 0, mode: "content_quality_exhausted" };
 }
 
+/** P294: the request key of the one draft Pentra writes on the next topic after an owner's draft was held. */
+const OWNER_NEXT_TOPIC_SUFFIX = ":next-topic";
+/** P294: retire the held owner draft (its topic too, its article out of the drafts list) and admit one new draft on the next
+ * topic under the owner's allowance and funding. Null (nothing changed) when no new draft can be admitted; the held draft
+ * is then handed back as before. */
+async function ownerNextTopicDraft(ctx: MutationCtx, site: Doc<"sites">, held: Doc<"jobs">): Promise<Id<"jobs"> | null> {
+  const cw = held.contentWork!, schedule = site.contentSchedule;
+  if (!schedule) return null;
+  const jobs = (await ctx.db.query("jobs").withIndex("by_site", q => q.eq("siteId", site._id)).order("desc").take(LIMIT))
+    .filter(j => j._id !== held._id);
+  if (jobs.some(j => j.contentWork?.ownerRequest?.key === `${cw.ownerRequest!.key}${OWNER_NEXT_TOPIC_SUFFIX}`)) return null;
+  await retireQualityExhaustedTopics(ctx, site, [...cw.discardedArticleIds, ...(held.articleId ? [held.articleId] : [])], { ownerDrafts: true });
+  let next: { jobId: Id<"jobs">; created: boolean };
+  try { next = await admitFreshOwnerDraft(ctx, site, schedule, jobs, { requestKey: `${cw.ownerRequest!.key}${OWNER_NEXT_TOPIC_SUFFIX}` }); }
+  catch { return null; }
+  if (!next.created) return null;
+  await ctx.db.patch(held._id, { contentWork: { ...cw, retiredAt: Date.now() }, updatedAt: Date.now() });
+  await archiveRetiredContentArtifact(ctx, (await ctx.db.get(held._id))!);
+  return next.jobId;
+}
+
 /** A topic whose Autopilot drafts failed review on every pass (first draft and
  * both revisions) is not picked again automatically. Review settlement used to
  * hand it back as "planned", so the next slot bought the same failing topic:
  * LeadPilot's "saas lead scoring framework" was drafted and rejected five
  * times between Oct 14 15:03Z and Oct 15 11:17Z. The topic stays on record
  * with the reviewer's last issues; an owner can still request it. */
-async function retireQualityExhaustedTopics(ctx: MutationCtx, site: Doc<"sites">, articleIds: Id<"articles">[]) {
+async function retireQualityExhaustedTopics(ctx: MutationCtx, site: Doc<"sites">, articleIds: Id<"articles">[], options: { ownerDrafts?: boolean } = {}) {
   const now = Date.now();
   for (const articleId of articleIds) {
     const article = await ctx.db.get(articleId);
@@ -1789,7 +1817,8 @@ async function retireQualityExhaustedTopics(ctx: MutationCtx, site: Doc<"sites">
     await ctx.db.patch(topic._id, { status: "disqualified", contentFeasibilityStatus: "quality_exhausted",
       contentFeasibilityVersion: CONTENT_FEASIBILITY_VERSION, contentFeasibilityIssues: (article.publicationGateIssues ?? []).slice(0, 8),
       contentFeasibilityCheckedAt: now,
-      disqualifiedReason: "Autopilot drafts of this topic failed review on every pass; it is not retried automatically.", updatedAt: now });
+      disqualifiedReason: options.ownerDrafts ? "An owner's draft of this topic was held after its one fix; Pentra wrote the next topic instead."
+        : "Autopilot drafts of this topic failed review on every pass; it is not retried automatically.", updatedAt: now });
   }
 }
 

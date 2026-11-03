@@ -135,3 +135,50 @@ export function rankedResearchSources<T extends { url: string }>(sources: readon
   return { kept: [...strong, ...context], role, counts: { owner: Math.min(owners.length, limit), publication: strong.length - Math.min(owners.length, limit),
     context: context.length, dropped: blogs.length - context.length } };
 }
+
+/** P295 (Nov 3 2026, Cowork's batch 4: 0 of 7, ops/COWORK-JUDGE-RESULTS.md fix 1): research covered the search, not the
+ * required items, so deletion emptied the sections searchers want (a cost section with no prices, a rebates heading with no
+ * rebate), though every missing figure was on its owner's page (WellnessLiving pricing, the City of Austin permit fee,
+ * Texas Gas Service's rebate, Carrier's lifespans). Each required item that asks for a figure and has none in the kept
+ * sources gets a targeted search on its owner's site before writing. */
+const FIGURE_ITEM = /\b(?:costs?|prices?|pricing|fees?|rebates?|incentives?|tax credits?|temperatures?|heat limits?|lifespans?|timeline|how long)\b|°/i;
+const ITEM_FILLER = new Set(("from what which whether their each with that this these those page pages owner owners source sources official guidance " +
+  "own sites site range ranges amount amounts typically usually common such including includes include about into than more most only also " +
+  "item items figure figures program programs reputable guide guides").split(" "));
+const itemTerms = (item: string) => [...new Set((item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !ITEM_FILLER.has(w)))];
+export const ITEM_LOOKUP_MAX = 6;
+export function missingFigureItems(coverage: readonly string[], sources: readonly { excerpt?: string; title?: string }[], uncoveredOptions: readonly string[] = []): string[] {
+  const texts = sources.map((source) => `${source.title ?? ""}\n${source.excerpt ?? ""}`.toLowerCase());
+  // The figure the item asks for, not any digit: a price, fee, rebate or credit needs an amount of money; a temperature a
+  // degree; a lifespan or timeline a duration (batch 5's Denver roofing passed on a year beside "cost" and lost its prices).
+  const figureFor = (item: string) => /\b(?:costs?|prices?|pricing|fees?|rebates?|incentives?|tax credits?)\b/i.test(item) ? /[$€£]\s?\d|\d\s?(?:usd|dollars)/
+    : /temperature|heat limit|°/i.test(item) ? /\d\s?°|\d+\s?degrees/ : /\d+\s?(?:-|to|–)?\s?\d*\s?(?:years?|months?|weeks?|days?|hours?)/;
+  const figured = (item: string) => {
+    const terms = itemTerms(item).slice(0, 8), figure = figureFor(item);
+    return texts.some((text) => terms.filter((term) => text.includes(term)).length >= 2 &&
+      terms.some((term) => { const at = text.indexOf(term); return at >= 0 && figure.test(text.slice(Math.max(0, at - 200), at + 200)); }));
+  };
+  const items = coverage.filter((item) => FIGURE_ITEM.test(item) && !figured(item));
+  return [...uncoveredOptions.map((option) => `${option} pricing, from ${option}'s own pricing page`), ...items].slice(0, ITEM_LOOKUP_MAX);
+}
+export function itemLookupRequest(args: { label: string; primaryKeyword: string; items: readonly string[]; targetCountry?: string; competitors?: readonly string[] }) {
+  return {
+    system: [
+      "You find specific figures on the pages of the organisations that own them, for an article that states only what its sources say.",
+      "For each item, search the owner's own website directly, for example \"WellnessLiving pricing\", \"site:austintexas.gov water heater permit fee\",",
+      "\"Texas Gas Service tankless water heater rebate\" or \"Lodge cast iron seasoning\". Open the page that states the figure and cite it.",
+      "The owner is the seller for a price, the utility or agency that pays a rebate, the city or county for a permit or fee, the manufacturer for a",
+      "specification, temperature limit or lifespan, and the agency for a rule or tax credit. Use at most two searches for an item, then move on.",
+      "Cite only pages that state the figure; never blogs, forums, social media or aggregators for these figures.",
+      "Then write a short brief: for each item, the figure exactly as its page states it, with its conditions, citing the page.",
+    ].join(" "),
+    userMessage: [
+      `Article topic: ${args.label}`,
+      `Primary search: ${args.primaryKeyword}`,
+      "ITEMS WITHOUT A FIGURE YET (find each on its owner's page):",
+      ...args.items.map((item) => `- ${item}`),
+      args.targetCountry ? `Readers are in: ${args.targetCountry}` : "",
+      competitorsLine(args.competitors),
+    ].filter(Boolean).join("\n"),
+  };
+}
