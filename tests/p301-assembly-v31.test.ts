@@ -87,7 +87,7 @@ test("P301 prose: a placeholder fills with its value and citation; a raw figure,
   const used = new Map<string, number>();
   const kept = proseParagraphs("Most Denver homeowners pay between {{r1}} for a full replacement, and the price climbs with pitch and layers.",
     { pool, scope: [], used, allowedText: "Most Denver homeowners pay between for a full replacement and the price climbs with pitch and layers. Denver" });
-  assert.equal(kept.kept, "Most Denver homeowners pay between $7,400 to $16,500 [1] for a full replacement, and the price climbs with pitch and layers.");
+  assert.equal(kept.kept, "Most Denver homeowners pay between $7,400–16,500 [1] for a full replacement, and the price climbs with pitch and layers."); // P305: prose ranges are normalized
   const raw = proseParagraphs("Most homeowners pay about $10,000 in total.", { pool, scope: [], used, allowedText: "Denver $10,000" });
   assert.equal(raw.kept, "", "a figure written in the model's own words never prints");
   const unknown = proseParagraphs("See the details at {{r9}}.", { pool, scope: [], used, allowedText: "" });
@@ -96,7 +96,7 @@ test("P301 prose: a placeholder fills with its value and citation; a raw figure,
     const out = proseParagraphs(meta, { pool, scope: [], used, allowedText: "permit rule costs material tool" });
     assert.equal(out.kept, "", `batch 6's meta lead-ins never print: "${meta}"`);
   }
-  const twice = proseParagraphs("Again: {{r1}}.", { pool, scope: [], used: new Map([["r1", 1]]), allowedText: "Denver" });
+  const twice = proseParagraphs("Again, the range sits at {{r1}} for most homes.", { pool, scope: [], used: new Map([["r1", 1]]), allowedText: "Denver" });
   assert.equal(twice.kept, "", "a fact used twice before drops its paragraph");
 });
 
@@ -122,7 +122,7 @@ test("P301 assembly: the intro states the headline fact by placeholder, and an u
   const built = assembledArticle({ skeleton, prose, records: v, productName: "Summit Peak Roofing",
     profile: "Summit Peak Roofing replaces asphalt shingle and metal roofs in Denver.", search: "roof replacement cost denver",
     cta: { label: "Try Summit Peak Roofing", url: "https://summit.example" } });
-  assert.match(built.markdown, /^Most Denver homeowners pay between \$7,400 and \$16,500 \[1\] for a full roof replacement\./, "the search's answer is the first sentence");
+  assert.match(built.markdown, /^Most Denver homeowners pay between \$7,400–16,500 \[1\] for a full roof replacement\./, "the search's answer is the first sentence"); // P305: normalized range
   assert.match(built.markdown, /## Permits\n\n- \*\*.+:\*\* more than 10% of the roof square footage or two roof squares \(whichever is smaller\) \[2\]/,
     "a fact the paragraph never stated still reaches the reader, as one plain line");
   assert.match(built.markdown, /\| Item \(as of November 2026\) \| Amount \| Source \|/, "two money facts make a dated table");
