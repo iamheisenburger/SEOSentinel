@@ -19,9 +19,9 @@ export function assembledFormat(env: string | undefined, format: string): boolea
   if (!value || value === "off" || !(ASSEMBLED_FORMATS as readonly string[]).includes(format)) return false;
   return value === "on" ? (ASSEMBLED_ON as readonly string[]).includes(format) : value.split(",").map((f) => f.trim()).includes(format);
 }
-/** What "on" assembles. A how-to only when named: research quotes snippets of a procedure, not its page in order, and batch 6
- * assembled a sprinkler blowout as three steps out of order; it waits for reads of the procedure page's own ordered list. */
-export const ASSEMBLED_ON = ["list", "guide", "comparison"] as const;
+/** What "on" assembles. A how-to reads each procedure page's own ordered list first (research quotes snippets of a procedure in
+ * no order: batch 6's first v3 how-to put a sprinkler blowout's three steps out of order). Tutorials keep the writer for now. */
+export const ASSEMBLED_ON = ["list", "guide", "comparison", "how-to"] as const;
 
 export const FACT_KINDS = ["price", "cost", "fee", "rebate", "duration", "spec", "rule", "fact"] as const;
 const MONEY = new Set<string>(["price", "cost", "fee", "rebate"]);
@@ -39,7 +39,9 @@ export const RecordsSchema = z.object({
 export type Records = z.infer<typeof RecordsSchema>;
 /** An option's entry: its prices, features and limits, plus the outline's facts about it (a trial length, a contract term). */
 export type AssembledOption = Records["options"][number] & { business: boolean; extras: Records["facts"] };
-export type VerifiedRecords = { options: AssembledOption[]; facts: Records["facts"]; faqs: Records["faqs"]; steps?: Records["steps"]; dropped: string[] };
+/** A step with the procedure it belongs to on its page (each ordered list is one procedure). */
+export type VerifiedStep = Records["steps"][number] & { procedure?: number };
+export type VerifiedRecords = { options: AssembledOption[]; facts: Records["facts"]; faqs: Records["faqs"]; steps?: VerifiedStep[]; dropped: string[] };
 
 const str = { type: "string" };
 const withQuote = (properties: Record<string, unknown>) => ({ type: "object", additionalProperties: false,
@@ -91,8 +93,8 @@ export function recordsRequest(args: { search: string; format: string; sections:
     "An excerpt marked OWNER PAGE is the product's, program's or agency's own page: it states that owner's own prices, plans, fees, rules and features. Any other excerpt supports a fact about a product or program only when its quote names it.",
     list ? `'options': the products or services this search's readers would compare that the excerpts give facts for, at most 10, plus ${args.productName} from excerpt [0] only; never ${args.competitors.length ? args.competitors.join(", ") : "a competitor of the business"}. name: as its own site writes it. website: its own site's home page when an OWNER PAGE url gives it, else "". prices: each plan with its price exactly as the quote states it, currency included (plan "" when the quote names none; billing only the period or terms, such as "per month" or "billed annually"; a plan's limits go in limits), from its own pricing page when an excerpt gives one. features: up to 4 short things it does, in the quote's words. limits: up to 2 things it lacks or charges extra for. From any page that is not the option's own, quote the passage that names the option.`
       : "'options': [] (this article is not a list).",
-    "'facts': for each outline section, the specifics its excerpts give a reader: cost and price ranges, fees, rebates and who pays them, durations, rules (permits, requirements, deadlines), specifications, and what to look for or how it works (kind 'fact', in the quote's words). section: one outline heading copied exactly; subject: what the fact is about; kind: price, cost, fee, rebate, duration, spec, rule or fact; label: a short row name that says what and whose it is ('Permit fee, City of Austin'); value: the figure or rule as the quote states it. One record per fact: never the same fact twice.",
-    sides ? `This compares ${sides[0]} and ${sides[1]}: record each attribute the top results compare (price or cost, weight, heat or temperature limits, efficiency, lifespan, care, safety, and the like) once per side: subject exactly "${sides[0]}" or "${sides[1]}", the same label for both sides with no side's name in it ('Maximum oven temperature'), and the value as its quote states it.` : "",
+    "'facts': for each outline section, the specifics its excerpts give a reader: cost and price ranges, fees, rebates and who pays them, durations, rules (permits, requirements, deadlines), specifications, and what to look for or how it works (kind 'fact', in the quote's words). section: one outline heading copied exactly; subject: what the fact is about (for a comparison, the side it is about); kind: price, cost, fee, rebate, duration, spec, rule or fact; label: a short row name for what it is, with no owner's, maker's or source's name in it ('Permit fee', not 'Permit fee, City of Austin'); value: the figure or rule as the quote states it. One record per fact: never the same fact twice.",
+    sides ? `This compares ${sides[0]} and ${sides[1]}: record each attribute the top results compare (price or cost, weight, heat or temperature limits, efficiency, lifespan, care, safety, and the like) once per side: subject exactly "${sides[0]}" or "${sides[1]}", the same label for both sides with no side's name in it ('Maximum oven temperature'), and the value as its quote states it. A fact about one maker's specific product is not a fact about the material: give that product as its subject, never a side.` : "",
     args.format === "how-to" ? "'steps': the procedure, in the order ONE excerpt gives it, from the owner's own instructions when an excerpt gives them (a manufacturer's, an agency's or a documentation page): step: one action in the imperative, in the quote's words; section: the outline heading it belongs under. Take every step of the procedure from that one excerpt; never reorder, merge or add steps."
       : "'steps': [] (this article is not a how-to).",
     "'faqs': for each listed question an excerpt answers: 'answer' in one or two plain sentences saying only what its quote says (numbers as written), with that quote. Skip a question no excerpt answers.",
@@ -131,11 +133,32 @@ function dedupe<T>(items: readonly T[], id: (item: T) => string): T[] {
   return items.filter((item) => { const k = id(item); if (!k || seen.has(k)) return false; seen.add(k); return true; });
 }
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+/** Ordinary sentence-opening words a quote may start with: none of them names a product (comparison's foreign check). */
+const QUOTE_COMMON = new Set(("This That These Those The A An It Its All Most Many Some Any No Not If When While Where What Why How " +
+  "Which Who For In On At By With Without After Before During From Into Over Under Both Either Neither January February March April May " +
+  "June July August September October November December Monday Tuesday Wednesday Thursday Friday Saturday Sunday Step Note Tip Yes No " +
+  "Also But And Or So Then Than Once Your You We Our They Their").split(" "));
 /** A date the value names ("March 5, 2026", "March 2026") that is before now. */
 function pastDate(value: string, now: number): boolean {
   for (const m of value.matchAll(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(?:(\d{1,2}),?\s+)?((?:19|20)\d{2})\b/gi)) {
     const at = Date.UTC(Number(m[3]), MONTHS.indexOf(m[1].toLowerCase()), m[2] ? Number(m[2]) : 28);
     if (at < now) return true;
+  }
+  return false;
+}
+/** R9 (batch 6): a record whose quote or value states a program or period that has ended ("expired", "no longer available",
+ * "2023 through 2025", "through December 31, 2025"): batch 6 promoted the 25C credit, which ended Dec 31 2025, as current. */
+export function endedProgram(value: string, quote: string, now: number): boolean {
+  const text = `${value} ${quote}`;
+  if (/\b(?:expired|discontinued|no longer (?:offered|available|accepting \w+))\b/i.test(text)) return true;
+  const year = new Date(now).getUTCFullYear();
+  // "through <month?> <year>" with the year already past ("through December 31, 2025", "through 2025").
+  for (const m of text.matchAll(/\b(?:through|until|till)\s+(?:(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+(?:\d{1,2},?\s+)?)?((?:19|20)\d{2})\b/gi)) {
+    if (Number(m[1]) < year) return true;
+  }
+  // A stated period "2023-2025", "2023 through 2025", "2023 to 2025" whose end is past.
+  for (const m of text.matchAll(/\b((?:19|20)\d{2})\s*(?:-|–|—|\b(?:through|to)\b)\s*(?:(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+)?((?:19|20)\d{2})\b/g)) {
+    if (Number(m[2]) < year) return true;
   }
   return false;
 }
@@ -155,6 +178,7 @@ export function verifiedRecords(raw: Omit<Records, "steps"> & { steps?: Records[
   const text = (n: number) => n === 0 ? ctx.profile : ctx.sources[n - 1]?.excerpt ?? "";
   const stale = (value: string) => /\b(?:will|upcoming|from|starting|effective|beginning)\b/i.test(value) && pastDate(value, ctx.now ?? Date.now());
   const valid = (record: { quote: string; source: number }, value: string, what: string) => {
+    if (endedProgram(value, record.quote, ctx.now ?? Date.now())) { dropped.push(`${what}: a program or period that has ended ("${(value || record.quote).slice(0, 80)}")`); return false; }
     if (stale(value)) { dropped.push(`${what}: a change dated in the past ("${value.slice(0, 80)}")`); return false; }
     if (!Number.isInteger(record.source) || record.source < 0 || record.source > ctx.sources.length || (record.source === 0 && !ctx.profile.trim())) {
       dropped.push(`${what}: no source [${record.source}]`); return false;
@@ -179,7 +203,11 @@ export function verifiedRecords(raw: Omit<Records, "steps"> & { steps?: Records[
     };
     const prices = option.prices.map((p) => NOT_A_PLAN.test(p.plan.trim()) ? { ...p, plan: "" } : p).filter((p) => {
       if (!PRICE_STATED.test(p.price)) { dropped.push(`${name} price "${p.price}": no currency`); return false; }
-      return valid(p, `${p.plan} ${p.price} ${p.billing}`, `${name} price`) && about(p, `${name} price`);
+      if (!valid(p, `${p.plan} ${p.price} ${p.billing}`, `${name} price`)) return false;
+      // R10 (batch 6, V3-RESEARCH-FIXTURES): a price exists only from the option's own fetched page. A third party's page
+      // naming it (Glofox "$99" from a listicle, Xero's range from an SEO site) shows as "No public price" or nothing.
+      if (!own(p.source)) { dropped.push(`${name} price "${p.price}": not from its own page`); return false; }
+      return true;
     });
     const ownPrices = prices.filter((p) => own(p.source));
     const notes = (records: Records["options"][number]["features"], what: string, limit: number) => dedupe(records.filter((r) =>
@@ -224,7 +252,9 @@ export function verifiedRecords(raw: Omit<Records, "steps"> & { steps?: Records[
   const [procedure] = [...bySource.entries()].sort((a, b) => b[1].length - a[1].length || a[0] - b[0]);
   if (procedure && bySource.size > 1) dropped.push(`${checkedSteps.length - procedure[1].length} step(s) from other sources: one procedure, one source's order`);
   const at = (step: Records["steps"][number]) => normal(text(step.source)).indexOf(normal(step.quote).replace(/^["'(\s.…]+|["')\s.…]+$/g, ""));
-  const steps = procedure ? [...procedure[1]].sort((a, b) => at(a) - at(b)).slice(0, 12) : [];
+  // Which ordered list a step comes from: each list on the page starts again at "1." (lib orderedStepsText).
+  const listOf = (step: Records["steps"][number]) => (normal(text(step.source)).slice(0, Math.max(0, at(step))).match(/(?:^|\s(?:…|\.\.\.)\s)1\. /g) ?? []).length;
+  const steps: VerifiedStep[] = procedure ? [...procedure[1]].sort((a, b) => at(a) - at(b)).slice(0, 12).map((step) => ({ ...step, procedure: listOf(step) })) : [];
   return { options, facts, faqs, steps, dropped };
 }
 
@@ -234,9 +264,11 @@ const PRICE_STATED = /[$€£¥₹]|\b(?:USD|EUR|GBP|CAD|AUD|INR)\b|\bfree\b/i;
 const PERIOD = /\/\s?(?:mo|month|yr|year|user|seat)\b|\b(?:per|a|an|each|every)\s+(?:month|year|user|seat|location)\b|\b(?:monthly|annually|yearly)\b/i;
 const LEADING_PERIOD = /^(?:\/\s?\w+|(?:a|an|per|each|every)\s+(?:month|year|week|user|seat|location|studio|member)(?:\s+per\s+(?:user|seat|location|studio|member))?)\b/i;
 const BILLING_TERM = /^(?:\/\s?\w+|(?:a|an|per|each|every)\s+\w+(?:\s+per\s+\w+)?|billed\s+\w+(?:\s+\w+)?|monthly|annually|yearly|weekly|one-time|once|paid\s+\w+)$/i;
+/** "$55 PER MONTH" (a page's shouting) reads "$55 per month"; an all-caps run of 4+ letters is shouting, "USD" is not. */
+const decase = (value: string) => /[A-Z]{4,}/.test(value) && value === value.toUpperCase() ? value.toLowerCase() : value;
 /** "$12" + "a month" reads "$12 a month"; "$6.99" + "/mo" reads "$6.99/mo"; other terms follow a comma. */
 export function priceWithBilling(price: string, billing: string): string {
-  const p = price.replace(/\s+/g, " ").trim(), b = billing.replace(/\s+/g, " ").trim().replace(/^[,;]\s*/, "");
+  const p = decase(price.replace(/\s+/g, " ").trim()), b = decase(billing.replace(/\s+/g, " ").trim().replace(/^[,;]\s*/, ""));
   const lead = BILLING_TERM.test(b) ? b : LEADING_PERIOD.exec(b)?.[0].trim() ?? "";
   return joinPeriod(p, lead);
 }
@@ -251,12 +283,33 @@ export function monthYear(at: number): string {
   return new Date(at).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
 }
 const cite = (n: number) => n > 0 ? ` [${n}]` : "";
-const cell = (value: string) => value.replace(/\|/g, "/").replace(/\s+/g, " ").trim();
+const cell = (value: string) => decase(value.replace(/\|/g, "/").replace(/\s+/g, " ").trim());
 const sentenceCase = (value: string) => { const v = value.replace(/\s+/g, " ").trim().replace(/[.;,]+$/, ""); return v ? v[0].toUpperCase() + v.slice(1) : v; };
 const firstFigure = (value: string) => { const n = statedNumbers(value)[0]; return n === undefined ? (/\bfree\b/i.test(value) ? 0 : Infinity) : Number(n); };
 function publisher(url: string): string { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; } }
 const LIST_HEADING = /\b(?:best|top|options|compared|picks|alternatives|choices)\b/i;
 const LIST_HEADING_WEAK = /\b(?:tools|software|apps|platforms|services|providers|products)\b/i;
+/** A heading the options table may sit under. Batch 6 put the yoga price table under "Integrations with other tools":
+ * a weak match must not start with a section-topic word that is not the list itself. */
+export const LIST_HEADING_GUARD = (heading: string) => LIST_HEADING_WEAK.test(heading) &&
+  !/^(?:integrations?|payments?|pricing|features?|support|reporting|onboarding|getting started|mobile|membership)\b/i.test(heading.trim());
+/** A procedure as its page writes it: each ordered list (or "Step N" headings) in page order, numbered, at most max. Research
+ * quotes snippets of a procedure in no order; batch 6's first v3 how-to put a sprinkler blowout's steps out of order. */
+export function orderedStepsText(html: string, max = 3000): string {
+  const clean = (value: string) => value.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&#8217;|&rsquo;|&#39;|&apos;/g, "'").replace(/&#8220;|&#8221;|&ldquo;|&rdquo;|&quot;/g, '"')
+    .replace(/&#36;/g, "$").replace(/\s+/g, " ").trim();
+  const lists = [...html.matchAll(/<ol\b[^>]*>([\s\S]*?)<\/ol>/gi)].map((list) => [...list[1].matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)]
+    .map((item) => clean(item[1])).filter((text) => text.length > 8));
+  const headings = [...html.matchAll(/<h[2-4]\b[^>]*>([\s\S]*?)<\/h[2-4]>/gi)].map((h) => clean(h[1])).filter((text) => /^step\s*\d+\b/i.test(text));
+  let out = "";
+  for (const steps of [...lists.filter((list) => list.length >= 3), ...(headings.length >= 3 ? [headings] : [])]) {
+    const block = steps.map((step, index) => `${index + 1}. ${step.slice(0, 280)}`).join(" ");
+    if (out.length + block.length + 3 > max) break;
+    out += (out ? " … " : "") + block;
+  }
+  return out;
+}
 /** A source's excerpt with its page read in full: research's quotes first, then the page around its figures, at most max. */
 export function enrichedExcerpt(excerpt: string, pageText: string, max = 6000): string {
   if (!pageText) return excerpt;
@@ -271,17 +324,33 @@ export function enrichedExcerpt(excerpt: string, pageText: string, max = 6000): 
 }
 export const FAQ_HEADING = /^(?:frequently asked questions|faqs?|common questions)$/i;
 
-/** A section of the assembled article: its heading and the block code printed from its records; lead-ins come later. */
-export type AssembledSection = { heading: string; body: string; options: string[] };
-export type Skeleton = { sections: AssembledSection[]; faq: AssembledSection | null; asOf: string };
+/** v3.1 (Nov 3, batch 6): a fact the writer may state in prose, as the placeholder the model writes ({{r7}}) and code fills
+ * with the record's value and citation. Facts reach the reader through language again; code still owns every figure. */
+export type ProseRecord = { id: string; label: string; value: string; source: number };
+/** A section of the assembled article: its heading, the data block code printed from its records (a table, a step list), and
+ * the records its prose paragraph may state as placeholders. */
+export type AssembledSection = { heading: string; body: string; options: string[]; records: ProseRecord[] };
+export type Skeleton = { sections: AssembledSection[]; faq: AssembledSection | null; asOf: string;
+  /** The records the intro may state (the headline facts: the search's answer in the first paragraph). */
+  intro: ProseRecord[]; pool: Record<string, { display: string; source: number; label: string }> };
 
-/** Code prints every fact from its record, once: a section with no record has no heading. */
+/** Code prints structured data from its records, once: a section with no record has no heading, and every other fact reaches
+ * the reader as a placeholder the prose fills (records are evidence, never display text). */
 export function skeletonFor(args: { format: string; sections: readonly string[]; records: VerifiedRecords; sources: readonly AssemblySource[]; readAt: number;
   sides?: readonly [string, string] | null }): Skeleton {
   const asOf = monthYear(args.readAt);
   const out: AssembledSection[] = [];
+  const pool: Record<string, { display: string; source: number; label: string }> = {};
+  let nextId = 0;
+  const idOf = new Map<unknown, string>();
+  const register = (record: unknown, display: string, source: number, label = ""): ProseRecord => {
+    const id = `r${++nextId}`;
+    pool[id] = { display, source, label };
+    idOf.set(record, id);
+    return { id, label, value: display, source };
+  };
   // A comparison's attributes stated for both sides go in one side-by-side table, each fact once (single-side facts stay in
-  // their sections).
+  // their sections). A fact about one maker's specific product is not a fact about the material: it stays out of the table.
   const sides = args.format === "comparison" ? args.sides ?? null : null;
   const tabled = new Set<Records["facts"][number]>();
   // A how-to's steps: numbered, in their source's order, under the section most of them name (or the outline's steps section).
@@ -290,15 +359,32 @@ export function skeletonFor(args: { format: string; sections: readonly string[];
   for (const step of steps) { const heading = args.sections.find((s) => s.toLowerCase() === step.section.trim().toLowerCase()); if (heading) named.set(heading, (named.get(heading) ?? 0) + 1); }
   const stepsHeading = steps.length ? [...named.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
     ?? args.sections.find((s) => /\bsteps?\b|\bhow to\b|\bprocess\b|\bprocedure\b/i.test(s) && !FAQ_HEADING.test(s)) ?? "Step by step" : "";
-  const stepList = steps.map((step, index) => `${index + 1}. ${sentenceCase(step.step)}${cite(step.source)}`).join("\n");
+  // Each section's procedure is numbered on its own (a page's drain-down and its blowout are two procedures).
+  const sectionOfStep = (step: Records["steps"][number]) => args.sections.find((s) => s.toLowerCase() === step.section.trim().toLowerCase()) ?? stepsHeading;
+  // One procedure split over sections keeps counting (1-4, then 5); a second procedure on the page starts again at 1.
+  const counted = new Map<number, number>(), numbered = new Map<VerifiedStep, number>();
+  for (const step of steps) { const n = (counted.get(step.procedure ?? 0) ?? 0) + 1; counted.set(step.procedure ?? 0, n); numbered.set(step, n); }
+  const stepLists = new Map<string, string>();
+  for (const heading of new Set(steps.map(sectionOfStep))) {
+    stepLists.set(heading, steps.filter((step) => sectionOfStep(step) === heading).map((step) => `${numbered.get(step)}. ${sentenceCase(step.step)}${cite(step.source)}`).join("\n"));
+  }
+  const stepList = stepLists.get(stepsHeading) ?? "";
   let comparison = "", comparisonHeading = "";
   if (sides) {
-    const attribute = (label: string) => key(wordsOf(label).filter((w) => !wordsOf(`${sides[0]} ${sides[1]}`).includes(w)).join(" "));
+    const sideWords = new Set(wordsOf(`${sides[0]} ${sides[1]}`));
+    const attribute = (label: string) => key(wordsOf(label).filter((w) => !sideWords.has(w)).join(" "));
     const rows = new Map<string, { label: string; cells: (Records["facts"][number] | undefined)[] }>();
     for (const fact of args.records.facts) {
       const side = sideOf(`${fact.subject} ${fact.label}`, sides);
       const id = attribute(fact.label);
-      if (side < 0 || !id) continue;
+      // "Oven-safe up to 500°F" from one maker's Dutch oven page is not the cast iron column (batch 6): a quote naming a
+      // product, brand or subtype ("Enameled…", "Lodge…") keeps the fact in its section's prose, out of the material's row.
+      const allowed = new Set([...sideWords, ...wordsOf(fact.subject)]);
+      const foreign = fact.quote.split(/\s+/).some((word) => {
+        const clean = word.replace(/[^A-Za-z]+$/, "");
+        return /^[A-Z][a-z]/.test(clean) && !QUOTE_COMMON.has(clean) && !allowed.has(clean.toLowerCase());
+      });
+      if (side < 0 || !id || foreign) continue;
       const own = sides.map((side, i) => wordsOf(side).filter((w) => !wordsOf(sides[1 - i]).includes(w)).join(" ")).filter(Boolean);
       const row = rows.get(id) ?? { label: [...sides, ...own].reduce((label, name) => withoutName(label, name), fact.label), cells: [undefined, undefined] };
       if (!row.cells[side]) row.cells[side] = fact;
@@ -306,123 +392,155 @@ export function skeletonFor(args: { format: string; sections: readonly string[];
     }
     const both = [...rows.values()].filter((row) => row.cells[0] && row.cells[1] && row.label);
     if (both.length >= 2) {
-      const value = (fact: Records["facts"][number]) => `${cell(fact.value)}${cite(fact.source)}`;
+      const value = (fact: Records["facts"][number]) => `${cell(fact.value).replace(/[.;,]+$/, "")}${cite(fact.source)}`;
       comparison = [`| | ${cell(sentenceCase(sides[0]))} | ${cell(sentenceCase(sides[1]))} |`, "| --- | --- | --- |",
         ...both.map((row) => `| ${cell(sentenceCase(row.label))} | ${value(row.cells[0]!)} | ${value(row.cells[1]!)} |`)].join("\n");
       for (const row of both) { tabled.add(row.cells[0]!); tabled.add(row.cells[1]!); }
-      comparisonHeading = args.sections.find((s) => /\b(?:compar\w*|side by side|at a glance|key differences|differences|vs\.?|versus)\b/i.test(s) && !FAQ_HEADING.test(s))
-        ?? args.sections.find((s) => !FAQ_HEADING.test(s)) ?? "At a glance";
+      comparisonHeading = args.sections.find((s) => /\b(?:compar\w*|side by side|at a glance|key differences|differences|vs\.?|versus)\b/i.test(s) && !FAQ_HEADING.test(s)) ?? "At a glance";
     }
   }
   const faqHeading = args.sections.find((s) => FAQ_HEADING.test(s.trim())) ?? "Frequently asked questions";
   const listHeading = args.format === "list" ? args.sections.find((s) => LIST_HEADING.test(s) && !FAQ_HEADING.test(s))
-    ?? args.sections.find((s) => LIST_HEADING_WEAK.test(s) && !/^(?:what|why|how)\b/i.test(s) && !FAQ_HEADING.test(s)) ?? "The options compared" : "";
+    ?? args.sections.find((s) => LIST_HEADING_GUARD(s) && !/^(?:what|why|how)\b/i.test(s) && !FAQ_HEADING.test(s)) ?? "The options compared" : "";
+  const introPool: ProseRecord[] = [];
   const listBlock = (): AssembledSection | null => {
-    const options = args.records.options;
+    const options = [...args.records.options.filter((o) => !o.business), ...args.records.options.filter((o) => o.business)];
     if (!options.length) return null;
     const lines: string[] = [];
     const starting = new Map(options.map((o) => [o.name, [...o.prices].sort((a, b) => firstFigure(a.price) - firstFigure(b.price))[0]]));
-    const priced = options.filter((o) => starting.get(o.name));
-    if (priced.length) {
-      lines.push(`Prices as of ${asOf}.`, "", "| Option | Starting price |", "| --- | --- |");
-      for (const o of priced) {
-        const p = starting.get(o.name)!;
-        const plan = p.plan.trim() && !normal(p.price).includes(normal(p.plan)) ? ` (${cell(p.plan)}${/\bplan\b/i.test(p.plan) ? "" : " plan"})` : "";
-        const price = `${cell(priceWithBilling(p.price, p.billing))}${plan}${cite(p.source)}`;
-        lines.push(`| ${o.website ? `[${cell(o.name)}](${o.website})` : cell(o.name)} | ${price} |`);
-      }
+    lines.push(`| Option | Starting price (as of ${asOf}) |`, "| --- | --- |");
+    const cheapest = [...options].filter((o) => starting.get(o.name)).sort((a, b) => firstFigure(starting.get(a.name)!.price) - firstFigure(starting.get(b.name)!.price))[0];
+    for (const o of [...(cheapest ? [cheapest] : []), ...options.filter((o) => o.business && starting.get(o.name))]) {
+      const p = starting.get(o.name)!;
+      if (introPool.length < 4 && !introPool.some((r) => r.label === o.name)) introPool.push(register(p, priceWithBilling(p.price, p.billing), p.source, o.name));
+    }
+    for (const o of options) {
+      const p = starting.get(o.name);
+      const plan = p && p.plan.trim() && !normal(p.price).includes(normal(p.plan)) ? ` (${cell(p.plan)}${/\bplan\b/i.test(p.plan) ? "" : " plan"})` : "";
+      const price = p ? `${cell(priceWithBilling(p.price, p.billing))}${plan}${cite(p.source)}` : "No public price";
+      lines.push(`| ${o.website ? `[${cell(o.name)}](${o.website})` : cell(o.name)} | ${price} |`);
     }
     for (const o of options) {
       const first = starting.get(o.name);
       lines.push("", `### ${o.name}`, "", `{{SUITS:${o.name}}}`, "");
       const bullets = [
-        ...o.prices.filter((p) => p !== first).map((p) => `- **${sentenceCase(p.plan) || "Price"}:** ${priceWithBilling(p.price, p.billing)}${cite(p.source)}`),
+        ...o.prices.filter((p) => p !== first).map((p) => { register(p, priceWithBilling(p.price, p.billing), p.source, o.name);
+          return `- **${sentenceCase(p.plan) || "Price"}:** ${priceWithBilling(p.price, p.billing)}${cite(p.source)}`; }),
         ...o.features.map((f) => `- ${sentenceCase(f.text)}${cite(f.source)}`),
-        ...o.extras.map((f) => `- **${sentenceCase(f.label)}:** ${f.value.replace(/\s+/g, " ").trim().replace(/[.;,]+$/, "")}${cite(f.source)}`),
+        ...o.extras.map((f) => `- **${sentenceCase(withoutName(f.label, o.name) || f.label)}:** ${f.value.replace(/\s+/g, " ").trim().replace(/[.;,]+$/, "")}${cite(f.source)}`),
         ...o.limits.map((l) => `- **Limit:** ${l.text.replace(/\s+/g, " ").trim().replace(/[.;,]+$/, "")}${cite(l.source)}`),
       ];
       lines.push(...bullets);
     }
-    return { heading: listHeading, body: lines.join("\n").replace(/\n{3,}/g, "\n\n").trim(), options: options.map((o) => o.name) };
+    return { heading: listHeading, body: lines.join("\n").replace(/\n{3,}/g, "\n\n").trim(), options: options.map((o) => o.name), records: [] };
   };
   const listInOutline = args.sections.some((s) => s === listHeading);
   for (const heading of args.sections) {
     if (FAQ_HEADING.test(heading.trim())) continue;
     if (args.format === "list" && heading === listHeading) { const block = listBlock(); if (block) out.push(block); continue; }
     const facts = args.records.facts.filter((f) => f.section === heading && !tabled.has(f));
-    const table = heading === comparisonHeading ? comparison : heading === stepsHeading ? stepList : "";
-    if (!facts.length && !table) continue;
+    const table = heading === comparisonHeading ? comparison : stepLists.get(heading) ?? "";
     const money = facts.filter((f) => MONEY.has(f.kind)), other = facts.filter((f) => !MONEY.has(f.kind));
     const lines: string[] = table ? [table, ""] : [];
-    if (money.length) lines.push(`Prices and fees as of ${asOf}.`, "");
     if (money.length >= 2) {
-      lines.push("| Item | Amount | Source |", "| --- | --- | --- |",
-        ...money.map((f) => `| ${cell(sentenceCase(f.label))} | ${cell(f.value)}${cite(f.source)} | ${f.source > 0 ? cell(publisher(args.sources[f.source - 1]?.url ?? "")) : "Our pricing"} |`), "");
-    } else other.unshift(...money);
-    const sideLabel = (f: Records["facts"][number]) => {
-      if (!sides) return sentenceCase(f.label);
-      const side = sideOf(`${f.subject} ${f.label}`, sides);
-      return side < 0 || sideOf(f.label, sides) === side ? sentenceCase(f.label) : `${sentenceCase(sides[side])}, ${f.label.replace(/^./, (c) => c.toLowerCase())}`;
-    };
-    lines.push(...other.map((f) => `- **${sideLabel(f)}:** ${f.value.replace(/\s+/g, " ").trim().replace(/[.;,]+$/, "")}${cite(f.source)}`));
-    out.push({ heading, body: lines.join("\n").trim(), options: [] });
+      lines.push(`| Item (as of ${asOf}) | Amount | Source |`, "| --- | --- | --- |",
+        ...money.map((f) => `| ${cell(sentenceCase(rowLabel(f, args.sources)))} | ${cell(f.value).replace(/[.;,]+$/, "")}${cite(f.source)} | ${f.source > 0 ? cell(publisher(args.sources[f.source - 1]?.url ?? "")) : "Our pricing"} |`), "");
+      for (const f of money) register(f, f.value.replace(/[.;,]+$/, ""), f.source, rowLabel(f, args.sources));
+    }
+    const records: ProseRecord[] = [];
+    const factLabel = (f: Records["facts"][number]) => `${f.subject && !normal(f.value).includes(normal(f.subject).slice(0, 12)) ? `${f.subject}: ` : ""}${rowLabel(f, args.sources)}`;
+    for (const f of [...(money.length >= 2 ? [] : money), ...other]) records.push(register(f, f.value.replace(/[.;,]+$/, ""), f.source, factLabel(f)));
+    if (!lines.length && !records.length) continue;
+    if (out.length < 2) {
+      introPool.push(...records.slice(0, 4));
+      if (money.length >= 2) for (const f of money.slice(0, 2)) introPool.push({ id: idOf.get(f)!, label: rowLabel(f, args.sources), value: f.value, source: f.source });
+    }
+    out.push({ heading, body: lines.join("\n").trim(), options: [], records });
   }
-  if (comparison && !args.sections.includes(comparisonHeading)) out.unshift({ heading: comparisonHeading, body: comparison, options: [] });
-  if (stepList && !args.sections.includes(stepsHeading)) out.unshift({ heading: stepsHeading, body: stepList, options: [] });
+  if (comparison && !args.sections.includes(comparisonHeading)) out.unshift({ heading: comparisonHeading, body: comparison, options: [], records: [] });
+  if (stepList && !args.sections.includes(stepsHeading)) out.unshift({ heading: stepsHeading, body: stepList, options: [], records: [] });
   if (args.format === "list" && !listInOutline) {
     const block = listBlock();
     if (block) out.splice(Math.min(1, out.length), 0, block);
   }
-  const faq = args.records.faqs.length ? { heading: faqHeading, options: [],
+  const faq = args.records.faqs.length ? { heading: faqHeading, options: [], records: [] as ProseRecord[],
     body: args.records.faqs.map((f) => `### ${f.question.trim()}\n\n${f.answer.replace(/\s+/g, " ").trim().replace(/[.!]?$/, (end) => `${cite(f.source)}${end || "."}`)}`).join("\n\n") } : null;
-  return { sections: out, faq, asOf };
+  return { sections: out, faq, asOf, intro: introPool.slice(0, 8), pool };
+}
+/** A table row's label: the fact's own label, with the owner's name out of it (the Source column says whose it is), and a
+ * label that restates its value collapsed to the subject (batch 6: "Free roof inspections and written estimates, Summit Peak
+ * Roofing" over the value "Free roof inspections and written estimates"). */
+function rowLabel(fact: Records["facts"][number], sources: readonly AssemblySource[]): string {
+  const owner = fact.source > 0 ? publisher(sources[fact.source - 1]?.url ?? "") : "";
+  const stripped = owner ? withoutName(withoutName(fact.label, owner), owner.replace(/\./g, " ")) : fact.label;
+  const label = sentenceCase(stripped || fact.subject || fact.label);
+  return normal(label).includes(normal(fact.value).slice(0, 24)) && fact.value.length < 60 ? sentenceCase(fact.subject || fact.label.split(/\s+/).slice(0, 4).join(" ")) : label;
 }
 
 export const ProseSchema = z.object({ title: z.string(), metaTitle: z.string(), metaDescription: z.string(), intro: z.string(),
-  sections: z.array(z.object({ heading: z.string(), leadIn: z.string() })).default([]),
+  sections: z.array(z.object({ heading: z.string(), paragraph: z.string() })).default([]),
   options: z.array(z.object({ name: z.string(), suits: z.string() })).default([]), conclusion: z.string() });
 export type Prose = z.infer<typeof ProseSchema>;
 export const PROSE_INPUT_SCHEMA: { type: "object"; properties: Record<string, unknown>; required: string[]; additionalProperties: false } = {
   type: "object", additionalProperties: false, required: ["title", "metaTitle", "metaDescription", "intro", "sections", "options", "conclusion"],
   // The conclusion comes last: strict output follows this order, and asked for first it was once written as "placeholder".
   properties: { title: str, metaTitle: str, metaDescription: str, intro: str,
-    sections: { type: "array", items: { type: "object", additionalProperties: false, properties: { heading: str, leadIn: str }, required: ["heading", "leadIn"] } },
+    sections: { type: "array", items: { type: "object", additionalProperties: false, properties: { heading: str, paragraph: str }, required: ["heading", "paragraph"] } },
     options: { type: "array", items: { type: "object", additionalProperties: false, properties: { name: str, suits: str }, required: ["name", "suits"] } },
     conclusion: str },
 };
 
-/** The one prose call: it sees the article code built and writes only the short parts marked WRITE. */
+/** The one prose call (v3.1): the model writes the article's language with the facts as placeholders ({{r7}}) that code
+ * fills with the record's value and citation. Batch 6's prose was forbidden every figure and name, so it could only write
+ * about the page ("this block shows…"); the intro never answered the search. */
 export function proseRequest(args: { search: string; productName: string; businessSummary: string; audience: string; profile: string;
-  skeleton: Skeleton; records: VerifiedRecords }): { system: string; userMessage: string } {
+  skeleton: Skeleton; records: VerifiedRecords; sources: readonly AssemblySource[] }): { system: string; userMessage: string } {
   const system = [
-    "You write the short prose of an article whose facts code has already placed. You see the article as code built it: its tables, price lists, figures and answers are final and read-only.",
-    "Write only: 'intro', 2-4 sentences that answer the search directly and say what the reader will find; for each section, 'leadIn', 1-3 sentences that tell the reader what the block below shows and how to use it for their decision; for each option, 'suits', 1-2 sentences on who it suits, from its own records below (what it does, what it lacks, what it costs, said in words); 'conclusion', 2-4 sentences on how to decide, then at most one sentence on what the business does, from its confirmed details; the 'title' (under 65 characters, in the search's words, no number or year); 'metaTitle' (under 60 characters); and 'metaDescription' (under 155 characters: what the reader gets).",
-    "Never write a number, price, percentage, date or year, nor how many options there are: the blocks give every figure, so a lead-in says 'the table compares starting prices', never the prices. Name no company, product, program, agency or person except one the section's own records name (and the business itself in the conclusion). Never tell the reader to check, confirm, verify, ask, call or contact anyone. Never mention records, data, sources or what the article lacks: write about the options and the reader's decision. Don't restate what a block says. Plain words, second person, no hype.",
+    "You write the prose of an article whose tables, prices and answers code has already placed from checked fact records. You write normal, readable paragraphs — and you finally may state the facts: every figure, price, percentage, date, plan name and product attribute in your paragraphs MUST be written as the placeholder shown, exactly like {{r7}}. Code replaces each placeholder with the fact and its citation, so never write a figure, price, year or percentage in your own words: use the placeholder.",
+    "Write: 'intro', 2-4 sentences that answer the search directly — state the headline facts from INTRO FACTS by placeholder in the first sentence or two — then say what the reader will find; for each section, 'paragraph', 2-4 sentences that give the section's substance in flowing prose, using that section's facts by placeholder (a table below already lists some facts: your paragraph explains and connects, it does not read the table aloud); for each option, 'suits', 1-2 sentences on who it suits, from its own facts by placeholder; 'conclusion', 2-4 sentences on how to decide between the options or approaches, then at most one sentence on what the business does, from its confirmed details; 'title' (under 65 characters, in the search's words, no number or year); 'metaTitle' (under 60); 'metaDescription' (under 155: what the reader gets).",
+    "Use each fact at most once in the whole article (the headline fact at most twice); a fact code already printed in a table above may appear in your paragraph only when the table's number needs saying in the sentence. Name no company, product, program, agency or person except through a placeholder or one the section's records name (and the business itself in the conclusion). Never tell the reader to check, confirm, verify, ask, call, contact or get a quote or estimate. Never write about the article, its blocks, tables, records or data ('this section covers', 'the table below shows', 'use it to', 'below you'll find'): write about the subject. Plain words, second person, no hype.",
   ].join(" ");
-  const recordNames = (section: AssembledSection) => section.options.length ? section.options.map((name) => {
-    const o = args.records.options.find((x) => x.name === name)!;
-    return `- ${name}: ${[...o.features.map((f) => f.text), ...o.extras.map((f) => `${f.label}: ${f.value}`), ...o.limits.map((l) => `not included: ${l.text}`), ...o.prices.map((p) => `${p.plan} ${p.price}`.trim())].join("; ")}`;
-  }).join("\n") : "";
+  const recordLine = (r: ProseRecord) => {
+    const record = args.skeleton.pool[r.id];
+    const origin0 = r.source > 0 ? publisher(args.sources[r.source - 1]?.url ?? "") : args.productName;
+    return `- {{${r.id}}} = ${record?.display ?? r.value}${origin0 ? ` (${origin0})` : ""}`;
+  };
+  const optionFacts = (name: string): string[] => {
+    const o = args.records.options.find((x) => x.name === name);
+    if (!o) return [];
+    const own = Object.entries(args.skeleton.pool).filter(([, entry]) => entry.label === name);
+    const prices = [...o.prices].sort((a, b) => firstFigure(a.price) - firstFigure(b.price));
+    const lines = prices.slice(0, 2).map((p) => `${p.plan ? `${p.plan}: ` : ""}${priceWithBilling(p.price, p.billing)}`);
+    return [`FACTS FOR ${name} (state any of these in 'suits' as its placeholder):`,
+      ...own.map(([id, entry]) => `- {{${id}}} = ${entry.display}`),
+      ...[...o.features.map((f) => f.text), ...o.extras.map((f) => `${f.label}: ${f.value}`), ...o.limits.map((l) => `not included: ${l.text}`)].slice(0, 5).map((t) => `- ${t}`),
+      ...(lines.length ? [`plans: ${lines.join("; ")}`] : ["no public price"])];
+  };
   const userMessage = [
     `SEARCH: ${args.search}`,
     `BUSINESS: ${args.productName}: ${args.businessSummary}`.slice(0, 600),
     args.audience ? `READERS: ${args.audience}`.slice(0, 400) : "",
     `BUSINESS CONFIRMED DETAILS:\n${args.profile.slice(0, 1500)}`,
+    args.skeleton.intro.length ? `INTRO FACTS (placeholders the intro may use):\n${args.skeleton.intro.map((r) => recordLine(r)).join("\n")}` : "",
     "THE ARTICLE AS CODE BUILT IT (read-only except the WRITE markers):",
     "[WRITE intro]",
-    ...args.skeleton.sections.map((section) => [`## ${section.heading}`, `[WRITE leadIn for "${section.heading}"]`,
-      section.body.replace(/\{\{SUITS:([^}]+)\}\}/g, (_m, name: string) => `[WRITE suits for "${name}"]`),
-      section.options.length ? `RECORDS FOR THE OPTIONS ABOVE:\n${recordNames(section)}` : ""].filter(Boolean).join("\n\n")),
+    ...args.skeleton.sections.flatMap((section) => {
+      const facts = section.records.length ? [`FACTS FOR THIS SECTION (write each as its placeholder):\n${section.records.map((r) => recordLine(r)).join("\n")}`] : [];
+      const options = section.options.flatMap((name) => optionFacts(name));
+      return [[`## ${section.heading}`], `[WRITE paragraph for "${section.heading}"]`, ...facts, ...options,
+        section.body.replace(/\{\{SUITS:([^}]+)\}\}/g, (_m, name: string) => `[WRITE suits for "${name}"]`)].filter((x) => x !== "").join("\n\n");
+    }),
     "[WRITE conclusion]",
     args.skeleton.faq ? `## ${args.skeleton.faq.heading}\n\n${args.skeleton.faq.body}` : "",
   ].filter(Boolean).join("\n\n");
-  return { system, userMessage };
+  return { system, userMessage: userMessage.replace(/\n{3,}/g, "\n\n") };
 }
 
 const HOMEWORK = /\b(?:check|confirm|verify|ask|call|contact|consult|request|get)\b[^.!?]{0,40}\b(?:quotes?|estimates?|providers?|vendors?|installers?|contractors?|plumbers?|roofers?|city|county|utility|utilities|pricing pages?|websites?|sites?|sales teams?|support)\b/i;
 /** Prose about the article's own making ("the records give no price", "the data shows") is not for readers. */
 const COUNTED = /\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+)\s+(?:\w+\s+)?(?:options|tools|apps|platforms|picks|choices|vendors|providers|products|programs|services)\b/i;
-const MAKING = /\b(?:records?|the data|our data|data (?:given|shown|provided|here)|(?:these|the|our) sources?|excerpts?|not (?:listed|given|shown|stated) here|no (?:price|pricing|figure)s? (?:is |are )?(?:given|listed|shown|stated|published)|hard(?:er)? to judge)\b/i;
+/** v3.1 (batch 6): the meta lead-ins the model wrote because the old prompt asked for them. */
+const MAKING = /\b(?:records?|the data|our data|data (?:given|shown|provided|here)|(?:these|the|our) sources?|excerpts?|not (?:listed|given|shown|stated) here|no (?:price|pricing|figure)s? (?:is |are )?(?:given|listed|shown|stated|published)|hard(?:er)? to judge|this (?:block|table|section|article|list|guide)|the (?:table|list|block|item|items|point|points|note) below|below you'?ll find|use it to)\b/i;
 /** The prose sentences code keeps: none that states a number, or names a company, its scope's records don't give, and none
  * that sends the reader to find something out. */
 export function keptProse(text: string, scope: { allowedText: string }): { kept: string; dropped: string[] } {
@@ -443,7 +561,42 @@ export function keptProse(text: string, scope: { allowedText: string }): { kept:
   return { kept: kept.join(" "), dropped };
 }
 
-/** The article: intro, each section's lead-in over its block, the conclusion with the business's next step, the FAQ last. */
+const PLACEHOLDER = /\{\{(r\d+)\}\}/g;
+/** v3.1: one prose paragraph with placeholders. The unit of deletion is the whole paragraph (batch 6's rule): a paragraph
+ * that states a raw figure, references an unknown record, overuses a fact, names something its records don't, or talks
+ * about the article is dropped whole and its facts fall back to the section's data block. */
+export function proseParagraphs(text: string, args: { pool: Record<string, { display: string; source: number; label?: string }>; scope: readonly ProseRecord[];
+  used: Map<string, number>; allowedText: string; limit?: number }): { kept: string; dropped: string[] } {
+  const paragraph = text.replace(/\s+/g, " ").trim();
+  if (!paragraph || /^\W*(?:placeholder|tbd|todo|to be written|n\/a|none|lorem ipsum)\W*$/i.test(paragraph) || paragraph.split(/\s+/).length < 3) {
+    return { kept: "", dropped: paragraph ? [paragraph] : [] };
+  }
+  const ids = [...paragraph.matchAll(PLACEHOLDER)].map((m) => m[1]);
+  const dropped: string[] = [];
+  const bad = (why: string) => { dropped.push(`${paragraph.slice(0, 120)} (${why})`); return { kept: "", dropped }; };
+  if (ids.some((id) => !args.pool[id])) return bad("a placeholder with no record");
+  const bare = paragraph.replace(PLACEHOLDER, " ");
+  if (statedNumbers(bare).length) return bad("a figure written in its own words");
+  for (const sentence of paragraph.split(/(?<=[.!?])\s+(?=["“(]?[A-Z0-9])/)) {
+    const plain = sentence.replace(/\*\*|__|`/g, "");
+    if (DEFLECTION.test(plain) || HOMEWORK.test(plain) || MAKING.test(plain) || COUNTED.test(plain) || /https?:\/\/|www\.|\.example\b/i.test(plain)) {
+      return bad("prose about the article or a reader sent elsewhere");
+    }
+  }
+  if (namedEntities(bare).some((name) => key(name).length >= 3 && !mentions(args.allowedText, name))) return bad("a name its records don't give");
+  const limit = args.limit ?? 2;
+  if (ids.some((id) => (args.used.get(id) ?? 0) >= limit)) return bad("a fact used too many times");
+  let kept = paragraph;
+  for (const id of new Set(ids)) {
+    args.used.set(id, (args.used.get(id) ?? 0) + ids.filter((x) => x === id).length);
+    const record = args.pool[id]!;
+    kept = kept.replaceAll(`{{${id}}}`, `${record.display}${cite(record.source)}`);
+  }
+  return { kept: kept.replace(/\s+([,.;:])/g, "$1").replace(/\(\s+/g, "(").replace(/\s+\)/g, ")").replace(/\s{2,}/g, " ").trim(), dropped: [] };
+}
+
+/** The article: intro, each section's paragraph over its block, the conclusion with the business's next step, the FAQ last.
+ * A section fact its paragraph never stated falls back to one line in the block (never a "label: quote" dump). */
 export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; records: VerifiedRecords; productName: string; profile: string;
   search: string; cta: { label: string; url: string } }): { markdown: string; dropped: string[] } {
   const dropped: string[] = [];
@@ -451,28 +604,41 @@ export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; recor
   const everything = recordText([...args.records.facts, ...args.records.faqs, ...args.records.options.flatMap((o) => [...o.prices, ...o.features, ...o.limits, ...o.extras])],
     [...args.records.options.map((o) => o.name), ...args.records.facts.map((f) => `${f.label} ${f.subject}`), args.productName, args.profile, args.search,
       ...args.skeleton.sections.map((s) => s.heading)]);
-  const keep = (text: string, allowedText: string) => { const r = keptProse(text, { allowedText }); dropped.push(...r.dropped); return r.kept; };
+  const used = new Map<string, number>();
+  const pool = args.skeleton.pool;
   const parts: string[] = [];
-  const intro = keep(args.prose.intro, everything);
-  if (intro) parts.push(intro);
+  const intro = proseParagraphs(args.prose.intro, { pool, scope: args.skeleton.intro, used, allowedText: everything });
+  dropped.push(...intro.dropped);
+  if (intro.kept) parts.push(intro.kept);
   for (const section of args.skeleton.sections) {
     const facts = args.records.facts.filter((f) => f.section === section.heading);
     const options = args.records.options.filter((o) => section.options.includes(o.name));
     const local = recordText([...facts, ...options.flatMap((o) => [...o.prices, ...o.features, ...o.limits, ...o.extras])],
       [...options.map((o) => o.name), ...facts.map((f) => `${f.label} ${f.subject}`), args.productName, args.search, section.heading]);
-    const lead = keep(args.prose.sections.find((s) => s.heading.trim().toLowerCase() === section.heading.toLowerCase())?.leadIn ?? "", local);
+    const paragraph = proseParagraphs(args.prose.sections.find((s) => s.heading.trim().toLowerCase() === section.heading.toLowerCase())?.paragraph ?? "",
+      { pool, scope: section.records, used, allowedText: local });
+    dropped.push(...paragraph.dropped);
+    // A section fact the paragraph never stated still reaches the reader, as one plain line (records are evidence; this is
+    // data, not a quote).
+    const fallback = section.records.filter((r) => !(used.get(r.id) ?? 0)).map((r) => `- **${r.label}:** ${r.value}${cite(r.source)}`);
     const body = section.body.replace(/\{\{SUITS:([^}]+)\}\}\n*/g, (_m, name: string) => {
       const option = options.find((o) => o.name === name);
-      const own = option ? recordText([...option.prices, ...option.features, ...option.limits, ...option.extras], [option.name, args.productName, args.search, option.business ? args.profile : ""]) : "";
-      const suits = option ? keep(args.prose.options.find((o) => key(o.name) === key(name))?.suits ?? "", own) : "";
-      return suits ? `${suits}\n\n` : "";
+      const ownPool: typeof pool = {};
+      if (option) for (const [id, entry] of Object.entries(pool)) if (entry.label === option.name) ownPool[id] = entry;
+      const ownScope: ProseRecord[] = Object.entries(ownPool).map(([id, entry]) => ({ id, label: entry.label, value: entry.display, source: entry.source }));
+      const suits = option ? proseParagraphs(args.prose.options.find((o) => key(o.name) === key(name))?.suits ?? "",
+        { pool: ownPool, scope: ownScope, used, allowedText: recordText([...option.prices, ...option.features, ...option.limits, ...option.extras], [option.name, args.productName, args.search, option.business ? args.profile : ""]) }) : { kept: "", dropped: [] as string[] };
+      dropped.push(...suits.dropped);
+      return suits.kept ? `${suits.kept}\n\n` : "";
     });
-    parts.push(`## ${section.heading}`, ...(lead ? [lead] : []), body);
+    // A heading with nothing left under it (its one record went to the intro, its table never formed) never prints.
+    if (paragraph.kept || body.trim() || fallback.length) parts.push(`## ${section.heading}`, ...(paragraph.kept ? [paragraph.kept] : []), ...(body.trim() ? [body] : []), ...fallback);
   }
-  const conclusion = keep(args.prose.conclusion, everything);
-  parts.push("## The bottom line", ...(conclusion ? [conclusion] : []), `[${args.cta.label}](${args.cta.url})`);
+  const conclusion = keptProse(args.prose.conclusion, { allowedText: everything });
+  dropped.push(...conclusion.dropped);
+  parts.push("## The bottom line", ...(conclusion.kept ? [conclusion.kept] : []), `[${args.cta.label}](${args.cta.url})`);
   if (args.skeleton.faq) parts.push(`## ${args.skeleton.faq.heading}`, args.skeleton.faq.body);
-  return { markdown: parts.join("\n\n").replace(/\n{3,}/g, "\n\n").trim(), dropped };
+  return { markdown: parts.filter((p) => p !== "").join("\n\n").replace(/\n{3,}/g, "\n\n").trim(), dropped };
 }
 
 /** Readable text of a fetched page around its figures (an owner's pricing, fee, rebate or rules page), for a records excerpt:

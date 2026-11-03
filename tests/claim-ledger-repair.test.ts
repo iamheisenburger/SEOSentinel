@@ -18,8 +18,10 @@ test("a sentence the snapshot does not support is deleted from the article and i
   assert.equal(before.passed, false);
   const repaired = repairClaimLedgerByDeletion({ markdown, productEvidence, productEvidenceHash: hash, claimEvidence });
   assert.equal(repaired.removed, 1);
-  assert.ok(!repaired.markdown.includes("VendorDock") && repaired.markdown.includes(own) && repaired.markdown.includes(advice), repaired.markdown);
-  assert.equal(repaired.claimEvidence[0].claim, own);
+  // v3.1 (batch 6, Cowork's A2): the deletion unit is the whole paragraph, so the supported own-sentence goes with the
+  // unsupported one and the ledger entry goes with its paragraph (never a halved paragraph left dangling).
+  assert.ok(!repaired.markdown.includes("VendorDock") && !repaired.markdown.includes(own) && repaired.markdown.includes(advice), repaired.markdown);
+  assert.deepEqual(repaired.claimEvidence, []);
   const after = validateClaimEvidenceLedger({ markdown: repaired.markdown, sources: [], researchEvidence: "", productEvidence, productEvidenceHash: hash, claimEvidence: repaired.claimEvidence });
   assert.equal(after.passed, true, after.issues.join("\n"));
 });

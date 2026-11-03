@@ -232,8 +232,9 @@ test("removes only audit-identified unsupported prose claims", () => {
     "Long website forms add friction and reduce visitor conversion.",
   ]);
 
+  // v3.1: the whole paragraph goes (batch 6's A2); the heading, links and the untouched list items and tables stay.
   assert.doesNotMatch(result, /Long forms create friction/);
-  assert.match(result, /A shorter form can be tested/);
+  assert.doesNotMatch(result, /A shorter form can be tested/);
   assert.match(result, /# Website conversion guide/);
   assert.match(result, /https:\/\/example\.com\/research/);
   assert.match(result, /Keep the existing qualification step/);
@@ -1311,7 +1312,8 @@ test("source-less correction removes only the unsupported quantified sentence", 
     removeUncitedQuantifiedSentences(
       "These are not dramatic gains. You will not 10x revenue. Focus on whether qualified conversations improve.",
     ),
-    "These are not dramatic gains. Focus on whether qualified conversations improve.",
+    "",
+    "v3.1: the flagged sentence takes its whole paragraph",
   );
   assert.equal(
     removeUncitedQuantifiedSentences(
@@ -2289,8 +2291,10 @@ test("pre-review pruning removes unsupported checkable claims and keeps advice, 
     "Pages that rank in positions 8 to 15 get 80% of clicks.",
     "Teams that do this convert 3x more visitors.",
   ]);
-  assert.match(pruned, /Start with the questions your customers already ask\. Harbor writes articles from confirmed business facts and publishes them to WordPress\.\n/,
-    "advice and the supported product fact stay, word for word");
+  // v3.1: the flagged "43% more traffic" sentence takes its whole paragraph, the supported product fact with it; the
+  // paragraph-level rule is why the pruned article keeps no halved openings.
+  assert.doesNotMatch(pruned, /43% more traffic/);
+  assert.doesNotMatch(pruned, /Start with the questions your customers already ask\./);
   assert.doesNotMatch(pruned, /## Numbers to ignore/, "a heading whose whole section was unsupported goes with it");
   assert.match(pruned, /- Write down what your customers call the problem\.\n\n\| Step \| Why \|/, "list items and tables keep their structure; tables are never edited");
   assert.equal(pruneUnsupportedEvidenceSentences({ markdown: "Start with your customers' own words.\n", productEvidence, productEvidenceHash }).removed.length, 0);

@@ -10,15 +10,20 @@ import { withPriceDate } from "../convex/lib/backedFacts.ts";
 
 const at = Date.UTC(2026, 10, 3);
 
-test("P294 a planned article's prices say when they were read", () => {
+test("P294 a planned article's prices say when they were read, inline beside the first price (v3.1)", () => {
   assert.equal(withPriceDate("Intro.\n\n## Compare the options\n\n### Tidio\n\n**Price:** $39 a month [2].", at),
-    "Intro.\n\n## Compare the options\n\nPrices as of November 2026.\n\n### Tidio\n\n**Price:** $39 a month [2].");
-  assert.equal(withPriceDate("Plans start at $12 a month [1].\n\n## Next\n\nMore.", at), "Prices as of November 2026.\n\nPlans start at $12 a month [1].\n\n## Next\n\nMore.");
+    "Intro.\n\n## Compare the options\n\n### Tidio\n\n**Price:** $39 (as of November 2026) a month [2].");
+  assert.equal(withPriceDate("Plans start at $12 a month [1].\n\n## Next\n\nMore.", at),
+    "Plans start at $12 (as of November 2026) a month [1].\n\n## Next\n\nMore.");
   for (const unchanged of ["Prices as of October 2026: $5 a month [1].", "No prices here.", "Text.\n\n## Sources\n\n1. A $9 page.", "```\nconst price = '$5';\n```"]) {
     assert.equal(withPriceDate(unchanged, at), unchanged);
   }
-  // P295 runs the empty-section and FAQ-order fixes in the same line, before the gate.
-  assert.match(readFileSync("convex/actions/pipeline.ts", "utf8"), /markdown: withPriceDate\(withFaqLast\(emptied\.markdown\), article\.createdAt \?\? Date\.now\(\)\) \};\n\s+const candidate = candidateFor\(fields\);/);
+  // v3.1 (batch 6): a standalone "Prices as of…" line the writer left is pipeline text and goes; the bank-reconciliation
+  // article carried one under "Documents you need", a section with no price.
+  assert.equal(withPriceDate("## Documents you need\n\nPrices as of November 2026.\n\nGather these.", at),
+    "## Documents you need\n\nGather these.");
+  // P295 runs the empty-section and FAQ-order fixes in the same line, before the gate; v3.1 renumbers citations after them.
+  assert.match(readFileSync("convex/actions/pipeline.ts", "utf8"), /markdown: renumberCitations\(withPriceDate\(withFaqLast\(emptied\.markdown\), article\.createdAt \?\? Date\.now\(\)\)\) \};\n\s+const candidate = candidateFor\(fields\);/);
 });
 
 test("P294 an owner's held planned draft gets the next topic once, never a third draft", () => {

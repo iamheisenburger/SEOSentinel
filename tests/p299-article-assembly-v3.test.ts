@@ -58,7 +58,7 @@ test("P299 assembly is off unless PENTRA_ASSEMBLY_V3 names the format: lists and
   assert.equal(assembledFormat("on", "list"), true);
   assert.equal(assembledFormat("on", "guide"), true);
   assert.equal(assembledFormat("on", "comparison"), true);
-  assert.equal(assembledFormat("on", "how-to"), false, "a how-to only when named (research gives snippets of a procedure, not its order)");
+  assert.equal(assembledFormat("on", "how-to"), true, "a how-to reads its procedure page's own ordered list");
   assert.equal(assembledFormat("list,how-to", "how-to"), true);
   assert.equal(assembledFormat("on", "tutorial"), false, "a format without renderers keeps the writer");
   assert.equal(assembledFormat("list", "guide"), false);
@@ -80,19 +80,28 @@ test("P299 code keeps a record only when its quote is in its excerpt and states 
   assert.deepEqual(v.faqs.map((f) => f.question), ["Do I need a permit for a water heater in Austin?"], "an answer that sends the reader elsewhere goes");
 });
 
-test("P299 code prints every fact once, a section with no record has no heading, prices are dated, the FAQ is last", () => {
+test("P299 code prints every fact once, a section with no record has no heading, prices are dated in the table header, the FAQ is last", () => {
   const v = verified();
   const skeleton = skeletonFor({ format: "list", sections, records: v, sources, readAt: Date.UTC(2026, 10, 3) });
   assert.deepEqual(skeleton.sections.map((s) => s.heading), ["Best yoga scheduling software options compared", "Permits and inspections"],
     "no heading for 'Why studios switch': it has no record");
   const list = skeleton.sections[0].body;
-  assert.match(list, /^Prices as of November 2026\.\n\n\| Option \| Starting price \|\n\| --- \| --- \|\n\| StudioFlow \| \$59 a month per studio \|\n\| \[Mindbody\]\(https:\/\/www\.mindbodyonline\.com\) \| \$139\/month billed monthly \(Starter plan\) \[1\] \|\n\| \[Momence\]\(https:\/\/www\.momence\.com\) \| \$89 per month \(Basic plan\) \[3\] \|/);
+  // v3.1: the date rides in the table header (never a standalone line), the business's own product lists last, and an
+  // option with no price of its own shows "No public price" (Vagaro's "$30" has no currency: not a price).
+  assert.match(list, /^\| Option \| Starting price \(as of November 2026\) \|\n\| --- \| --- \|\n\| \[Mindbody\]\(https:\/\/www\.mindbodyonline\.com\) \| \$139\/month billed monthly \(Starter plan\) \[1\] \|\n\| \[Momence\]\(https:\/\/www\.momence\.com\) \| \$89 per month \(Basic plan\) \[3\] \|\n\| \[Vagaro\]\(https:\/\/www\.vagaro\.com\) \| No public price \|\n\| StudioFlow \| \$59 a month per studio \|$/m);
   assert.equal(list.match(/\$139/g)!.length, 1, "the starting price is in the table only");
   assert.match(list, /### Mindbody\n\n\{\{SUITS:Mindbody\}\}\n\n- \*\*Accelerate:\*\* \$279\/month \[1\]\n- Online booking, waitlists and class packs on every plan \[1\]/);
-  assert.match(skeleton.sections[1].body, /^Prices and fees as of November 2026\.\n\n- \*\*Water heater permit, City of Austin:\*\* \$125 \[5\]\n- \*\*Inspection:\*\* required within 30 days of the permit \[5\]$/);
+  assert.doesNotMatch(skeleton.sections.map((s) => s.body).join("\n"), /^Prices as of /m, "no standalone dating line anywhere");
+  // v3.1: a section's facts are prose records (placeholders), not label: quote bullets; two or more money facts make a
+  // table whose header carries "as of".
+  const permits = skeleton.sections[1];
+  assert.equal(permits.body, "", "one fee and one rule: no table, two prose records");
+  assert.deepEqual(permits.records.map((r) => r.value), ["$125", "required within 30 days of the permit"]);
+  assert.equal(permits.records[0].id.startsWith("r"), true);
   assert.equal(skeleton.faq!.body, "### Do I need a permit for a water heater in Austin?\n\nYes. A water heater permit in Austin costs $125 [5].");
   assert.equal(priceWithBilling("$12", "a month"), "$12 a month");
   assert.equal(priceWithBilling("$6.99", "/mo"), "$6.99/mo");
+  assert.equal(priceWithBilling("$55", "PER MONTH"), "$55 per month", "a page's shouting is decased");
 });
 
 test("P299 code drops a prose sentence with a figure or a name its records don't give, homework, or talk about the records", () => {
@@ -111,8 +120,8 @@ test("P299 an assembled article passes Pentra's gate with nothing blocking and n
     intro: "The right scheduling software decides how easily students book, how often they come back and how much admin fills your week. " +
       "A small studio needs a schedule students can read on a phone, simple ways to sell drop-ins, packs and memberships, and reminders that cut no-shows. " +
       "Below, each option's starting price and what it includes sit side by side, followed by who each one suits, so you can shortlist the tools that fit how you already teach and sell classes.",
-    sections: [{ heading: "Best yoga scheduling software options compared", leadIn: "The table compares starting prices; each entry below says what the plan includes." },
-      { heading: "Permits and inspections", leadIn: "If your studio is moving into a new space, these are the rules that apply." }],
+    sections: [{ heading: "Best yoga scheduling software options compared", paragraph: "The table compares starting prices; each entry below says what the plan includes." },
+      { heading: "Permits and inspections", paragraph: "If your studio is moving into a new space, a water heater permit there costs {{r3}}, and the inspection that follows it is {{r4}}." }],
     options: [{ name: "Mindbody", suits: "Mindbody suits studios that want booking, waitlists and class packs in one place." },
       { name: "Momence", suits: "Momence suits studios that stream classes or sell on-demand video." },
       { name: "Vagaro", suits: "Vagaro suits studios that want a marketplace listing next to online booking." },
@@ -124,6 +133,7 @@ test("P299 an assembled article passes Pentra's gate with nothing blocking and n
     cta: { label: "Try StudioFlow", url: "https://studioflow.example" } });
   assert.ok(built.markdown.indexOf("## The bottom line") < built.markdown.indexOf("## Frequently asked questions"), "the FAQ is last");
   assert.match(built.markdown, /### Momence\n\nMomence suits studios that stream classes or sell on-demand video\.\n\n- Livestream and on-demand video on every plan \[3\]/);
+  assert.match(built.markdown, /a water heater permit there costs \$125 \[5\]/, "v3.1: a placeholder fills with its record's value and citation");
   const hashed = sources.map((s) => ({ ...s, contentHash: createHash("sha256").update(s.excerpt).digest("hex") }));
   const markdown = withSourcesSection(built.markdown, hashed);
   const article = { title: prose.title, slug: "/best-scheduling-software-for-yoga-studios", articleType: "listicle", markdown, metaTitle: prose.metaTitle,
@@ -188,7 +198,11 @@ test("P299 a comparison's attributes stated for both sides form one side-by-side
   assert.deepEqual(skeleton.sections.map((s) => s.heading), ["Ceramic vs cast iron at a glance", "Care"], "sections whose facts all went into the table have no heading");
   assert.equal(skeleton.sections[0].body, "| | Ceramic cookware | Cast iron cookware |\n| --- | --- | --- |\n| Maximum oven temperature | 500°F [1] | no limit [2] |\n" +
     "| Weight of a 10-inch skillet | 2.5 lb [1] | 5 lb [2] |");
-  assert.equal(skeleton.sections[1].body, "- **Cast iron cookware, seasoning:** needs seasoning [2]", "a single-side fact names its side");
+  // v3.1: a single-side fact is a prose record for its section (the model writes "cast iron needs seasoning" with the
+  // placeholder), never a printed "label: quote" row.
+  assert.equal(skeleton.sections[1].body, "");
+  assert.deepEqual(skeleton.sections[1].records.map((r) => r.value), ["needs seasoning"]);
+  assert.match(skeleton.sections[1].records[0].label, /cast iron/i, "the record's label carries its side");
 });
 
 test("P299 batch 6's second run: the business's price keeps its period, labels lose the option's name cleanly, prose never counts options", async () => {
@@ -214,7 +228,10 @@ test("P299 a comparison's single-side fact names its side", () => {
   const skeleton = skeletonFor({ format: "comparison", sections: ["Durability and lifespan"], sources: [{ url: "https://a.example", excerpt: "" }], readAt: Date.UTC(2026, 10, 3), sides,
     records: { options: [], faqs: [], dropped: [], facts: [{ section: "Durability and lifespan", subject: "ceramic cookware", kind: "duration", label: "Typical lifespan",
       value: "up to three years", quote: "q", source: 1 }] } });
-  assert.equal(skeleton.sections[0].body, "- **Ceramic cookware, typical lifespan:** up to three years [1]");
+  // v3.1: the single-side fact is a prose record for its section, never a printed "label: quote" row.
+  assert.equal(skeleton.sections[0].body, "");
+  assert.deepEqual(skeleton.sections[0].records.map((r) => r.value), ["up to three years"]);
+  assert.match(skeleton.sections[0].records[0].label, /ceramic cookware/i, "the record's label carries its side");
 });
 
 test("P299 a how-to's steps come from one source, in that source's own order, numbered by code", () => {
@@ -234,4 +251,35 @@ test("P299 a how-to's steps come from one source, in that source's own order, nu
   const skeleton = skeletonFor({ format: "how-to", sections: ["How to winterize step by step"], records: v, sources, readAt: Date.UTC(2026, 10, 3) });
   assert.equal(skeleton.sections[0].body, "1. Shut off the water supply at the main valve [1]\n2. Set the controller to rain mode [1]\n" +
     "3. Connect an air compressor to the blow-out port [1]\n4. Open each zone one at a time [1]");
+});
+
+test("P299 a how-to reads each procedure page's own ordered list; each section's procedure is numbered on its own", async () => {
+  const { orderedStepsText } = await import("../convex/lib/articleAssembly.ts");
+  const html = "<h2>Drain</h2><ol><li>Turn off the mainline shutoff valve.</li><li>Open one control valve to relieve pressure.</li><li>Slowly open the manual drain valve.</li></ol>" +
+    "<h2>Blow out</h2><ol><li>Close the mainline sprinkler shutoff valve.</li><li>Attach the air compressor hose to a blow-out adapter.</li><li>Set the pressure regulating valve to 50 psi.</li></ol>";
+  assert.equal(orderedStepsText(html), "1. Turn off the mainline shutoff valve. 2. Open one control valve to relieve pressure. 3. Slowly open the manual drain valve. … " +
+    "1. Close the mainline sprinkler shutoff valve. 2. Attach the air compressor hose to a blow-out adapter. 3. Set the pressure regulating valve to 50 psi.");
+  const excerpt = orderedStepsText(html);
+  const sources = [{ url: "https://www.rainbird.com/blog/blow-out", title: "Rain Bird", excerpt }];
+  const step = (section: string, s: string) => ({ section, step: s, quote: s, source: 1 });
+  const v = verifiedRecords({ options: [], facts: [], faqs: [], steps: [step("Blow out the lines", "Set the pressure regulating valve to 50 psi."),
+    step("Drain the system", "Turn off the mainline shutoff valve."), step("Blow out the lines", "Close the mainline sprinkler shutoff valve."),
+    step("Drain the system", "Slowly open the manual drain valve.")] },
+    { sources, profile: "", productName: "Greenline", competitors: [], sections: ["Drain the system", "Blow out the lines"] });
+  const skeleton = skeletonFor({ format: "how-to", sections: ["Drain the system", "Blow out the lines"], records: v, sources, readAt: Date.UTC(2026, 10, 3) });
+  assert.deepEqual(skeleton.sections.map((s) => s.body), ["1. Turn off the mainline shutoff valve [1]\n2. Slowly open the manual drain valve [1]",
+    "1. Close the mainline sprinkler shutoff valve [1]\n2. Set the pressure regulating valve to 50 psi [1]"], "two procedures, each in its page's order");
+});
+
+test("P299 one procedure split over sections keeps counting; a second procedure starts again at 1", () => {
+  const excerpt = "1. Gather the records. 2. Check the statement itself. 3. Match transactions. 4. List the differences. 5. Calculate the adjusted balances. 6. Post entries and document. … 1. Close the shutoff valve. 2. Open the drain valve.";
+  const sources = [{ url: "https://a.example/reconcile", title: "Guide", excerpt }];
+  const step = (section: string, s: string) => ({ section, step: s, quote: s, source: 1 });
+  const sections = ["Steps", "Calculate the adjusted balance", "Record adjusting entries", "Draining"];
+  const v = verifiedRecords({ options: [], facts: [], faqs: [], steps: [step("Steps", "Gather the records."), step("Steps", "Match transactions."),
+    step("Calculate the adjusted balance", "Calculate the adjusted balances."), step("Record adjusting entries", "Post entries and document."),
+    step("Draining", "Close the shutoff valve."), step("Draining", "Open the drain valve.")] }, { sources, profile: "", productName: "Brightline", competitors: [], sections });
+  const skeleton = skeletonFor({ format: "how-to", sections, records: v, sources, readAt: Date.UTC(2026, 10, 3) });
+  assert.deepEqual(skeleton.sections.map((s) => s.body), ["1. Gather the records [1]\n2. Match transactions [1]", "3. Calculate the adjusted balances [1]",
+    "4. Post entries and document [1]", "1. Close the shutoff valve [1]\n2. Open the drain valve [1]"]);
 });

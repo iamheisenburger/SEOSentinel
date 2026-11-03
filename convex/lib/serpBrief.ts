@@ -6,13 +6,17 @@ import { v } from "convex/values";
  * brief is read once per topic and kept (topic_clusters.serpBrief), so retries and revisions see the same results. */
 /** P260: what one of the top results contains, read from its page: its H2/H3 headings, visible words, code blocks,
  * tables and list items. */
-export type SerpPage = { url: string; headings: string[]; words: number; codeBlocks: number; tables: number; items: number };
+export type SerpPage = { url: string; headings: string[]; words: number; codeBlocks: number; tables: number; items: number;
+  /** v3.1 (Nov 3 2026, R3): product names a listicle names in its entries (bold or link leads of list items), so a list's
+   * options are the union of what the top results name, not what one research run kept. */
+  names?: string[] };
 export type SerpBrief = { observedAt: number; locationCode: number; languageCode: string; format: string;
   results: { title: string; url: string; description?: string }[]; questions: string[]; pages?: SerpPage[];
   /** P268: how the fixed plan read Google (2: advanced results with People Also Ask, goto links recovered). */
   reader?: number };
 
-const serpPageValidator = v.object({ url: v.string(), headings: v.array(v.string()), words: v.number(), codeBlocks: v.number(), tables: v.number(), items: v.number() });
+const serpPageValidator = v.object({ url: v.string(), headings: v.array(v.string()), words: v.number(), codeBlocks: v.number(), tables: v.number(), items: v.number(),
+  names: v.optional(v.array(v.string())) });
 export const serpBriefValidator = v.object({ observedAt: v.number(), locationCode: v.number(), languageCode: v.string(), format: v.string(),
   results: v.array(v.object({ title: v.string(), url: v.string(), description: v.optional(v.string()) })), questions: v.array(v.string()),
   pages: v.optional(v.array(serpPageValidator)), reader: v.optional(v.number()) });
@@ -79,8 +83,12 @@ export function pageShape(url: string, html: string): SerpPage {
   const clean = html.replace(/<(script|style|noscript|svg|nav|header|footer|aside|form)\b[\s\S]*?<\/\1>/gi, " ");
   const main = /<(main|article)\b[\s\S]*?<\/\1>/i.exec(clean)?.[0] ?? /<body\b[\s\S]*<\/body>/i.exec(clean)?.[0] ?? clean;
   const headings = [...main.matchAll(/<h([23])\b[^>]*>([\s\S]*?)<\/h\1>/gi)].map((m) => text(m[2]).slice(0, 100)).filter((h) => h.length > 1).slice(0, 24);
+  // A listicle names its options in the bold or link lead of each entry ("**WellnessLiving** — …", "<a>Wave</a>: free").
+  const names = [...main.matchAll(/<li\b[^>]*>\s*(?:<p>\s*)?<(?:strong|b|a)\b[^>]*>([\s\S]{2,60}?)<\/(?:strong|b|a)>/gi)]
+    .map((m) => text(m[1]).replace(/[:–—-]\s*.*$/, "").trim()).filter((n) => n.length > 1).slice(0, 30);
   return { url, headings, words: text(main).split(" ").filter(Boolean).length, codeBlocks: (main.match(/<pre\b/gi) ?? []).length,
-    tables: (main.match(/<table\b/gi) ?? []).length, items: (main.match(/<li\b/gi) ?? []).length };
+    tables: (main.match(/<table\b/gi) ?? []).length, items: (main.match(/<li\b/gi) ?? []).length,
+    ...(names.length ? { names } : {}) };
 }
 
 /** The format most of the top results share, decided in code: a comparison (versus titles or tables), a list (counted
@@ -114,13 +122,14 @@ export function planFormat(brief: Pick<SerpBrief, "results" | "pages">, asksForP
 
 const NOT_AN_OPTION = /^(?:what|why|how|when|where|which|who|best|top|our|the|a|an|is|are|do|does|can|should|conclusion|summary|final|faqs?|frequently|pricing|prices?|features?|pros|cons|overview|introduction|methodology|key|comparison|compare|table|related|bottom|verdict|choosing|choose|benefits?|alternatives?|other|more|free|paid|why|tips?|step|steps|getting|get|start|sign|book|contact|about|reviews?|rating|ratings|honorable|wrapping|editor|editors|in|for|with|and|to|online|class|classes|scheduling|software|booking|payment|payments|customer|support|integrations?|reporting|marketing|membership|memberships|mobile|apps?|ease|value|security|setup|onboarding|cost|costs|plans?)\b/i;
 /** P262 (Oct 31 2026): the options a list search's top results name, from their own headings ("1. Mindbody", "Momence: best
- * for…", "WellnessLiving"), most named first. Live trial: "best scheduling software for yoga studios" named 3 options, because
- * research kept only two vendors' help pages and the fact sheet rule allows only the options it holds. */
+ * for…", "WellnessLiving") and the bold or link leads of their entries, most named first. Live trial: "best scheduling
+ * software for yoga studios" named 3 options, because research kept only two vendors' help pages and the fact sheet rule
+ * allows only the options it holds. */
 export function listedOptions(brief: Pick<SerpBrief, "pages">, limit = 10): string[] {
   const counts = new Map<string, { name: string; pages: number; first: number }>();
   (brief.pages ?? []).forEach((page, pageIndex) => {
     const found = new Map<string, string>();
-    for (const heading of page.headings) {
+    for (const heading of [...page.headings, ...(page.names ?? [])]) {
       const name = heading.replace(/^\s*(?:#?\d+[.):]?|[-•*])\s+/, "").split(/\s*(?::|–|—| - |\(|\||,| vs\.? )\s*/)[0].trim();
       const words = name.split(/\s+/);
       if (!name || words.length > 3 || NOT_AN_OPTION.test(name) || !words.every((w) => /^(?:[A-Z0-9][A-Za-z0-9.&'+-]*|of|and|for|by)$/.test(w)) ||

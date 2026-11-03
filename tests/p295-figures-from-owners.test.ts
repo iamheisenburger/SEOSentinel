@@ -37,7 +37,9 @@ test("P295 fix 2: a figure heading over no figure goes, and so does a column of 
   assert.match(out.markdown, /## Installed cost in Austin\n\nGas units run/);
   assert.doesNotMatch(out.markdown, /## Rebates and incentives|How much does a permit cost/);
   assert.match(out.markdown, /### Is a permit required\?/);
-  assert.match(out.markdown, /\| Option \| Price \|\n\| --- \| --- \|\n\| Cast iron \| \$50 \[3\] \|/);
+  // v3.1 (batch 6, Cowork's A3): a column of dashes takes the whole table with it — never a column or a cell (the
+  // bank-reconciliation payout example lost its Credit column and stopped balancing).
+  assert.doesNotMatch(out.markdown, /\| Option \||Cast iron/);
   assert.match(out.markdown, /## Sources\n\n1\. Rebates and incentives$/, "Sources are never edited");
 });
 
@@ -58,5 +60,5 @@ test("P295 fix 5: the FAQ is the last section; the plan's review applies fixes 2
   assert.equal(withFaqLast(md), "Intro.\n\n## Steps\n\nDo it.\n\n## Spring start-up\n\nOpen the valve.\n\n## FAQ\n\n### Q?\n\nA.\n\n## Sources\n\n1. A");
   assert.equal(withFaqLast("Intro.\n\n## FAQ\n\nA.\n\n## Sources\n\n1. A"), "Intro.\n\n## FAQ\n\nA.\n\n## Sources\n\n1. A");
   assert.match(readFileSync("convex/actions/pipeline.ts", "utf8"),
-    /fields = \{ \.\.\.fields, markdown: withPriceDate\(withFaqLast\(emptied\.markdown\), article\.createdAt \?\? Date\.now\(\)\) \};\n\s+const candidate = candidateFor\(fields\);/);
+    /fields = \{ \.\.\.fields, markdown: renumberCitations\(withPriceDate\(withFaqLast\(emptied\.markdown\), article\.createdAt \?\? Date\.now\(\)\)\) \};\n\s+const candidate = candidateFor\(fields\);/);
 });

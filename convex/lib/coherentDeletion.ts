@@ -6,28 +6,24 @@
  * 2026, LeadPilot): a numbered list skipping step 2, a paragraph whose opening
  * sentence is gone ("The engine replies..." with no engine introduced), a
  * quotation cut in half, a "This means..." pointing at nothing. Those drafts
- * scored 52-62 and never published. Every deletion therefore passes these
- * checks; a sentence that cannot be deleted cleanly is HELD (left exactly as
- * written) so the fail-closed review still sees it and the writer rewrites the
- * passage instead. Headings, tables, code, comments and source rows are never
- * edited. */
+ * scored 52-62 and never published.
+ *
+ * v3.1 (Cowork's batch 6 order): the deletion unit is the WHOLE paragraph or
+ * list item, never a sentence inside it — rewriting the remainder of a
+ * paragraph whose other half was deleted is what orphaned batch 6's steps and
+ * definitions ("Add one if it doesn't"). A line with any flagged sentence goes
+ * whole, under the same holds as before (numbered steps, bold labels, FAQ
+ * question pairing), and a ":" paragraph whose introduced block went with it,
+ * or a heading left with nothing under it, goes too. Headings, tables, code,
+ * comments and source rows are never edited. */
 
-export const SENTENCE_SPLIT = /(?<=[.!?])\s+(?=[A-Z*"'\[“‘])/;
+export const SENTENCE_SPLIT = /(?<=[.!?])\s+(?=[A-Z*”’\[“‘])/;
 export const LIST_PREFIX = /^(\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+|>\s*)?)/;
 const ORDERED_ITEM = /^\s*\d+[.)]\s+/;
 /** A sentence opening like this depends on the sentence or block before it. */
-const LEANS_ON_PREVIOUS = /^(?:\*\*[^*]{1,80}\*\*[:.]?\s*)?["“'‘(]?(?:this|that|these|those|it|its|it's|they|they're|their|them|such|both|another|also|however|but|and|or|so|then|thus|therefore|instead|otherwise|still|yet|meanwhile|likewise|similarly|in that case|as a result|for example|for instance|in other words|that's|here's why|even so|at that point|from there)\b/i;
-const BOLD_LEAD_IN_ONLY = /^(?:\*\*[^*]+\*\*|__[^_]+__)[:.]?$/;
-/** A block's bold lead-in label ("**Step 2:** ...", "**Pricing.** ..."). The
- * sentence splitter keeps it with the first sentence, so deleting that
- * sentence would delete the label (Oct 18 2026: a test design jumped from
- * Step 1 to Step 3). */
-const BOLD_LEAD_IN = /^\s*(?:\*\*[^*\n]{1,80}\*\*|__[^_\n]{1,80}__)/;
+const LEANS_ON_PREVIOUS = /^(?:\*\*[^*]{1,80}\*\*[:.]?\s*)?[““’‘(]?(?:this|that|these|those|it|its|it’s|they|they’re|their|them|such|both|another|also|however|but|and|or|so|then|thus|therefore|instead|otherwise|still|yet|meanwhile|likewise|similarly|in that case|as a result|for example|for instance|in other words|that’s|here’s why|even so|at that point|from there)\b/i;
 /** A bold label that numbers a step of a sequence: its block is never dropped. */
 const NUMBERED_BOLD_LABEL = /^\s*(?:\*\*|__)\s*(?:(?:step|phase|stage|part|day|week|module|lesson|tip|mistake|reason|way|method|option)\s*#?\d+|\d+[.):])/i;
-/** Inside a paragraph, "The engine replies..." right after a deleted sentence
- * usually names something that sentence introduced. */
-const DEFINITE_REFERENCE = /^(?:\*\*[^*]{1,80}\*\*[:.]?\s*)?["“'‘(]?the\b/i;
 /** A heading that is one step of a sequence: dropping its section leaves a gap. */
 const NUMBERED_HEADING = /^\s*#{1,6}\s+(?:(?:step|phase|stage|part|day|week|module|lesson|tip|mistake|reason|way|method|option)\s*#?\d+|\d+[.):]\s)/i;
 
@@ -35,10 +31,6 @@ export type CoherentDeletion = { markdown: string; removed: string[]; held: stri
 
 function editable(line: string) {
   return Boolean(line.trim()) && !/^\s*(?:#|\||<!--)/.test(line) && !/^\s*[-*]\s+https?:\/\//i.test(line);
-}
-
-function quotesBalanced(text: string) {
-  return (text.match(/"/g) ?? []).length % 2 === 0 && (text.match(/“/g) ?? []).length === (text.match(/”/g) ?? []).length;
 }
 
 /** The body of the next prose line after `index` within the same section, if any. */
@@ -124,47 +116,57 @@ export function deleteSentencesCoherently(
     if (!flagged.some(Boolean)) continue;
     const flaggedText = segments.filter((_, k) => flagged[k]).map((s) => s.trim());
     const hold = () => { heldAt[i] = flaggedText; };
-    if (flagged.every(Boolean)) {
-      // A whole block goes only when nothing depends on it: never a numbered
-      // step, never the last content under a heading, never a block the next
-      // one refers back to.
-      const next = nextProseBody(lines, i, fence);
-      // P289 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md hole 3): an FAQ answer left with nothing goes with its question.
-      const question = options.dropStrandedQuestion && answersPreviousQuestion(lines, i) && !ORDERED_ITEM.test(line) &&
-        !(next !== undefined && LEANS_ON_PREVIOUS.test(next)) ? previousContentLine(lines, i) : -1;
-      if (question >= 0) { lines[question] = ""; lines[i] = ""; removedAt[i] = flaggedText; continue; }
-      if (ORDERED_ITEM.test(line) || NUMBERED_BOLD_LABEL.test(line.slice(prefix.length)) ||
-        (next !== undefined && LEANS_ON_PREVIOUS.test(next)) || lastItemOfIntroducedList(lines, i) ||
-        answersPreviousQuestion(lines, i)) { hold(); continue; }
-      if (onlyContentInSection(lines, i)) {
-        // The section's only content: the section goes with it (heading
-        // included, unless subsections follow), except a numbered step or
-        // the article's introduction.
-        let h = i - 1;
-        while (h >= 0 && !headingLevel(lines[h])) h--;
-        let n = i + 1;
-        while (n < lines.length && !headingLevel(lines[n])) n++;
-        const subsections = h >= 0 && n < lines.length && headingLevel(lines[n]) > headingLevel(lines[h]);
-        const introduction = h < 0 && lines.some((other, k) => k !== i && other.trim());
-        if (introduction || (h >= 0 && NUMBERED_HEADING.test(lines[h]) && !subsections)) { hold(); continue; }
-        if (h >= 0 && !subsections) lines[h] = "";
-      }
-      lines[i] = "";
-      removedAt[i] = flaggedText;
-      continue;
+    // v3.1: the whole paragraph or list item goes (never a sentence inside it), under the same holds as a full block.
+    if (!flagged.every(Boolean) && (ORDERED_ITEM.test(line) || NUMBERED_BOLD_LABEL.test(line.slice(prefix.length)))) { hold(); continue; }
+    // A whole block goes only when nothing depends on it: never the last content under a heading, never a block the next
+    // one refers back to.
+    const next = nextProseBody(lines, i, fence);
+    // P289 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md hole 3): an FAQ answer left with nothing goes with its question.
+    const question = options.dropStrandedQuestion && answersPreviousQuestion(lines, i) && !ORDERED_ITEM.test(line) &&
+      !(next !== undefined && LEANS_ON_PREVIOUS.test(next)) ? previousContentLine(lines, i) : -1;
+    if (question >= 0) { lines[question] = ""; lines[i] = ""; removedAt[i] = flaggedText; continue; }
+    if (flagged.every(Boolean) && (ORDERED_ITEM.test(line) || NUMBERED_BOLD_LABEL.test(line.slice(prefix.length)) ||
+      (next !== undefined && LEANS_ON_PREVIOUS.test(next)) || lastItemOfIntroducedList(lines, i) ||
+      answersPreviousQuestion(lines, i))) { hold(); continue; }
+    if (onlyContentInSection(lines, i)) {
+      // The section's only content: the section goes with it (heading
+      // included, unless subsections follow), except a numbered step or
+      // the article's introduction.
+      let h = i - 1;
+      while (h >= 0 && !headingLevel(lines[h])) h--;
+      let n = i + 1;
+      while (n < lines.length && !headingLevel(lines[n])) n++;
+      const subsections = h >= 0 && n < lines.length && headingLevel(lines[n]) > headingLevel(lines[h]);
+      const introduction = h < 0 && lines.some((other, k) => k !== i && other.trim());
+      if (introduction || (h >= 0 && NUMBERED_HEADING.test(lines[h]) && !subsections)) { hold(); continue; }
+      if (h >= 0 && !subsections) lines[h] = "";
     }
-    // Part of a block: never cut a quotation or the block's bold label, never
-    // strand a sentence that refers back to (or names something introduced by)
-    // a deleted one.
-    if (flaggedText.some((s) => !quotesBalanced(s)) || segments.some((s, k) => flagged[k] && BOLD_LEAD_IN.test(s)) ||
-      segments.some((s, k) => k > 0 && !flagged[k] && flagged[k - 1] && (LEANS_ON_PREVIOUS.test(s.trim()) || DEFINITE_REFERENCE.test(s.trim())))) { hold(); continue; }
-    const kept = segments.filter((_, k) => !flagged[k]).join(" ").trim();
-    if (!kept || BOLD_LEAD_IN_ONLY.test(kept)) { hold(); continue; }
-    lines[i] = `${prefix}${kept}`;
+    lines[i] = "";
     removedAt[i] = flaggedText;
+  }
+  // v3.1 cascades: a ":" paragraph whose introduced list or table went with it, and a heading left with nothing under it.
+  if (removedAt.some((x) => x)) {
+    for (let i = 0; i < lines.length; i++) {
+      const text = lines[i].trim();
+      if (!text || headingLevel(lines[i]) || /^\s*(?:\||```)/.test(lines[i]) || !/:\s*$/.test(text)) continue;
+      let j = i + 1;
+      while (j < lines.length && !lines[j].trim()) j++;
+      if (j >= lines.length || headingLevel(lines[j]) || fence[j]) lines[i] = "";
+    }
+    for (let i = 0; i < lines.length; i++) {
+      const h = headingLevel(lines[i]);
+      if (!h || h === 1) continue;
+      let j = i + 1, empty = true;
+      for (; j < lines.length; j++) {
+        const level = headingLevel(lines[j]);
+        if (level && level <= h) break;
+        if (lines[j].trim()) { empty = false; break; }
+      }
+      if (empty) lines[i] = "";
+    }
   }
   // Reported in document order.
   const removed = removedAt.flatMap((x) => x ?? []), held = heldAt.flatMap((x) => x ?? []);
   if (!removed.length) return { markdown, removed, held };
-  return { markdown: lines.join("\n").replace(/\n{3,}/g, "\n\n"), removed, held };
+  return { markdown: lines.join("\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+/, ""), removed, held };
 }

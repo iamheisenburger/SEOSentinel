@@ -15,21 +15,23 @@ const sources = [
 const input = { sources, profile: "Name: Cedar Ridge Plumbing\nEstimates are free.", allowedNames: ["Cedar Ridge Plumbing", "Austin"], topic: "tankless water heater installation austin" };
 const run = (markdown: string, extra = {}) => backedFactsOnly(markdown, { ...input, ...extra });
 
-test("P289 a number its cited source states stays; one it doesn't, or an uncited one, goes", () => {
+test("P289 a number its cited source states stays; one it doesn't goes, and v3.1 takes its whole paragraph with it", () => {
   const out = run([
     "Gas units cost $2,100 to $5,600 installed [1]. Most jobs take 9 hours [1]. Pino's default level is 30 [3].",
     "",
-    "Permits in town cost $119. Cedar Ridge Plumbing gives free estimates.",
+    "Permits in town cost $119.",
+    "",
+    "Cedar Ridge Plumbing gives free estimates.",
   ].join("\n"));
-  assert.match(out.markdown, /Gas units cost \$2,100 to \$5,600 installed \[1\]\./);
-  assert.match(out.markdown, /Pino's default level is 30 \[3\]\./);
-  assert.doesNotMatch(out.markdown, /9 hours|\$119/);
+  // v3.1 (batch 6, Cowork's A2): the deletion unit is the whole paragraph — batch 5's halved paragraphs left dangling
+  // sentences. A backed sentence that shared its paragraph with an unbacked one goes with it; the one fix refills coverage.
+  assert.doesNotMatch(out.markdown, /9 hours|\$119|Gas units|Pino's default/);
   assert.match(out.markdown, /Cedar Ridge Plumbing gives free estimates\./, "the business's own facts need no citation");
   assert.deepEqual(out.removed.map((r) => r.reason).sort(), ["number", "number"]);
 });
 
 test("P289 the right number under the wrong company goes (hole 2)", () => {
-  const out = run("Austin Energy pays a $400 rebate for tankless heaters [1]. Texas Gas Service pays a $400 rebate [1].");
+  const out = run("Austin Energy pays a $400 rebate for tankless heaters [1].\n\nTexas Gas Service pays a $400 rebate [1].");
   assert.doesNotMatch(out.markdown, /Austin Energy/);
   assert.match(out.markdown, /Texas Gas Service pays a \$400 rebate \[1\]\./);
   assert.deepEqual(out.removed.map((r) => r.reason), ["name"]);

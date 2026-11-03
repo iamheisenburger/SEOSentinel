@@ -14,7 +14,7 @@
 import { deleteSentencesCoherently, LIST_PREFIX, SENTENCE_SPLIT } from "./coherentDeletion.ts";
 import { DEFLECTION, exampleSections, illustrativeNumbers, namesOutsideSources, numberStated, prose, repeatedPassages, SOURCES_HEADING, statedNumbers, words } from "./articlePlanChecks.ts";
 
-export type BackingSource = { text: string };
+export type BackingSource = { text: string; url?: string };
 export type BackingInput = {
   /** In citation order: [1] is sources[0]. */
   sources: readonly BackingSource[];
@@ -222,6 +222,34 @@ export function backedFactsOnly(article: string, input: BackingInput): { markdow
   const flagged = (input.unbacked ?? []).map((s) => lower(prose(s)).replace(/\s+/g, " ").trim()).filter((s) => s.length >= 12);
   const wrong = (input.wrongClaims ?? []).map((s) => lower(prose(s)).replace(/\s+/g, " ").trim()).filter((s) => s.length >= 12);
   const blockCitations = lineCitations(text);
+  // v3.1 (batch 6, R8): the local authority's figure wins a unit conflict. Batch 6's sprinkler how-to printed Rain Bird's
+  // "regulate to 75–85 psi" beside Colorado's "never over 50 psi": same unit, different values, and the .gov figure must win.
+  // When exactly one side of the conflict cites a government or university source, the others' sentences go.
+  const CONFLICT_UNITS = /\b(\d[\d,.]*)\s?(psi|cfm|gpm)\b/gi;
+  const authorityUrl = (n: number) => /\.gov\b|\.edu\b|\.mil\b/i.test(input.sources[n - 1]?.url ?? "");
+  const conflicts = new Map<string, string>();
+  {
+    const byUnit = new Map<string, { value: string; sentence: string; authority: boolean }[]>();
+    for (const segment of segmentsInOrder) {
+      CONFLICT_UNITS.lastIndex = 0;
+      const m = CONFLICT_UNITS.exec(prose(segment));
+      if (!m) continue;
+      const own = citations(segment), cited = own.length ? own : blockCitations.get(segment) ?? [];
+      const entry = { value: m[1].replace(/,/g, ""), sentence: segment.trim(), authority: cited.some(authorityUrl) };
+      const list = byUnit.get(m[2].toLowerCase()) ?? [];
+      list.push(entry);
+      byUnit.set(m[2].toLowerCase(), list);
+    }
+    for (const [, entries] of byUnit) {
+      const values = [...new Set(entries.map((e) => e.value))];
+      const authorities = entries.filter((e) => e.authority);
+      // Same unit, different values, and a .gov/.edu figure on exactly one side: the others' sentences go. With no
+      // authority in the conflict (or on both sides), every sourced figure stays: the conflict is shown, not picked.
+      if (values.length >= 2 && authorities.length >= 1 && authorities.length < entries.length) {
+        for (const entry of entries.filter((e) => !e.authority)) conflicts.set(lower(prose(entry.sentence)).replace(/\s+/g, " ").trim(), entry.sentence);
+      }
+    }
+  }
   // A person or company the sources, the business details and the search never name ("According to Jane Doe, ..."): a named
   // claim with nothing behind it.
   const invented = namesOutsideSources(text, { sources: input.sources.map((s) => ({ url: "", text: s.text })), profile: input.profile,
@@ -232,6 +260,7 @@ export function backedFactsOnly(article: string, input: BackingInput): { markdow
     if (wrong.some((claim) => plain.includes(claim) || (plain.length >= 24 && claim.includes(plain)))) return "claim";
     if (invented.some((line) => plain === line || plain.includes(line) || (plain.length >= 24 && line.includes(plain)))) return "name";
     if (flagged.some((line) => plain.includes(line) || (plain.length >= 24 && line.includes(plain)))) return "number";
+    if (conflicts.has(plain)) return "number";
     // A list option's own entry is never dropped as a repeat (its template wording repeats; the option doesn't).
     if (laterCopies.get(sentence) && !/^\s*(?:\*\*|__)[^*_]{1,80}(?:\*\*|__)/.test(sentence)) {
       laterCopies.set(sentence, laterCopies.get(sentence)! - 1); return "repeat";
@@ -274,29 +303,69 @@ export function backedFactsOnly(article: string, input: BackingInput): { markdow
   return { markdown: `${result.markdown}${tail}`, removed, held: result.held };
 }
 
-/** P294 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md step 2): a planned article that states prices says when they were read, in code
- * (the writer was told to and didn't: LeadPilot's Nov 4 chatbot list gave Tidio's and Zendesk's prices undated). One line,
- * "Prices as of November 2026.", opens the section where the first price appears; an article that dates them already, or
- * states none, is unchanged. */
+/** P294 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md step 2) + v3.1 (batch 6): a planned article that states prices says when they
+ * were read, INLINE beside the first price ("$11,712 (as of November 2026)"), never as a line of its own — batch 6's
+ * bank-reconciliation article carried one under "Documents you need", a section with no price. A standalone "Prices as of…"
+ * line the writer left anywhere is removed first: it is pipeline text. */
 const PRICE = /(?:[$€£]\s?\d|\b\d[\d,.]*\s?(?:USD|EUR|GBP)\b)/;
+const PRICE_TOKEN = /[$€£]\s?\d[\d,.]*(?:\s*(?:[-–—]|to)\s*[$€£]?\s?\d[\d,.]*)?/;
 const DATED = /\bas of [A-Z][a-z]+ \d{4}\b/;
+const STANDALONE_PRICE_DATE = /^\s*Prices?(?:\s+and\s+(?:fees|prices))?\s+as\s+of\s+[A-Z][a-z]+\s+\d{4}\.?\s*$/;
 export function withPriceDate(article: string, readAt: number): string {
   const split = SOURCES_HEADING.exec(article), body = split ? article.slice(0, split.index) : article, tail = split ? article.slice(split.index) : "";
-  if (DATED.test(body)) return article;
-  const lines = body.split("\n");
-  let fence = false, first = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (/^\s*```/.test(lines[i])) { fence = !fence; continue; }
-    if (!fence && !/^\s*#/.test(lines[i]) && PRICE.test(lines[i])) { first = i; break; }
-  }
-  if (first < 0) return article;
+  const lines = body.split("\n").map((line) => STANDALONE_PRICE_DATE.test(line) ? "" : line);
+  const stripped = lines.join("\n").replace(/\n{3,}/g, "\n\n");
+  if (DATED.test(stripped)) return `${stripped}${tail}`;
   const month = new Date(readAt).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
-  let heading = -1;
-  for (let i = first; i >= 0; i--) if (/^##\s/.test(lines[i])) { heading = i; break; }
-  let at = heading + 1;
-  if (heading < 0) { at = first; while (at > 0 && lines[at - 1].trim()) at--; }
-  lines.splice(at, 0, ...(heading >= 0 ? ["", `Prices as of ${month}.`] : [`Prices as of ${month}.`, ""]));
-  return `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}${tail}`;
+  let fence = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) { fence = !fence; continue; }
+    if (fence || !line.trim() || /^\s*(?:#|\||-\s|\d+[.)])/.test(line)) continue;
+    const at = PRICE_TOKEN.exec(line);
+    if (!at) continue;
+    const end = at.index + at[0].length;
+    const dated = `${line.slice(0, end)} (as of ${month})${line.slice(end)}`;
+    return `${lines.slice(0, i).concat([dated], lines.slice(i + 1)).join("\n").replace(/\n{3,}/g, "\n\n")}${tail}`;
+  }
+  return `${stripped}${tail}`;
+}
+
+/** v3.1 (batch 6, Cowork's A4): citations renumber 1..n in first-use order after any deletion, and the Sources list follows,
+ * with nothing cited left out (batch 6's python article skipped [3]). Only the two formats Pentra prints are rewritten; any
+ * other shape leaves the article unchanged. */
+const TAIL_SOURCE = /^\s*(?:(\d+)[.)]\s+|[-*]\s+\[(\d+)\]\s+)(\[.*\)\s*|\S.*)$/;
+export function renumberCitations(article: string): string {
+  const split = SOURCES_HEADING.exec(article);
+  if (!split) return article;
+  const body = article.slice(0, split.index), tail = article.slice(split.index);
+  const order: number[] = [];
+  for (const m of body.matchAll(CITATION)) for (const n of m[1].split(/\s*,\s*/).map(Number)) if (n > 0 && !order.includes(n)) order.push(n);
+  if (order.length < 2) return article;
+  const lines = tail.split("\n");
+  const entries = new Map<number, string>();
+  const slots: number[] = [];
+  lines.forEach((line, i) => {
+    const m = TAIL_SOURCE.exec(line);
+    if (!m) return;
+    const n = Number(m[1] ?? m[2]);
+    if (!Number.isInteger(n) || n <= 0) return;
+    entries.set(n, m[3]);
+    slots.push(i);
+  });
+  if (order.some((n) => !entries.has(n))) return article;
+  const map = new Map(order.map((n, i) => [n, i + 1]));
+  if ([...map.entries()].every(([n, next]) => n === next)) return article;
+  const renumbered = body.replace(CITATION, (_all, list: string) =>
+    `[${list.split(/\s*,\s*/).map(Number).map((n) => map.get(n) ?? n).join(", ")}]`);
+  let next = 0;
+  const newTail = lines.map((line, i) => {
+    const m = TAIL_SOURCE.exec(line);
+    if (!m || slots.indexOf(i) < 0) return line;
+    const n = order[next++];
+    return `${next}. ${entries.get(n)}`;
+  });
+  return `${renumbered}${newTail.join("\n")}`.replace(/\n{3,}/g, "\n\n");
 }
 
 /** P295 (Cowork's batch 4, fix 2): a heading that promises a figure (costs, prices, fees, rebates, lifespan, timeline,
@@ -306,6 +375,7 @@ export const FIGURE_HEADING = /\b(?:costs?|prices?|pricing|fees?|rebates?|incent
 const EMPTY_CELL = /^\s*(?:—|–|-|n\/a|not (?:covered|stated|listed|published)(?: here)?)?\s*$/i;
 export function withoutEmptyFigureSections(article: string): { markdown: string; removed: string[] } {
   const split = SOURCES_HEADING.exec(article), body = split ? article.slice(0, split.index) : article, tail = split ? article.slice(split.index) : "";
+  const examples = exampleSections(body).filter((b) => b.trim());
   let lines = body.split("\n");
   const removed: string[] = [];
   const level = (line: string) => /^(#{2,3})\s/.exec(line)?.[1].length ?? 0;
@@ -321,22 +391,29 @@ export function withoutEmptyFigureSections(article: string): { markdown: string;
       i--;
     }
   }
-  // Tables: a column whose body cells are mostly empty or dashes goes.
+  // v3.1 (batch 6, Cowork's A3): never delete a column or a cell. A journal-entry table's debit and credit columns are
+  // legitimately half-empty; the payout example's Credit column (with "$2,415 + $85 = $2,500") was deleted and the table
+  // stopped balancing. A table that is mostly empty cells is missing data: the whole table goes — unless it is an
+  // illustration (a worked example or a "hypothetical" passage), where empty cells are the point.
   for (let i = 0; i < lines.length; i++) {
     if (!/^\s*\|/.test(lines[i]) || !/^\s*\|?\s*:?-{3,}/.test(lines[i + 1] ?? "")) continue;
     let end = i + 2;
     while (end < lines.length && /^\s*\|/.test(lines[end])) end++;
     const cells = (line: string) => line.trim().replace(/^\||\|$/g, "").split("|");
     const rows = lines.slice(i + 2, end).map(cells), width = cells(lines[i]).length;
-    const drop = Array.from({ length: width }, (_, c) => c > 0 && rows.length > 0 && rows.filter((row) => EMPTY_CELL.test(row[c] ?? "")).length * 2 >= rows.length);
-    if (drop.some(Boolean)) {
-      const keepCols = (row: string[]) => row.filter((_, c) => !drop[c]);
-      if (keepCols(cells(lines[i])).length < 2) { removed.push(`table: ${lines[i].trim()}`); lines.splice(i, end - i); i--; continue; }
-      removed.push(...drop.map((d, c) => d ? `column: ${cells(lines[i])[c].trim()}` : "").filter(Boolean));
-      const render = (row: string[]) => `| ${keepCols(row).map((cell) => cell.trim()).join(" | ")} |`;
-      lines.splice(i, end - i, render(cells(lines[i])), render(cells(lines[i + 1])), ...rows.map(render));
+    const drop = Array.from({ length: width }, (_, c) => c > 0 && rows.length > 0 && rows.filter((row) => EMPTY_CELL.test(row[c] ?? "")).length * 3 >= rows.length * 2);
+    if (!drop.some(Boolean)) { i = end - 1; continue; }
+    let heading = -1, illustrated = false;
+    for (let j = i - 1; j >= 0; j--) {
+      if (!lines[j].trim()) continue;
+      if (level(lines[j])) { heading = j; break; }
+      if (/\b(?:hypothetical|for illustration|illustrative|imagine|suppose)\b/i.test(lines[j])) illustrated = true;
     }
-    i = end - 1;
+    for (let j = heading + 1; j < i; j++) if (/\b(?:hypothetical|for illustration|illustrative|imagine|suppose)\b/i.test(lines[j])) illustrated = true;
+    if (illustrated || examples.some((body) => body.includes(lines[i]) && body.includes(lines[end - 1]))) { i = end - 1; continue; }
+    removed.push(`table: ${lines[i].trim()}`);
+    lines.splice(i, end - i);
+    i--;
   }
   return { markdown: `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}${tail}`, removed };
 }

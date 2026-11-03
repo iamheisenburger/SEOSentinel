@@ -7,9 +7,9 @@ import { LIST_MIN_OPTIONS, LIST_RESEARCH_SEARCHES, LIST_RESEARCH_SOURCES, MAX_RE
 import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWords, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis,
   serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch, FORMAT_DEFAULT_WORDS } from "../lib/serpBrief";
 import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, planCheckIssues, planCheckNotes, runPlanChecks, statedNumbers, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
-import { assembledArticle, assembledFormat, comparedSides, enrichedExcerpt, ownerPageText, PROSE_INPUT_SCHEMA, ProseSchema, pricingText, proseRequest, RECORDS_INPUT_SCHEMA,
+import { assembledArticle, assembledFormat, comparedSides, enrichedExcerpt, orderedStepsText, ownerPageText, PROSE_INPUT_SCHEMA, ProseSchema, pricingText, proseRequest, RECORDS_INPUT_SCHEMA,
   RecordsSchema, recordsRequest, skeletonFor, verifiedRecords } from "../lib/articleAssembly";
-import { backedFactsOnly, withFaqLast, withoutEmptyFigureSections, withPriceDate, type BackingInput, type BackingRemoval } from "../lib/backedFacts";
+import { backedFactsOnly, renumberCitations, withFaqLast, withoutEmptyFigureSections, withPriceDate, type BackingInput, type BackingRemoval } from "../lib/backedFacts";
 import { sourcingGaps, TopicNotSourceable, undocumentedCodeNames, type SourcingCounts } from "../lib/topicSourcing";
 import { withoutStockDisclaimers } from "../lib/contentCorrection";
 import { articlePlanEnabled, contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
@@ -5231,15 +5231,30 @@ async function handleArticle(
       const excerpt = enrichedExcerpt(researchSources[at].excerpt, read.value.text);
       if (excerpt.length > researchSources[at].excerpt.length) { researchSources[at] = { ...researchSources[at], excerpt, contentHash: sha256Hex(excerpt) }; enriched++; }
     }
-    // A list's options: each one's own pricing page, found from its pages in research or in Google's top results.
+    // A list's options: each one's own pricing page, found from its pages in research or in Google's top results, or by one
+    // targeted search per option research never reached (R3).
     const pages = articlePlan?.format === "list" ? await ownerPricingPages(plannedListOptions,
-      [...researchSources, ...(serpBrief?.results ?? []).map((result) => ({ url: result.url }))]) : [];
+      [...researchSources, ...(serpBrief?.results ?? []).map((result) => ({ url: result.url }))],
+      { locationCode: dataForSeoLocationCode(site.targetCountry), languageCode: dataForSeoLanguageCode(site.language) }) : [];
     for (const page of pages) {
       const at = researchSources.findIndex((source) => source.url === page.url);
       if (at >= 0) researchSources[at] = page; else researchSources.push(page);
       researchSourceRoles.set(page.url, "owner");
     }
-    researchQualityNotes.push(`Assembly v3: ${enriched} owner page(s) and ${pages.length} option pricing page(s) read in full.`);
+    // A how-to's procedure: each source's page is read for its own ordered lists, put first so its steps keep the page's order.
+    let procedures = 0;
+    if (articlePlan?.format === "how-to") {
+      const reads = await Promise.allSettled(researchSources.slice(0, 6).map(async (source) => ({ url: source.url,
+        text: orderedStepsText((await fetchPublicText(source.url, { sameHostRedirects: true })).text, 3000) })));
+      for (const read of reads) {
+        if (read.status !== "fulfilled" || read.value.text.length < 80) continue;
+        const at = researchSources.findIndex((source) => source.url === read.value.url);
+        const excerpt = enrichedExcerpt(read.value.text, researchSources[at].excerpt);
+        researchSources[at] = { ...researchSources[at], excerpt, contentHash: sha256Hex(excerpt) };
+        procedures++;
+      }
+    }
+    researchQualityNotes.push(`Assembly v3: ${enriched} owner page(s), ${pages.length} option pricing page(s) and ${procedures} procedure page(s) read in full.`);
   }
   if (assembleV3 && articlePlan) articlePlan.assembly = "v3";
   const article = assembleV3 && articlePlan && topic ? await assembleArticleV3({ site, topic, plan: articlePlan, covers: outlineCovers,
@@ -7489,7 +7504,7 @@ async function checkPlannedClaims(args: { markdown: string; search: string }): P
 function plannedBacking(article: Doc<"articles">, topic: { primaryKeyword?: string } | null, productName: string, wrongClaims: string[]): BackingInput {
   const plan = article.articlePlan;
   return {
-    sources: (article.sources ?? []).map((source) => ({ text: `${source.title ?? ""}\n${source.excerpt ?? ""}` })),
+    sources: (article.sources ?? []).map((source) => ({ text: `${source.title ?? ""}\n${source.excerpt ?? ""}`, url: source.url })),
     profile: article.productEvidenceSnapshot ?? "",
     allowedNames: [productName, topic?.primaryKeyword ?? "", ...(article.metaKeywords ?? [])].filter(Boolean),
     topic: [topic?.primaryKeyword ?? "", ...(plan?.sections ?? []), ...(plan?.coverage ?? [])].join(" "),
@@ -7505,15 +7520,30 @@ function removedByCodeNote(removed: readonly BackingRemoval[]): string {
 
 /** P299: a list option's own pricing page, read in full ($0, no model): research quotes a line or two of it, and the list
  * prints every plan from it. Only pages on the option's own site (lib/sourceQuality firstPartyProductPage). */
-async function ownerPricingPages(options: readonly string[], sources: readonly { url: string }[]): Promise<PreservedSource[]> {
+async function ownerPricingPages(options: readonly string[], sources: readonly { url: string }[], locale?: { locationCode: number; languageCode: string }): Promise<PreservedSource[]> {
   const targets = new Map<string, string>();
+  const missing: string[] = [];
   for (const option of options.slice(0, 10)) {
     const own = sources.find((source) => firstPartyProductPage(source.url, [option.toLowerCase().replace(/[^a-z0-9]/g, "")]));
-    if (!own) continue;
+    if (own) {
+      try {
+        const url = new URL(own.url);
+        targets.set(/\/(?:pricing|plans|prices)\b/i.test(url.pathname) ? own.url : `${url.origin}/pricing`, option);
+      } catch { /* not a URL; the search below may still find the vendor */ }
+    } else missing.push(option);
+  }
+  // R3 (batch 6, V3-RESEARCH-FIXTURES): a list's width is the union of what the top results name, not what one research run
+  // kept. An option research never reached gets one targeted search for its own pricing page ($0 model cost, one each).
+  const { analyzeSERPFromDataForSEO } = await import("./seoData");
+  for (const option of missing.slice(0, 8)) {
     try {
-      const url = new URL(own.url);
-      targets.set(/\/(?:pricing|plans|prices)\b/i.test(url.pathname) ? own.url : `${url.origin}/pricing`, option);
-    } catch { continue; }
+      const found = await analyzeSERPFromDataForSEO(`"${option}" pricing`, locale?.locationCode ?? 2840, locale?.languageCode ?? "en");
+      const key = option.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const hit = found.results.find((result) => firstPartyProductPage(result.url, [key]));
+      if (!hit) continue;
+      const url = new URL(hit.url);
+      targets.set(/\/(?:pricing|plans|prices)\b/i.test(url.pathname) ? hit.url : `${url.origin}/pricing`, option);
+    } catch { /* a search that fails leaves the option unpriced, never blocks the article */ }
   }
   const read = await Promise.allSettled([...targets].map(async ([url, option]) => {
     const page = await fetchPublicText(url, { sameHostRedirects: true });
@@ -7547,10 +7577,10 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   if (thin && contentProviderAutopilotDraft()) throw new TopicNotSourceable([args.plan.format === "list" ? "fewer than 3 options with checked records" : "fewer than 2 sections with checked records"]);
   const skeleton = skeletonFor({ format: args.plan.format, sections: args.plan.sections, records: verified, sources, readAt: contentProviderPromptTime(), sides });
   const proseCall = proseRequest({ search: args.topic.primaryKeyword, productName: args.productName, businessSummary: args.site.siteSummary ?? args.site.niche ?? "",
-    audience: args.site.targetAudienceSummary ?? "", profile: args.profile, skeleton, records: verified });
+    audience: args.site.targetAudienceSummary ?? "", profile: args.profile, skeleton, records: verified, sources });
   const prose = await callClaudeStructured({ system: `${UNTRUSTED_EVIDENCE_INSTRUCTION}\n\n${proseCall.system}`, userMessage: proseCall.userMessage,
-    toolName: "write_prose", toolDescription: "Submit the article's short prose: title, description, intro, lead-ins, who each option suits and the conclusion.",
-    inputSchema: PROSE_INPUT_SCHEMA, outputSchema: ProseSchema, maxTokens: 4000 });
+    toolName: "write_prose", toolDescription: "Submit the article's prose: title, description, intro, a paragraph per section with its facts as placeholders, who each option suits and the conclusion.",
+    inputSchema: PROSE_INPUT_SCHEMA, outputSchema: ProseSchema, maxTokens: 6000 });
   const built = assembledArticle({ skeleton, prose, records: verified, productName: args.productName, profile: args.profile, search: args.topic.primaryKeyword,
     cta: configuredCallToAction(args.site, args.productName) });
   if (built.dropped.length) args.notes.push(`Assembly v3: code dropped ${built.dropped.length} prose sentence(s) with a figure or name its section's records don't give.`);
@@ -7683,8 +7713,10 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
   // P299: an assembled article has no empty section by construction; this rule read a FAQ question about price with a
   // yes-or-no answer as an empty figure section and left the FAQ heading bare.
   const emptied = assembled ? { markdown: fields.markdown, removed: [] as string[] } : withoutEmptyFigureSections(fields.markdown);
-  if (emptied.removed.length) fixNotes.push(`Removed by code: ${emptied.removed.length} empty section(s) or column(s): ${emptied.removed.join("; ").slice(0, 300)}.`);
-  fields = { ...fields, markdown: withPriceDate(withFaqLast(emptied.markdown), article.createdAt ?? Date.now()) };
+  if (emptied.removed.length) fixNotes.push(`Removed by code: ${emptied.removed.length} empty section(s) or table(s): ${emptied.removed.join("; ").slice(0, 300)}.`);
+  // v3.1 (batch 6, A4): after any deletion the citations renumber 1..n in first-use order and the Sources list follows (the
+  // python tutorial's list skipped [3]).
+  fields = { ...fields, markdown: renumberCitations(withPriceDate(withFaqLast(emptied.markdown), article.createdAt ?? Date.now())) };
   const candidate = candidateFor(fields);
   const quality = evaluatePublicationQuality(candidate, "strict");
   const failures = planChecksForArticle(candidate);

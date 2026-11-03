@@ -115,7 +115,8 @@ test("P96 deleting an unsupported sentence never removes a paragraph's bold step
   const result = deleteSentencesCoherently(whole, drop);
   assert.match(result.markdown, /\*\*Step 2: Write the question list\.\*\*/);
   assert.equal(result.removed.length, 0);
-  // Unlabelled paragraphs are still repaired by deletion.
+  // v3.1 (batch 6, Cowork's A2): an unlabelled paragraph is repaired by deleting the WHOLE paragraph, never by halving
+  // it (batch 5's halvings left dangling sentences).
   const plain = "Choose the pages first. Include a 3 to 4 weeks turnaround. Add a few questions your site cannot answer.";
-  assert.equal(deleteSentencesCoherently(plain, drop).markdown, "Choose the pages first. Add a few questions your site cannot answer.");
+  assert.equal(deleteSentencesCoherently(plain, drop).markdown, "");
 });

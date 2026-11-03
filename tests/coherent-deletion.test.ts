@@ -4,7 +4,7 @@ import { deleteSentencesCoherently } from "../convex/lib/coherentDeletion.ts";
 
 const flagged = (sentence: string) => /GoHighLevel|UNSUPPORTED/.test(sentence);
 
-test("Oct 15 scars are never produced: steps, quotes, orphaned references and dangling list intros are held", () => {
+test("Oct 15 scars are never produced: steps, orphaned references and dangling list intros are held (v3.1: a mixed paragraph goes whole)", () => {
   const md = [
     "## What a chat widget does",
     "",
@@ -31,12 +31,30 @@ test("Oct 15 scars are never produced: steps, quotes, orphaned references and da
     "- UNSUPPORTED only remaining item.",
   ].join("\n");
   const r = deleteSentencesCoherently(md, flagged);
-  assert.equal(r.markdown, md, r.removed.join(" | "));
-  assert.equal(r.removed.length, 0);
-  assert.equal(r.held.length, 5);
+  // v3.1 (batch 6, Cowork's A2): the deletion unit is the whole paragraph or list item. A paragraph whose flagged sentence
+  // once left a dangling neighbour ("The engine replies…") goes with its heading; the numbered step, the block the next
+  // paragraph leans on and the last item of an introduced list are still held.
+  assert.equal(r.markdown, [
+    "## Next steps",
+    "",
+    "1. Write the single outcome.",
+    "2. List the GoHighLevel questions visitors ask most.",
+    "3. Sort them into answerable and unknown.",
+    "",
+    "## Planning",
+    "",
+    "UNSUPPORTED paragraph that the next one refers to.",
+    "",
+    "This means you should plan carefully.",
+    "",
+    "Three parts matter:",
+    "",
+    "- UNSUPPORTED only remaining item.",
+  ].join("\n"), JSON.stringify(r, null, 2));
+  assert.deepEqual(r.held, ["List the GoHighLevel questions visitors ask most.", "UNSUPPORTED paragraph that the next one refers to.", "UNSUPPORTED only remaining item."]);
 });
 
-test("clean deletions still happen: a middle sentence, an independent bullet, an opening sentence nothing leans on", () => {
+test("clean deletions still happen, by whole paragraph or list item (v3.1): a mixed line never survives halved", () => {
   const md = [
     "Intro paragraph that stays.",
     "",
@@ -54,10 +72,6 @@ test("clean deletions still happen: a middle sentence, an independent bullet, an
     "Intro paragraph that stays.",
     "",
     "## Forms",
-    "",
-    "A shorter form can be tested when completion is weak.",
-    "",
-    "Keep the qualification step. Review results weekly.",
     "",
     "- Write down the problem.",
     "",
