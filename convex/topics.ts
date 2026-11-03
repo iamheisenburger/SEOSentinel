@@ -15,6 +15,7 @@ import {
   dormantTopicRevivalPatch,
   normalizeTopicIntentKeyword,
   terminalContentFeasibility,
+  CONTENT_FEASIBILITY_VERSION,
 } from "./lib/topicLifecycle";
 import { reconcileTopicLifecycle } from "./lib/topicLifecycleDb";
 import {
@@ -1128,6 +1129,24 @@ export const recordBusinessFitAuditsInternal = internalMutation({
 // a tenant profile changes. The worker calls this mutation immediately before
 // incurring research or model spend, so only that exact queued topic can be
 // quarantined while unrelated tenant work remains untouched.
+/** P291 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md step 0): research couldn't source what this topic's format needs (a list's
+ * own pricing pages, a tutorial's docs, three usable sources). The topic is retired as too thin to write well, before any
+ * draft; the slot takes the next topic. Same job/topic fence as the business-fit settlement below. */
+export const markTopicUnsourceableInternal = internalMutation({
+  args: { siteId: v.id("sites"), jobId: v.id("jobs"), topicId: v.id("topic_clusters"), reasons: v.array(v.string()) },
+  handler: async (ctx, { siteId, jobId, topicId, reasons }) => {
+    const [topic, job] = await Promise.all([ctx.db.get(topicId), ctx.db.get(jobId)]);
+    const payload = job?.payload && typeof job.payload === "object" ? job.payload as Record<string, unknown> : {};
+    if (!topic || topic.siteId !== siteId || !job || job.siteId !== siteId || job.type !== "article" || job.status !== "running" ||
+      payload.topicId !== topicId || ["used", "cannibalizing", "plan_checkpoint"].includes(topic.status ?? "")) return { updated: false };
+    const checkedAt = now();
+    await ctx.db.patch(topicId, { status: "disqualified", contentFeasibilityStatus: "too_thin", contentFeasibilityVersion: CONTENT_FEASIBILITY_VERSION,
+      contentFeasibilityIssues: reasons.slice(0, 8), contentFeasibilityCheckedAt: checkedAt,
+      disqualifiedReason: `Skipped before writing: ${reasons.join("; ")}`.slice(0, 500), updatedAt: checkedAt });
+    return { updated: true };
+  },
+});
+
 export const disqualifyQueuedTopicInternal = internalMutation({
   args: {
     siteId: v.id("sites"),

@@ -163,8 +163,10 @@ function autopilotReplaceable(job: Doc<"jobs">, reusesHeldDraft = false) {
   // live page, a reader check added since) or whose writing never ran still gets one new article, written once.
   // P277: a slot whose draft was held by checks since corrected takes a held draft that today's checks pass, nothing new.
   const rejudged = reusesHeldDraft && outdatedQualityVerdict(job);
+  // P290 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md step 6): the customer never gets homework. A slot whose first article was
+  // held after its one fix takes the next topic once (the held topic is retired); a held replacement is not replaced.
   return Boolean(cw && cw.stage === "failed" && !cw.ownerRequest && cw.retiredAt === undefined &&
-    (cw.failure !== "bounded_content_quality_exhausted" || rejudged) &&
+    (cw.failure !== "bounded_content_quality_exhausted" || rejudged || !cw.replacesJobId) &&
     (!cw.replacesJobId || HELD_BACK_FAILURES.has(cw.failure ?? "") || rejudged) &&
     (cw.intent === "create" ? autopilotSkippableFailure(job) : automaticImprovement(cw)));
 }
@@ -300,9 +302,17 @@ const TOPIC_RESEARCH_WAIT_MARGIN_MS = 90 * 60_000;
  * back: pentra.dev's Oct 27 run added 3, one was held back as a copy and the other two filled Oct 28 and 29, so its
  * Oct 30 slot had no topic until research came due on Oct 30 at 12:22Z, after the slot. A run that found nothing keeps
  * its week, and research never runs more than once a day. */
+/** P292 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md hole 5): a site with nothing left to write researches again within hours, on the
+ * next round's seeds, instead of the next day (or a week after an empty run). pentra.dev's 14:33Z run added one topic, the
+ * duplicate audit dropped it, and its 21:42Z slot had nothing to write until research 24 hours later. */
+export const TOPIC_RESEARCH_STARVED_GAP_MS = 3 * 3_600_000;
+export const TOPIC_RESEARCH_STARVED_MIN_ADDED = 4;
 export function exhaustedTopicResearchDueAt(schedule: Parameters<typeof topicResearchDueAt>[0]) {
-  if (researchMethodOutdated(schedule) || schedule.topicsReplenishAdded === 0) return topicResearchDueAt(schedule);
-  return Math.min(topicResearchDueAt(schedule), (schedule.topicsReplenishedAt ?? 0) + TOPIC_REPLENISH_MIN_GAP_MS);
+  if (researchMethodOutdated(schedule)) return topicResearchDueAt(schedule);
+  const added = schedule.topicsReplenishAdded;
+  const gap = added === undefined || added >= TOPIC_RESEARCH_STARVED_MIN_ADDED ? TOPIC_REPLENISH_MIN_GAP_MS
+    : added === 0 ? TOPIC_REPLENISH_MIN_GAP_MS : TOPIC_RESEARCH_STARVED_GAP_MS;
+  return Math.min(topicResearchDueAt(schedule), (schedule.topicsReplenishedAt ?? 0) + gap);
 }
 async function startTopicResearchIfDue(ctx: MutationCtx, site: Doc<"sites">, articleBudgetMicroUsd: number, options: { exhausted?: boolean } = {}) {
   const schedule = site.contentSchedule;
@@ -1892,7 +1902,9 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
     .sort((a, b) => (b.searchVolume ?? 0) - (a.searchVolume ?? 0)).map(t => t.primaryKeyword);
   const shown = searches.filter(q => q.impressions >= 5 && !isBrandedSearchQuery(q.keyword, site.domain))
     .sort((a, b) => b.impressions - a.impressions).map(q => q.keyword);
-  const demand = [...written, ...shown].filter(k => searchSeedLength(k) && onBusiness(k)).slice(0, 160);
+  // P292 (hole 5): the questions Google shows beside this site's topics (People Also Ask) are real searches too.
+  const asked = topics.flatMap(t => t.serpBrief?.questions ?? []).map(q => q.replace(/\?+$/, "").trim());
+  const demand = [...written, ...shown, ...asked].filter(k => searchSeedLength(k) && onBusiness(k)).slice(0, 160);
   const seeds = researchSeedsForRound({ demand,
     owner: tenantDiscoveryAnchors([...(site.anchorKeywords ?? []), ...(site.keyFeatures ?? [])], 40).filter(k => searchLikePhrase(k)),
     profile: tenantDiscoveryAnchors([...(site.painPoints ?? []), site.productUsage, site.niche, site.blogTheme], 40).filter(k => searchLikePhrase(k)),
@@ -2875,7 +2887,8 @@ export const advance = internalMutation({
     // A reused draft's topic was retired on the verdict since corrected (that verdict stays on this job and the held one).
     await ctx.db.patch(topic._id, { status: "queued", ...(reused ? { contentFeasibilityStatus: undefined, contentFeasibilityVersion: undefined,
       contentFeasibilityIssues: undefined, contentFeasibilityCheckedAt: undefined, disqualifiedReason: undefined } : {}), updatedAt: Date.now() });
-    if (!improvement) await refreshAccountUsage(ctx, site, replacing ? 0 : 1);
+    // P290: a replacement takes over its slot's count, unless the job it replaces counts for nothing (a held draft, P255).
+    if (!improvement) await refreshAccountUsage(ctx, site, replacing && contentJobUsesAllowance(replacing) ? 0 : 1);
     if (improvement) await ctx.db.patch(improvement.page._id, { editable: { ...improvement.page.editable!, lastWorkJobId: jobId } });
     // Research the next keywords before the searched ones run out, instead of
     // waiting for an empty inventory (which costs slots at a fast cadence).

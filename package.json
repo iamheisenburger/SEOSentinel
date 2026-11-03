@@ -11,7 +11,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test --test-concurrency=1 tests/*.test.ts",
+    "test": "NODE_OPTIONS=--max-old-space-size=8192 node --experimental-strip-types --test --test-concurrency=1 tests/*.test.ts",
     "test:e2e": "playwright test",
     "test:wordpress": "node scripts/wordpress-fixture.mjs --test",
     "test:wordpress:mysql": "node scripts/wordpress-fixture.mjs --mysql --test",

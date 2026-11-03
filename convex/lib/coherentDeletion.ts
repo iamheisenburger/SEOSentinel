@@ -12,8 +12,8 @@
  * passage instead. Headings, tables, code, comments and source rows are never
  * edited. */
 
-const SENTENCE_SPLIT = /(?<=[.!?])\s+(?=[A-Z*"'\[“‘])/;
-const LIST_PREFIX = /^(\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+|>\s*)?)/;
+export const SENTENCE_SPLIT = /(?<=[.!?])\s+(?=[A-Z*"'\[“‘])/;
+export const LIST_PREFIX = /^(\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+|>\s*)?)/;
 const ORDERED_ITEM = /^\s*\d+[.)]\s+/;
 /** A sentence opening like this depends on the sentence or block before it. */
 const LEANS_ON_PREVIOUS = /^(?:\*\*[^*]{1,80}\*\*[:.]?\s*)?["“'‘(]?(?:this|that|these|those|it|its|it's|they|they're|their|them|such|both|another|also|however|but|and|or|so|then|thus|therefore|instead|otherwise|still|yet|meanwhile|likewise|similarly|in that case|as a result|for example|for instance|in other words|that's|here's why|even so|at that point|from there)\b/i;
@@ -80,6 +80,11 @@ function lastItemOfIntroducedList(lines: string[], index: number) {
   return j >= 0 && /:\s*$/.test(lines[j]);
 }
 
+function previousContentLine(lines: string[], index: number) {
+  for (let j = index - 1; j >= 0; j--) if (lines[j].trim()) return j;
+  return -1;
+}
+
 const headingLevel = (line: string) => /^\s*(#{1,6})\s/.exec(line)?.[1].length ?? 0;
 
 /** True when `index` is the only remaining content line between its headings. */
@@ -98,7 +103,7 @@ function onlyContentInSection(lines: string[], index: number) {
 export function deleteSentencesCoherently(
   markdown: string,
   drop: (sentence: string) => boolean,
-  options: { skipLine?: (line: string) => boolean } = {},
+  options: { skipLine?: (line: string) => boolean; dropStrandedQuestion?: boolean } = {},
 ): CoherentDeletion {
   const lines = markdown.split("\n");
   const fence: boolean[] = [];
@@ -124,6 +129,10 @@ export function deleteSentencesCoherently(
       // step, never the last content under a heading, never a block the next
       // one refers back to.
       const next = nextProseBody(lines, i, fence);
+      // P289 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md hole 3): an FAQ answer left with nothing goes with its question.
+      const question = options.dropStrandedQuestion && answersPreviousQuestion(lines, i) && !ORDERED_ITEM.test(line) &&
+        !(next !== undefined && LEANS_ON_PREVIOUS.test(next)) ? previousContentLine(lines, i) : -1;
+      if (question >= 0) { lines[question] = ""; lines[i] = ""; removedAt[i] = flaggedText; continue; }
       if (ORDERED_ITEM.test(line) || NUMBERED_BOLD_LABEL.test(line.slice(prefix.length)) ||
         (next !== undefined && LEANS_ON_PREVIOUS.test(next)) || lastItemOfIntroducedList(lines, i) ||
         answersPreviousQuestion(lines, i)) { hold(); continue; }

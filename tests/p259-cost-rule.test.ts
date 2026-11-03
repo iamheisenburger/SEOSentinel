@@ -20,9 +20,10 @@ test("P259 at most one rewrite, only for an objective problem, and a failed arti
   assert.match(work, /draft\.publicationGateIssues!\.every\(issue => ownerWaivableIssue\(issue, draft\)\) && readerVisibleIssues\(draft\)\.length === 0\);/);
   const revise = work.slice(work.indexOf("async function reviseFailedWork"), work.indexOf("async function retireQualityExhaustedTopics"));
   assert.doesNotMatch(revise, /chooseTopic\(/, "no replacement draft on another topic");
-  // P277: except by a held draft that checks since corrected had stopped and today's checks pass (nothing new is written).
-  assert.match(work, /\(cw\.failure !== "bounded_content_quality_exhausted" \|\| rejudged\) &&\n    \(!cw\.replacesJobId \|\| HELD_BACK_FAILURES\.has\(cw\.failure \?\? ""\) \|\| rejudged\)/,
-    "a slot whose article failed its checks is never refilled with a new article");
+  // P277: a held draft that checks since corrected had stopped and today's checks pass refills its slot (nothing new is
+  // written). P290 (plan v2 step 6): a slot's first held article takes the next topic once; a held replacement never.
+  assert.match(work, /\(cw\.failure !== "bounded_content_quality_exhausted" \|\| rejudged \|\| !cw\.replacesJobId\) &&\n    \(!cw\.replacesJobId \|\| HELD_BACK_FAILURES\.has\(cw\.failure \?\? ""\) \|\| rejudged\)/,
+    "one replacement for a slot's held first article, never for a held replacement");
   assert.match(work, /const rejudged = reusesHeldDraft && outdatedQualityVerdict\(job\);/);
 });
 

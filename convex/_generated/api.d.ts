@@ -72,6 +72,7 @@ import type * as lib_autopilotHealthDetail from "../lib/autopilotHealthDetail.js
 import type * as lib_autopilotReadiness from "../lib/autopilotReadiness.js";
 import type * as lib_autopilotRunLease from "../lib/autopilotRunLease.js";
 import type * as lib_autopilotRunOutcome from "../lib/autopilotRunOutcome.js";
+import type * as lib_backedFacts from "../lib/backedFacts.js";
 import type * as lib_blogListing from "../lib/blogListing.js";
 import type * as lib_cadenceLiveness from "../lib/cadenceLiveness.js";
 import type * as lib_cadenceMicroSeed from "../lib/cadenceMicroSeed.js";
@@ -209,6 +210,7 @@ import type * as lib_topicFit from "../lib/topicFit.js";
 import type * as lib_topicLifecycle from "../lib/topicLifecycle.js";
 import type * as lib_topicLifecycleDb from "../lib/topicLifecycleDb.js";
 import type * as lib_topicOrder from "../lib/topicOrder.js";
+import type * as lib_topicSourcing from "../lib/topicSourcing.js";
 import type * as lib_userError from "../lib/userError.js";
 import type * as lib_winnableDiscovery from "../lib/winnableDiscovery.js";
 import type * as lib_wordpressConditional from "../lib/wordpressConditional.js";
@@ -310,6 +312,7 @@ declare const fullApi: ApiFromModules<{
   "lib/autopilotReadiness": typeof lib_autopilotReadiness;
   "lib/autopilotRunLease": typeof lib_autopilotRunLease;
   "lib/autopilotRunOutcome": typeof lib_autopilotRunOutcome;
+  "lib/backedFacts": typeof lib_backedFacts;
   "lib/blogListing": typeof lib_blogListing;
   "lib/cadenceLiveness": typeof lib_cadenceLiveness;
   "lib/cadenceMicroSeed": typeof lib_cadenceMicroSeed;
@@ -447,6 +450,7 @@ declare const fullApi: ApiFromModules<{
   "lib/topicLifecycle": typeof lib_topicLifecycle;
   "lib/topicLifecycleDb": typeof lib_topicLifecycleDb;
   "lib/topicOrder": typeof lib_topicOrder;
+  "lib/topicSourcing": typeof lib_topicSourcing;
   "lib/userError": typeof lib_userError;
   "lib/winnableDiscovery": typeof lib_winnableDiscovery;
   "lib/wordpressConditional": typeof lib_wordpressConditional;

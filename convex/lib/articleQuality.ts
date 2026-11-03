@@ -1243,6 +1243,10 @@ const INCOMPLETE_TRANSITIVE_META_END_PATTERN =
  * floor sits below the writer's depth target (ARTICLE_DEPTH_BASE_WORDS plus
  * its reserve, 1,500 words) to leave room for that pruning. */
 export const STRICT_PUBLICATION_MIN_WORDS = 1000;
+/** P289 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md hole 7): a planned article's length is set by its required items (sections,
+ * format elements, options), not words; code deletes what its sources don't back, so this is only a floor against an
+ * empty page. */
+export const PLANNED_MIN_WORDS = 300;
 /** The depth the writer is asked for starts from this (plus a reserve). */
 export const ARTICLE_DEPTH_BASE_WORDS = 1200;
 
@@ -2363,7 +2367,7 @@ export function evaluatePublicationQuality(
   // a measured step: the format ceiling in articleWordCeiling() still bounds the
   // top end, so short formats stay publishable while genuine guides must be
   // substantive.
-  const minimumWordCount = mode === "strict" ? STRICT_PUBLICATION_MIN_WORDS : 500;
+  const minimumWordCount = mode === "strict" ? (article.qualityPlan === "fixed_v1" ? PLANNED_MIN_WORDS : STRICT_PUBLICATION_MIN_WORDS) : 500;
   if (measuredWordCount < minimumWordCount) {
     issues.push(
       `Article is too thin (${measuredWordCount} words; minimum ${minimumWordCount}).`,

@@ -6,7 +6,9 @@ import { LIST_MIN_OPTIONS, LIST_RESEARCH_SEARCHES, LIST_RESEARCH_SOURCES, MAX_RE
   primarySourcesRequest, rankedResearchSources, sourceHosts } from "../lib/researchPasses";
 import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWords, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis,
   serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch, FORMAT_DEFAULT_WORDS } from "../lib/serpBrief";
-import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, flaggedLines, planCheckIssues, planCheckNotes, runPlanChecks, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
+import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, planCheckIssues, planCheckNotes, runPlanChecks, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
+import { backedFactsOnly, type BackingInput, type BackingRemoval } from "../lib/backedFacts";
+import { sourcingGaps, TopicNotSourceable, undocumentedCodeNames, type SourcingCounts } from "../lib/topicSourcing";
 import { withoutStockDisclaimers } from "../lib/contentCorrection";
 import { articlePlanEnabled, contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
 import { autopilotCompanyNameIssue, autopilotCompanyNameNote, autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote,
@@ -75,6 +77,7 @@ import {
   removeUnverifiedInlineCitations,
   selectReviewedProductImage,
   STRICT_PUBLICATION_MIN_WORDS,
+  PLANNED_MIN_WORDS,
   ARTICLE_DEPTH_BASE_WORDS,
   repairClaimLedgerByDeletion,
   stripUnsourcedQualityClaims,
@@ -4597,6 +4600,8 @@ async function handleArticle(
   let researchSources: PreservedSource[] = [];
   // P268: who publishes each kept source of a planned article (owner, publication, or a blog kept as context only).
   let researchSourceRoles = new Map<string, SourceRole>();
+  // P291: what research found for a planned article, by publisher (step 0 decides from it before anything is written).
+  let plannedSourcing: SourcingCounts | null = null;
 
   if (topic && !contentProviderActive()) {
     try {
@@ -4838,6 +4843,7 @@ async function handleArticle(
         const ranked = rankedResearchSources(readable, roles, limit);
         researchSources = ranked.kept;
         researchSourceRoles = new Map(ranked.kept.map((source) => [source.url, ranked.role(source.url)]));
+        plannedSourcing = { owner: ranked.counts.owner, publication: ranked.counts.publication, context: ranked.counts.context };
         researchQualityNotes.push(`Sources by publisher: ${ranked.counts.owner} owner page(s), ${ranked.counts.publication} publication(s), ${ranked.counts.context} blog(s) as context only${ranked.counts.dropped ? `; ${ranked.counts.dropped} blog(s) left out` : ""}.`);
       } else researchSources = readable.slice(0, limit);
       if (strict.rejected.length) researchQualityNotes.push(planned ? `Excluded ${strict.rejected.length} source(s) from forums, social media or other unusable hosts.`
@@ -4862,6 +4868,14 @@ async function handleArticle(
       researchQualityNotes.push(`Web research unavailable for this article: ${err instanceof Error ? err.message.slice(0, 200) : "unknown"}`);
       console.error(`Autopilot web research failed (continuing without): ${err instanceof Error ? err.message : "unknown"}`);
     }
+  }
+
+  // P291 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md step 0): an Autopilot article is written only when research found what its
+  // format needs (a list its options' own pages, a tutorial the official docs, at least three usable sources otherwise).
+  // A topic that can't be sourced costs its research, never a draft: the job ends here and the slot takes the next topic.
+  if (articlePlan && contentProviderAutopilotDraft() && contentWebResearchEnabled()) {
+    const gaps = sourcingGaps(articlePlan.format, plannedSourcing ?? { owner: 0, publication: 0, context: researchSources.length });
+    if (gaps.length) throw new TopicNotSourceable(gaps);
   }
 
   // ── Step 1b: YouTube Video Search (graceful degradation) ──
@@ -5072,7 +5086,10 @@ async function handleArticle(
     // P268 (Oct 31 2026): Cowork, batch 2: "Length targets cause repetition. In every article the same caveat appears 3-7
     // times. The writer pads to reach the word target." Coverage sets the length.
     articlePlan ? `- LENGTH: There is no word target: the outline and the coverage set the length. Give each section and each coverage item its specifics once, then stop. Never restate a point, caveat, warning, label or number you have already given; a later section refers back in a few words at most. The publication floor is ${minimumWords} words.` : "",
-    articlePlan ? `- FACT SHEET: The source excerpts are the fact sheet. Every number and factual claim comes from them (put its [n] right after the claim it supports) or from the confirmed business facts. A product's or vendor's own page supports facts about that product only. Name no person or company the excerpts or business facts don't name.` : "",
+    // P289 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md steps 2-3): every factual sentence carries its own [n], and code deletes one
+    // its excerpt doesn't back; volatile facts are dated.
+    articlePlan ? `- FACT SHEET: The source excerpts are the fact sheet. End EVERY sentence that states a fact (a number, price, fee, date, name, rule, or why something happens) with the [n] of the excerpt that states it, even when the sentence before cites the same excerpt; advice, steps and transitions need none. Code deletes any factual sentence its [n] excerpt doesn't state (its numbers, the company or product named beside a number, the cause it gives), so write only what the excerpts say, in their direction (never "low" where the excerpt says "high"). Facts about the business itself come from the confirmed business facts and need no [n]. A product's or vendor's own page supports facts about that product only. Name no person or company the excerpts or business facts don't name.` : "",
+    articlePlan ? `- DATES: Give each price, fee, rebate, incentive and rule "as of ${new Date().toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" })}" once, where it is first stated (prices and rules change; the reader must see when these were read).` : "",
     // P264 (Oct 31 2026), searcher-led: Cowork judged the plan's first 5 articles thin (a worked example stopped halfway,
     // no prices, steps repeated three times, a vacated FTC rule stated as current).
     // P268: "No deflecting: 'check the manufacturer' and 'ask your plumber' count as a missing item when the top results give
@@ -7398,6 +7415,25 @@ async function checkPlannedClaims(args: { markdown: string; search: string }): P
   return claimErrorsInArticle(checked.errors, args.markdown);
 }
 
+/** P289 (Nov 3 2026): what step 4 checks a planned article's sentences against: its numbered sources' excerpts (in citation
+ * order), the business's confirmed details, and the names that need no source. */
+function plannedBacking(article: Doc<"articles">, topic: { primaryKeyword?: string } | null, productName: string, wrongClaims: string[]): BackingInput {
+  const plan = article.articlePlan;
+  return {
+    sources: (article.sources ?? []).map((source) => ({ text: `${source.title ?? ""}\n${source.excerpt ?? ""}` })),
+    profile: article.productEvidenceSnapshot ?? "",
+    allowedNames: [productName, topic?.primaryKeyword ?? "", ...(article.metaKeywords ?? [])].filter(Boolean),
+    topic: [topic?.primaryKeyword ?? "", ...(plan?.sections ?? []), ...(plan?.coverage ?? [])].join(" "),
+    wrongClaims,
+  };
+}
+/** The internal QA line for what code removed (never shown to the customer as something to check). */
+function removedByCodeNote(removed: readonly BackingRemoval[]): string {
+  const count = (reason: BackingRemoval["reason"]) => removed.filter((r) => r.reason === reason).length;
+  return `Removed by code: ${removed.length} sentence(s) its sources don't back (numbers ${count("number")}, names ${count("name")}, ` +
+    `causes ${count("cause")}, repeats ${count("repeat")}, referrals ${count("referral")}, claims ${count("claim")}, table rows ${count("table")}).`;
+}
+
 async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">; articleId: Id<"articles">; incrementRevision: boolean;
   qualityRecoveryVersion?: number; site: Doc<"sites">; article: Doc<"articles"> }) {
   const { siteId, articleId, incrementRevision, site, article } = args;
@@ -7423,28 +7459,39 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
   const fixedBefore = (article.qualityRevisionCount ?? 0) >= 1;
   let fixedNow = false;
   if (!fixedBefore) {
-    // The one targeted fix: exactly the failing lines and checks, nothing else rewritten.
+    const plan = article.articlePlan;
+    const claims = plan ? await checkPlannedClaims({ markdown: fields.markdown, search: topic?.primaryKeyword ?? article.title })
+      .catch((error: unknown) => { fixNotes.push(costCapRefusal(error) ? "The claims check was skipped: this article reached its $0.50 cost cap."
+        : `Claims check unavailable: ${error instanceof Error ? error.message.slice(0, 120) : "unknown"}`); return [] as ClaimError[]; }) : [];
+    // P289 (Nov 3 2026, ops/ARTICLE-PLAN-V2.md step 4): code keeps only what the sources back. A number, a name beside a
+    // number, or a cause its cited source doesn't state, a passage said again, a referral and what the claims check found
+    // are deleted here at $0, never handed to the fix or to the customer.
+    const backing = plannedBacking(article, topic, productName, claims.map((claim) => claim.sentence));
+    const cleaned = backedFactsOnly(fields.markdown, backing);
+    if (cleaned.removed.length) {
+      fields = { ...fields, markdown: cleaned.markdown };
+      fixNotes.push(removedByCodeNote(cleaned.removed));
+    }
+    // The one targeted fix: only what deletion can't do (a missing section or format element, a step without code, too few
+    // options, a sentence that could not be deleted cleanly), nothing else rewritten.
     const before = candidateFor(fields);
     const failures = planChecksForArticle(before);
     const objective = issuesBlockingPreLinkReview([...evaluatePublicationQuality(before, "strict").issues, ...readerVisibleIssues(before)])
       .filter((issue) => !/^Plan check:/.test(issue));
-    // P268 (Oct 31 2026): what Cowork failed batch 2 for that code can find (a passage said again, a reader sent elsewhere,
-    // a tutorial step without code, a list short of options) and one claims check, for the same one fix. Neither holds a draft.
-    const plan = article.articlePlan;
     const found = plan ? fixFindings(fields.markdown, { format: plan.format as PlanFormat, sections: plan.sections, minItems: plan.minItems }, productName,
-      [topic?.primaryKeyword ?? "", ...plan.sections, ...(plan.coverage ?? [])].join(" ")) : [];
-    const claims = plan ? await checkPlannedClaims({ markdown: fields.markdown, search: topic?.primaryKeyword ?? article.title })
-      .catch((error: unknown) => { fixNotes.push(costCapRefusal(error) ? "The claims check was skipped: this article reached its $0.50 cost cap."
-        : `Claims check unavailable: ${error instanceof Error ? error.message.slice(0, 120) : "unknown"}`); return [] as ClaimError[]; }) : [];
-    if (found.length || claims.length) fixNotes.push(`Fix inputs: ${claims.length} claim(s) to correct, ${found.filter((f) => f.kind === "repetition").length} repeated passage(s), ` +
-      `${found.filter((f) => f.kind === "deflection").length} referral(s), ${found.filter((f) => f.kind === "code").length} step(s) without code, ${found.filter((f) => f.kind === "options").length ? "too few options" : "options complete"}.`);
+      [topic?.primaryKeyword ?? "", ...plan.sections, ...(plan.coverage ?? [])].join(" ")).filter((finding) => finding.kind === "code" || finding.kind === "options") : [];
+    // P291 (hole 4): a tutorial's code uses only functions and options its documentation sources show.
+    const undocumented = plan?.format === "tutorial"
+      ? undocumentedCodeNames(fields.markdown, (article.sources ?? []).map((source) => `${source.title ?? ""}\n${source.excerpt ?? ""}`).join("\n")) : [];
+    if (found.length || claims.length) fixNotes.push(`Fix inputs: ${claims.length} claim(s) found (deleted by code), ` +
+      `${found.filter((f) => f.kind === "code").length} step(s) without code, ${found.filter((f) => f.kind === "options").length ? "too few options" : "options complete"}.`);
     const instructions = [
       ...failures.map((failure) => failure.check === "number" ? `Remove or correct this sentence; ${failure.detail}: «${failure.line}»`
         : failure.check === "product" ? `Correct this product fact to match the confirmed business details, or remove it: «${failure.line}»`
         : failure.check === "name" ? `Rewrite this sentence without the name(s) no source or business detail gives (${failure.detail.replace(/ is not named.*$/, "")}), keeping its point: «${failure.line}»`
         : `${failure.detail}: add it, following the outline and the format.`),
-      ...claims.map((claim) => `Correct this sentence (${claim.problem.slice(0, 200)}) using only the fact sheet; correction: ${claim.correction.slice(0, 300)}: «${claim.sentence}»`),
       ...found.map((finding) => finding.line ? `${finding.detail}: «${finding.line}»` : `${finding.detail}.`),
+      ...(undocumented.length ? [`Rewrite the code that uses ${undocumented.join(", ")}: the documentation excerpts don't show ${undocumented.length === 1 ? "it" : "them"}. Use only functions, options and commands the excerpts show.`] : []),
       // An uncited number: the exact passage, so the one fix can cite its fact-sheet source or drop the number.
       ...objective.flatMap((issue) => UNCITED_QUANTITY_ISSUE.test(issue)
         ? uncitedEvidenceRequiredParagraphs(before.markdown, before).map((passage) =>
@@ -7454,7 +7501,7 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
     // The $0.50 cap skips the fix, never the writing: a fix it refuses leaves the draft for its owner, lines marked.
     const fixed = instructions.length ? await remediateFinalArticle({ markdown: fields.markdown, articleType: article.articleType ?? "standard",
       primaryKeyword: topic?.primaryKeyword ?? article.title, productName, productEvidence: article.productEvidenceSnapshot ?? "",
-      researchEvidence: article.researchEvidenceSummary ?? "", sources: article.sources ?? [], minWords: STRICT_PUBLICATION_MIN_WORDS,
+      researchEvidence: article.researchEvidenceSummary ?? "", sources: article.sources ?? [], minWords: PLANNED_MIN_WORDS,
       maxWords: plannedWordCeiling(article.articleType, article.articlePlan?.targetWords), auditNotes: ["Fix only these points and change nothing else. Keep the worked example's illustrative amounts exactly as they are:", ...instructions.slice(0, 32)],
       maxTokens: plannedFixMaxTokens(fields.markdown) })
       .catch((error: unknown) => { if (costCapRefusal(error)) return null; throw error; }) : null;
@@ -7465,8 +7512,11 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
     // issues than the draft had is set aside, and the draft it was given stands.
     const blocking = (draft: typeof fields) => { const c = candidateFor(draft);
       return issuesBlockingPreLinkReview([...evaluatePublicationQuality(c, "strict").issues, ...readerVisibleIssues(c)]).length; };
-    // P282: a stock disclaimer the fix itself wrote is removed in code, the way the live repair removes it.
-    const fixedFields = fixed ? { ...fields, markdown: withSourcesSection(withoutStockDisclaimers(fixed.markdown), article.sources ?? []) } : null;
+    // P282: a stock disclaimer the fix itself wrote is removed in code, the way the live repair removes it. P289: so is
+    // anything the fix wrote that its sources don't back (step 5's output goes through step 4 again, code only).
+    const refixed = fixed ? backedFactsOnly(withSourcesSection(withoutStockDisclaimers(fixed.markdown), article.sources ?? []), backing) : null;
+    if (refixed?.removed.length) fixNotes.push(`After the fix: ${removedByCodeNote(refixed.removed)}`);
+    const fixedFields = refixed ? { ...fields, markdown: refixed.markdown } : null;
     const [blockingBefore, blockingAfter] = fixedFields ? [blocking(fields), blocking(fixedFields)] : [0, 0];
     if (fixedFields && blockingAfter > blockingBefore) {
       fixNotes.push(`The fix was set aside: it left ${blockingAfter} blocking issue(s) where the draft had ${blockingBefore}.`);
@@ -7487,9 +7537,6 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
   const candidate = candidateFor(fields);
   const quality = evaluatePublicationQuality(candidate, "strict");
   const failures = planChecksForArticle(candidate);
-  // The owner's marked lines include the sentences with an uncited number (a table is listed by the check, not marked).
-  const uncitedLines = uncitedEvidenceRequiredParagraphs(candidate.markdown, candidate).filter((passage) => !/^\s*\|/.test(passage))
-    .flatMap((passage) => passage.split(/(?<=[.!?])\s+/)).filter((sentence) => /\d/.test(sentence) && sentence.trim().length >= 12);
   const preLinkIssues = issuesBlockingPreLinkReview([...quality.issues, ...readerVisibleIssues(candidate)]);
   const readyForPublication = preLinkIssues.length === 0;
   const contentHash = readyForPublication ? publicationArtifactHash(candidate) : undefined;
@@ -7498,9 +7545,9 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
   await ctx.runMutation(internal.articles.applyQualityReview, {
     articleId, title: fields.title, markdown: fields.markdown, metaTitle: fields.metaTitle, metaDescription: fields.metaDescription,
     wordCount: stats.wordCount, readingTime: stats.readingTime,
-    // The lines a failed check points at, for the owner's marked draft (statementsToCheck reads them).
-    factCheckNotes: [`Code checks (fixed plan v1): ${failures.length ? `${failures.length} to fix` : "passed"}.`,
-      ...[...new Set([...flaggedLines(failures), ...uncitedLines.map((line) => line.trim())])].map((line) => `Unverified claim: «${line.replace(/[«»]/g, "")}»`)].join(" "),
+    // P290 (step 6): no line is handed to the customer to check; what code couldn't back was deleted, and the checks'
+    // findings stay in the internal notes below.
+    factCheckNotes: `Code checks (fixed plan v1): ${failures.length ? `${failures.length} to fix` : "passed"}.`,
     editorialQualityNotes: [
       ...(article.editorialQualityNotes ?? []).filter((note) => /^(?:Excluded \d+ .*source|Research: |Web research unavailable|Primary-source research pass|Outline unavailable|Sources by publisher|Source check unavailable)/.test(note)),
       `Fixed article plan v1: ${article.articlePlan?.format ?? "guide"}, ${article.articlePlan?.sections.length ?? 0} outline section(s).`,
@@ -10137,14 +10184,25 @@ export const processNextJob = internalAction({
           }
         }
         await reserveArticleProviderAttempt("generation");
-        const generated = await providerScope("draft", () => handleArticle(
-          ctx,
-          args.siteId,
-          payload?.topicId,
-          payload?.options,
-          job._id,
-          workerToken,
-        ));
+        let generated: { articleId: Id<"articles"> };
+        try {
+          generated = await providerScope("draft", () => handleArticle(
+            ctx,
+            args.siteId,
+            payload?.topicId,
+            payload?.options,
+            job._id,
+            workerToken,
+          ));
+        } catch (error) {
+          // P291 (step 0): research couldn't source this topic; it is retired before any writing and the slot moves on.
+          if (!(error instanceof TopicNotSourceable) || !payload?.topicId) throw error;
+          const settlement = await ctx.runMutation(internal.topics.markTopicUnsourceableInternal, {
+            siteId: args.siteId, jobId: job._id, topicId: payload.topicId, reasons: error.gaps });
+          if (!settlement.updated) throw new Error("Topic sourcing settlement lost its exact job/topic fence");
+          await complete({ topicId: payload.topicId, qualityQuarantined: true, terminalTopicFit: true, detail: error.message });
+          return { processed: true, jobId: job._id, qualityQuarantined: true, failureKind: "topic_not_sourceable" };
+        }
         articleId = generated.articleId;
         const handoff = await ctx.runMutation(
           internal.jobs.yieldGeneratedArticleForReview,

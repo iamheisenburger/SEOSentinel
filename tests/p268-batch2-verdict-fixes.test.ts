@@ -146,7 +146,8 @@ test("P268 the one fix runs on the first review with the claims check and the co
   assert.match(pipeline, /const fixedBefore = \(article\.qualityRevisionCount \?\? 0\) >= 1;\n\s+let fixedNow = false;\n\s+if \(!fixedBefore\) \{/);
   assert.match(pipeline, /const qualityRevisionCount = \(article\.qualityRevisionCount \?\? 0\) \+ \(incrementRevision \|\| fixedNow \? 1 : 0\);/);
   assert.match(pipeline, /const claims = plan \? await checkPlannedClaims\(/);
-  assert.match(pipeline, /\.\.\.claims\.map\(\(claim\) => `Correct this sentence \(/);
+  // P289: what the claims check finds is deleted by code (tests/p289-code-keeps-backed-facts.test.ts), not sent to the fix.
+  assert.match(pipeline, /const backing = plannedBacking\(article, topic, productName, claims\.map\(\(claim\) => claim\.sentence\)\);/);
   assert.match(pipeline, /\.\.\.found\.map\(\(finding\) => finding\.line \? `\$\{finding\.detail\}: «\$\{finding\.line\}»` : `\$\{finding\.detail\}\.`\),/);
   // P269: the check reads the article alone, against established knowledge (tests/p269-claims-check.test.ts).
   assert.match(pipeline, /it states a scientific, engineering or technical mechanism, cause or property wrongly or backwards/);

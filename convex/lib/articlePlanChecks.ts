@@ -9,11 +9,11 @@ export type FactSheet = { sources: { url: string; title?: string; text: string }
 export type ArticleOutline = { format: PlanFormat; sections: string[]; minItems?: number };
 export type PlanCheckFailure = { check: "number" | "product" | "name" | "section" | "format"; line?: string; detail: string };
 
-const SOURCES_HEADING = /^#{2,3}\s+(?:Sources|References|Related reading)\s*$/im;
+export const SOURCES_HEADING = /^#{2,3}\s+(?:Sources|References|Related reading)\s*$/im;
 const CODE_BLOCK = /^[ \t]{0,6}```[\s\S]*?^[ \t]{0,6}```[ \t]*$/gm;
 const HAS_CODE = /^[ \t]{0,6}```/m;
 /** Article prose: no code (blocks or inline), no headings, no Sources section, no link targets. */
-function prose(markdown: string): string {
+export function prose(markdown: string): string {
   return markdown.split(SOURCES_HEADING)[0]
     // P268: a fence indented inside a numbered step is code too (batch 2's tutorial: its JSON output read as claims).
     .replace(CODE_BLOCK, " ")
@@ -43,7 +43,7 @@ export function statedNumbers(sentence: string): string[] {
     .replace(/\b\d{1,2}(?:st|nd|rd|th)\b/gi, " ").replace(/\b\d{1,2}:\d{2}\b/g, " ");
   return [...new Set([...text.matchAll(/(?<![\w.])\$?\d[\d,]*(?:\.\d+)?/g)].map((m) => m[0].replace(/[$,]/g, "")).filter((n) => n !== ""))];
 }
-function numberStated(number: string, haystack: string): boolean {
+export function numberStated(number: string, haystack: string): boolean {
   const digits = number.replace(/\.0+$/, "");
   return new RegExp(`(?<![\\d.])${digits.replace(/\./g, "\\.")}(?![\\d])`).test(haystack.replace(/(\d),(\d{3})/g, "$1$2"));
 }
@@ -215,7 +215,7 @@ function bodySentences(markdown: string): string[] {
 const FILLER = new Set(("a an the and or but if of to in on for with at by from as is are was were be been being it its this that these those your you we " +
   "our they their them not no so than then there here what which who when where why how do does did can could will would should may might must also just " +
   "only very more most less about into over under after before up out such each every any some all both per via one").split(" "));
-const words = (sentence: string) => normalize(sentence).replace(/\[\d+(?:\s*,\s*\d+)*\]/g, " ").match(/[a-z0-9$%][a-z0-9$%'.-]*/g)?.map((w) => w.replace(/[.'-]+$/, "")) ?? [];
+export const words = (sentence: string) => normalize(sentence).replace(/\[\d+(?:\s*,\s*\d+)*\]/g, " ").match(/[a-z0-9$%][a-z0-9$%'.-]*/g)?.map((w) => w.replace(/[.'-]+$/, "")) ?? [];
 
 const stem = (word: string) => word.replace(/(?:ies)$/, "y").replace(/(?<=[a-z]{3})s$/, "");
 /** Passages of six or more words that appear in more than one sentence of the article's body. A passage made only of the
@@ -260,7 +260,7 @@ export function repeatedPassages(markdown: string, n = 6, topic = ""): { phrase:
 }
 
 /** A reader sent elsewhere for the answer, the way Cowork marked it ("check the manufacturer", "ask your plumber"). */
-const DEFLECTION = /(?<![-\w])(?:check|confirm|verify|ask|consult|contact|call|talk to|speak (?:to|with)|refer to|look up|see)\b[^.!?]{0,50}?\b(?:the|your|a|an|each|local|their)\s+(?:\w+\s+){0,2}?(?:manufacturer|maker|brand|plumber|installer|contractor|electrician|technician|provider|vendor|retailer|dealer|utility|city|county|municipality|accountant|bookkeeper|tax (?:pro|professional|adviser|advisor)|professional|expert|documentation|docs|official (?:site|website|page)|product page|pricing page|(?:care |product )?label|packaging)(?:'s|s|’s)?\b/i;
+export const DEFLECTION = /(?<![-\w])(?:check|confirm|verify|ask|consult|contact|call|talk to|speak (?:to|with)|refer to|look up|see)\b[^.!?]{0,50}?\b(?:the|your|a|an|each|local|their)\s+(?:\w+\s+){0,2}?(?:manufacturer|maker|brand|plumber|installer|contractor|electrician|technician|provider|vendor|retailer|dealer|utility|city|county|municipality|accountant|bookkeeper|tax (?:pro|professional|adviser|advisor)|professional|expert|documentation|docs|official (?:site|website|page)|product page|pricing page|(?:care |product )?label|packaging)(?:'s|s|’s)?\b/i;
 export function deflections(markdown: string): string[] {
   return sentences(prose(markdown)).filter((sentence) => DEFLECTION.test(sentence));
 }
