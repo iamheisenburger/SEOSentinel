@@ -226,6 +226,20 @@ export function verifiedRecords(raw: Omit<Records, "steps"> & { steps?: Records[
     if (!section) { dropped.push(`${fact.label}: an unknown section "${fact.section}"`); return []; }
     if (!valid(fact, `${fact.label} ${fact.value}`, fact.label)) return [];
     if (!namesQuoted(fact.value, fact.quote)) { dropped.push(`${fact.label}: a name its quote doesn't give`); return []; }
+    // R9b (batch 8): a rebate or tax-credit figure exists only from the program's own page — a government site, or a page
+    // on the paying utility's own domain. Batch 8 printed 25C credit caps from a tax-software blog whose page never says
+    // the program ended: the owner's page either states the figure with its dates or the record goes.
+    if (/\b(?:rebate|tax credit|credit)\b/i.test(`${fact.kind} ${fact.subject} ${fact.label}`) && fact.source > 0) {
+      const url = ctx.sources[fact.source - 1]?.url ?? "";
+      const host = /^https?:\/\/([^\/]+)/.exec(url)?.[1] ?? "";
+      const ownerKey = host.replace(/^www\./, "").split(".")[0] ?? "";
+      const authority = /\.gov\b|\.edu\b|\.mil\b/i.test(host) || /energystar|irs\.gov|energy\.gov/i.test(host);
+      const ownerSpeaking = ownerKey.length >= 5 && mentions(`${fact.quote} ${fact.value} ${fact.subject}`, ownerKey);
+      if (!authority && !ownerSpeaking) {
+        dropped.push(`${fact.label}: a rebate or credit not from the program's own page (${host || "no host"})`);
+        return [];
+      }
+    }
     return [{ ...fact, section, kind: (FACT_KINDS as readonly string[]).includes(fact.kind) ? fact.kind : "fact" }];
   }), (fact) => `${key(fact.label)}|${key(fact.value)}`).filter((fact) => {
     // Each fact once, with its owner: a fact about a listed option joins that option's entry (a trial length, a contract
@@ -448,7 +462,14 @@ export function skeletonFor(args: { format: string; sections: readonly string[];
       for (const f of money) register(f, f.value.replace(/[.;,]+$/, ""), f.source, rowLabel(f, args.sources));
     }
     const records: ProseRecord[] = [];
-    const factLabel = (f: Records["facts"][number]) => `${f.subject && !normal(f.value).includes(normal(f.subject).slice(0, 12)) ? `${f.subject}: ` : ""}${rowLabel(f, args.sources)}`;
+    // The subject prefixes a fact whose label doesn't already start with it (batch 8 printed "Stone-coated steel:
+    // Stone-coated steel cost per square").
+    const factLabel = (f: Records["facts"][number]) => {
+      const label = rowLabel(f, args.sources);
+      const subject = f.subject.trim();
+      return subject && !normal(f.value).includes(normal(subject).slice(0, 12)) && !normal(label).startsWith(normal(subject).slice(0, 10))
+        ? `${subject}: ${label}` : label;
+    };
     for (const f of [...(money.length >= 2 ? [] : money), ...other]) records.push(register(f, f.value.replace(/[.;,]+$/, ""), f.source, factLabel(f)));
     if (!lines.length && !records.length) continue;
     if (out.length < 2) {
@@ -586,12 +607,21 @@ export function proseParagraphs(text: string, args: { pool: Record<string, { dis
   if (namedEntities(bare).some((name) => key(name).length >= 3 && !mentions(args.allowedText, name))) return bad("a name its records don't give");
   const limit = args.limit ?? 2;
   if (ids.some((id) => (args.used.get(id) ?? 0) >= limit)) return bad("a fact used too many times");
-  let kept = paragraph;
-  for (const id of new Set(ids)) {
-    args.used.set(id, (args.used.get(id) ?? 0) + ids.filter((x) => x === id).length);
-    const record = args.pool[id]!;
-    kept = kept.replaceAll(`{{${id}}}`, `${record.display}${cite(record.source)}`);
+  // Fill each placeholder with its value and citation, walking the original text with a cursor (replacement lengths
+  // shift later indices); a quoted fragment landing mid-sentence reads as prose ("… deals with automated waitlists…" —
+  // batch 8's glued capitals), so its first letter follows the sentence's case.
+  let filled = "", cursor = 0;
+  for (const match of [...paragraph.matchAll(PLACEHOLDER)]) {
+    const record = args.pool[match[1]]!;
+    const before = paragraph.slice(0, match.index).replace(/[\s(\[]+$/, "");
+    const follow = before.length > 0 && /[a-z,;]$/.test(before) && /^[A-Z][a-z]/.test(record.display)
+      ? record.display.charAt(0).toLowerCase() + record.display.slice(1) : record.display;
+    filled += paragraph.slice(cursor, match.index) + `${follow}${cite(record.source)}`;
+    cursor = match.index + match[0].length;
   }
+  const kept = filled + paragraph.slice(cursor);
+  args.used.clear();
+  for (const id of ids) args.used.set(id, (args.used.get(id) ?? 0) + 1);
   return { kept: kept.replace(/\s+([,.;:])/g, "$1").replace(/\(\s+/g, "(").replace(/\s+\)/g, ")").replace(/\s{2,}/g, " ").trim(), dropped: [] };
 }
 

@@ -131,6 +131,33 @@ export function planFormat(brief: Pick<SerpBrief, "results" | "pages">, asksForP
 }
 
 const NOT_AN_OPTION = /^(?:what|why|how|when|where|which|who|best|top|our|the|a|an|is|are|do|does|can|should|conclusion|summary|final|faqs?|frequently|pricing|prices?|features?|pros|cons|overview|introduction|methodology|key|comparison|compare|table|related|bottom|verdict|choosing|choose|benefits?|alternatives?|other|more|free|paid|why|tips?|step|steps|getting|get|start|sign|book|contact|about|reviews?|rating|ratings|honorable|wrapping|editor|editors|in|for|with|and|to|online|class|classes|scheduling|software|booking|payment|payments|customer|support|integrations?|reporting|marketing|membership|memberships|mobile|apps?|ease|value|security|setup|onboarding|cost|costs|plans?)\b/i;
+/** v3.1 (batch 9, R3): option names inside listicle text research already kept. Real listicle prose names a tool as the
+ * subject of a sentence ("WellnessLiving offers clear, tiered subscription plans", "Vagaro offers one of the most
+ * affordable entry points") or beside its price; batch 8's yoga excerpts held WellnessLiving, Vagaro and Glofox that way
+ * and none became an option. */
+const NAME_CONTEXT = /\b(?:offers?|is|are|costs?|starts?|has|provides?|charges?|runs|suits?|includes?)\b/i;
+const NAME_NOISE = /^(?:the|this|that|it|our|their|yoga|studio|studios|scheduling|software|pricing|prices|plans?|core|features?|small|best|top|most|many|all|some|new|every|standard|only|free|pro|lite|plus|business|monthly|annual|per|from|starting|users?|members?|classes?|booking|payments?|integrations?|reporting|support|mobile|app|trial|free|demo)\b/i;
+export function namesInText(text: string, limit = 12): string[] {
+  const found = new Map<string, string>();
+  const push = (raw: string) => {
+    const name = raw.trim().replace(/[,.;:]$/, "");
+    const k = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (k.length < 3 || k.length > 30 || !/^[A-Z]/.test(name) || NOT_AN_OPTION.test(name) || NAME_NOISE.test(name) || found.has(k)) return;
+    found.set(k, name);
+  };
+  // Anywhere in the stream (flattened excerpts have no sentence punctuation); a lowercase word before the name keeps
+  // generic subjects out ("prices WellnessLiving offers", never "approximately $199").
+  for (const m of text.matchAll(/(?:^|[^A-Za-z0-9.&'])([A-Z][A-Za-z0-9&'.]{2,}(?:\s+[A-Z][A-Za-z0-9&'.]{2,}){0,2}?)\s+(?:offers?|costs?|starts?|provides?|charges?|runs)\b/g)) {
+    const name = m[1]!;
+    // "Scheduling for Small Studios Vagaro offers" captures "Studios Vagaro": the noise word swallowed the name, and the
+    // match hides the name's own position — so a noise-prefixed capture retries its last word.
+    if (!NAME_NOISE.test(name)) push(name);
+    else if (name.includes(" ")) push(name.split(/\s+/).pop()!);
+  }
+  for (const m of text.matchAll(/\b([A-Z][A-Za-z0-9&'.]{2,}(?:\s+[A-Z][A-Za-z0-9&'.]{2,}){0,2})\s+[$€£]\s?\d/g)) push(m[1]!);
+  return [...found.values()].slice(0, limit);
+}
+
 /** P262 (Oct 31 2026): the options a list search's top results name, from their own headings ("1. Mindbody", "Momence: best
  * for…", "WellnessLiving") and the bold or link leads of their entries, most named first. Live trial: "best scheduling
  * software for yoga studios" named 3 options, because research kept only two vendors' help pages and the fact sheet rule

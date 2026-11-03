@@ -153,9 +153,19 @@ export function missingFigureItems(coverage: readonly string[], sources: readonl
   // degree; a lifespan or timeline a duration (batch 5's Denver roofing passed on a year beside "cost" and lost its prices).
   const figureFor = (item: string) => /\b(?:costs?|prices?|pricing|fees?|rebates?|incentives?|tax credits?)\b/i.test(item) ? /[$€£]\s?\d|\d\s?(?:usd|dollars)/
     : /temperature|heat limit|°/i.test(item) ? /\d\s?°|\d+\s?degrees/ : /\d+\s?(?:-|to|–)?\s?\d*\s?(?:years?|months?|weeks?|days?|hours?)/;
+  // v3.1 (batch 9): a term nearly every source shares ("denver", "roof" beside every price) makes ANY item look covered —
+  // batch 8's Denver roofing skipped its permit and insurance lookups that way while "permit" appeared in 0 sources. Only
+  // DISTINCTIVE terms (in at most half the sources) decide coverage.
+  const sourcesWith = (term: string) => texts.filter((text) => text.includes(term)).length;
+  const distinctive = (item: string) => itemTerms(item).filter((term) => term.length > 3 && sourcesWith(term) <= Math.max(1, Math.floor(texts.length / 2)));
   const figured = (item: string) => {
-    const terms = itemTerms(item).slice(0, 8), figure = figureFor(item);
-    return texts.some((text) => terms.filter((term) => text.includes(term)).length >= 2 &&
+    const terms = distinctive(item).slice(0, 8), figure = figureFor(item);
+    if (terms.length < 2) return false;
+    // An item is covered only where a source also has its TOPIC word — the item's first distinctive term (batch 8: "cash
+    // value" asides in cost pages made the insurance item look covered while "insurance" appeared in 0 sources, and the
+    // permit item skipped its denvergov lookup the same way).
+    const topic = terms[0];
+    return texts.some((text) => text.includes(topic) && terms.filter((term) => text.includes(term)).length >= 2 &&
       terms.some((term) => { const at = text.indexOf(term); return at >= 0 && figure.test(text.slice(Math.max(0, at - 200), at + 200)); }));
   };
   const items = coverage.filter((item) => FIGURE_ITEM.test(item) && !figured(item));

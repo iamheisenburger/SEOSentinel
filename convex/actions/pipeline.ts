@@ -4,7 +4,7 @@ import { EVIDENCE_EXCERPT_MAX_CHARS } from "../lib/evidenceExcerpt";
 import { LIST_MIN_OPTIONS, LIST_RESEARCH_SEARCHES, LIST_RESEARCH_SOURCES, MAX_RESEARCH_SOURCES, PLANNED_RESEARCH_SOURCES, PRIMARY_PASS_BELOW,
   PRIMARY_PASS_SEARCHES, SEARCHER_LED_RESEARCH_SYSTEM, SOURCE_ROLE_LABEL, type SourceRole, coverageSourcesRequest, optionSourcesRequest, itemLookupRequest, missingFigureItems,
   primarySourcesRequest, rankedResearchSources, sourceHosts } from "../lib/researchPasses";
-import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWords, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis,
+import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWords, namesInText, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis,
   serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch, FORMAT_DEFAULT_WORDS } from "../lib/serpBrief";
 import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, planCheckIssues, planCheckNotes, runPlanChecks, statedNumbers, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
 import { assembledArticle, assembledFormat, comparedSides, enrichedExcerpt, orderedStepsText, ownerPageText, PROSE_INPUT_SCHEMA, ProseSchema, pricingText, proseRequest, RECORDS_INPUT_SCHEMA,
@@ -5233,7 +5233,14 @@ async function handleArticle(
       if (excerpt.length > researchSources[at].excerpt.length) { researchSources[at] = { ...researchSources[at], excerpt, contentHash: sha256Hex(excerpt) }; enriched++; }
     }
     // A list's options: each one's own pricing page, found from its pages in research or in Google's top results, or by one
-    // targeted search per option research never reached (R3).
+    // targeted search per option research never reached (R3). Batch 9: candidates also come from names beside prices inside
+    // the listicle excerpts research kept (WellnessLiving/Momence sat in batch 8's excerpts but never became options).
+    if (articlePlan?.format === "list") {
+      const inText = researchSources.flatMap((source) => namesInText(source.excerpt ?? ""));
+      const wider = [...plannedListOptions];
+      for (const name of inText) if (!wider.some((o) => o.toLowerCase().replace(/[^a-z0-9]/g, "") === name.toLowerCase().replace(/[^a-z0-9]/g, ""))) wider.push(name);
+      plannedListOptions = wider.slice(0, 14);
+    }
     const pages = articlePlan?.format === "list" ? await ownerPricingPages(plannedListOptions,
       [...researchSources, ...(serpBrief?.results ?? []).map((result) => ({ url: result.url }))],
       { locationCode: dataForSeoLocationCode(site.targetCountry), languageCode: dataForSeoLanguageCode(site.language) }) : [];
