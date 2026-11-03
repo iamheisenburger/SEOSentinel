@@ -173,6 +173,7 @@ import type * as lib_promptRates from "../lib/promptRates.js";
 import type * as lib_providerBudgetAuthorization from "../lib/providerBudgetAuthorization.js";
 import type * as lib_providerSpendReservation from "../lib/providerSpendReservation.js";
 import type * as lib_publicRevisionProjection from "../lib/publicRevisionProjection.js";
+import type * as lib_publicUrlRetry from "../lib/publicUrlRetry.js";
 import type * as lib_publicationArtifact from "../lib/publicationArtifact.js";
 import type * as lib_publicationDeferral from "../lib/publicationDeferral.js";
 import type * as lib_publicationEligibility from "../lib/publicationEligibility.js";
@@ -410,6 +411,7 @@ declare const fullApi: ApiFromModules<{
   "lib/providerBudgetAuthorization": typeof lib_providerBudgetAuthorization;
   "lib/providerSpendReservation": typeof lib_providerSpendReservation;
   "lib/publicRevisionProjection": typeof lib_publicRevisionProjection;
+  "lib/publicUrlRetry": typeof lib_publicUrlRetry;
   "lib/publicationArtifact": typeof lib_publicationArtifact;
   "lib/publicationDeferral": typeof lib_publicationDeferral;
   "lib/publicationEligibility": typeof lib_publicationEligibility;

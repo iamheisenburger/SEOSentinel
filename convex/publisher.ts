@@ -99,18 +99,8 @@ import {
   publisherDestinationReceiptVerified,
   supportedPublisherMethod,
 } from "./lib/publisherProvisioning.ts";
+import { PUBLIC_URL_OUTAGE_RETRY_DELAYS_MS, PUBLIC_URL_RETRY_DELAYS_MS } from "./lib/publicUrlRetry.ts";
 
-const PUBLIC_URL_RETRY_DELAYS_MS = [
-  30_000,
-  2 * 60_000,
-  5 * 60_000,
-  15 * 60_000,
-  30 * 60_000,
-  60 * 60_000,
-  3 * 60 * 60_000,
-  12 * 60 * 60_000,
-  24 * 60 * 60_000,
-] as const;
 
 type FileContent = {
   path: string;
@@ -3138,6 +3128,8 @@ export const verifyPublicPublicationInternal = internalAction({
       urlStructure: site.urlStructure,
       slug: article.slug,
     });
+    // P285: a page that cannot be fetched at all (the site is down) is checked again for a week, not 41 hours.
+    let unreachable = false;
     try {
       const fetched = await safeFetchPublicText(publicUrl, {
         expectedHost: new URL(publicUrl).hostname,
@@ -3154,7 +3146,7 @@ export const verifyPublicPublicationInternal = internalAction({
           Accept: "text/html,application/xhtml+xml",
           "Accept-Encoding": "identity",
         },
-      });
+      }).catch((error: unknown) => { unreachable = true; throw error; });
       verifyLivePublicationPage({
         expectedUrl: publicUrl,
         fetchedUrl: fetched.url,
@@ -3192,7 +3184,7 @@ export const verifyPublicPublicationInternal = internalAction({
       const message = error instanceof Error
         ? error.message
         : "Public page verification failed";
-      const nextDelay = PUBLIC_URL_RETRY_DELAYS_MS[args.attempt];
+      const nextDelay = (unreachable ? PUBLIC_URL_OUTAGE_RETRY_DELAYS_MS : PUBLIC_URL_RETRY_DELAYS_MS)[args.attempt];
       const status = nextDelay === undefined ? "failed" : "pending";
       if (nextDelay !== undefined) {
         await ctx.scheduler.runAfter(
