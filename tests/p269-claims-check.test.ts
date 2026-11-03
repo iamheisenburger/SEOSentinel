@@ -27,10 +27,10 @@ test("P269 the claims check reads the article alone, on the writer model, and ke
   assert.match(pipeline, /const claims = plan \? await checkPlannedClaims\(\{ markdown: fields\.markdown, search: topic\?\.primaryKeyword \?\? article\.title \}\)/);
 });
 
-test("P269 the claims check runs only while the one fix it feeds still fits under the $0.50 cap", () => {
+test("P269 the claims check stays under the $0.50 cap (P288: on its own price, no fix reserve)", () => {
   const work = readFileSync("convex/contentWork.ts", "utf8");
-  assert.match(work, /export const ARTICLE_FIX_RESERVE_MICRO_USD = 200_000;/);
-  assert.match(work, /const reserve = \/:review:check_claims\$\/\.test\(args\.key\) \? ARTICLE_FIX_RESERVE_MICRO_USD : 0;\n\s+if \(spent >= cap \|\| \(optional && spent \+ args\.ceilingMicroUsd \+ reserve > cap\)\) \{/);
+  assert.doesNotMatch(work, /ARTICLE_FIX_RESERVE_MICRO_USD/);
+  assert.match(work, /if \(spent >= cap \|\| \(optional && spent \+ args\.ceilingMicroUsd > cap\)\) \{/);
 });
 
 test("P269 a hyphenated adjective is not a referral", () => {

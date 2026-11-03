@@ -168,8 +168,8 @@ test("P260 no AI review and no scores for a planned article: code checks, at mos
 test("P260 an article's provider spend is capped at $0.50; the cap skips the fix, never ends in a retry loop", () => {
   assert.match(work, /export const ARTICLE_COST_CAP_MICRO_USD = 500_000;/);
   assert.match(work, /const cap = Math\.min\(cw\.budgetMicroUsd, ARTICLE_COST_CAP_MICRO_USD\);/);
-  // P269: the claims check also keeps the fix's reserve free (tests/p269-claims-check.test.ts).
-  assert.match(work, /if \(spent >= cap \|\| \(optional && spent \+ args\.ceilingMicroUsd \+ reserve > cap\)\) \{/);
+  // P288: every optional step (the claims check included) runs only while its own highest price fits.
+  assert.match(work, /if \(spent >= cap \|\| \(optional && spent \+ args\.ceilingMicroUsd > cap\)\) \{/);
   assert.match(work, /export const ARTICLE_OPTIONAL_STEP = \/:remediate_final_article\$\|:review:submit_final_metadata\$\|:review:check_claims\$\/;/,
     "research passes are stopped only by spend (live trial: their $0.59 ceiling refused every second pass)");
   assert.match(work, /\/Content work \(budget exhausted\|rollover blocked\|cost cap reached\)\/\.test\(error\) \? error/);

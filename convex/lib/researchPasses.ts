@@ -129,7 +129,9 @@ export function rankedResearchSources<T extends { url: string }>(sources: readon
   const publications = sources.filter((source) => role(source.url) === "publication");
   const blogs = sources.filter((source) => role(source.url) === "blog");
   const strong = [...owners, ...publications].slice(0, limit);
-  const context = blogs.slice(0, Math.max(0, Math.min(2, MIN_STRONG_SOURCES - strong.length, limit - strong.length)));
+  // P288 (Nov 3 2026): up to MIN_STRONG_SOURCES in all, not at most 2 blogs: a how-to's guides (QuickBooks, NetSuite,
+  // Experian) and a local search's trade pages are all "blogs", and batch 3's how-to and Austin articles kept 2 sources.
+  const context = blogs.slice(0, Math.max(0, Math.min(MIN_STRONG_SOURCES - strong.length, limit - strong.length)));
   return { kept: [...strong, ...context], role, counts: { owner: Math.min(owners.length, limit), publication: strong.length - Math.min(owners.length, limit),
     context: context.length, dropped: blogs.length - context.length } };
 }

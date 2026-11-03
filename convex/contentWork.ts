@@ -1730,8 +1730,6 @@ export const ARTICLE_COST_CAP_MICRO_USD = 500_000;
 /** P260: the steps an article can do without (the one fix and the fix's metadata), by call key. A research pass is
  * stopped only by spend: its ceiling ($0.59) assumes a whole context window of results, about ten times its cost. */
 export const ARTICLE_OPTIONAL_STEP = /:remediate_final_article$|:review:submit_final_metadata$|:review:check_claims$/;
-/** P269: what the one fix may cost at most (batch 2's fix ceilings were $0.15-0.19), kept free when the claims check runs. */
-export const ARTICLE_FIX_RESERVE_MICRO_USD = 200_000;
 
 async function reviseFailedWork(ctx: MutationCtx, site: Doc<"sites">, failed: Doc<"jobs">): Promise<CadenceScheduleResult> {
   const cw = failed.contentWork!;
@@ -3170,9 +3168,9 @@ export const beginProviderCall = internalMutation({
       const spent = cw.providerCalls.reduce((sum, c) => sum + (c.state === "completed" ? c.actualMicroUsd ?? c.ceilingMicroUsd
         : c.state === "started" ? c.ceilingMicroUsd : 0), 0);
       const optional = ARTICLE_OPTIONAL_STEP.test(args.key);
-      // P269: the claims check runs only while the one fix it feeds still fits after it.
-      const reserve = /:review:check_claims$/.test(args.key) ? ARTICLE_FIX_RESERVE_MICRO_USD : 0;
-      if (spent >= cap || (optional && spent + args.ceilingMicroUsd + reserve > cap)) {
+      // P288 (Nov 3 2026): the claims check runs whenever its own highest price fits (P269 also kept a flat $0.20 free for
+      // the fix, so batch 3's list and tutorial skipped it at $0.26-0.29 spent; the fix still checks its own price).
+      if (spent >= cap || (optional && spent + args.ceilingMicroUsd > cap)) {
         throw new Error(`Content work cost cap reached: capMicroUsd=${cap}; spentMicroUsd=${spent}; requestedMicroUsd=${args.ceilingMicroUsd}`);
       }
     }
