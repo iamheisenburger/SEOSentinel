@@ -95,6 +95,8 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
   /** A hosted platform (Ghost Admin API on the business domain) instead of GitHub. */
   hosted?: { method: "ghost"; secret: string; transport: (url: URL, init: RequestInit) => Promise<Response> };
   failedOptionalSource?: boolean; liveCorrupt?: "canonical" | "body" | "title";
+  /** P286: the business's website answers HTTP 402 (its hosting account disabled) while this returns true. */
+  publicDown?: () => boolean;
   evidence?: { sources: Array<{ url: string; title: string; text: string }>; failed?: string[]; brief?: string; competitor?: string };
   webResearch?: { citations: Array<{ url: string; title: string; cited_text: string }>; searches?: number; inputTokens?: number; outputTokens?: number; error?: { status: number; type: string } };
   /** Keyword research answers: Google Ads keywords for a seed batch, Labs suggestions for one seed. */
@@ -383,6 +385,7 @@ export function setup(options: { quality?: "unsupported" | "low"; publisherFailu
         `<h2>Review exceptions</h2><ul><li>One</li><li>Two</li></ul></main></body></html>`, { headers: { "Content-Type": "text/html" } });
       const business = businesses.find(b => b.domain === url.hostname);
       if (business && url.pathname.startsWith("/blog/")) {
+        if (options.publicDown?.()) return new Response("Payment required", { status: 402, headers: { "Content-Type": "text/html" } });
         const files = repositories.get(business.name.toLowerCase())!.files;
         const content = files.get(`content/blog/${url.pathname.slice(6)}.md`) ?? files.get(`content/blog/${url.pathname.slice(6)}.mdx`);
         if (!content) return new Response("Not deployed", { status: 404, headers: { "Content-Type": "text/html" } });
@@ -6547,6 +6550,69 @@ test("SLC mismatched canonical, title or rendered body never verifies and never 
     assert.equal(f.tables.jobs.filter(j => j.contentWork?.stage === "verified").length, 0);
     assert.equal(f.get(site.id)!.contentSchedule.nextDeadlineAt, START + 10 * 60_000); f.assertOffline();
   }
+});
+
+// P286 (Nov 3 2026): pentra.dev and leadpilot.chat answered HTTP 402 for a day (hosting account disabled). Each site's
+// delivered article was next checked 12 to 23 hours later, so a restore would have left both schedules stopped most of a
+// day; and a check that ran out stayed failed for good, even once the page was live.
+test("P286 a site down for hours is checked hourly and resumes within an hour of coming back", async () => {
+  let down = true;
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]], publicDown: () => down });
+  const site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  f.setTime(START + 5 * 60_000);
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "mocked window" });
+  const delivered = () => f.tables.articles.find(a => a.status === "published");
+  await pumpUntil(f, () => (delivered()?.publicUrlCheckAttempts ?? 0) >= 9, 300, START + 48 * 3_600_000);
+  assert.equal(delivered()!.publicUrlStatus, "pending");
+  assert.match(delivered()!.publicUrlCheckError, /402/);
+  const back = f.now();
+  down = false;
+  await pumpUntil(f, () => delivered()!.publicUrlStatus === "verified", 100, back + 61 * 60_000);
+  assert.equal(f.tables.jobs.find(j => j.articleId === delivered()!._id)!.contentWork.stage, "verified");
+  assert.ok(f.get(site.id)!.contentSchedule.nextDeadlineAt > START + 10 * 60_000, "the schedule moves on");
+  f.assertOffline();
+});
+
+test("P286 a failed live check passes at a scheduler pass once the page is right, keeping the failure on record", async () => {
+  const options: Parameters<typeof setup>[0] = { growthFirst: true, businesses: [slcBusinesses[0]], liveCorrupt: "body" };
+  const f = setup(options);
+  const site = await selectGrowth(f);
+  await pumpUntil(f, () => f.tables.jobs.filter(j => j.contentWork?.stage === "ready").length === 2);
+  f.setTime(START + 5 * 60_000);
+  await f.invoke("autopilot:dispatchSiteFollowup", { siteId: site.id, trigger: "content_window", reason: "mocked window" });
+  await pumpUntil(f, () => f.tables.articles.some(a => a.publicUrlStatus === "failed"), 180, START + 48 * 3_600_000);
+  const article = f.tables.articles.find(a => a.publicUrlStatus === "failed")!;
+  const failure = { error: article.publicUrlCheckError, attempts: article.publicUrlCheckAttempts, checkedAt: article.publicUrlLastCheckedAt };
+  const job = () => f.tables.jobs.find(j => j.articleId === article._id)!;
+  const probes = () => f.tables._scheduled_functions.filter(s => s.name === "publisher:verifyPublicPublicationInternal" && s.args.probe);
+  const pass = async () => {
+    assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "public_url_failed");
+    for (let step = 0; step < 20 && probes().some(s => s.state.kind === "pending"); step++) {
+      f.setTime(Math.max(f.now(), probes().find(s => s.state.kind === "pending")!.at)); await f.runNextScheduled();
+    }
+    assert.ok(!probes().some(s => s.state.kind === "pending"));
+  };
+  f.setTime(failure.checkedAt + 61 * 60_000);
+  await pass();
+  assert.equal(probes().length, 1, "one extra check an hour");
+  assert.equal(f.get(article._id)!.publicUrlStatus, "failed", "still wrong: nothing recorded");
+  assert.equal(f.get(article._id)!.publicUrlCheckAttempts, failure.attempts);
+  assert.equal(f.get(article._id)!.publicUrlCheckError, failure.error);
+  assert.equal(f.tables._scheduled_functions.filter(s => s.name === "publisher:verifyPublicPublicationInternal" && !s.args.probe &&
+    s.state.kind === "pending").length, 0, "the extra check starts no retries");
+  options.liveCorrupt = undefined; // the owner fixed the page
+  await pass();
+  assert.equal(probes().length, 1, "not again within the hour");
+  f.setTime(f.now() + 61 * 60_000);
+  assert.equal((await f.invoke("contentWork:advance", { siteId: site.id })).mode, "public_url_failed");
+  await pumpUntil(f, () => f.get(article._id)!.publicUrlStatus === "verified", 20, f.now() + 60_000);
+  const verified = f.get(article._id)!;
+  assert.deepEqual(verified.publicUrlEarlierFailure, failure, "the failure stays on record");
+  assert.equal(verified.publicUrlCheckAttempts, failure.attempts + 1, "attempts are never reset");
+  assert.equal(job().contentWork.stage, "verified");
+  assert.ok(f.get(site.id)!.contentSchedule.nextDeadlineAt > START + 10 * 60_000, "the schedule moves on");
+  f.assertOffline();
 });
 
 test("SLC changed connection, revoked access and changed confirmed facts stop before further provider work", async () => {

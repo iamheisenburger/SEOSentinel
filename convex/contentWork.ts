@@ -25,6 +25,7 @@ import { reconcileTopicLifecycle } from "./lib/topicLifecycleDb";
 import type { CadenceScheduleResult } from "./lib/autopilotRunOutcome";
 import { liveAutopilotReadiness, publicationDestinationBlockers } from "./lib/autopilotReadiness";
 import { PUBLISHED_REVISION_LEASE_MS } from "./lib/publishedRevision";
+import { PUBLIC_URL_PROBE_AFTER_FAILURE_MS, PUBLIC_URL_PROBE_INTERVAL_MS } from "./lib/publicUrlRetry";
 import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
 import { contentConnectionHash, confirmedContentProfileHash, contentConnectionComplete, contentConsentToken, pasteDestination } from "./lib/contentSelection";
 import { contentFunding, contentIssue } from "./lib/contentCustomer";
@@ -2664,6 +2665,16 @@ export const advance = internalMutation({
         await ctx.scheduler.runAfter(0, internal.publisher.verifyContentImprovement, { siteId, jobId: unverified._id });
       }
       const article = unverified.articleId ? await ctx.db.get(unverified.articleId) : null;
+      // P286 (Nov 3 2026): the site's whole schedule waits on this one live check, whose next retry can be a day away (or
+      // never, once it failed). Check the page again at most hourly; only success is recorded (convex/publisher.ts).
+      const cw = unverified.contentWork!, now = Date.now(), lastCheck = article?.publicUrlLastCheckedAt ?? article?.publishedAt ?? 0;
+      if (cw.intent === "create" && article?.status === "published" && article.publishedContentHash && article.publishedContentHash === cw.approvedArtifactHash &&
+        (article.publicUrlStatus === "pending" || (article.publicUrlStatus === "failed" && now - lastCheck < PUBLIC_URL_PROBE_AFTER_FAILURE_MS)) &&
+        now - Math.max(lastCheck, cw.liveProbeAt ?? 0) >= PUBLIC_URL_PROBE_INTERVAL_MS) {
+        await ctx.scheduler.runAfter(0, internal.publisher.verifyPublicPublicationInternal, { siteId, articleId: article._id,
+          expectedContentHash: article.publishedContentHash, attempt: article.publicUrlCheckAttempts ?? 0, probe: true });
+        await ctx.db.patch(unverified._id, { contentWork: { ...cw, liveProbeAt: now } });
+      }
       return { scheduled: 0, mode: article?.publicUrlStatus === "failed" ? "public_url_failed" : "public_url_pending" };
     }
     const failed = waiting.find(j => j.contentWork!.stage === "review_failed");

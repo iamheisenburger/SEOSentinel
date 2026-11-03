@@ -3091,6 +3091,8 @@ export const verifyPublicPublicationInternal = internalAction({
     articleId: v.id("articles"),
     expectedContentHash: v.string(),
     attempt: v.number(),
+    /** P286: the scheduler's extra check (contentWork advance): it records only success and schedules nothing. */
+    probe: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<{
     status: "stale" | "pending" | "failed" | "verified";
@@ -3181,6 +3183,8 @@ export const verifyPublicPublicationInternal = internalAction({
       }
       return { status: "verified", publicUrl };
     } catch (error) {
+      // P286: a failed extra check leaves the article's own retry schedule, attempts and verdict exactly as they were.
+      if (args.probe) return { status: article.publicUrlStatus === "failed" ? "failed" : "pending", publicUrl };
       const message = error instanceof Error
         ? error.message
         : "Public page verification failed";

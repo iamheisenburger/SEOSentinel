@@ -1098,6 +1098,8 @@ export default defineSchema({
     publicUrlVerifiedAt: v.optional(v.number()),
     publicUrlCheckAttempts: v.optional(v.number()),
     publicUrlCheckError: v.optional(v.string()),
+    // P286: a live check that had failed and later passed (the page came back) keeps that failure on record here.
+    publicUrlEarlierFailure: v.optional(v.object({ error: v.optional(v.string()), attempts: v.optional(v.number()), checkedAt: v.optional(v.number()) })),
     publicationReceipt: v.optional(
       v.object({
         method: v.union(v.literal("github"), v.literal("wordpress"), v.literal("webhook"), v.literal("shopify"), v.literal("webflow"), v.literal("ghost")),
@@ -1400,6 +1402,8 @@ export default defineSchema({
       priorReservationIds: v.optional(v.array(v.id("provider_spend_reservations"))),
       publishedAt: v.optional(v.number()), verifiedAt: v.optional(v.number()),
       verificationNextAt: v.optional(v.number()),
+      // P286: when the scheduler last checked a delivered article's live page itself (at most hourly; success only).
+      liveProbeAt: v.optional(v.number()),
       windowWakeId: v.optional(v.id("_scheduled_functions")),
       failure: v.optional(v.string()),
       retiredAt: v.optional(v.number()),

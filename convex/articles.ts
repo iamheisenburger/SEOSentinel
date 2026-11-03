@@ -2437,6 +2437,9 @@ export const recordPublicPublicationCheck = internalMutation({
       publicUrlVerifiedAt: status === "verified" ? checkedAt : undefined,
       publicUrlCheckAttempts: Math.max(1, Math.floor(attempts)),
       publicUrlCheckError: status === "verified" ? undefined : error?.slice(0, 500),
+      // P286: a failed check verified later (the scheduler's extra check) never erases the failure.
+      ...(status === "verified" && article.publicUrlStatus === "failed" ? { publicUrlEarlierFailure: { error: article.publicUrlCheckError,
+        attempts: article.publicUrlCheckAttempts, checkedAt: article.publicUrlLastCheckedAt } } : {}),
       updatedAt: checkedAt,
     });
     await syncSummary(ctx, articleId);
