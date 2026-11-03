@@ -6,7 +6,9 @@ import { LIST_MIN_OPTIONS, LIST_RESEARCH_SEARCHES, LIST_RESEARCH_SOURCES, MAX_RE
   primarySourcesRequest, rankedResearchSources, sourceHosts } from "../lib/researchPasses";
 import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWords, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis,
   serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch, FORMAT_DEFAULT_WORDS } from "../lib/serpBrief";
-import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, planCheckIssues, planCheckNotes, runPlanChecks, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
+import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, planCheckIssues, planCheckNotes, runPlanChecks, statedNumbers, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
+import { assembledArticle, assembledFormat, comparedSides, enrichedExcerpt, ownerPageText, PROSE_INPUT_SCHEMA, ProseSchema, pricingText, proseRequest, RECORDS_INPUT_SCHEMA,
+  RecordsSchema, recordsRequest, skeletonFor, verifiedRecords } from "../lib/articleAssembly";
 import { backedFactsOnly, withFaqLast, withoutEmptyFigureSections, withPriceDate, type BackingInput, type BackingRemoval } from "../lib/backedFacts";
 import { sourcingGaps, TopicNotSourceable, undocumentedCodeNames, type SourcingCounts } from "../lib/topicSourcing";
 import { withoutStockDisclaimers } from "../lib/contentCorrection";
@@ -4519,7 +4521,7 @@ async function handleArticle(
   // no prices, no named tools, no runnable code, no rebates). The outline now comes first and lists what the top results
   // give a searcher (its coverage); research then finds a source for each item.
   let articlePlan: { version: number; format: PlanFormat; sections: string[]; minItems?: number; targetWords?: number; context?: string;
-    coverage?: string[] } | undefined;
+    coverage?: string[]; assembly?: string } | undefined;
   const outlineCovers = new Map<string, string>();
   if (topic && !selectedWork && contentProviderActive() && articlePlanEnabled()) {
     const asksForProducts = searchAsksForProducts(topic.primaryKeyword);
@@ -4599,6 +4601,8 @@ async function handleArticle(
   await reportProgress(2, "Researching the web...");
   let researchContext = "";
   let researchSources: PreservedSource[] = [];
+  // P299: the options the top lists name, for assembly v3's reads of their own pricing pages.
+  let plannedListOptions: string[] = [];
   // P268: who publishes each kept source of a planned article (owner, publication, or a blog kept as context only).
   let researchSourceRoles = new Map<string, SourceRole>();
   // P291: what research found for a planned article, by publisher (step 0 decides from it before anything is written).
@@ -4743,6 +4747,7 @@ async function handleArticle(
     const listOptions = (articlePlanEnabled() && serpBrief && !productNamesInSearch(topic.primaryKeyword).length &&
       planFormat(serpBrief, searchAsksForProducts(topic.primaryKeyword), technicalSearch(topic.primaryKeyword), topic.primaryKeyword) === "list"
       ? listedOptions(serpBrief) : []).filter((option) => !competitorKeys.includes(competitorKey(option)));
+    plannedListOptions = listOptions;
     const namedProducts = effectiveArticleType === "comparison" ? productNamesInSearch(topic.primaryKeyword)
       : listOptions.map((option) => option.toLowerCase().replace(/[^a-z0-9]/g, "")).filter((name) => name.length >= 3);
     // P264: a planned article's research is searcher-led: a source for each item of its coverage, official where one
@@ -5207,7 +5212,41 @@ async function handleArticle(
     `Write the article now. Follow every instruction in the system prompt exactly.`,
   ].filter(Boolean).join("\n");
 
-  const article = await callClaudeStructured({
+  // P299 (Nov 3 2026, ops/ARTICLE-ASSEMBLY-V3.md, Cowork): article assembly v3, data first. Code places every fact from
+  // records checked against the excerpts they quote, and one call writes only the short prose (lib/articleAssembly). A list
+  // first reads its options' own pricing pages in full ($0). Off unless PENTRA_ASSEMBLY_V3 names the format.
+  // The business's confirmed details: what assembly v3 checks the business's own facts against, and the draft's snapshot.
+  const productEvidence = firstPartyProductEvidence({ productName, site, crawled: siteData });
+  const assembleV3 = Boolean(articlePlan && topic && assembledFormat(process.env.PENTRA_ASSEMBLY_V3, articlePlan.format));
+  if (assembleV3) {
+    // Every owner's page research quoted (an agency's fee or rule page, a utility's rebate page, a vendor's pricing page) is
+    // read in full around its figures ($0): research quotes a line or two of a page, and a table of fees or plans needs it all.
+    const owners = researchSources.filter((source) => researchSourceRoles.get(source.url) === "owner").slice(0, 8);
+    const reads = await Promise.allSettled(owners.map(async (source) => ({ url: source.url,
+      text: ownerPageText((await fetchPublicText(source.url, { sameHostRedirects: true })).text, 4000) })));
+    let enriched = 0;
+    for (const read of reads) {
+      if (read.status !== "fulfilled" || read.value.text.length < 160) continue;
+      const at = researchSources.findIndex((source) => source.url === read.value.url);
+      const excerpt = enrichedExcerpt(researchSources[at].excerpt, read.value.text);
+      if (excerpt.length > researchSources[at].excerpt.length) { researchSources[at] = { ...researchSources[at], excerpt, contentHash: sha256Hex(excerpt) }; enriched++; }
+    }
+    // A list's options: each one's own pricing page, found from its pages in research or in Google's top results.
+    const pages = articlePlan?.format === "list" ? await ownerPricingPages(plannedListOptions,
+      [...researchSources, ...(serpBrief?.results ?? []).map((result) => ({ url: result.url }))]) : [];
+    for (const page of pages) {
+      const at = researchSources.findIndex((source) => source.url === page.url);
+      if (at >= 0) researchSources[at] = page; else researchSources.push(page);
+      researchSourceRoles.set(page.url, "owner");
+    }
+    researchQualityNotes.push(`Assembly v3: ${enriched} owner page(s) and ${pages.length} option pricing page(s) read in full.`);
+  }
+  if (assembleV3 && articlePlan) articlePlan.assembly = "v3";
+  const article = assembleV3 && articlePlan && topic ? await assembleArticleV3({ site, topic, plan: articlePlan, covers: outlineCovers,
+      questions: serpBrief?.questions ?? [], options: plannedListOptions, productName,
+      profile: productEvidence, sources: researchSources,
+      owner: (url) => researchSourceRoles.get(url) === "owner", notes: researchQualityNotes })
+    : await callClaudeStructured({
     system: `${UNTRUSTED_EVIDENCE_INSTRUCTION}\n\n${systemPrompt}`,
     userMessage,
     toolName: "submit_article",
@@ -5337,7 +5376,6 @@ async function handleArticle(
   ].filter(
     (name) => name.trim().toLowerCase() !== productName.trim().toLowerCase(),
   );
-  const productEvidence = firstPartyProductEvidence({ productName, site, crawled: siteData });
   const productEvidenceHash = productEvidence
     ? sha256Hex(productEvidence)
     : undefined;
@@ -7465,6 +7503,65 @@ function removedByCodeNote(removed: readonly BackingRemoval[]): string {
     `causes ${count("cause")}, repeats ${count("repeat")}, referrals ${count("referral")}, claims ${count("claim")}, table rows ${count("table")}).`;
 }
 
+/** P299: a list option's own pricing page, read in full ($0, no model): research quotes a line or two of it, and the list
+ * prints every plan from it. Only pages on the option's own site (lib/sourceQuality firstPartyProductPage). */
+async function ownerPricingPages(options: readonly string[], sources: readonly { url: string }[]): Promise<PreservedSource[]> {
+  const targets = new Map<string, string>();
+  for (const option of options.slice(0, 10)) {
+    const own = sources.find((source) => firstPartyProductPage(source.url, [option.toLowerCase().replace(/[^a-z0-9]/g, "")]));
+    if (!own) continue;
+    try {
+      const url = new URL(own.url);
+      targets.set(/\/(?:pricing|plans|prices)\b/i.test(url.pathname) ? own.url : `${url.origin}/pricing`, option);
+    } catch { continue; }
+  }
+  const read = await Promise.allSettled([...targets].map(async ([url, option]) => {
+    const page = await fetchPublicText(url, { sameHostRedirects: true });
+    const excerpt = pricingText(page.text, 4000);
+    return excerpt.length < 160 ? null : { url: page.url, title: `${option} pricing`, excerpt, contentHash: sha256Hex(excerpt), capturedAt: contentProviderPromptTime() };
+  }));
+  return read.flatMap((result) => result.status === "fulfilled" && result.value ? [result.value] : []);
+}
+
+/** P299: article assembly v3 (lib/articleAssembly): one records call, code checks and places every fact once, one prose call
+ * for the intro, lead-ins, who each option suits and the conclusion, and code drops any of its sentences that states a figure
+ * or names a company its section's records don't give. No claims check and no fix: nothing is written that code didn't check. */
+async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_clusters">; plan: { format: string; sections: string[]; coverage?: string[] };
+  covers: Map<string, string>; questions: string[]; options: string[]; productName: string; profile: string; sources: PreservedSource[];
+  owner: (url: string) => boolean; notes: string[] }): Promise<z.infer<typeof ArticleSchema>> {
+  const competitors = (args.site.competitors ?? []).map((c: string) => c.trim()).filter(Boolean);
+  const sources = args.sources.map((source) => ({ url: source.url, title: source.title, excerpt: source.excerpt }));
+  const sides = args.plan.format === "comparison" ? comparedSides(args.topic.primaryKeyword) : null;
+  const records = recordsRequest({ search: args.topic.primaryKeyword, format: args.plan.format,
+    sections: args.plan.sections.map((heading) => ({ heading, covers: args.covers.get(heading) })), coverage: args.plan.coverage ?? [],
+    options: args.options, questions: args.questions, productName: args.productName, profile: args.profile, competitors, sources, ownerPage: args.owner, sides });
+  const raw = await callClaudeStructured({ system: `${UNTRUSTED_EVIDENCE_INSTRUCTION}\n\n${records.system}`, userMessage: records.userMessage,
+    toolName: "extract_records", toolDescription: "Submit the article's fact records, each copied word for word from one excerpt.",
+    inputSchema: RECORDS_INPUT_SCHEMA, outputSchema: RecordsSchema, maxTokens: 16000 });
+  const verified = verifiedRecords(raw, { sources, profile: args.profile, productName: args.productName, competitors, sections: args.plan.sections,
+    now: contentProviderPromptTime() });
+  args.notes.push(`Assembly v3: ${verified.options.length} option(s), ${verified.facts.length} fact(s) and ${verified.faqs.length} answer(s) on record; ` +
+    `code dropped ${verified.dropped.length} record(s) its excerpt doesn't state.`);
+  const thin = args.plan.format === "list" ? verified.options.filter((option) => !option.business).length < 3
+    : new Set(verified.facts.map((fact) => fact.section)).size < 2;
+  if (thin && contentProviderAutopilotDraft()) throw new TopicNotSourceable([args.plan.format === "list" ? "fewer than 3 options with checked records" : "fewer than 2 sections with checked records"]);
+  const skeleton = skeletonFor({ format: args.plan.format, sections: args.plan.sections, records: verified, sources, readAt: contentProviderPromptTime(), sides });
+  const proseCall = proseRequest({ search: args.topic.primaryKeyword, productName: args.productName, businessSummary: args.site.siteSummary ?? args.site.niche ?? "",
+    audience: args.site.targetAudienceSummary ?? "", profile: args.profile, skeleton, records: verified });
+  const prose = await callClaudeStructured({ system: `${UNTRUSTED_EVIDENCE_INSTRUCTION}\n\n${proseCall.system}`, userMessage: proseCall.userMessage,
+    toolName: "write_prose", toolDescription: "Submit the article's short prose: title, description, intro, lead-ins, who each option suits and the conclusion.",
+    inputSchema: PROSE_INPUT_SCHEMA, outputSchema: ProseSchema, maxTokens: 4000 });
+  const built = assembledArticle({ skeleton, prose, records: verified, productName: args.productName, profile: args.profile, search: args.topic.primaryKeyword,
+    cta: configuredCallToAction(args.site, args.productName) });
+  if (built.dropped.length) args.notes.push(`Assembly v3: code dropped ${built.dropped.length} prose sentence(s) with a figure or name its section's records don't give.`);
+  const title = (statedNumbers(prose.title).length ? "" : prose.title.replace(/\s+/g, " ").trim()) || args.topic.label;
+  return { title, slug: buildSlug(args.topic.primaryKeyword), markdown: built.markdown,
+    metaTitle: clampMetaTitle(prose.metaTitle, 60, title) ?? title.slice(0, 60),
+    metaDescription: clampMetaDescription(prose.metaDescription) ?? prose.metaDescription.slice(0, 155),
+    metaKeywords: [args.topic.primaryKeyword, ...(args.topic.secondaryKeywords ?? []).slice(0, 4)],
+    sources: args.sources.map((source) => ({ url: source.url, title: source.title })) };
+}
+
 async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">; articleId: Id<"articles">; incrementRevision: boolean;
   qualityRecoveryVersion?: number; site: Doc<"sites">; article: Doc<"articles"> }) {
   const { siteId, articleId, incrementRevision, site, article } = args;
@@ -7489,19 +7586,22 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
   // A review after the fix checks again and never fixes twice: at most one fix (Arshad's cost rule).
   const fixedBefore = (article.qualityRevisionCount ?? 0) >= 1;
   let fixedNow = false;
+  // P299: an assembled article (v3) has nothing for the claims check, deletion or the fix: code placed every fact from a
+  // checked record and dropped every prose sentence its records don't back. It goes straight to the gate.
+  const assembled = article.articlePlan?.assembly === "v3";
   // P295: what the reader check (a cited number its source doesn't contain) and the plan check (a number in no source) flag.
   const flaggedNow = (markdown: string) => [...citedNumberMismatches(markdown, article.sources ?? []),
     ...planChecksForArticle(candidateFor({ ...fields, markdown })).filter((f) => ["number", "product", "name"].includes(f.check)).map((f) => f.line ?? "")];
   // P297 (Nov 3 2026): step 4's deletion runs on every review, a re-review included ($0, code only): batch 5's how-to was
   // re-reviewed after its one fix and held on sentences code would have deleted.
-  if (fixedBefore) {
+  if (fixedBefore && !assembled) {
     const recheck = backedFactsOnly(fields.markdown, { ...plannedBacking(article, topic, productName, []), unbacked: flaggedNow(fields.markdown) });
     if (recheck.removed.length) {
       fields = { ...fields, markdown: recheck.markdown };
       fixNotes.push(removedByCodeNote(recheck.removed));
     }
   }
-  if (!fixedBefore) {
+  if (!fixedBefore && !assembled) {
     const plan = article.articlePlan;
     const claims = plan ? await checkPlannedClaims({ markdown: fields.markdown, search: topic?.primaryKeyword ?? article.title })
       .catch((error: unknown) => { fixNotes.push(costCapRefusal(error) ? "The claims check was skipped: this article reached its $0.50 cost cap."
@@ -7580,7 +7680,9 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
   }
   // P295 (Cowork's batch 4, fixes 2 and 5): a heading that promises a figure its section doesn't give, and a table column of
   // dashes, go; the FAQ is the last section. P294 (plan v2 step 2): prices say when they were read, in code.
-  const emptied = withoutEmptyFigureSections(fields.markdown);
+  // P299: an assembled article has no empty section by construction; this rule read a FAQ question about price with a
+  // yes-or-no answer as an empty figure section and left the FAQ heading bare.
+  const emptied = assembled ? { markdown: fields.markdown, removed: [] as string[] } : withoutEmptyFigureSections(fields.markdown);
   if (emptied.removed.length) fixNotes.push(`Removed by code: ${emptied.removed.length} empty section(s) or column(s): ${emptied.removed.join("; ").slice(0, 300)}.`);
   fields = { ...fields, markdown: withPriceDate(withFaqLast(emptied.markdown), article.createdAt ?? Date.now()) };
   const candidate = candidateFor(fields);
@@ -7598,7 +7700,7 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
     // findings stay in the internal notes below.
     factCheckNotes: `Code checks (fixed plan v1): ${failures.length ? `${failures.length} to fix` : "passed"}.`,
     editorialQualityNotes: [
-      ...(article.editorialQualityNotes ?? []).filter((note) => /^(?:Excluded \d+ .*source|Research: |Web research unavailable|Primary-source research pass|Outline unavailable|Sources by publisher|Source check unavailable)/.test(note)),
+      ...(article.editorialQualityNotes ?? []).filter((note) => /^(?:Excluded \d+ .*source|Research: |Web research unavailable|Primary-source research pass|Outline unavailable|Sources by publisher|Source check unavailable|Item lookup|Assembly v3: )/.test(note)),
       `Fixed article plan v1: ${article.articlePlan?.format ?? "guide"}, ${article.articlePlan?.sections.length ?? 0} outline section(s).`,
       ...fixNotes, ...planCheckIssues(failures), ...planCheckNotes(failures),
     ],

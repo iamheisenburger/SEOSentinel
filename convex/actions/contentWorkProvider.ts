@@ -38,7 +38,8 @@ export const contentProviderAutopilotDraft = () => {
 
 /** Tools that write article prose (first draft and rewrites). */
 // P269: the claims check runs on the writer model (the checks model missed every error Cowork found in batch 2).
-const WRITER_TOOLS = new Set(["submit_article", "remediate_final_article", "check_claims"]);
+// P299: assembly v3's records call and prose call run on the writer model too (a record copied wrong is a wrong fact).
+const WRITER_TOOLS = new Set(["submit_article", "remediate_final_article", "check_claims", "extract_records", "write_prose"]);
 
 /** No SDK retry, model fallback, repair ladder or optional paid service. The
  * same durable job owns every bounded call and its ambiguous-response receipt.
@@ -50,7 +51,7 @@ export async function contentStructuredCall(args: { system: string; userMessage:
   // P260: plan_article is the fixed plan's outline step (checks model).
   // P268: classify_sources (who publishes each research source) and check_claims (the one claims check before the fix).
   if (!["submit_article", "review_article", "remediate_final_article", "audit_final_article", "submit_final_metadata", "plan_article",
-    "classify_sources", "check_claims"].includes(args.toolName)) throw new Error(`Unpriced content tool: ${args.toolName}`);
+    "classify_sources", "check_claims", "extract_records", "write_prose"].includes(args.toolName)) throw new Error(`Unpriced content tool: ${args.toolName}`);
   const cw = s.job.contentWork, p = cw.pricing;
   const baseKey = `${cw.replacements}:${cw.revisions}:${s.phase}:${args.toolName}`;
   const logicalKey = baseKey + (clarifyAudit ? SEMANTIC_AUDIT_SUFFIX : "");

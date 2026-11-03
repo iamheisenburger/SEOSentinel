@@ -55,6 +55,7 @@ import type * as http from "../http.js";
 import type * as jobs from "../jobs.js";
 import type * as lib_accountDeletion from "../lib/accountDeletion.js";
 import type * as lib_anthropicText from "../lib/anthropicText.js";
+import type * as lib_articleAssembly from "../lib/articleAssembly.js";
 import type * as lib_articleExecutionBudget from "../lib/articleExecutionBudget.js";
 import type * as lib_articleGenerationAttempt from "../lib/articleGenerationAttempt.js";
 import type * as lib_articlePlanChecks from "../lib/articlePlanChecks.js";
@@ -295,6 +296,7 @@ declare const fullApi: ApiFromModules<{
   jobs: typeof jobs;
   "lib/accountDeletion": typeof lib_accountDeletion;
   "lib/anthropicText": typeof lib_anthropicText;
+  "lib/articleAssembly": typeof lib_articleAssembly;
   "lib/articleExecutionBudget": typeof lib_articleExecutionBudget;
   "lib/articleGenerationAttempt": typeof lib_articleGenerationAttempt;
   "lib/articlePlanChecks": typeof lib_articlePlanChecks;

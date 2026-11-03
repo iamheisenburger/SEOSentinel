@@ -31,7 +31,8 @@ test("P287 a year the title doesn't give leaves the search title; one it gives s
 
 test("P287 every search title Pentra writes, and a held draft judged again, go through the year cleanup", () => {
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
-  assert.equal((pipeline.match(/clampMetaTitle\([^;\n]*?, 60, /g) ?? []).length, 5, "the five places a search title is set pass the title");
+  // P299: assembly v3's search title is the sixth.
+  assert.equal((pipeline.match(/clampMetaTitle\([^;\n]*?, 60, /g) ?? []).length, 6, "the six places a search title is set pass the title");
   assert.match(pipeline, /metaTitle: withoutUnsupportedMetaYears\(article\.metaTitle, article\.title\), metaDescription: article\.metaDescription \};/);
   const work = readFileSync("convex/contentWork.ts", "utf8");
   assert.match(work, /editorialQualityScore: undefined, metaTitle: withoutUnsupportedMetaYears\(article\.metaTitle, article\.title\) \};/);

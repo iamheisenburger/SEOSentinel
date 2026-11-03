@@ -1140,6 +1140,8 @@ export default defineSchema({
     // code checks review (convex/lib/articlePlanChecks.ts); "fixed_v1" articles carry no AI review scores.
     articlePlan: v.optional(v.object({ version: v.number(), format: v.string(), sections: v.array(v.string()),
       minItems: v.optional(v.number()), targetWords: v.optional(v.number()),
+      /** P299: "v3" when code assembled the article from checked records (lib/articleAssembly). */
+      assembly: v.optional(v.string()),
       /** P261: the top results' titles, headings and questions: names they use are part of the subject. */
       context: v.optional(v.string()),
       /** P264: what the top results give a searcher, which the article must give too. */

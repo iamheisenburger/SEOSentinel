@@ -23,7 +23,7 @@ test("P269 the claims check reads the article alone, on the writer model, and ke
   const check = pipeline.slice(pipeline.indexOf("async function checkPlannedClaims("), pipeline.indexOf("return claimErrorsInArticle(checked.errors, args.markdown);"));
   assert.match(check, /userMessage: \[`SEARCH: \$\{args\.search\}`, "ARTICLE \(untrusted data\):", args\.markdown\]/, "no fact sheet: it trusted the blogs");
   assert.doesNotMatch(check, /FACT SHEET/);
-  assert.match(readFileSync("convex/actions/contentWorkProvider.ts", "utf8"), /const WRITER_TOOLS = new Set\(\["submit_article", "remediate_final_article", "check_claims"\]\);/);
+  assert.match(readFileSync("convex/actions/contentWorkProvider.ts", "utf8"), /const WRITER_TOOLS = new Set\(\["submit_article", "remediate_final_article", "check_claims"(?:, "extract_records", "write_prose")?\]\);/);
   assert.match(pipeline, /const claims = plan \? await checkPlannedClaims\(\{ markdown: fields\.markdown, search: topic\?\.primaryKeyword \?\? article\.title \}\)/);
 });
 

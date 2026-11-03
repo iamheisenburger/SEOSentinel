@@ -20,5 +20,5 @@ test("P297 a section that opens as a hypothetical is an example: its amounts nee
 test("P297 step 4's deletion runs on a re-review too", () => {
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
   const review = pipeline.slice(pipeline.indexOf("async function reviewPlannedArticle("), pipeline.indexOf("  if (!fixedBefore) {\n    const plan = article.articlePlan;"));
-  assert.match(review, /if \(fixedBefore\) \{\n\s+const recheck = backedFactsOnly\(fields\.markdown, \{ \.\.\.plannedBacking\(article, topic, productName, \[\]\), unbacked: flaggedNow\(fields\.markdown\) \}\);/);
+  assert.match(review, /if \(fixedBefore && !assembled\) \{\n\s+const recheck = backedFactsOnly\(fields\.markdown, \{ \.\.\.plannedBacking\(article, topic, productName, \[\]\), unbacked: flaggedNow\(fields\.markdown\) \}\);/);
 });

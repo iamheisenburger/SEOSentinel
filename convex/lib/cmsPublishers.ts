@@ -307,7 +307,8 @@ async function publishShopify(args: PublishArgs): Promise<PublicationReceipt> {
 
 const WEBFLOW_API = "https://api.webflow.com/v2";
 
-type WebflowFieldMap = { body: string; summary?: string; image?: string; seoTitle?: string };
+/** P300: a plain text field's own length limit, when the collection sets one (validations.maxLength). */
+type WebflowFieldMap = { body: string; summary?: string; image?: string; seoTitle?: string; summaryMax?: number; seoTitleMax?: number };
 
 function webflowHeaders(site: CmsSite): Record<string, string> {
   return { Authorization: `Bearer ${site.cmsSecret!.trim()}`, "accept-version": "2.0.0" };
@@ -355,8 +356,15 @@ export function webflowFieldMap(fields: unknown[]): WebflowFieldMap {
   if (missing.length) {
     throw new Error(`Webflow collection has required fields Pentra can't fill: ${missing.map((field) => String(field.displayName ?? field.slug)).join(", ")}. Make them optional in the collection settings.`);
   }
+  // P300 (Nov 3 2026): a field's own length limit is honoured. The Webflow blog template's "Intro Text" takes 140 characters,
+  // so a 150-character description failed the whole publish (Webflow answered 400 "Is too long") on the test site.
+  const maxOf = (field: Record<string, unknown> | undefined) => {
+    const max = Number(record(field?.validations)?.maxLength);
+    return Number.isInteger(max) && max > 0 ? max : undefined;
+  };
+  const summaryMax = maxOf(summary), seoTitleMax = maxOf(seoTitle);
   return { body: slugOf(body), ...(summary ? { summary: slugOf(summary) } : {}), ...(image ? { image: slugOf(image) } : {}),
-    ...(seoTitle ? { seoTitle: slugOf(seoTitle) } : {}) };
+    ...(seoTitle ? { seoTitle: slugOf(seoTitle) } : {}), ...(summaryMax ? { summaryMax } : {}), ...(seoTitleMax ? { seoTitleMax } : {}) };
 }
 
 async function webflowContext(site: CmsSite, request: CmsRequest) {
@@ -411,8 +419,8 @@ async function publishWebflow(args: PublishArgs): Promise<PublicationReceipt> {
     slug,
     [context.fields.body]: article.html,
   };
-  if (context.fields.summary && article.metaDescription) fieldData[context.fields.summary] = plainText(article.metaDescription, 256);
-  if (context.fields.seoTitle) fieldData[context.fields.seoTitle] = plainText(article.metaTitle || article.title, 256);
+  if (context.fields.summary && article.metaDescription) fieldData[context.fields.summary] = plainText(article.metaDescription, Math.min(256, context.fields.summaryMax ?? 256));
+  if (context.fields.seoTitle) fieldData[context.fields.seoTitle] = plainText(article.metaTitle || article.title, Math.min(256, context.fields.seoTitleMax ?? 256));
   if (context.fields.image && image) fieldData[context.fields.image] = { url: image, alt: plainText(article.title, 200) };
   const response = await request(`${WEBFLOW_API}/collections/${encodeURIComponent(context.collectionId)}/items/live`, {
     method: "POST",
@@ -660,8 +668,8 @@ export async function updateHostedPost(site: CmsSite, request: CmsRequest, args:
   }
   const context = await webflowContext(site, request);
   const fieldData: Record<string, unknown> = { name: args.title, [context.fields.body]: args.html };
-  if (context.fields.summary && args.metaDescription) fieldData[context.fields.summary] = plainText(args.metaDescription, 256);
-  if (context.fields.seoTitle) fieldData[context.fields.seoTitle] = plainText(args.metaTitle ?? args.title, 256);
+  if (context.fields.summary && args.metaDescription) fieldData[context.fields.summary] = plainText(args.metaDescription, Math.min(256, context.fields.summaryMax ?? 256));
+  if (context.fields.seoTitle) fieldData[context.fields.seoTitle] = plainText(args.metaTitle ?? args.title, Math.min(256, context.fields.seoTitleMax ?? 256));
   await args.beforeWrite();
   const response = await request(`${WEBFLOW_API}/collections/${encodeURIComponent(context.collectionId)}/items/${encodeURIComponent(args.id)}/live`, {
     method: "PATCH",
