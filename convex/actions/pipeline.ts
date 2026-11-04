@@ -7618,6 +7618,12 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   // appears — its name, its own site when research found one, "No public price" — never a fabricated fact
   // (batch 19's invoicing carried 4 options against the top lists' 7+). Stubs add width only after the real
   // records passed every hold; they carry no price, feature or claim.
+  // P320 (batch 24's yoga): stub seeds must be product names. Nav labels and page furniture ("Home",
+  // "Customers", "Blog", "Affiliate Program") and PAA questions leaked in as options through page-shape
+  // entry names; a reader sees them as headings.
+  const NAV_SEED = /^(?:home|blog|help|customers?|client?s?|affiliate(?: program)?|pricing|login|log ?in|sign ?up|contact|about|faq|support|reviews?|services?|products?|features|integrations|demo|trial|get started|learn more|read more|menu|search|cart|shop|store|resources?|news|articles?|posts?|videos?|tutorials?|docs|documentation|api|careers?|jobs|team|press|privacy|terms)[.!?]?$/i;
+  const stubSeed = (name: string) => name.trim().length >= 3 && !name.trim().endsWith("?") && !name.trim().endsWith(".") && !NAV_SEED.test(name.trim())
+    && /^[A-Za-z]/.test(name.trim()) && (name.trim().match(/[A-Za-z]/g) ?? []).length >= 4;
   if (args.plan.format === "list") {
     const named = new Set(verified.options.map((o) => o.name.toLowerCase().replace(/[^a-z0-9]/g, "")));
     const ownSite = new Map(args.options.map((name) => {
@@ -7627,7 +7633,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
     for (const seed of args.options.slice(0, 14)) {
       if (verified.options.length >= 8) break;
       const k = seed.toLowerCase().replace(/[^a-z0-9]/g, "");
-      if (!k || named.has(k) || k === args.productName.toLowerCase().replace(/[^a-z0-9]/g, "")) continue;
+      if (!k || named.has(k) || k === args.productName.toLowerCase().replace(/[^a-z0-9]/g, "") || !stubSeed(seed)) continue;
       verified = { ...verified, options: [...verified.options, { name: seed, website: ownSite.get(seed) ?? "",
         prices: [], features: [], limits: [], extras: [], business: false }] };
       named.add(k);
