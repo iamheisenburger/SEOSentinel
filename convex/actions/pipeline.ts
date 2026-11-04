@@ -7682,14 +7682,24 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   // verified on some rolls and not others; under the one-shot cost cap there was nothing to catch the miss). Up
   // to two owner pages are tried; if neither yields a record that survives verification, the hold stands.
   let recovered = 0;
-  for (const item of authorityUnsatisfied.slice(0, 2)) {
+  // A program that has ENDED is not a gap: the article stays silent on it (dead programs are never printed as
+  // current), and the hold exempts the item — batch 27's Austin plan demanded a 2026 federal credit whose real
+  // status is "expired December 31, 2025", and no honest record could ever satisfy it.
+  const exempted: string[] = [];
+  for (const item of authorityUnsatisfied.slice(0, 3)) {
     if (recovered || sources.length >= 24) break;
     try {
+      const summary = `${args.site.siteSummary ?? ""} ${args.site.niche ?? ""}`;
       const place = /\b(?:in|for|near)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*$/.exec(args.topic.primaryKeyword)?.[1]
-        ?? /\b([A-Z][a-z]{3,})\b/.exec(args.topic.primaryKeyword.split(" ").slice(-2).join(" "))?.[1] ?? "";
-      const terms = [...new Set((item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !ITEM_FILLER.has(w)))].slice(0, 2).join(" ");
+        ?? /\b([A-Z][a-z]{3,})\b/.exec(args.topic.primaryKeyword.split(" ").slice(-2).join(" "))?.[1]
+        ?? /\b(?:in|serving|near)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/.exec(summary)?.[1] ?? "";
+      // The plan's coverage items name their owners ("from IRS Form 5695 instructions", "City and County of
+      // Denver permit office"): those names are the strongest owner filter there is, and they free national
+      // programs from the place match a city page needs.
+      const hints = [...item.matchAll(/\b([A-Z]{2,}[A-Z]*|[A-Z][a-z]{2,})\b/g)].map((m) => m[1]).filter((w, i) => i > 0 || !item.startsWith(w));
+      const terms = [...new Set((item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !ITEM_FILLER.has(w)))].slice(0, 3).join(" ");
       const [{ analyzeSERPFromDataForSEO }, { dataForSeoLocationCode, dataForSeoLanguageCode }] = await Promise.all([import("./seoData"), import("../lib/dataForSeoLocale")]);
-      const found = await analyzeSERPFromDataForSEO(`${args.topic.primaryKeyword} ${terms}`.trim(), dataForSeoLocationCode(args.site.targetCountry), dataForSeoLanguageCode(args.site.language));
+      const found = await analyzeSERPFromDataForSEO(`${terms} ${hints[0] ?? ""} ${place}`.trim(), dataForSeoLocationCode(args.site.targetCountry), dataForSeoLanguageCode(args.site.language));
       // The program owner: a government/military/education host always; for rebate, incentive and credit items
       // also the paying utility's own domain — recognised by the domain's own words (gas, electric, energy,
       // utility, power) or by the result's title naming the program and the place, which covers utilities whose
@@ -7700,7 +7710,9 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
           const host = new URL(result.url).hostname.toLowerCase();
           const gov = /\.(gov|mil|edu)$/.test(host);
           const utility = utilityItem && (/(?:gas|electric|energy|utility|power)/.test(host.replace(/\.(?:com|net|org|coop|us|gov)$/, "")) || /\b(?:rebate|incentive|credit)\b/i.test(result.title ?? ""));
-          return (gov || utility) && (!place || host.includes(place.split(" ")[0].toLowerCase()) || (result.title ?? "").toLowerCase().includes(place.split(" ")[0].toLowerCase()));
+          const located = !place || host.includes(place.split(" ")[0].toLowerCase()) || (result.title ?? "").toLowerCase().includes(place.split(" ")[0].toLowerCase())
+            || hints.some((h) => host.includes(h.toLowerCase()));
+          return (gov || utility) && located;
         } catch { return false; }
       };
       for (const hit of found.results.filter(ownerResult).slice(0, 2)) {
@@ -7727,8 +7739,23 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
     } catch { /* the hold below stands */ }
     if (recovered) args.notes.push("Assembly v3: an unsatisfied authority item was recovered by a direct program-owner read (code-extracted).");
   }
-  const stillUnsatisfied = recovered ? unsatisfiedFigureItems(args.plan.coverage ?? [], verified, FIGURE_ITEM, ITEM_FILLER)
-    .filter((item) => /\b(?:permits?|rebates?|incentives?|tax credits?)\b/i.test(item)) : authorityUnsatisfied;
+  // The ended-program exemption: an owner page (or a search result's own title) that says the program ended,
+  // discontinued or is no longer available satisfies the item honestly — the article stays silent on it, which
+  // is the same rule every record faces (a dead program is never printed as current).
+  for (const item of authorityUnsatisfied) {
+    if (recovered && authorityUnsatisfied.indexOf(item) === 0) continue;
+    const itemTerms = [...new Set((item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !ITEM_FILLER.has(w)))].slice(0, 3);
+    const endedWording = /\b(?:no longer available|discontinued|has ended|expired|ended|phased out|not available)\b/i;
+    const ownerSaysEnded = sources.some((source) => {
+      const text = source.excerpt.toLowerCase();
+      return itemTerms.filter((t) => text.includes(t)).length >= 2 && endedWording.test(source.excerpt)
+        && new RegExp(`${itemTerms[0]}[^.]{0,160}${endedWording.source}|${endedWording.source}[^.]{0,160}${itemTerms[0]}`, "i").test(source.excerpt);
+    });
+    if (ownerSaysEnded) { exempted.push(item); args.notes.push(`Coverage: "${item.slice(0, 60)}" — the program owner states it has ended; the article stays silent on it.`); }
+  }
+  const stillUnsatisfied = (recovered ? unsatisfiedFigureItems(args.plan.coverage ?? [], verified, FIGURE_ITEM, ITEM_FILLER)
+    .filter((item) => /\b(?:permits?|rebates?|incentives?|tax credits?)\b/i.test(item)) : authorityUnsatisfied)
+    .filter((item) => !exempted.some((e) => e.slice(0, 40) === item.slice(0, 40)));
   const holds = [...(thin ? [args.plan.format === "list" ? "fewer than 3 options with checked records" : "fewer than 2 sections with checked records"] : []),
     ...(stillUnsatisfied.length ? [`planned authority item(s) with no verified record: ${stillUnsatisfied.slice(0, 2).join("; ").slice(0, 180)}`] : []),
     ...(questionsUnanswered ? [`${args.questions.length} questions searchers ask and no verified answer`] : [])];
