@@ -7626,11 +7626,14 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   // P310b: FAQ records verify rarely (question, answer and quote must all check), so "any questions and no FAQ"
   // held nearly every assembled draft. The article holds only when the PLAN promised the answers ("Answers to the
   // six People Also Ask questions" is a coverage item); otherwise a missing FAQ is a QA note, judged as usefulness.
-  const planPromisesAnswers = (args.plan.coverage ?? []).some((item) => /answers? to (?:the )?(?:six|five|four|three|\d+ )?(?:people also ask|common|searcher)/i.test(item));
-  const questionsUnanswered = args.plan.format !== "tutorial" && planPromisesAnswers && !verified.faqs.length;
-  if (args.plan.format !== "tutorial" && args.questions.length >= 2 && !verified.faqs.length && !planPromisesAnswers)
+  // P315: FAQ records verify too rarely to hold an article on (question, answer AND quote must all check);
+  // a missing FAQ is a usefulness judgment — noted, judged, never a rejection.
+  const questionsUnanswered = false;
+  if (args.plan.format !== "tutorial" && args.questions.length >= 2 && !verified.faqs.length)
     args.notes.push(`Coverage: ${args.questions.length} searcher question(s); no verified FAQ answers (no FAQ section printed).`);
-  const proseFloor = 600;
+  // P315: a list's density lives in its tables and bullets (batch 18's yoga was 463 words with a full option
+  // table and every option's suits); its floor is lower and the judge's median check still guards usefulness.
+  const proseFloor = args.plan.format === "list" ? 450 : 600;
   // v3.1 (batch 7): a topic with too few checked records is not sourceable in ANY mode — a 43-word article reached the
   // gate in owner-review mode and burned its quality attempts. The slot takes the next topic instead.
   // P310 calibration: an authority item (permit, fee, rebate, credit) holds alone — trust is non-negotiable. A
@@ -7651,9 +7654,9 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
       const item = authorityUnsatisfied[0];
       const place = /\b(?:in|for|near)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*$/.exec(args.topic.primaryKeyword)?.[1]
         ?? /\b([A-Z][a-z]{3,})\b/.exec(args.topic.primaryKeyword.split(" ").slice(-2).join(" "))?.[1] ?? "";
-      const terms = [...new Set((item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !ITEM_FILLER.has(w)))].slice(0, 3).join(" ");
+      const terms = [...new Set((item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !ITEM_FILLER.has(w)))].slice(0, 2).join(" ");
       const [{ analyzeSERPFromDataForSEO }, { dataForSeoLocationCode, dataForSeoLanguageCode }] = await Promise.all([import("./seoData"), import("../lib/dataForSeoLocale")]);
-      const found = await analyzeSERPFromDataForSEO(`${terms} ${place}`.trim(), dataForSeoLocationCode(args.site.targetCountry), dataForSeoLanguageCode(args.site.language));
+      const found = await analyzeSERPFromDataForSEO(`${args.topic.primaryKeyword} ${terms}`.trim(), dataForSeoLocationCode(args.site.targetCountry), dataForSeoLanguageCode(args.site.language));
       // A rebate or credit's program owner can be a utility's own .com (Texas Gas Service, Austin Energy) —
       // batch 17's Austin held on its rebate because the payer is not a .gov. For those items a host whose name
       // says gas/electric/energy/power counts as the owner; permits still need .gov/.mil/.edu.

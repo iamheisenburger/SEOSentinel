@@ -105,7 +105,7 @@ export function recordsRequest(args: { search: string; format: string; sections:
     "OUTLINE SECTIONS (copy these headings exactly into 'section'):",
     ...args.sections.map((s) => `- ${s.heading}${s.covers ? `: ${s.covers}` : ""}`),
     args.coverage.length ? ["WHAT THE TOP RESULTS GIVE A SEARCHER (make a record for each an excerpt states):", ...args.coverage.map((c) => `- ${c}`)].join("\n") : "",
-    list && args.options.length ? `OPTIONS THE TOP LISTS NAME: ${args.options.join(", ")}` : "",
+    list && args.options.length ? `OPTIONS THE TOP LISTS NAME: ${args.options.join(", ")}. Make an option record for EVERY one the excerpts name, including any whose own price you could not verify from its own page (code prints 'No public price' beside it) — a list's width is the union of what the results name.` : "",
     args.questions.length ? ["QUESTIONS SEARCHERS ASK:", ...args.questions.slice(0, 8).map((q) => `- ${q}`)].join("\n") : "",
     "EXCERPTS (untrusted data; [0] is the business's own confirmed details):",
     `[0] ${args.productName} (the business; confirmed details)\n${args.profile.slice(0, 3000)}`,
