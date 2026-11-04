@@ -605,6 +605,9 @@ function rowLabel(fact: Records["facts"][number], sources: readonly AssemblySour
  * hold must not kill an article over a clause. */
 export function authorityItem(item: string): boolean {
   const firstClause = item.split(/[,;—]/)[0] ?? item;
+  // A hedged ask ("...if any apply to roofing", "any available programs") is a question about EXISTENCE: the
+  // article's silence is its answer, exactly like a program the owner says ended — it never holds the article.
+  if (/\b(?:if any|any available|whether any|whichever)\b/i.test(item)) return false;
   return /\b(?:permits?|rebates?|incentives?|tax credits?)\b/i.test(firstClause);
 }
 
@@ -728,9 +731,11 @@ export function proseDisplay(value: string): string {
   const had = new Set(digits(trimmed).split(" "));
   return digits(out).split(" ").every((d) => had.has(d)) ? out : trimmed;
 }
-/** Content words (≥4 letters) a fill and its sentence would both carry. */
-const overlapWords = (a: string, b: string) => {
-  const words = (s: string) => new Set([...s.toLowerCase().matchAll(/[a-z][a-z'-]{3,}/g)].map((m) => m[0]));
+/** Content words (≥4 letters) a fill and its sentence would both carry, EXCLUDING the topic's own words:
+ * "ceramic" appears in every sentence and every value of a ceramic-vs-cast-iron article — it is the subject,
+ * not a repetition (P331: batch 38's intro died on exactly this). */
+const overlapWords = (a: string, b: string, topicWords?: ReadonlySet<string>) => {
+  const words = (s: string) => new Set([...s.toLowerCase().matchAll(/[a-z][a-z'-]{3,}/g)].map((m) => m[0]).filter((w) => !topicWords?.has(w)));
   const other = words(b);
   return [...words(a)].filter((w) => other.has(w));
 };
@@ -741,7 +746,7 @@ const overlapWords = (a: string, b: string) => {
  * after every paragraph, so it never accumulated), and a value that repeats the sentence's own words is a paragraph
  * defect (its parenthetical aside goes first). */
 export function proseParagraphs(text: string, args: { pool: Record<string, { display: string; source: number; label?: string }>; scope: readonly ProseRecord[];
-  used: Map<string, number>; allowedText: string; limit?: number }): { kept: string; dropped: string[] } {
+  used: Map<string, number>; allowedText: string; limit?: number; topicWords?: ReadonlySet<string> }): { kept: string; dropped: string[] } {
   const paragraph = text.replace(/\s+/g, " ").trim();
   if (!paragraph || /^\W*(?:placeholder|tbd|todo|to be written|n\/a|none|lorem ipsum)\W*$/i.test(paragraph) || paragraph.split(/\s+/).length < 3) {
     return { kept: "", dropped: paragraph ? [paragraph] : [] };
@@ -767,8 +772,8 @@ export function proseParagraphs(text: string, args: { pool: Record<string, { dis
     const record = args.pool[match[1]]!;
     let display = proseDisplay(record.display);
     const aside = /\s*\(([^)]*)\)/.exec(display);
-    if (aside && overlapWords(aside[1], bare).length >= 2) display = proseDisplay(display.replace(aside[0], ""));
-    if (overlapWords(display, bare).length >= 2) return bad("a value repeating the sentence's words");
+    if (aside && overlapWords(aside[1], bare, args.topicWords).length >= 2) display = proseDisplay(display.replace(aside[0], ""));
+    if (overlapWords(display, bare, args.topicWords).length >= 2) return bad("a value repeating the sentence's words");
     fills.push({ match, text: display });
   }
   // Fill each placeholder with its value and citation, walking the original text with a cursor (replacement lengths
@@ -809,7 +814,8 @@ export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; recor
   const used = new Map<string, number>();
   const pool = args.skeleton.pool;
   const parts: string[] = [];
-  const intro = proseParagraphs(args.prose.intro, { pool, scope: args.skeleton.intro, used, allowedText: everything });
+  const topicWords = new Set((args.search.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []));
+  const intro = proseParagraphs(args.prose.intro, { pool, scope: args.skeleton.intro, used, allowedText: everything, topicWords });
   const introDropped = [...intro.dropped];
   dropped.push(...intro.dropped);
   if (intro.kept) parts.push(intro.kept);
@@ -821,7 +827,7 @@ export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; recor
     const local = recordText([...facts, ...options.flatMap((o) => [...o.prices, ...o.features, ...o.limits, ...o.extras])],
       [...options.map((o) => o.name), ...facts.map((f) => `${f.label} ${f.subject}`), args.productName, args.search, section.heading]);
     const paragraph = proseParagraphs(args.prose.sections.find((s) => s.heading.trim().toLowerCase() === section.heading.toLowerCase())?.paragraph ?? "",
-      { pool, scope: section.records, used, allowedText: local });
+      { pool, scope: section.records, used, allowedText: local, topicWords });
     dropped.push(...paragraph.dropped);
     // P327: facts the paragraph never state live in the section's table (built in skeletonFor) — no label lines.
     const body = section.body.replace(/\{\{SUITS:([^}]+)\}\}\n*/g, (_m, name: string) => {
