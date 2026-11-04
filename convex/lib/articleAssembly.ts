@@ -479,6 +479,11 @@ export function skeletonFor(args: { format: string; sections: readonly string[];
         ? `${subject}: ${label}` : label;
     };
     for (const f of [...(money.length >= 2 ? [] : money), ...other]) records.push(register(f, proseDisplay(f.value), f.source, factLabel(f)));
+    // P313 (batch 16's bank and heat pump): a heading that promises a figure over only qualitative records
+    // ("Adjust for bank fees, interest and errors" with no dollar anywhere) is an empty promise on the assembly
+    // path too — the writer path drops these (withoutEmptyFigureSections); assembly must not print them.
+    const figureRecorded = facts.some((f) => /\d/.test(f.value)) || records.some((r) => /\d/.test(r.value));
+    if (/\b(?:costs?|prices?|pricing|fees?|rebates?|incentives?|tax credits?|how much|savings)\b/i.test(heading) && !figureRecorded) continue;
     if (!lines.length && !records.length) continue;
     if (out.length < 2) {
       introPool.push(...records.slice(0, 4));
@@ -613,11 +618,14 @@ export function proseDisplay(value: string): string {
   // A range normalizes to an en dash only where the wording says range: "X to Y" always, "between X and Y",
   // or a unit directly after the second number ("$4 and $11 per square foot"). "$400 and $650 rebate tiers"
   // is two separate amounts, not a range, and stays as written (P307).
+  // P311: the dash form keeps the currency on BOTH numbers ("$1,187–$3,491"): the reader check canonicalizes
+  // "$3,491" and "3,491" as different numbers, and the excerpt writes "$1,187 and $3,491".
+  const dash = (_m: string, c1: string, n1: string, c2: string, n2: string) => `${c1}${n1}–${c2 || c1}${n2}`;
   let out = trimmed
-    .replace(/([$€£]?\s?\d[\d,]*(?:\.\d+)?)\s+to\s+[$€£]?\s?(\d[\d,]*(?:\.\d+)?)/g, "$1–$2")
-    .replace(/between\s+([$€£]?\s?\d[\d,]*(?:\.\d+)?)\s+and\s+[$€£]?\s?(\d[\d,]*(?:\.\d+)?)/gi, "$1–$2")
-    .replace(/([$€£]?\s?\d[\d,]*(?:\.\d+)?)\s+and\s+[$€£]?\s?(\d[\d,]*(?:\.\d+)?)(?=\s+(?:per|a|an|each)\s+\w)/g, "$1–$2");
-  out = out.replace(/\s+([–—])/g, "$1").replace(/–\$/g, "–");
+    .replace(/([€£$]?)\s?(\d[\d,]*(?:\.\d+)?)\s+to\s+([€£$]?)\s?(\d[\d,]*(?:\.\d+)?)/g, dash)
+    .replace(/between\s+([€£$]?)\s?(\d[\d,]*(?:\.\d+)?)\s+and\s+([€£$]?)\s?(\d[\d,]*(?:\.\d+)?)/gi, dash)
+    .replace(/([€£$]?)\s?(\d[\d,]*(?:\.\d+)?)\s+and\s+([€£$]?)\s?(\d[\d,]*(?:\.\d+)?)(?=\s+(?:per|a|an|each)\s+\w)/g, dash);
+  out = out.replace(/\s+([–—])/g, "$1");
   const digits = (s: string) => [...s.matchAll(/\d[\d,]*(?:\.\d+)?/g)].map((m) => m[0]).join(" ");
   const had = new Set(digits(trimmed).split(" "));
   return digits(out).split(" ").every((d) => had.has(d)) ? out : trimmed;
@@ -677,7 +685,9 @@ export function proseParagraphs(text: string, args: { pool: Record<string, { dis
     let text = display, cut = at;
     const between = /\bbetween\s+$/i.exec(paragraph.slice(Math.max(0, cursor), at));
     const amounts = /^([$€£]?\s?\d[\d,]*(?:\.\d+)?)\s+and\s+[$€£]?\s?(\d[\d,]*(?:\.\d+)?)$/.exec(display);
-    if (between && amounts) { text = `${amounts[1]}–${amounts[2]}`; cut = at - between[0].length; }
+    const dashed = /^[€£$]?\s?\d[\d,]*(?:\.\d+)?–[€£$]?\s?\d[\d,]*(?:\.\d+)?$/.test(display);
+    if (between && amounts) { const cur = /^[$€£]/.exec(amounts[1])?.[0] ?? ""; text = `${amounts[1]}–${cur}${amounts[2]}`; cut = at - between[0].length; }
+    else if (between && dashed) { cut = at - between[0].length; }
     const before = paragraph.slice(0, cut).replace(/[\s(\[]+$/, "");
     const follow = before.length > 0 && /[a-z,;:]$/.test(before) && /^[A-Z][a-z]/.test(text)
       ? text.charAt(0).toLowerCase() + text.slice(1) : text;

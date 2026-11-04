@@ -73,8 +73,8 @@ test("P305: a sentence-initial 'As of November 2026' dates the price; no second 
 });
 
 test("P305: proseDisplay normalizes ranges and never invents digits", () => {
-  assert.equal(proseDisplay("$4 and $11 per square foot"), "$4–11 per square foot");
-  assert.equal(proseDisplay("$9,000 –$13,500"), "$9,000–13,500");
+  assert.equal(proseDisplay("$4 and $11 per square foot"), "$4–$11 per square foot");
+  assert.equal(proseDisplay("$9,000 –$13,500"), "$9,000–$13,500");
   assert.equal(proseDisplay("40 to 60 gallons"), "40–60 gallons");
   assert.equal(proseDisplay("Almost always full tear-offs"), "Almost always full tear-offs");
   // A normalization that changed the digits falls back to the trimmed value.
@@ -90,7 +90,7 @@ const pool = {
 test("P305: a fill's parenthetical aside goes when the sentence already says its words", () => {
   const used = new Map<string, number>();
   const result = proseParagraphs("A typical Denver tract ranch or two-story falls at {{r1}}.", { pool, scope: [], used, allowedText: "Denver tract ranch" });
-  assert.equal(result.kept, "A typical Denver tract ranch or two-story falls at $10,000–16,000 [1].");
+  assert.equal(result.kept, "A typical Denver tract ranch or two-story falls at $10,000–$16,000 [1].");
 });
 
 test("P305: a fill after a colon follows the sentence's case, and a record is stated at most once", () => {
@@ -178,8 +178,8 @@ import { verifiedRecords, unsatisfiedFigureItems } from "../convex/lib/articleAs
 import { FIGURE_ITEM, ITEM_FILLER } from "../convex/lib/researchPasses.ts";
 
 test("P307: ranges normalize only in range wording; two separate amounts stay", () => {
-  assert.equal(proseDisplay("between $4 and $11 per square foot"), "$4–11 per square foot");
-  assert.equal(proseDisplay("$60 to $130"), "$60–130");
+  assert.equal(proseDisplay("between $4 and $11 per square foot"), "$4–$11 per square foot");
+  assert.equal(proseDisplay("$60 to $130"), "$60–$130");
   assert.equal(proseDisplay("$400 and $650 rebate tiers"), "$400 and $650 rebate tiers");
 });
 
@@ -245,5 +245,5 @@ test("P308: a 'between' before a placeholder folds the record's two amounts", ()
   const used = new Map<string, number>();
   const out = proseParagraphs("New heat pumps typically cost between {{r1}} to install, depending on the home.",
     { pool, scope: [], used, allowedText: "heat pump install" });
-  assert.equal(out.kept, "New heat pumps typically cost $2,500–10,000 [1] to install, depending on the home.");
+  assert.equal(out.kept, "New heat pumps typically cost $2,500–$10,000 [1] to install, depending on the home.");
 });

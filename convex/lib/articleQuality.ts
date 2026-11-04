@@ -2247,6 +2247,25 @@ export function readerVisibleDefects(markdown: string): string[] {
       }
     }
   }
+  // P313 (batch 16's python retry): prose that references "step 6" past a list that counts to 5 points at
+  // nothing — usually a rewrite renumbered the list but not the references.
+  {
+    const groups: { end: number; max: number }[] = [];
+    let inList = false, max = 0, end = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const m = /^\s*(\d+)[.)]\s/.exec(lines[i]);
+      if (m && lines[i] !== "[code example]") { if (!inList) { inList = true; max = 0; } max = Math.max(max, Number(m[1])); end = i; }
+      else if (inList && lines[i].trim()) { groups.push({ end, max }); inList = false; }
+    }
+    if (inList) groups.push({ end, max });
+    for (let i = 0; i < lines.length; i++) {
+      if (/^\s*(\d+)[.)]\s/.test(lines[i])) continue;
+      const group = groups.filter((g) => g.end < i).pop();
+      if (!group) continue;
+      const over = [...lines[i].matchAll(/\b(?:step|phase)\s+(\d+)\b/gi)].map((m) => Number(m[1])).filter((n) => n > group.max);
+      if (over.length) defects.push(`Reader-visible defect: the text references "step ${over[0]}" but the page's lists count to ${group.max}.`);
+    }
+  }
   // Numbered lists: "1. 1. 1." renders as 1, 2, 3; anything else must count up by one.
   for (let i = 0; i < lines.length; i++) {
     const item = LIST_ITEM.exec(lines[i]);
