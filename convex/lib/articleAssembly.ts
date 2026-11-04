@@ -599,6 +599,15 @@ function rowLabel(fact: Records["facts"][number], sources: readonly AssemblySour
 /** P307: the plan's figure items that no verified record carries. An item is satisfied where a fact's or an option
  * price's own words (label, value, quote) contain at least two of its distinctive terms — the same vocabulary rule
  * the pre-write lookups use, so a record either plainly answers the item or plainly doesn't. */
+/** P330: an item is an AUTHORITY item only when its ASK is the program — the rebate, permit, credit or fee is
+ * in the item's first clause. An item that buries "any rebates" inside a longer vendor-services sentence
+ * ("Financing options from local roofers and lenders, and any rebates...") is a breadth ask; the authority
+ * hold must not kill an article over a clause. */
+export function authorityItem(item: string): boolean {
+  const firstClause = item.split(/[,;—]/)[0] ?? item;
+  return /\b(?:permits?|rebates?|incentives?|tax credits?)\b/i.test(firstClause);
+}
+
 export function unsatisfiedFigureItems(coverage: readonly string[], records: VerifiedRecords, figureItem: RegExp, filler: Set<string>): string[] {
   const texts = [...records.facts.map((f) => `${f.label} ${f.value} ${f.quote}`),
     ...records.options.flatMap((o) => o.prices.map((p) => `${o.name} ${p.price} ${p.quote}`))];

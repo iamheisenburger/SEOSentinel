@@ -7,7 +7,7 @@ import { LIST_MIN_OPTIONS, LIST_RESEARCH_SEARCHES, LIST_RESEARCH_SOURCES, MAX_RE
 import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWords, namesInText, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis,
   serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch, FORMAT_DEFAULT_WORDS } from "../lib/serpBrief";
 import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, planCheckIssues, planCheckNotes, runPlanChecks, statedNumbers, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
-import { assembledArticle, assembledFormat, comparedSides, enrichedExcerpt, orderedStepsText, ownerPageText, PROSE_INPUT_SCHEMA, ProseSchema, pricingText, proseRequest, RECORDS_INPUT_SCHEMA,
+import { assembledArticle, assembledFormat, authorityItem, comparedSides, enrichedExcerpt, orderedStepsText, ownerPageText, PROSE_INPUT_SCHEMA, ProseSchema, pricingText, proseRequest, RECORDS_INPUT_SCHEMA,
   RecordsSchema, recordsRequest, skeletonFor, unsatisfiedFigureItems, verifiedRecords, authorityFactsFromPage } from "../lib/articleAssembly";
 import { backedFactsOnly, rebuildSourcesSection, withFaqLast, withoutEmptyFigureSections, withoutUntimedSections, withPriceDate, type BackingInput, type BackingRemoval } from "../lib/backedFacts";
 import { fetchPublicTextRendered } from "../lib/tregFetch";
@@ -7677,7 +7677,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   // never prints, so the article keeps only promises it fulfills. It is recorded for QA instead.
   // P312: the authority principle is about PROGRAM owners — permits, rebates, incentives, credits — not any fee
   // ("payment processing fees" is a vendor fact under R10, not an authority hold; batch 15's lists were held on it).
-  const authorityUnsatisfied = unsatisfied.filter((item) => /\b(?:permits?|rebates?|incentives?|tax credits?)\b/i.test(item));
+  const authorityUnsatisfied = unsatisfied.filter(authorityItem);
   if (unsatisfied.length > authorityUnsatisfied.length)
     args.notes.push(`Coverage: ${unsatisfied.length - authorityUnsatisfied.length} planned breadth item(s) without a verified record (their sections do not print).`);
   // P321: the authority recovery searches for the program owner's page in code, reads it, and CODE extracts the
@@ -7820,7 +7820,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
     if (ownerSaysEnded) { exempted.push(item); args.notes.push(`Coverage: "${item.slice(0, 60)}" — the program owner states it has ended; the article stays silent on it.`); }
   }
   const stillUnsatisfied = (recovered ? unsatisfiedFigureItems(args.plan.coverage ?? [], verified, FIGURE_ITEM, ITEM_FILLER)
-    .filter((item) => /\b(?:permits?|rebates?|incentives?|tax credits?)\b/i.test(item)) : authorityUnsatisfied)
+    .filter(authorityItem) : authorityUnsatisfied)
     .filter((item) => !exempted.some((e) => e.slice(0, 40) === item.slice(0, 40)));
   const holds = [...(thin ? [args.plan.format === "list" ? "fewer than 3 options with checked records" : "fewer than 2 sections with checked records"] : []),
     ...(stillUnsatisfied.length ? [`planned authority item(s) with no verified record: ${stillUnsatisfied.slice(0, 2).join("; ").slice(0, 180)}${recoveryTrace.length ? ` [recovery: ${recoveryTrace.join(" | ").slice(0, 220)}]` : ""}`] : []),
