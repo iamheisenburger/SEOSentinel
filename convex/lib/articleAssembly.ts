@@ -758,7 +758,7 @@ const overlapWords = (a: string, b: string, topicWords?: ReadonlySet<string>) =>
  * defect (its parenthetical aside goes first). */
 export function proseParagraphs(text: string, args: { pool: Record<string, { display: string; source: number; label?: string }>; scope: readonly ProseRecord[];
   used: Map<string, number>; allowedText: string; limit?: number; topicWords?: ReadonlySet<string> }): { kept: string; dropped: string[] } {
-  const paragraph = text.replace(/\s+/g, " ").trim();
+  let paragraph = text.replace(/\s+/g, " ").trim();
   if (!paragraph || /^\W*(?:placeholder|tbd|todo|to be written|n\/a|none|lorem ipsum)\W*$/i.test(paragraph) || paragraph.split(/\s+/).length < 3) {
     return { kept: "", dropped: paragraph ? [paragraph] : [] };
   }
@@ -768,11 +768,19 @@ export function proseParagraphs(text: string, args: { pool: Record<string, { dis
   if (ids.some((id) => !args.pool[id])) return bad("a placeholder with no record");
   const bare = paragraph.replace(PLACEHOLDER, " ");
   if (statedNumbers(bare).length) return bad("a figure written in its own words");
-  for (const sentence of paragraph.split(/(?<=[.!?])\s+(?=["“(]?[A-Z0-9])/)) {
+  // P334: one meta or deflection sentence prunes; the clean remainder keeps the paragraph (a whole-paragraph
+  // drop for a trailing "the right choice depends on..." lost batch 40's intro — its first clauses were facts).
+  const sentences = paragraph.split(/(?<=[.!?])\s+(?=["“(]?[A-Z0-9])/);
+  const cleanSentences = sentences.filter((sentence) => {
     const plain = sentence.replace(/\*\*|__|`/g, "");
-    if (DEFLECTION.test(plain) || HOMEWORK.test(plain) || MAKING.test(plain) || COUNTED.test(plain) || /https?:\/\/|www\.|\.example\b/i.test(plain)) {
-      return bad("prose about the article or a reader sent elsewhere");
-    }
+    return !(DEFLECTION.test(plain) || HOMEWORK.test(plain) || MAKING.test(plain) || COUNTED.test(plain) || /https?:\/\/|www\.|\.example\b/i.test(plain));
+  });
+  const paragraph0 = paragraph;
+  if (cleanSentences.length !== sentences.length) {
+    if (!cleanSentences.length) return bad("prose about the article or a reader sent elsewhere");
+    paragraph = cleanSentences.join(" ");
+    if (!PLACEHOLDER.test(paragraph)) return bad("prose about the article or a reader sent elsewhere");
+    dropped.push(`${paragraph0.slice(0, 90)}… (a meta or deflection sentence pruned)`);
   }
   if (namedEntities(bare).some((name) => key(name).length >= 3 && !mentions(args.allowedText, name))) return bad("a name its records don't give");
   const limit = args.limit ?? 1;

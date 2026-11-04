@@ -7718,10 +7718,11 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
     return false;
   };
   for (const item of authorityUnsatisfied.slice(0, 3)) {
-    if (recovered || sources.length >= 24) break;
+    if (sources.length >= 24) break;
     try {
       // First: the owner page research already found. Its excerpt is in the pool; the extractor quotes it in code.
       const itemHints = [...item.matchAll(/\b([A-Z]{2,}[A-Z]*|[A-Z][a-z]{2,})\b/g)].map((m) => m[1]).filter((w, i) => i > 0 || !item.startsWith(w));
+      let recoveredThisItem = 0;
       const ownerIndices = sources.map((source, i) => ownerSource(source, itemHints) ? i : -1).filter((i) => i >= 0).slice(0, 3);
       for (const i of ownerIndices) {
         if (recovered) break;
@@ -7730,7 +7731,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
         // The stored excerpt is a research quote (a line or two); try it free, then read the owner's whole page.
         if (tryExtract(item, i + 1, owner, sources[i].excerpt)) {
           recoveryTrace.push("pool-excerpt");
-          recovered = 1;
+          recovered = 1; recoveredThisItem = 1;
           args.notes.push("Assembly v3: an authority item recovered from a source research had already found (code-extracted).");
           break;
         }
@@ -7741,7 +7742,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
             recoveryTrace.push("pool-fullpage");
             // The fetched page replaces the quote-only excerpt (still the owner's own page, now in full).
             sources[i] = { ...sources[i], excerpt: `${owner}\n${body}` };
-            recovered = 1;
+            recovered = 1; recoveredThisItem = 1;
             args.notes.push("Assembly v3: an authority item recovered by reading an already-found owner page in full (code-extracted).");
           }
         } catch { /* the page stays as research quoted it */ }
@@ -7783,7 +7784,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
       };
       recoveryTrace.push(`search:${found.results.length}r/${found.results.filter(ownerResult).length}own`);
       for (const hit of found.results.filter(ownerResult).slice(0, 2)) {
-        if (recovered) break;
+        if (recoveredThisItem) break;
         const page = await fetchPublicTextRendered(hit.url, 800);
         const body = ownerPageText(page.text, 5000);
         if (body.length < 160) continue;
@@ -7801,7 +7802,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
         const checked = verifiedRecords({ ...raw, facts: [...(raw.facts ?? []), ...candidates],
           faqs: raw.faqs ?? [], options: raw.options ?? [], steps: raw.steps ?? [] } as Parameters<typeof verifiedRecords>[0],
           { sources, profile: args.profile, productName: args.productName, competitors, sections: args.plan.sections, now: contentProviderPromptTime() });
-        if (checked.facts.length > verified.facts.length) { verified = checked; recovered = 1; }
+        if (checked.facts.length > verified.facts.length) { verified = checked; recovered = 1; recoveredThisItem = 1; }
       }
     } catch { /* the hold below stands */ }
     if (recovered) args.notes.push("Assembly v3: an unsatisfied authority item was recovered by a direct program-owner read (code-extracted).");
