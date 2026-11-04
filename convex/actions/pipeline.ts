@@ -7686,9 +7686,54 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   // current), and the hold exempts the item — batch 27's Austin plan demanded a 2026 federal credit whose real
   // status is "expired December 31, 2025", and no honest record could ever satisfy it.
   const exempted: string[] = [];
+  // P324: research usually already FOUND the owner page (batch 29's pools held austinenergy rebates,
+  // denvergov permits, irs.gov credits) — the records model just failed to quote it verbatim. The extractor
+  // runs over the authority sources already in hand BEFORE any new search: same code path, zero extra cost.
+  const UTILITY_LABEL = /^[a-z]{0,14}(?:gas|electric|energy|utility|power)s?(?:service|services|co|inc|company|utilities)?$/;
+  const ownerSource = (source: { url: string }, itemHints: readonly string[]) => {
+    try {
+      const host = new URL(source.url).hostname.toLowerCase();
+      const label = host.replace(/^www\./, "").split(".")[0] ?? "";
+      return /\.(gov|mil|edu)$/.test(host) || UTILITY_LABEL.test(label) || itemHints.some((h) => host.includes(h.toLowerCase()));
+    } catch { return false; }
+  };
+  const tryExtract = (item: string, index: number, owner: string, excerpt: string): boolean => {
+    const candidates = authorityFactsFromPage({ item, excerpt, source: index, owner, sections: args.plan.sections, covers: args.covers });
+    if (!candidates.length) return false;
+    const checked = verifiedRecords({ ...raw, facts: [...(raw.facts ?? []), ...candidates],
+      faqs: raw.faqs ?? [], options: raw.options ?? [], steps: raw.steps ?? [] } as Parameters<typeof verifiedRecords>[0],
+      { sources, profile: args.profile, productName: args.productName, competitors, sections: args.plan.sections, now: contentProviderPromptTime() });
+    if (checked.facts.length > verified.facts.length) { verified = checked; return true; }
+    return false;
+  };
   for (const item of authorityUnsatisfied.slice(0, 3)) {
     if (recovered || sources.length >= 24) break;
     try {
+      // First: the owner page research already found. Its excerpt is in the pool; the extractor quotes it in code.
+      const itemHints = [...item.matchAll(/\b([A-Z]{2,}[A-Z]*|[A-Z][a-z]{2,})\b/g)].map((m) => m[1]).filter((w, i) => i > 0 || !item.startsWith(w));
+      const ownerIndices = sources.map((source, i) => ownerSource(source, itemHints) ? i : -1).filter((i) => i >= 0).slice(0, 3);
+      for (const i of ownerIndices) {
+        if (recovered) break;
+        const label = (new URL(sources[i].url).hostname.replace(/^www\./, "").split(".")[0] ?? "").split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+        const owner = sources[i].title?.split(/[|:–-]/)[0]?.trim() || label;
+        // The stored excerpt is a research quote (a line or two); try it free, then read the owner's whole page.
+        if (tryExtract(item, i + 1, owner, sources[i].excerpt)) {
+          recovered = 1;
+          args.notes.push("Assembly v3: an authority item recovered from a source research had already found (code-extracted).");
+          break;
+        }
+        try {
+          const page = await fetchPublicTextRendered(sources[i].url, 800);
+          const body = ownerPageText(page.text, 5000);
+          if (body.length >= 160 && tryExtract(item, i + 1, owner, `${owner}\n${body}`)) {
+            // The fetched page replaces the quote-only excerpt (still the owner's own page, now in full).
+            sources[i] = { ...sources[i], excerpt: `${owner}\n${body}` };
+            recovered = 1;
+            args.notes.push("Assembly v3: an authority item recovered by reading an already-found owner page in full (code-extracted).");
+          }
+        } catch { /* the page stays as research quoted it */ }
+      }
+      if (recovered) break;
       const summary = `${args.site.siteSummary ?? ""} ${args.site.niche ?? ""}`;
       const place = /\b(?:in|for|near)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*$/.exec(args.topic.primaryKeyword)?.[1]
         ?? /\b([A-Z][a-z]{3,})\b/.exec(args.topic.primaryKeyword.split(" ").slice(-2).join(" "))?.[1]
