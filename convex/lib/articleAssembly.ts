@@ -800,7 +800,7 @@ export function proseParagraphs(text: string, args: { pool: Record<string, { dis
 /** The article: intro, each section's paragraph over its block, the conclusion with the business's next step, the FAQ last.
  * A section fact its paragraph never stated falls back to one line in the block (never a "label: quote" dump). */
 export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; records: VerifiedRecords; productName: string; profile: string;
-  search: string; cta: { label: string; url: string } }): { markdown: string; dropped: string[]; heldIntro: boolean } {
+  search: string; cta: { label: string; url: string } }): { markdown: string; dropped: string[]; heldIntro: boolean; introDropped: string[] } {
   const dropped: string[] = [];
   const recordText = (records: { quote: string }[], more: string[] = []) => [...records.map((r) => r.quote), ...more].join("\n");
   const everything = recordText([...args.records.facts, ...args.records.faqs, ...args.records.options.flatMap((o) => [...o.prices, ...o.features, ...o.limits, ...o.extras])],
@@ -810,6 +810,7 @@ export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; recor
   const pool = args.skeleton.pool;
   const parts: string[] = [];
   const intro = proseParagraphs(args.prose.intro, { pool, scope: args.skeleton.intro, used, allowedText: everything });
+  const introDropped = [...intro.dropped];
   dropped.push(...intro.dropped);
   if (intro.kept) parts.push(intro.kept);
   // P329 (Cowork's read of the final five): there is NO machine-written intro. When the prose intro fails its
@@ -841,7 +842,7 @@ export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; recor
   parts.push("## The bottom line", ...(conclusion.kept ? [conclusion.kept] : []), `[${args.cta.label}](${args.cta.url})`);
   if (args.skeleton.faq) parts.push(`## ${args.skeleton.faq.heading}`, args.skeleton.faq.body);
   const heldIntro = !intro.kept && args.skeleton.intro.length > 0;
-  return { markdown: parts.filter((p) => p !== "").join("\n\n").replace(/\n{3,}/g, "\n\n").trim(), dropped, heldIntro };
+  return { markdown: parts.filter((p) => p !== "").join("\n\n").replace(/\n{3,}/g, "\n\n").trim(), dropped, heldIntro, introDropped };
 }
 
 /** Readable text of a fetched page around its figures (an owner's pricing, fee, rebate or rules page), for a records excerpt:
