@@ -7642,6 +7642,22 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   // against a 1,200-word median passed every other check).
   const bodyWords = built.markdown.replace(/^([ \t]*```[\w-]*[^\n]*\n)[\s\S]*?^[ \t]*```[ \t]*$/gm, " code ").split(/\s+/).filter(Boolean).length;
   if (bodyWords < proseFloor) throw new TopicNotSourceable([`the assembled article is ${bodyWords} words; ${proseFloor} is the floor`]);
+  // P309 (batch 11's Austin): the promise is checked against the ARTICLE the reader gets, not the records code
+  // verified — a record whose section name mismatched the outline vanished after verification and Austin published
+  // without its install costs. And an authority item (a permit, fee, rebate or credit the plan says a searcher
+  // needs) holds alone: roof's plan said "City of Denver permit office; must be verified" and the article still
+  // published without it.
+  const figureRegex = /[$€£]\s?\d|\b\d[\d,.]*\s?(?:USD|dollars)\b|\d+\s?°|\b\d+\s?(?:psi|cfm|gpm|years?|months?)\b/i;
+  const printedUnsatisfied = figureItems.filter((item) => {
+    const terms = [...new Set((item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !ITEM_FILLER.has(w)))].slice(0, 6);
+    const inArticle = terms.filter((term) => built.markdown.toLowerCase().includes(term)).length >= Math.min(2, terms.length)
+      && figureRegex.test(built.markdown);
+    return !inArticle;
+  });
+  const authorityMisses = printedUnsatisfied.filter((item) => /\b(?:permits?|fees?|rebates?|incentives?|tax credits?)\b/i.test(item));
+  if (printedUnsatisfied.length >= 2 || authorityMisses.length)
+    throw new TopicNotSourceable([...(authorityMisses.length ? [`planned authority item(s) not in the article: ${authorityMisses.slice(0, 2).join("; ").slice(0, 180)}`] : []),
+      `${printedUnsatisfied.length} of ${figureItems.length} planned figure item(s) never reached the article: ${printedUnsatisfied.slice(0, 3).join("; ").slice(0, 180)}`]);
   const title = (statedNumbers(prose.title).length ? "" : prose.title.replace(/\s+/g, " ").trim()) || args.topic.label;
   return { title, slug: buildSlug(args.topic.primaryKeyword), markdown: built.markdown,
     metaTitle: clampMetaTitle(prose.metaTitle, 60, title) ?? title.slice(0, 60),
