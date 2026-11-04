@@ -72,6 +72,21 @@ function lastItemOfIntroducedList(lines: string[], index: number) {
   return j >= 0 && /:\s*$/.test(lines[j]);
 }
 
+/** P307 (Cowork's 21:30Z pino verdict): the section's only prose, with code under it — deleting it opens the section
+ * with bare code. The code needs its introducing sentence. */
+function onlyProseBeforeCode(lines: string[], index: number, fence: boolean[]) {
+  let start = index;
+  for (let j = index - 1; j >= 0 && !headingLevel(lines[j]); j--) if (lines[j].trim() && !fence[j]) start = j;
+  let proseCount = 0, hasCode = false;
+  for (let j = start; j < lines.length && !headingLevel(lines[j]); j++) {
+    if (!lines[j].trim()) continue;
+    if (fence[j]) { hasCode = true; continue; }
+    if (j === index) proseCount++;
+    else if (lines[j].trim() && !/^\s*```/.test(lines[j])) proseCount++;
+  }
+  return hasCode && proseCount === 1;
+}
+
 function previousContentLine(lines: string[], index: number) {
   for (let j = index - 1; j >= 0; j--) if (lines[j].trim()) return j;
   return -1;
@@ -127,7 +142,7 @@ export function deleteSentencesCoherently(
     if (question >= 0) { lines[question] = ""; lines[i] = ""; removedAt[i] = flaggedText; continue; }
     if (flagged.every(Boolean) && (ORDERED_ITEM.test(line) || NUMBERED_BOLD_LABEL.test(line.slice(prefix.length)) ||
       (next !== undefined && LEANS_ON_PREVIOUS.test(next)) || lastItemOfIntroducedList(lines, i) ||
-      answersPreviousQuestion(lines, i))) { hold(); continue; }
+      answersPreviousQuestion(lines, i) || onlyProseBeforeCode(lines, i, fence))) { hold(); continue; }
     if (onlyContentInSection(lines, i)) {
       // The section's only content: the section goes with it (heading
       // included, unless subsections follow), except a numbered step or
@@ -141,6 +156,8 @@ export function deleteSentencesCoherently(
       if (introduction || (h >= 0 && NUMBERED_HEADING.test(lines[h]) && !subsections)) { hold(); continue; }
       if (h >= 0 && !subsections) lines[h] = "";
     }
+    const number = /^\s*(\d+)[.)]\s/.exec(line);
+    if (number && lines.slice(i + 1).some((later) => new RegExp(`\\b(?:step|phase)\\s+${number[1]}\\b`, "i").test(later))) { hold(); continue; }
     lines[i] = "";
     removedAt[i] = flaggedText;
   }

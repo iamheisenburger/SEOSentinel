@@ -151,8 +151,8 @@ export function rankedResearchSources<T extends { url: string }>(sources: readon
  * rebate), though every missing figure was on its owner's page (WellnessLiving pricing, the City of Austin permit fee,
  * Texas Gas Service's rebate, Carrier's lifespans). Each required item that asks for a figure and has none in the kept
  * sources gets a targeted search on its owner's site before writing. */
-const FIGURE_ITEM = /\b(?:costs?|prices?|pricing|fees?|rebates?|incentives?|tax credits?|temperatures?|heat limits?|lifespans?|timeline|how long)\b|°/i;
-const ITEM_FILLER = new Set(("from what which whether their each with that this these those page pages owner owners source sources official guidance " +
+export const FIGURE_ITEM = /\b(?:costs?|prices?|pricing|fees?|rebates?|incentives?|tax credits?|temperatures?|heat limits?|lifespans?|timeline|how long)\b|°/i;
+export const ITEM_FILLER = new Set(("from what which whether their each with that this these those page pages owner owners source sources official guidance " +
   "own sites site range ranges amount amounts typically usually common such including includes include about into than more most only also " +
   "item items figure figures program programs reputable guide guides").split(" "));
 const itemTerms = (item: string) => [...new Set((item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !ITEM_FILLER.has(w)))];

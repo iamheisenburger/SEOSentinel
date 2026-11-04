@@ -2,13 +2,13 @@
 import { assertNotMidContentSetup } from "../lib/contentSetupPath";
 import { EVIDENCE_EXCERPT_MAX_CHARS } from "../lib/evidenceExcerpt";
 import { LIST_MIN_OPTIONS, LIST_RESEARCH_SEARCHES, LIST_RESEARCH_SOURCES, MAX_RESEARCH_SOURCES, PLANNED_RESEARCH_SOURCES, PRIMARY_PASS_BELOW,
-  PRIMARY_PASS_SEARCHES, SEARCHER_LED_RESEARCH_SYSTEM, SOURCE_ROLE_LABEL, type SourceRole, coverageSourcesRequest, optionSourcesRequest, itemLookupRequest, missingFigureItems,
+  PRIMARY_PASS_SEARCHES, SEARCHER_LED_RESEARCH_SYSTEM, SOURCE_ROLE_LABEL, type SourceRole, coverageSourcesRequest, optionSourcesRequest, itemLookupRequest, missingFigureItems, FIGURE_ITEM, ITEM_FILLER,
   primarySourcesRequest, rankedResearchSources, sourceHosts } from "../lib/researchPasses";
 import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWords, namesInText, pageShape, planFormat, serpArticleType, serpBriefFromAnalysis,
   serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch, FORMAT_DEFAULT_WORDS } from "../lib/serpBrief";
 import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, planCheckIssues, planCheckNotes, runPlanChecks, statedNumbers, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
 import { assembledArticle, assembledFormat, comparedSides, enrichedExcerpt, orderedStepsText, ownerPageText, PROSE_INPUT_SCHEMA, ProseSchema, pricingText, proseRequest, RECORDS_INPUT_SCHEMA,
-  RecordsSchema, recordsRequest, skeletonFor, verifiedRecords } from "../lib/articleAssembly";
+  RecordsSchema, recordsRequest, skeletonFor, unsatisfiedFigureItems, verifiedRecords } from "../lib/articleAssembly";
 import { backedFactsOnly, rebuildSourcesSection, withFaqLast, withoutEmptyFigureSections, withoutUntimedSections, withPriceDate, type BackingInput, type BackingRemoval } from "../lib/backedFacts";
 import { fetchPublicTextRendered } from "../lib/tregFetch";
 import { sourcingGaps, TopicNotSourceable, undocumentedCodeNames, type SourcingCounts } from "../lib/topicSourcing";
@@ -7613,9 +7613,22 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
     `code dropped ${verified.dropped.length} record(s) its excerpt doesn't state.`);
   const thin = args.plan.format === "list" ? verified.options.filter((option) => !option.business).length < 3
     : new Set(verified.facts.map((fact) => fact.section)).size < 2;
+  // P307 (the coverage variance, batches 8-10): an article is only as complete as the plan that promised it. A coverage
+  // item that asks for a figure must have a verified record carrying its terms, a searcher's question needs an answer
+  // (anything but a tutorial), and the article needs enough body to stand beside the results it competes with — or the
+  // article holds and the slot takes a fresh run with the owner lookups. This converts lucky rolls into guarantees:
+  // batch 10's roof published without the 10% permit threshold its own plan promised.
+  const figureItems = (args.plan.coverage ?? []).filter((item) => FIGURE_ITEM.test(item));
+  const unsatisfied = unsatisfiedFigureItems(args.plan.coverage ?? [], verified, FIGURE_ITEM, ITEM_FILLER);
+  const questionsUnanswered = args.plan.format !== "tutorial" && args.questions.length >= 2 && !verified.faqs.length;
+  const proseFloor = 600;
   // v3.1 (batch 7): a topic with too few checked records is not sourceable in ANY mode — a 43-word article reached the
   // gate in owner-review mode and burned its quality attempts. The slot takes the next topic instead.
-  if (thin) throw new TopicNotSourceable([args.plan.format === "list" ? "fewer than 3 options with checked records" : "fewer than 2 sections with checked records"]);
+  const holds = [...(thin ? [args.plan.format === "list" ? "fewer than 3 options with checked records" : "fewer than 2 sections with checked records"] : []),
+    ...(unsatisfied.length >= 2 || (unsatisfied.length && figureItems.length <= 3)
+      ? [`${unsatisfied.length} of ${figureItems.length} planned figure item(s) have no verified record: ${unsatisfied.slice(0, 3).join("; ").slice(0, 200)}`] : []),
+    ...(questionsUnanswered ? [`${args.questions.length} questions searchers ask and no verified answer`] : [])];
+  if (holds.length) throw new TopicNotSourceable(holds);
   const skeleton = skeletonFor({ format: args.plan.format, sections: args.plan.sections, records: verified, sources, readAt: contentProviderPromptTime(), sides });
   const proseCall = proseRequest({ search: args.topic.primaryKeyword, productName: args.productName, businessSummary: args.site.siteSummary ?? args.site.niche ?? "",
     audience: args.site.targetAudienceSummary ?? "", profile: args.profile, skeleton, records: verified, sources });
@@ -7625,6 +7638,10 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   const built = assembledArticle({ skeleton, prose, records: verified, productName: args.productName, profile: args.profile, search: args.topic.primaryKeyword,
     cta: configuredCallToAction(args.site, args.productName) });
   if (built.dropped.length) args.notes.push(`Assembly v3: code dropped ${built.dropped.length} prose sentence(s) with a figure or name its section's records don't give.`);
+  // P307: the article must carry its own weight beside the results it competes with (batch 10's roof: 511 words
+  // against a 1,200-word median passed every other check).
+  const bodyWords = built.markdown.replace(/^([ \t]*```[\w-]*[^\n]*\n)[\s\S]*?^[ \t]*```[ \t]*$/gm, " code ").split(/\s+/).filter(Boolean).length;
+  if (bodyWords < proseFloor) throw new TopicNotSourceable([`the assembled article is ${bodyWords} words; ${proseFloor} is the floor`]);
   const title = (statedNumbers(prose.title).length ? "" : prose.title.replace(/\s+/g, " ").trim()) || args.topic.label;
   return { title, slug: buildSlug(args.topic.primaryKeyword), markdown: built.markdown,
     metaTitle: clampMetaTitle(prose.metaTitle, 60, title) ?? title.slice(0, 60),

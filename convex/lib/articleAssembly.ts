@@ -268,7 +268,15 @@ export function verifiedRecords(raw: Omit<Records, "steps"> & { steps?: Records[
   const at = (step: Records["steps"][number]) => normal(text(step.source)).indexOf(normal(step.quote).replace(/^["'(\s.…]+|["')\s.…]+$/g, ""));
   // Which ordered list a step comes from: each list on the page starts again at "1." (lib orderedStepsText).
   const listOf = (step: Records["steps"][number]) => (normal(text(step.source)).slice(0, Math.max(0, at(step))).match(/(?:^|\s(?:…|\.\.\.)\s)1\. /g) ?? []).length;
-  const steps: VerifiedStep[] = procedure ? [...procedure[1]].sort((a, b) => at(a) - at(b)).slice(0, 12).map((step) => ({ ...step, procedure: listOf(step) })) : [];
+  // P307 (batch 8's sprinkler shut the water off at steps 1 and 4): two steps of one procedure that say the same
+  // thing in different words keep the first only. Compared on content words, never order words.
+  const stepWords = (text: string) => new Set((text.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []));
+  const sameStep = (a: string, b: string) => { const A = stepWords(a), B = stepWords(b);
+    return A.size >= 3 && B.size >= 3 && [...A].filter((w) => B.has(w)).length / Math.min(A.size, B.size) >= 0.65; };
+  const steps: VerifiedStep[] = procedure ? [...procedure[1]].sort((a, b) => at(a) - at(b))
+    .filter((step, i, all) => !all.slice(Math.max(0, i - 4), i)
+      .some((earlier) => listOf(earlier) === listOf(step) && sameStep(earlier.step, step.step)))
+    .slice(0, 12).map((step) => ({ ...step, procedure: listOf(step) })) : [];
   return { options, facts, faqs, steps, dropped };
 }
 
@@ -458,8 +466,8 @@ export function skeletonFor(args: { format: string; sections: readonly string[];
     const lines: string[] = table ? [table, ""] : [];
     if (money.length >= 2) {
       lines.push(`| Item (as of ${asOf}) | Amount | Source |`, "| --- | --- | --- |",
-        ...money.map((f) => `| ${cell(sentenceCase(rowLabel(f, args.sources)))} | ${cell(f.value).replace(/[.;,]+$/, "")}${cite(f.source)} | ${f.source > 0 ? cell(publisher(args.sources[f.source - 1]?.url ?? "")) : "Our pricing"} |`), "");
-      for (const f of money) register(f, f.value.replace(/[.;,]+$/, ""), f.source, rowLabel(f, args.sources));
+        ...money.map((f) => `| ${cell(sentenceCase(rowLabel(f, args.sources)))} | ${cell(proseDisplay(f.value))}${cite(f.source)} | ${f.source > 0 ? cell(publisher(args.sources[f.source - 1]?.url ?? "")) : "Our pricing"} |`), "");
+      for (const f of money) register(f, proseDisplay(f.value), f.source, rowLabel(f, args.sources));
     }
     const records: ProseRecord[] = [];
     // The subject prefixes a fact whose label doesn't already start with it (batch 8 printed "Stone-coated steel:
@@ -470,7 +478,7 @@ export function skeletonFor(args: { format: string; sections: readonly string[];
       return subject && !normal(f.value).includes(normal(subject).slice(0, 12)) && !normal(label).startsWith(normal(subject).slice(0, 10))
         ? `${subject}: ${label}` : label;
     };
-    for (const f of [...(money.length >= 2 ? [] : money), ...other]) records.push(register(f, f.value.replace(/[.;,]+$/, ""), f.source, factLabel(f)));
+    for (const f of [...(money.length >= 2 ? [] : money), ...other]) records.push(register(f, proseDisplay(f.value), f.source, factLabel(f)));
     if (!lines.length && !records.length) continue;
     if (out.length < 2) {
       introPool.push(...records.slice(0, 4));
@@ -496,6 +504,19 @@ function rowLabel(fact: Records["facts"][number], sources: readonly AssemblySour
   const stripped = owner ? withoutName(withoutName(fact.label, owner), owner.replace(/\./g, " ")) : fact.label;
   const label = sentenceCase(stripped || fact.subject || fact.label);
   return normal(label).includes(normal(fact.value).slice(0, 24)) && fact.value.length < 60 ? sentenceCase(fact.subject || fact.label.split(/\s+/).slice(0, 4).join(" ")) : label;
+}
+
+/** P307: the plan's figure items that no verified record carries. An item is satisfied where a fact's or an option
+ * price's own words (label, value, quote) contain at least two of its distinctive terms — the same vocabulary rule
+ * the pre-write lookups use, so a record either plainly answers the item or plainly doesn't. */
+export function unsatisfiedFigureItems(coverage: readonly string[], records: VerifiedRecords, figureItem: RegExp, filler: Set<string>): string[] {
+  const texts = [...records.facts.map((f) => `${f.label} ${f.value} ${f.quote}`),
+    ...records.options.flatMap((o) => o.prices.map((p) => `${o.name} ${p.price} ${p.quote}`))];
+  return coverage.filter((item) => {
+    if (!figureItem.test(item)) return false;
+    const terms = [...new Set((item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !filler.has(w)))].slice(0, 6);
+    return !texts.some((text) => { const t = text.toLowerCase(); return terms.filter((term) => t.includes(term)).length >= Math.min(2, terms.length); });
+  });
 }
 
 export const ProseSchema = z.object({ title: z.string(), metaTitle: z.string(), metaDescription: z.string(), intro: z.string(),
@@ -561,7 +582,7 @@ const HOMEWORK = /\b(?:check|confirm|verify|ask|call|contact|consult|request|get
 /** Prose about the article's own making ("the records give no price", "the data shows") is not for readers. */
 const COUNTED = /\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+)\s+(?:\w+\s+)?(?:options|tools|apps|platforms|picks|choices|vendors|providers|products|programs|services)\b/i;
 /** v3.1 (batch 6): the meta lead-ins the model wrote because the old prompt asked for them. */
-const MAKING = /\b(?:records?|the data|our data|data (?:given|shown|provided|here)|(?:these|the|our) sources?|excerpts?|not (?:listed|given|shown|stated) here|no (?:price|pricing|figure)s? (?:is |are )?(?:given|listed|shown|stated|published)|hard(?:er)? to judge|this (?:block|table|section|article|list|guide)|the (?:table|list|block|item|items|point|points|note) below|below you'?ll find|use it to)\b/i;
+const MAKING = /\b(?:records?|the data|our data|data (?:given|shown|provided|here)|(?:these|the|our) sources?|excerpts?|not (?:listed|given|shown|stated) here|no (?:price|pricing|figure)s? (?:is |are )?(?:given|listed|shown|stated|published)|hard(?:er)? to judge|this (?:block|table|section|article|list|guide)|this (?:guide|article|post) covers?|the (?:table|list|block|item|items|point|points|note) below|below you'?ll find|use it to)\b/i;
 /** The prose sentences code keeps: none that states a number, or names a company, its scope's records don't give, and none
  * that sends the reader to find something out. */
 export function keptProse(text: string, scope: { allowedText: string }): { kept: string; dropped: string[] } {
@@ -588,8 +609,14 @@ const PLACEHOLDER = /\{\{(r\d+)\}\}/g;
  * numbers are not all in the value falls back to the trimmed value. */
 export function proseDisplay(value: string): string {
   const trimmed = value.replace(/\s+/g, " ").trim().replace(/[.;,]+$/, "");
-  const out = trimmed.replace(/(\d[\d,]*(?:\.\d+)?)\s*(?:dollars?)?\s*(?:\band\b|\bto\b|[–—-])\s*[$€£]?\s*(\d[\d,]*(?:\.\d+)?)/g, "$1–$2")
-    .replace(/\s+([–—])/g, "$1");
+  // A range normalizes to an en dash only where the wording says range: "X to Y" always, "between X and Y",
+  // or a unit directly after the second number ("$4 and $11 per square foot"). "$400 and $650 rebate tiers"
+  // is two separate amounts, not a range, and stays as written (P307).
+  let out = trimmed
+    .replace(/([$€£]?\s?\d[\d,]*(?:\.\d+)?)\s+to\s+[$€£]?\s?(\d[\d,]*(?:\.\d+)?)/g, "$1–$2")
+    .replace(/between\s+([$€£]?\s?\d[\d,]*(?:\.\d+)?)\s+and\s+[$€£]?\s?(\d[\d,]*(?:\.\d+)?)/gi, "$1–$2")
+    .replace(/([$€£]?\s?\d[\d,]*(?:\.\d+)?)\s+and\s+[$€£]?\s?(\d[\d,]*(?:\.\d+)?)(?=\s+(?:per|a|an|each)\s+\w)/g, "$1–$2");
+  out = out.replace(/\s+([–—])/g, "$1").replace(/–\$/g, "–");
   const digits = (s: string) => [...s.matchAll(/\d[\d,]*(?:\.\d+)?/g)].map((m) => m[0]).join(" ");
   const had = new Set(digits(trimmed).split(" "));
   return digits(out).split(" ").every((d) => had.has(d)) ? out : trimmed;
@@ -680,7 +707,7 @@ export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; recor
     dropped.push(...paragraph.dropped);
     // A section fact the paragraph never stated still reaches the reader, as one plain line (records are evidence; this is
     // data, not a quote).
-    const fallback = section.records.filter((r) => !(used.get(r.id) ?? 0)).map((r) => `- **${r.label}:** ${r.value}${cite(r.source)}`);
+    const fallback = section.records.filter((r) => !(used.get(r.id) ?? 0)).map((r) => `- **${r.label}:** ${proseDisplay(r.value)}${cite(r.source)}`);
     const body = section.body.replace(/\{\{SUITS:([^}]+)\}\}\n*/g, (_m, name: string) => {
       const option = options.find((o) => o.name === name);
       const ownPool: typeof pool = {};

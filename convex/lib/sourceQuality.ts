@@ -208,6 +208,11 @@ export function readableSourceTitle(title: string | undefined, url: string, exce
   if (words.length >= 2 && !NAV_LABEL_TITLE.test(clean) && !OTHER_SCRIPT.test(clean)) return clean;
   const heading = /^\s*#{1,3}\s+(.{4,120})\s*$/m.exec(excerpt)?.[1]?.replace(/[#*`[\]]/g, "").replace(/\s+/g, " ").trim() ?? "";
   if ((heading.match(/\p{L}{3,}/gu) ?? []).length >= 2 && !OTHER_SCRIPT.test(heading)) return heading;
+  // P307: no heading either — the excerpt's first plain content line (Cowork 21:30Z: "undefined" and a bare
+  // "github.com" printed in a Sources list).
+  const firstLine = excerpt.split("\n").map((l) => l.replace(/^[#>*|-]+\s*/, "").replace(/\s+/g, " ").trim())
+    .find((l) => l.length >= 12 && l.length <= 90 && (l.match(/\p{L}{3,}/gu) ?? []).length >= 2 && !OTHER_SCRIPT.test(l) && !/^https?:\/\//.test(l));
+  if (firstLine && !NAV_LABEL_TITLE.test(firstLine)) return firstLine;
   let host: string;
   try { host = new URL(url).hostname.replace(/^(?:www|secure)\d*\./i, ""); } catch { return clean || url; }
   return `${host}${/\.pdf(?:$|[?#])/i.test(url) ? " (PDF)" : ""}`;

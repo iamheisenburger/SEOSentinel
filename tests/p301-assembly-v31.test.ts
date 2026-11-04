@@ -122,7 +122,7 @@ test("P301 assembly: the intro states the headline fact by placeholder, and an u
   const built = assembledArticle({ skeleton, prose, records: v, productName: "Summit Peak Roofing",
     profile: "Summit Peak Roofing replaces asphalt shingle and metal roofs in Denver.", search: "roof replacement cost denver",
     cta: { label: "Try Summit Peak Roofing", url: "https://summit.example" } });
-  assert.match(built.markdown, /^Most Denver homeowners pay between \$7,400–16,500 \[1\] for a full roof replacement\./, "the search's answer is the first sentence"); // P305: normalized range
+  assert.match(built.markdown, /^Most Denver homeowners pay \$7,400–16,500 \[1\] for a full roof replacement\./, "the search's answer is the first sentence"); // P307: "between X and Y" folds into the dash
   assert.match(built.markdown, /## Permits\n\n- \*\*.+:\*\* more than 10% of the roof square footage or two roof squares \(whichever is smaller\) \[2\]/,
     "a fact the paragraph never stated still reaches the reader, as one plain line");
   assert.match(built.markdown, /\| Item \(as of November 2026\) \| Amount \| Source \|/, "two money facts make a dated table");

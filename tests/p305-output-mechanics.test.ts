@@ -171,3 +171,69 @@ test("P306: a permit fee a third-party calculator states is not covered; the cit
   const covered = missingFigureItems(["water heater permit cost"], [calculator, city]);
   assert.equal(covered.length, 0, "the city's own fee figure covers the item");
 });
+
+// P307 (overnight, Cowork's two cautions): coverage holds, range-context normalization, deletion holds, step dedup.
+const now = Date.UTC(2026, 10, 4);
+import { verifiedRecords, unsatisfiedFigureItems } from "../convex/lib/articleAssembly.ts";
+import { FIGURE_ITEM, ITEM_FILLER } from "../convex/lib/researchPasses.ts";
+
+test("P307: ranges normalize only in range wording; two separate amounts stay", () => {
+  assert.equal(proseDisplay("between $4 and $11 per square foot"), "$4–11 per square foot");
+  assert.equal(proseDisplay("$60 to $130"), "$60–130");
+  assert.equal(proseDisplay("$400 and $650 rebate tiers"), "$400 and $650 rebate tiers");
+});
+
+test("P307: the section's only prose before code is never deleted", () => {
+  const markdown = [
+    "## Writing logs to a file",
+    "",
+    "The transports option writes each log line to a file with 77777 rotation.",
+    "",
+    "```js",
+    "const transport = pino.transport({ target: 'pino/file' })",
+    "```",
+  ].join("\n");
+  const result = deleteSentencesCoherently(markdown, () => true);
+  assert.match(result.markdown, /transports option writes each log line/);
+  assert.match(result.markdown, /pino\.transport/);
+});
+
+test("P307: a numbered step referenced later is never deleted", () => {
+  const markdown = [
+    "1. Shut off the water at the valve with 42424 psi.",
+    "2. Open the drains.",
+    "",
+    "Step 1 is what protects the pipes from freezing.",
+  ].join("\n");
+  const result = deleteSentencesCoherently(markdown, (s) => s.includes("42424"));
+  assert.match(result.markdown, /Shut off the water/);
+});
+
+test("P307: two steps saying the same thing in one procedure keep the first", () => {
+  const sources = [{ url: "https://denverwater.org/winterize", title: "Denver Water winterization",
+    excerpt: "1. Turn off the water supply to the sprinkler system at the shutoff valve. 2. Open the boiler drain. 3. Shut off the water supply at the valve using the shutoff." }];
+  const v = verifiedRecords({ options: [], facts: [], faqs: [],
+    steps: [
+      { section: "Steps", step: "Turn off the water supply to the sprinkler system at the shutoff valve", quote: "Turn off the water supply to the sprinkler system at the shutoff valve", source: 1 },
+      { section: "Steps", step: "Open the boiler drain valve", quote: "Open the boiler drain", source: 1 },
+      { section: "Steps", step: "Shut off the water supply at the valve using the shutoff", quote: "Shut off the water supply at the valve using the shutoff", source: 1 }] },
+    { sources, profile: "", productName: "X", competitors: [], sections: ["Steps"], now });
+  const steps = v.steps ?? [];
+  assert.equal(steps.length, 2, `expected the duplicate shut-off to collapse, got ${steps.length}`);
+});
+
+test("P307: a planned figure item with no record is named unsatisfied", () => {
+  const v = verifiedRecords({ options: [], facts: [
+      { section: "Costs", subject: "roof", kind: "cost", label: "Typical total cost", value: "$11,712",
+        quote: "Denver roofs average $11,712 installed", source: 1 }], faqs: [] },
+    { sources: [{ url: "https://example.com/cost", title: "Costs", excerpt: "Denver roofs average $11,712 installed" }],
+      profile: "", productName: "X", competitors: [], sections: ["Costs", "Permits"], now });
+  const missing = unsatisfiedFigureItems(["roof permit fee from the city", "typical total roof cost in dollars"], v, FIGURE_ITEM, ITEM_FILLER);
+  assert.ok(missing.some((m) => m.includes("permit")), "the permit item has no record");
+  assert.ok(!missing.some((m) => m.includes("total roof cost")), "the cost item is satisfied");
+});
+
+test("P307: 'undefined' and bare-domain titles use the excerpt's first content line", () => {
+  assert.equal(readableSourceTitle(undefined, "https://raw.githubusercontent.com/pinojs/pino/docs/api.md",
+    "pino(opts, stream)\nsends JSON objects to a stream"), "pino(opts, stream)");
+});
