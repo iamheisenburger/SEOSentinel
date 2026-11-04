@@ -7654,8 +7654,16 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
       const terms = [...new Set((item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !ITEM_FILLER.has(w)))].slice(0, 3).join(" ");
       const [{ analyzeSERPFromDataForSEO }, { dataForSeoLocationCode, dataForSeoLanguageCode }] = await Promise.all([import("./seoData"), import("../lib/dataForSeoLocale")]);
       const found = await analyzeSERPFromDataForSEO(`${terms} ${place}`.trim(), dataForSeoLocationCode(args.site.targetCountry), dataForSeoLanguageCode(args.site.language));
+      // A rebate or credit's program owner can be a utility's own .com (Texas Gas Service, Austin Energy) —
+      // batch 17's Austin held on its rebate because the payer is not a .gov. For those items a host whose name
+      // says gas/electric/energy/power counts as the owner; permits still need .gov/.mil/.edu.
+      const utilityItem = /\b(?:rebates?|incentives?|credits?)\b/i.test(item);
+      const ownerHost = (host: string) => utilityItem
+        ? /\.(gov|mil|edu)$/.test(host) || /(?:gas|electric|energy|utility|power)/.test(host.replace(/\.(?:com|net|org|coop)$/, ""))
+
+        : /\.(gov|mil|edu)$/.test(host);
       const hit = found.results.find((result) => {
-        try { const host = new URL(result.url).hostname.toLowerCase(); return /\.(gov|mil|edu)$/.test(host) && (!place || host.includes(place.split(" ")[0].toLowerCase()) || (result.title ?? "").toLowerCase().includes(place.split(" ")[0].toLowerCase())); }
+        try { const host = new URL(result.url).hostname.toLowerCase(); return ownerHost(host) && (!place || host.includes(place.split(" ")[0].toLowerCase()) || (result.title ?? "").toLowerCase().includes(place.split(" ")[0].toLowerCase())); }
         catch { return false; }
       });
       if (hit) {
