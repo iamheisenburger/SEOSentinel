@@ -60,3 +60,17 @@ A $300 rebate was available through December 31, 2024.`, source: 1, owner: "Nort
 A $300 rebate was available through December 31, 2024.` }], profile: "Biz", productName: "Biz", competitors: [], sections, now });
   assert.equal(v.facts.length, 0, "the R9 rules the model's records face drop this too");
 });
+
+// P322 soundness: an aggregator's install costs never satisfy a rebate item.
+test("P322: a rebate item requires a rebate word in the sentence, and only org-shaped utility hosts are owners", () => {
+  const aggregator = `Energy Rebate Calculator
+A cold-climate heat pump typically costs $8,000–$18,000 installed. See rebate options for your area.`;
+  const facts = authorityFactsFromPage({ item: "Utility rebate amounts and eligibility", excerpt: aggregator, source: 1, owner: "Energy Rebate Calculator", sections, covers });
+  assert.equal(facts.length, 0, "a page of install costs satisfies a rebate item with nothing — the rebate-less figure sentence dies, and the rebate sentence has no figure");
+  // A real utility's rebate line extracts as before.
+  const utility = `Xcel Energy — rebates
+Members installing a qualifying cold-climate heat pump receive a $2,000 rebate after installation.`;
+  const ok = authorityFactsFromPage({ item: "Utility rebate amounts and eligibility", excerpt: utility, source: 1, owner: "Xcel Energy", sections, covers });
+  assert.equal(ok.length, 1);
+  assert.equal(ok[0].value, "$2,000");
+});

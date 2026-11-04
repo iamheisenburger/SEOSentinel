@@ -7705,14 +7705,20 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
       // utility, power) or by the result's title naming the program and the place, which covers utilities whose
       // domain names none of those words. Permits, fees and rules still require a government host.
       const utilityItem = /\b(?:rebates?|incentives?|credits?)\b/i.test(item);
+      // A paying utility names itself "name + gas/electric/energy/utility/power (+ org suffix)" — austinenergy,
+      // xcelenergy, texasgasservice. A rebate-named aggregator (energyrebatecalculator) does not pass: the
+      // utility word must BE the organisation's name, not a topic in it. National agencies without such names
+      // are reached by the item's own owner hints or a .gov host.
+      const UTILITY_LABEL = /^[a-z]{0,14}(?:gas|electric|energy|utility|power)s?(?:service|services|co|inc|company|utilities)?$/;
       const ownerResult = (result: { url: string; title?: string }) => {
         try {
           const host = new URL(result.url).hostname.toLowerCase();
+          const label = host.replace(/^www\./, "").split(".")[0] ?? "";
           const gov = /\.(gov|mil|edu)$/.test(host);
-          const utility = utilityItem && (/(?:gas|electric|energy|utility|power)/.test(host.replace(/\.(?:com|net|org|coop|us|gov)$/, "")) || /\b(?:rebate|incentive|credit)\b/i.test(result.title ?? ""));
-          const located = !place || host.includes(place.split(" ")[0].toLowerCase()) || (result.title ?? "").toLowerCase().includes(place.split(" ")[0].toLowerCase())
-            || hints.some((h) => host.includes(h.toLowerCase()));
-          return (gov || utility) && located;
+          const utility = utilityItem && UTILITY_LABEL.test(label);
+          const hintOwner = hints.some((h) => host.includes(h.toLowerCase()));
+          const located = !place || host.includes(place.split(" ")[0].toLowerCase()) || (result.title ?? "").toLowerCase().includes(place.split(" ")[0].toLowerCase()) || hintOwner;
+          return (gov || utility || hintOwner) && located;
         } catch { return false; }
       };
       for (const hit of found.results.filter(ownerResult).slice(0, 2)) {

@@ -206,11 +206,16 @@ export function authorityFactsFromPage(args: { item: string; excerpt: string; so
   if (!section) return [];
   const FIGURE = /(?:up to |at least |maximum of )?[$€£]\s?\d[\d,]*(?:\.\d+)?|(?:up to |at least )?\b\d[\d,]*(?:\.\d+)?\s?%/i;
   const units = args.excerpt.split("\n").flatMap((line) => line.trim().startsWith("|") ? [line] : line.split(/(?<=[.;])\s+(?=[A-Z"“(])/));
+  // A rebate sentence says rebate; a permit sentence says permit. The item's keyword must appear in the sentence
+  // itself, so a page of install costs can never satisfy a rebate item (batch 28's heat pump pulled cost ranges
+  // off a rebate-named aggregator this way).
+  const keywordWord = /\b(permits?|fees?|rebates?|incentives?|credits?)\b|\b(?:receive|get|claim|offers?)\b[^.]{0,50}\bback\b/i;
   const out: Records["facts"] = [];
   for (const unit of units) {
     const clean = unit.trim().replace(/^[|\-*\s]+/, (m) => (unit.trim().startsWith("|") ? "|" : "")).trim();
     if (clean.length < 10 || out.length >= 3) continue;
     const lower = clean.toLowerCase();
+    if (keyword !== "fact" && !keywordWord.test(clean)) continue;
     if (terms.filter((term) => lower.includes(term)).length < 1) continue;
     const figure = FIGURE.exec(clean);
     if (!figure) continue;
