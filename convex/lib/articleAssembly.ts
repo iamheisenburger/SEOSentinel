@@ -498,7 +498,7 @@ export function skeletonFor(args: { format: string; sections: readonly string[];
     if (block) out.splice(Math.min(1, out.length), 0, block);
   }
   const faq = args.records.faqs.length ? { heading: faqHeading, options: [], records: [] as ProseRecord[],
-    body: args.records.faqs.map((f) => `### ${f.question.trim()}\n\n${f.answer.replace(/\s+/g, " ").trim().replace(/[.!]?$/, (end) => `${cite(f.source)}${end || "."}`)}`).join("\n\n") } : null;
+    body: args.records.faqs.map((f) => `### ${f.question.trim()}\n\n${proseDisplay(f.answer.replace(/\s+/g, " ").trim()).replace(/[.!]?$/, (end) => `${cite(f.source)}${end || "."}`)}`).join("\n\n") } : null;
   return { sections: out, faq, asOf, intro: introPool.slice(0, 8), pool };
 }
 /** A table row's label: the fact's own label, with the owner's name out of it (the Source column says whose it is), and a
