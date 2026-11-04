@@ -7614,7 +7614,33 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
     now: contentProviderPromptTime() });
   args.notes.push(`Assembly v3: ${verified.options.length} option(s), ${verified.facts.length} fact(s) and ${verified.faqs.length} answer(s) on record; ` +
     `code dropped ${verified.dropped.length} record(s) its excerpt doesn't state.`);
-  const thin = args.plan.format === "list" ? verified.options.filter((option) => !option.business).length < 3
+  // P317: a list's width is the union of what the results name. A seed option with no verified record still
+  // appears — its name, its own site when research found one, "No public price" — never a fabricated fact
+  // (batch 19's invoicing carried 4 options against the top lists' 7+). Stubs add width only after the real
+  // records passed every hold; they carry no price, feature or claim.
+  if (args.plan.format === "list") {
+    const named = new Set(verified.options.map((o) => o.name.toLowerCase().replace(/[^a-z0-9]/g, "")));
+    const ownSite = new Map(args.options.map((name) => {
+      const hit = sources.find((source) => firstPartyProductPage(source.url, [name.toLowerCase().replace(/[^a-z0-9]/g, "")]));
+      return [name, hit ? new URL(hit.url).origin : ""];
+    }));
+    for (const seed of args.options.slice(0, 14)) {
+      if (verified.options.length >= 8) break;
+      const k = seed.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (!k || named.has(k) || k === args.productName.toLowerCase().replace(/[^a-z0-9]/g, "")) continue;
+      verified = { ...verified, options: [...verified.options, { name: seed, website: ownSite.get(seed) ?? "",
+        prices: [], features: [], limits: [], extras: [], business: false }] };
+      named.add(k);
+    }
+    const stubbed = verified.options.filter((o) => !o.prices.length && !o.features.length && !o.limits.length).length;
+    if (stubbed) args.notes.push(`Assembly v3: ${stubbed} named option(s) added without verified records (printed as 'No public price').`);
+  }
+  // P319: the thin check sees the widened list (stubs merged above) — a roll with 2 verified options plus 6 named
+  // stubs is an honest 8-row list ("No public price" beside the unverified), not a dead slot. The hollow-list
+  // guard stands: at least 2 verified records and 5 named options in all.
+  const nonBusiness = verified.options.filter((option) => !option.business);
+  const verifiedOptions = nonBusiness.filter((option) => option.prices.length || option.features.length || option.limits.length || option.extras.length).length;
+  const thin = args.plan.format === "list" ? (verifiedOptions < 2 || nonBusiness.length < 5)
     : new Set(verified.facts.map((fact) => fact.section)).size < 2;
   // P307 (the coverage variance, batches 8-10): an article is only as complete as the plan that promised it. A coverage
   // item that asks for a figure must have a verified record carrying its terms, a searcher's question needs an answer
@@ -7694,27 +7720,6 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
     ...(stillUnsatisfied.length ? [`planned authority item(s) with no verified record: ${stillUnsatisfied.slice(0, 2).join("; ").slice(0, 180)}`] : []),
     ...(questionsUnanswered ? [`${args.questions.length} questions searchers ask and no verified answer`] : [])];
   if (holds.length) throw new TopicNotSourceable(holds);
-  // P317: a list's width is the union of what the results name. A seed option with no verified record still
-  // appears — its name, its own site when research found one, "No public price" — never a fabricated fact
-  // (batch 19's invoicing carried 4 options against the top lists' 7+). Stubs add width only after the real
-  // records passed every hold; they carry no price, feature or claim.
-  if (args.plan.format === "list") {
-    const named = new Set(verified.options.map((o) => o.name.toLowerCase().replace(/[^a-z0-9]/g, "")));
-    const ownSite = new Map(args.options.map((name) => {
-      const hit = sources.find((source) => firstPartyProductPage(source.url, [name.toLowerCase().replace(/[^a-z0-9]/g, "")]));
-      return [name, hit ? new URL(hit.url).origin : ""];
-    }));
-    for (const seed of args.options.slice(0, 14)) {
-      if (verified.options.length >= 8) break;
-      const k = seed.toLowerCase().replace(/[^a-z0-9]/g, "");
-      if (!k || named.has(k) || k === args.productName.toLowerCase().replace(/[^a-z0-9]/g, "")) continue;
-      verified = { ...verified, options: [...verified.options, { name: seed, website: ownSite.get(seed) ?? "",
-        prices: [], features: [], limits: [], extras: [], business: false }] };
-      named.add(k);
-    }
-    const stubbed = verified.options.filter((o) => !o.prices.length && !o.features.length && !o.limits.length).length;
-    if (stubbed) args.notes.push(`Assembly v3: ${stubbed} named option(s) added without verified records (printed as 'No public price').`);
-  }
   const skeleton = skeletonFor({ format: args.plan.format, sections: args.plan.sections, records: verified, sources, readAt: contentProviderPromptTime(), sides });
   const proseCall = proseRequest({ search: args.topic.primaryKeyword, productName: args.productName, businessSummary: args.site.siteSummary ?? args.site.niche ?? "",
     audience: args.site.targetAudienceSummary ?? "", profile: args.profile, skeleton, records: verified, sources });
