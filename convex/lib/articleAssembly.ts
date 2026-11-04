@@ -43,6 +43,8 @@ export type AssembledOption = Records["options"][number] & { business: boolean; 
 export type VerifiedStep = Records["steps"][number] & { procedure?: number };
 export type VerifiedRecords = { options: AssembledOption[]; facts: Records["facts"]; faqs: Records["faqs"]; steps?: VerifiedStep[]; dropped: string[] };
 
+import { ITEM_FILLER } from "./researchPasses.ts";
+
 const str = { type: "string" };
 const withQuote = (properties: Record<string, unknown>) => ({ type: "object", additionalProperties: false,
   properties: { ...properties, quote: str, source: { type: "integer" } }, required: [...Object.keys(properties), "quote", "source"] });
@@ -173,6 +175,54 @@ function origin(url: string): string { try { const u = new URL(url); return `${u
 
 /** Code's check of every record: its quote is in the excerpt it cites, every figure is in its quote, a name it adds is in its
  * quote, a product's facts come from its own page or a quote that names it (a price from its own page wins), each fact once. */
+/** P321: the authority recovery's extraction is CODE, not a model call. A sentence (or table row) of the program
+ * owner's own page that carries one of the plan item's distinctive terms beside a money figure or a percentage
+ * becomes a fact record whose quote is a verbatim slice of the page's excerpt — so quote verification, figure
+ * verification and the R9 rules pass by construction, not by a roll. Expired programs and past-dated changes are
+ * dropped by verifiedRecords like any other record. The item's own words pick the sentences and the outline
+ * section; nothing here knows any city, utility or program. */
+export function authorityFactsFromPage(args: { item: string; excerpt: string; source: number; owner: string;
+  sections: readonly string[]; covers: ReadonlyMap<string, string> }): Records["facts"] {
+  const terms = [...new Set((args.item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !ITEM_FILLER.has(w)))];
+  if (!terms.length) return [];
+  const keyword = /\b(permits?|fees?|rebates?|incentives?|credits?)\b/i.exec(args.item)?.[0]?.toLowerCase() ?? "fact";
+  const kind: Records["facts"][number]["kind"] = /rebate|incentive|credit/.test(keyword) ? "rebate" : /permit|fee/.test(keyword) ? "fee" : "fact";
+  const labelWords: string[] = [];
+  for (const word of args.item.split(/\s+/)) {
+    if (/[,.;:]$/.test(word)) { labelWords.push(word.replace(/[,.;:]$/, "")); break; }
+    labelWords.push(word);
+    if (/\b(permits?|fees?|rebates?|incentives?|credits?)\b/i.test(word)) break;
+  }
+  const label = sentenceCase(labelWords.slice(0, 6).join(" ")) || sentenceCase(keyword);
+  // The record prints under an outline heading; the heading (with the coverage text the planner gave it) that
+  // shares the most of the item's terms is its home. No home means no record — an orphan fact prints nowhere.
+  let section = "", best = 0;
+  for (const heading of args.sections) {
+    const text = `${heading} ${args.covers.get(heading) ?? ""}`.toLowerCase();
+    const score = terms.filter((term) => text.includes(term)).length;
+    if (score > best) { best = score; section = heading; }
+  }
+  if (!section) section = args.sections.find((h) => /\b(?:rebate|incentive|credit|permit|fee)/i.test(h)) ?? "";
+  if (!section) return [];
+  const FIGURE = /(?:up to |at least |maximum of )?[$€£]\s?\d[\d,]*(?:\.\d+)?|(?:up to |at least )?\b\d[\d,]*(?:\.\d+)?\s?%/i;
+  const units = args.excerpt.split("\n").flatMap((line) => line.trim().startsWith("|") ? [line] : line.split(/(?<=[.;])\s+(?=[A-Z"“(])/));
+  const out: Records["facts"] = [];
+  for (const unit of units) {
+    const clean = unit.trim().replace(/^[|\-*\s]+/, (m) => (unit.trim().startsWith("|") ? "|" : "")).trim();
+    if (clean.length < 10 || out.length >= 3) continue;
+    const lower = clean.toLowerCase();
+    if (terms.filter((term) => lower.includes(term)).length < 1) continue;
+    const figure = FIGURE.exec(clean);
+    if (!figure) continue;
+    const value = figure[0].trim();
+    if (out.some((f) => key(f.value) === key(value))) continue;
+    // The subject names the program's owner (the paying utility or agency, from its own page title): the record
+    // attributes the figure to the organization that runs the program — R9b's own-page rule reads exactly this.
+    out.push({ section, subject: args.owner, kind, label, value, quote: clean, source: args.source });
+  }
+  return out;
+}
+
 export function verifiedRecords(raw: Omit<Records, "steps"> & { steps?: Records["steps"] }, ctx: { sources: readonly AssemblySource[]; profile: string; productName: string;
   competitors: readonly string[]; sections: readonly string[]; now?: number }): VerifiedRecords {
   const dropped: string[] = [];

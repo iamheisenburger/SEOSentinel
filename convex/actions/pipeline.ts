@@ -8,7 +8,7 @@ import { type SerpBrief, type SerpPage, googleRedirect, listedOptions, medianWor
   serpBriefPrompt, serpBriefUsable, serpPagesPrompt, technicalSearch, FORMAT_DEFAULT_WORDS } from "../lib/serpBrief";
 import { articleOutlinePrompt, claimErrorsInArticle, fixFindings, planCheckIssues, planCheckNotes, runPlanChecks, statedNumbers, type ArticleOutline, type PlanFormat } from "../lib/articlePlanChecks";
 import { assembledArticle, assembledFormat, comparedSides, enrichedExcerpt, orderedStepsText, ownerPageText, PROSE_INPUT_SCHEMA, ProseSchema, pricingText, proseRequest, RECORDS_INPUT_SCHEMA,
-  RecordsSchema, recordsRequest, skeletonFor, unsatisfiedFigureItems, verifiedRecords } from "../lib/articleAssembly";
+  RecordsSchema, recordsRequest, skeletonFor, unsatisfiedFigureItems, verifiedRecords, authorityFactsFromPage } from "../lib/articleAssembly";
 import { backedFactsOnly, rebuildSourcesSection, withFaqLast, withoutEmptyFigureSections, withoutUntimedSections, withPriceDate, type BackingInput, type BackingRemoval } from "../lib/backedFacts";
 import { fetchPublicTextRendered } from "../lib/tregFetch";
 import { sourcingGaps, TopicNotSourceable, undocumentedCodeNames, type SourcingCounts } from "../lib/topicSourcing";
@@ -7676,49 +7676,56 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   const authorityUnsatisfied = unsatisfied.filter((item) => /\b(?:permits?|rebates?|incentives?|tax credits?)\b/i.test(item));
   if (unsatisfied.length > authorityUnsatisfied.length)
     args.notes.push(`Coverage: ${unsatisfied.length - authorityUnsatisfied.length} planned breadth item(s) without a verified record (their sections do not print).`);
-  // P312 recovery (roofing, batches 13-15: research kept 23 sources, none .gov): when an authority item is
-  // unsatisfied, CODE searches for the program owner's page directly — the item's terms plus the topic's own
-  // place, filtered to .gov/.mil/.edu hosts — reads it, and the records call runs ONCE more with it appended.
-  // If the record still does not verify, the hold stands. One iteration, no loop, ~$0.10 when it fires.
+  // P321: the authority recovery searches for the program owner's page in code, reads it, and CODE extracts the
+  // fact — a sentence of the owner's own page carrying one of the item's terms beside a money figure or a
+  // percentage, quoted verbatim from the excerpt it came from. No model sits in this loop (P312's model retry
+  // verified on some rolls and not others; under the one-shot cost cap there was nothing to catch the miss). Up
+  // to two owner pages are tried; if neither yields a record that survives verification, the hold stands.
   let recovered = 0;
-  for (const item of authorityUnsatisfied.slice(0, 2)) if (!recovered && sources.length < 24) {
+  for (const item of authorityUnsatisfied.slice(0, 2)) {
+    if (recovered || sources.length >= 24) break;
     try {
       const place = /\b(?:in|for|near)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*$/.exec(args.topic.primaryKeyword)?.[1]
         ?? /\b([A-Z][a-z]{3,})\b/.exec(args.topic.primaryKeyword.split(" ").slice(-2).join(" "))?.[1] ?? "";
       const terms = [...new Set((item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !ITEM_FILLER.has(w)))].slice(0, 2).join(" ");
       const [{ analyzeSERPFromDataForSEO }, { dataForSeoLocationCode, dataForSeoLanguageCode }] = await Promise.all([import("./seoData"), import("../lib/dataForSeoLocale")]);
       const found = await analyzeSERPFromDataForSEO(`${args.topic.primaryKeyword} ${terms}`.trim(), dataForSeoLocationCode(args.site.targetCountry), dataForSeoLanguageCode(args.site.language));
-      // A rebate or credit's program owner can be a utility's own .com (Texas Gas Service, Austin Energy) —
-      // batch 17's Austin held on its rebate because the payer is not a .gov. For those items a host whose name
-      // says gas/electric/energy/power counts as the owner; permits still need .gov/.mil/.edu.
+      // The program owner: a government/military/education host always; for rebate, incentive and credit items
+      // also the paying utility's own domain — recognised by the domain's own words (gas, electric, energy,
+      // utility, power) or by the result's title naming the program and the place, which covers utilities whose
+      // domain names none of those words. Permits, fees and rules still require a government host.
       const utilityItem = /\b(?:rebates?|incentives?|credits?)\b/i.test(item);
-      const ownerHost = (host: string) => utilityItem
-        ? /\.(gov|mil|edu)$/.test(host) || /(?:gas|electric|energy|utility|power)/.test(host.replace(/\.(?:com|net|org|coop)$/, ""))
-
-        : /\.(gov|mil|edu)$/.test(host);
-      const hit = found.results.find((result) => {
-        try { const host = new URL(result.url).hostname.toLowerCase(); return ownerHost(host) && (!place || host.includes(place.split(" ")[0].toLowerCase()) || (result.title ?? "").toLowerCase().includes(place.split(" ")[0].toLowerCase())); }
-        catch { return false; }
-      });
-      if (hit) {
+      const ownerResult = (result: { url: string; title?: string }) => {
+        try {
+          const host = new URL(result.url).hostname.toLowerCase();
+          const gov = /\.(gov|mil|edu)$/.test(host);
+          const utility = utilityItem && (/(?:gas|electric|energy|utility|power)/.test(host.replace(/\.(?:com|net|org|coop|us|gov)$/, "")) || /\b(?:rebate|incentive|credit)\b/i.test(result.title ?? ""));
+          return (gov || utility) && (!place || host.includes(place.split(" ")[0].toLowerCase()) || (result.title ?? "").toLowerCase().includes(place.split(" ")[0].toLowerCase()));
+        } catch { return false; }
+      };
+      for (const hit of found.results.filter(ownerResult).slice(0, 2)) {
+        if (recovered) break;
         const page = await fetchPublicTextRendered(hit.url, 800);
-        const excerpt = ownerPageText(page.text, 5000);
-        if (excerpt.length >= 160) {
-          sources.push({ url: page.url, title: readableSourceTitle(hit.title, page.url, excerpt), excerpt });
-          const retryCall = recordsRequest({ search: args.topic.primaryKeyword, format: args.plan.format,
-            sections: args.plan.sections.map((heading) => ({ heading, covers: args.covers.get(heading) })), coverage: [item], options: args.options, questions: [],
-            productName: args.productName, profile: args.profile, competitors, sources, ownerPage: args.owner, sides });
-          const retried = await callClaudeStructured({ system: `${UNTRUSTED_EVIDENCE_INSTRUCTION}\n\n${retryCall.system}`, userMessage: retryCall.userMessage,
-            toolName: "extract_records", toolDescription: "Submit the one missing fact record, copied word for word from one excerpt.",
-            inputSchema: RECORDS_INPUT_SCHEMA, outputSchema: RecordsSchema, maxTokens: 4000 });
-          const checked = verifiedRecords({ ...raw, facts: [...(raw.facts ?? []), ...(retried.facts ?? [])],
-            faqs: [...(raw.faqs ?? []), ...(retried.faqs ?? [])], options: [...(raw.options ?? []), ...(retried.options ?? [])] } as Parameters<typeof verifiedRecords>[0],
-            { sources, profile: args.profile, productName: args.productName, competitors, sections: args.plan.sections, now: contentProviderPromptTime() });
-          if (checked.facts.length > verified.facts.length || checked.options.length > verified.options.length) { verified = checked; recovered = 1; }
-        }
+        const body = ownerPageText(page.text, 5000);
+        if (body.length < 160) continue;
+        // The page's own title leads the excerpt: the owner naming itself on its own page is the owner speaking
+        // (R9b), and the extractor's quotes are slices of this same string, so verification is deterministic.
+        const hostLabel = (new URL(hit.url).hostname.replace(/^www\./, "").split(".")[0] ?? "").split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+        const titleName = /^([A-Z][\w&'.-]*(?:\s+[A-Z][\w&'.-]*){0,3})/.exec((hit.title ?? "").trim())?.[1] ?? "";
+        const k = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const owner = titleName && k(titleName).includes(k(hostLabel).slice(0, 10)) ? titleName : hostLabel;
+        const excerpt = `${(hit.title ?? new URL(hit.url).hostname).replace(/\s+/g, " ").trim()}\n${body}`;
+        const at = sources.length + 1;
+        const candidates = authorityFactsFromPage({ item, excerpt, source: at, owner, sections: args.plan.sections, covers: args.covers });
+        if (!candidates.length) continue;
+        sources.push({ url: page.url, title: readableSourceTitle(hit.title, page.url, excerpt), excerpt });
+        const checked = verifiedRecords({ ...raw, facts: [...(raw.facts ?? []), ...candidates],
+          faqs: raw.faqs ?? [], options: raw.options ?? [], steps: raw.steps ?? [] } as Parameters<typeof verifiedRecords>[0],
+          { sources, profile: args.profile, productName: args.productName, competitors, sections: args.plan.sections, now: contentProviderPromptTime() });
+        if (checked.facts.length > verified.facts.length) { verified = checked; recovered = 1; }
       }
     } catch { /* the hold below stands */ }
-    if (recovered) args.notes.push("Assembly v3: an unsatisfied authority item was recovered by a direct program-owner search.");
+    if (recovered) args.notes.push("Assembly v3: an unsatisfied authority item was recovered by a direct program-owner read (code-extracted).");
   }
   const stillUnsatisfied = recovered ? unsatisfiedFigureItems(args.plan.coverage ?? [], verified, FIGURE_ITEM, ITEM_FILLER)
     .filter((item) => /\b(?:permits?|rebates?|incentives?|tax credits?)\b/i.test(item)) : authorityUnsatisfied;
