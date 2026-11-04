@@ -7686,6 +7686,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   // current), and the hold exempts the item — batch 27's Austin plan demanded a 2026 federal credit whose real
   // status is "expired December 31, 2025", and no honest record could ever satisfy it.
   const exempted: string[] = [];
+  const recoveryTrace: string[] = [];
   // P324: research usually already FOUND the owner page (batch 29's pools held austinenergy rebates,
   // denvergov permits, irs.gov credits) — the records model just failed to quote it verbatim. The extractor
   // runs over the authority sources already in hand BEFORE any new search: same code path, zero extra cost.
@@ -7718,6 +7719,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
         const owner = sources[i].title?.split(/[|:–-]/)[0]?.trim() || label;
         // The stored excerpt is a research quote (a line or two); try it free, then read the owner's whole page.
         if (tryExtract(item, i + 1, owner, sources[i].excerpt)) {
+          recoveryTrace.push("pool-excerpt");
           recovered = 1;
           args.notes.push("Assembly v3: an authority item recovered from a source research had already found (code-extracted).");
           break;
@@ -7726,6 +7728,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
           const page = await fetchPublicTextRendered(sources[i].url, 800);
           const body = ownerPageText(page.text, 5000);
           if (body.length >= 160 && tryExtract(item, i + 1, owner, `${owner}\n${body}`)) {
+            recoveryTrace.push("pool-fullpage");
             // The fetched page replaces the quote-only excerpt (still the owner's own page, now in full).
             sources[i] = { ...sources[i], excerpt: `${owner}\n${body}` };
             recovered = 1;
@@ -7766,6 +7769,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
           return (gov || utility || hintOwner) && located;
         } catch { return false; }
       };
+      recoveryTrace.push(`search:${found.results.length}r/${found.results.filter(ownerResult).length}own`);
       for (const hit of found.results.filter(ownerResult).slice(0, 2)) {
         if (recovered) break;
         const page = await fetchPublicTextRendered(hit.url, 800);
@@ -7808,7 +7812,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
     .filter((item) => /\b(?:permits?|rebates?|incentives?|tax credits?)\b/i.test(item)) : authorityUnsatisfied)
     .filter((item) => !exempted.some((e) => e.slice(0, 40) === item.slice(0, 40)));
   const holds = [...(thin ? [args.plan.format === "list" ? "fewer than 3 options with checked records" : "fewer than 2 sections with checked records"] : []),
-    ...(stillUnsatisfied.length ? [`planned authority item(s) with no verified record: ${stillUnsatisfied.slice(0, 2).join("; ").slice(0, 180)}`] : []),
+    ...(stillUnsatisfied.length ? [`planned authority item(s) with no verified record: ${stillUnsatisfied.slice(0, 2).join("; ").slice(0, 180)}${recoveryTrace.length ? ` [recovery: ${recoveryTrace.join(" | ").slice(0, 220)}]` : ""}`] : []),
     ...(questionsUnanswered ? [`${args.questions.length} questions searchers ask and no verified answer`] : [])];
   if (holds.length) throw new TopicNotSourceable(holds);
   const skeleton = skeletonFor({ format: args.plan.format, sections: args.plan.sections, records: verified, sources, readAt: contentProviderPromptTime(), sides });
