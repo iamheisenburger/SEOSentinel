@@ -547,8 +547,19 @@ export function skeletonFor(args: { format: string; sections: readonly string[];
     // label line ("- **Subject: Label:** value") is gone entirely; a fact reaches prose only through a
     // placeholder. Money values carry the read date; every row names its source.
     if (money.length >= 2) {
+      // P333: two facts of one section can carry the same label ("Price" for a skillet and a Dutch oven) —
+      // the second and later collisions take their subject as a prefix so no table shows two identical rows.
+      const seenLabels = new Set<string>();
+      const tableLabel = (f: Records["facts"][number]) => {
+        let label = sentenceCase(rowLabel(f, args.sources));
+        if (seenLabels.has(label.toLowerCase())) label = sentenceCase(`${f.subject.trim()} ${label}`.trim());
+        let n = 2;
+        while (seenLabels.has(label.toLowerCase())) label = `${label} (${n++})`;
+        seenLabels.add(label.toLowerCase());
+        return label;
+      };
       lines.push(`| Item (as of ${asOf}) | Amount | Source |`, "| --- | --- | --- |",
-        ...money.map((f) => `| ${cell(sentenceCase(rowLabel(f, args.sources)))} | ${cell(proseDisplay(f.value))}${cite(f.source)} | ${f.source > 0 ? cell(publisher(args.sources[f.source - 1]?.url ?? "")) : "Our pricing"} |`), "");
+        ...money.map((f) => `| ${cell(tableLabel(f))} | ${cell(proseDisplay(f.value))}${cite(f.source)} | ${f.source > 0 ? cell(publisher(args.sources[f.source - 1]?.url ?? "")) : "Our pricing"} |`), "");
       for (const f of money) register(f, proseDisplay(f.value), f.source, rowLabel(f, args.sources));
     }
     // P329 (Cowork): tables are for price lists and side-by-side comparisons only. A qualitative fact is a
@@ -843,7 +854,9 @@ export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; recor
     // A heading with nothing left under it (its one record went to the intro, its table never formed) never prints.
     if (paragraph.kept || body.trim()) parts.push(`## ${section.heading}`, ...(paragraph.kept ? [paragraph.kept] : []), ...(body.trim() ? [body] : []));
   }
-  const conclusion = keptProse(args.prose.conclusion, { allowedText: everything });
+  // P333: the conclusion goes through the same fill-and-check path as the intro and sections — the model writes
+  // placeholders there too, and they printed raw (batch 39's {{r27}} reached The bottom line).
+  const conclusion = proseParagraphs(args.prose.conclusion, { pool, scope: args.skeleton.intro, used, allowedText: everything, topicWords });
   dropped.push(...conclusion.dropped);
   parts.push("## The bottom line", ...(conclusion.kept ? [conclusion.kept] : []), `[${args.cta.label}](${args.cta.url})`);
   if (args.skeleton.faq) parts.push(`## ${args.skeleton.faq.heading}`, args.skeleton.faq.body);
