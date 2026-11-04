@@ -268,8 +268,12 @@ export function verifiedRecords(raw: Omit<Records, "steps"> & { steps?: Records[
     const ownPrices = prices.filter((p) => own(p.source));
     const notes = (records: Records["options"][number]["features"], what: string, limit: number) => dedupe(records.filter((r) =>
       valid(r, r.text, `${name} ${what}`) && namesQuoted(r.text, r.quote) && about(r, `${name} ${what}`)), (r) => key(r.text)).slice(0, limit);
+    // P327 (Cowork item 4): a limit is a negative claim about a product — only its own page may state it
+    // (batch 32 sourced WellnessLiving's and Zen Planner's limits from Mindbody's comparison page).
+    const ownNotes = (records: Records["options"][number]["features"], what: string, limit: number) => dedupe(records.filter((r) =>
+      valid(r, r.text, `${name} ${what}`) && namesQuoted(r.text, r.quote) && own(r.source)), (r) => key(r.text)).slice(0, limit);
     const kept = { prices: dedupe(ownPrices.length ? ownPrices : prices, (p) => `${key(p.plan)}|${key(p.price)}`).slice(0, 4),
-      features: notes(option.features, "feature", 4), limits: notes(option.limits, "limit", 2) };
+      features: notes(option.features, "feature", 4), limits: ownNotes(option.limits, "limit", 2) };
     if (!kept.prices.length && kept.features.length < 2) { dropped.push(`${name}: too little on record to list`); continue; }
     const website = business ? "" : firstPartyProductPage(option.website, [k]) ? origin(option.website)
       : origin(ctx.sources.find((source) => firstPartyProductPage(source.url, [k]))?.url ?? "");
@@ -501,9 +505,28 @@ export function skeletonFor(args: { format: string; sections: readonly string[];
     for (const o of options) {
       const first = starting.get(o.name);
       lines.push("", `### ${o.name}`, "", `{{SUITS:${o.name}}}`, "");
+      // P327 (Cowork item 3): one price per plan. When two sources give different figures for the same plan,
+      // a single "sources differ" line carries both with their citations — never two values under one label.
+      const byPlan = new Map<string, typeof o.prices>();
+      for (const p of o.prices.filter((p) => p !== first)) {
+        const pk = key(p.plan) || "price";
+        byPlan.set(pk, [...(byPlan.get(pk) ?? []), p]);
+      }
+      const conflictLines: string[] = [];
+      for (const [pk, group] of byPlan) {
+        const distinct = [...new Set(group.map((p) => normal(p.price)))];
+        if (distinct.length > 1) {
+          const planName = sentenceCase(group[0].plan) || "Price";
+          conflictLines.push(`- **${planName}:** sources differ — ${group.slice(0, 2).map((p) => `${priceWithBilling(p.price, p.billing)}${cite(p.source)}`).join("; ")}`);
+          for (const p of group) register(p, priceWithBilling(p.price, p.billing), p.source, o.name);
+        } else {
+          const p = group[0];
+          register(p, priceWithBilling(p.price, p.billing), p.source, o.name);
+          conflictLines.push(`- **${sentenceCase(p.plan) || "Price"}:** ${priceWithBilling(p.price, p.billing)}${cite(p.source)}`);
+        }
+      }
       const bullets = [
-        ...o.prices.filter((p) => p !== first).map((p) => { register(p, priceWithBilling(p.price, p.billing), p.source, o.name);
-          return `- **${sentenceCase(p.plan) || "Price"}:** ${priceWithBilling(p.price, p.billing)}${cite(p.source)}`; }),
+        ...conflictLines,
         ...o.features.map((f) => `- ${sentenceCase(f.text)}${cite(f.source)}`),
         ...o.extras.map((f) => `- **${sentenceCase(withoutName(f.label, o.name) || f.label)}:** ${f.value.replace(/\s+/g, " ").trim().replace(/[.;,]+$/, "")}${cite(f.source)}`),
         ...o.limits.map((l) => `- **Limit:** ${l.text.replace(/\s+/g, " ").trim().replace(/[.;,]+$/, "")}${cite(l.source)}`),
@@ -520,10 +543,17 @@ export function skeletonFor(args: { format: string; sections: readonly string[];
     const table = heading === comparisonHeading ? comparison : stepLists.get(heading) ?? "";
     const money = facts.filter((f) => MONEY.has(f.kind)), other = facts.filter((f) => !MONEY.has(f.kind));
     const lines: string[] = table ? [table, ""] : [];
-    if (money.length >= 2) {
+    // P327 (Cowork items 1 and 2 of the batch-32 read): every section fact prints as a TABLE ROW — the bold
+    // label line ("- **Subject: Label:** value") is gone entirely; a fact reaches prose only through a
+    // placeholder. Money values carry the read date; every row names its source.
+    if (money.length) {
       lines.push(`| Item (as of ${asOf}) | Amount | Source |`, "| --- | --- | --- |",
         ...money.map((f) => `| ${cell(sentenceCase(rowLabel(f, args.sources)))} | ${cell(proseDisplay(f.value))}${cite(f.source)} | ${f.source > 0 ? cell(publisher(args.sources[f.source - 1]?.url ?? "")) : "Our pricing"} |`), "");
       for (const f of money) register(f, proseDisplay(f.value), f.source, rowLabel(f, args.sources));
+    }
+    if (other.length) {
+      lines.push("| Item | Detail | Source |", "| --- | --- | --- |",
+        ...other.map((f) => `| ${cell(sentenceCase(rowLabel(f, args.sources)))} | ${cell(f.value.replace(/[.;,]+$/, ""))}${cite(f.source)} | ${f.source > 0 ? cell(publisher(args.sources[f.source - 1]?.url ?? "")) : "Our business" } |`), "");
     }
     const records: ProseRecord[] = [];
     // The subject prefixes a fact whose label doesn't already start with it (batch 8 printed "Stone-coated steel:
@@ -642,9 +672,13 @@ export function proseRequest(args: { search: string; productName: string; busine
 
 const HOMEWORK = /\b(?:check|confirm|verify|ask|call|contact|consult|request|get)\b[^.!?]{0,40}\b(?:quotes?|estimates?|providers?|vendors?|installers?|contractors?|plumbers?|roofers?|city|county|utility|utilities|pricing pages?|websites?|sites?|sales teams?|support)\b/i;
 /** Prose about the article's own making ("the records give no price", "the data shows") is not for readers. */
-const COUNTED = /\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+)\s+(?:\w+\s+)?(?:options|tools|apps|platforms|picks|choices|vendors|providers|products|programs|services)\b/i;
+// P327 (Cowork's batch-32 read): a counted phrase is meta-talk only in its "list promises" shape — "six things
+// to consider below", "3 points". A plain count in a real sentence ("six options compare", "plans start at
+// three tiers") is normal writing; dropping every paragraph containing one is why batch 32's yoga lost its
+// intro and opened on a heading.
+const COUNTED = /\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+)\s+(?:things|items|points|steps|ways|tips|reasons|factors|considerations|takeaways?|examples?)\b|\b(?:things|items|points|steps|ways|tips|reasons|factors)\s+to\s+(?:consider|compare|know|cover)\b/i;
 /** v3.1 (batch 6): the meta lead-ins the model wrote because the old prompt asked for them. */
-const MAKING = /\b(?:records?|the data|our data|data (?:given|shown|provided|here)|(?:these|the|our) sources?|excerpts?|not (?:listed|given|shown|stated) here|no (?:price|pricing|figure)s? (?:is |are )?(?:given|listed|shown|stated|published)|hard(?:er)? to judge|this (?:block|table|section|article|list|guide)|this (?:guide|article|post) covers?|the (?:table|list|block|item|items|point|points|note) below|below you'?ll find|use it to)\b/i;
+const MAKING = /\b(?:records?|the data|our data|data (?:given|shown|provided|here)|(?:these|the|our) sources?|excerpts?|not (?:listed|given|shown|stated) here|no (?:price|pricing|figure)s? (?:is |are )?(?:given|listed|shown|stated|published)|hard(?:er)? to judge|this (?:block|table|section|article|list|guide)|this (?:guide|article|post) covers?|the (?:table|list|block|item|items|point|points|note) below|below you(?:'?ll| will) find|use it to)\b/i;
 /** The prose sentences code keeps: none that states a number, or names a company, its scope's records don't give, and none
  * that sends the reader to find something out. */
 export function keptProse(text: string, scope: { allowedText: string }): { kept: string; dropped: string[] } {
@@ -770,6 +804,12 @@ export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; recor
   const intro = proseParagraphs(args.prose.intro, { pool, scope: args.skeleton.intro, used, allowedText: everything });
   dropped.push(...intro.dropped);
   if (intro.kept) parts.push(intro.kept);
+  else if (args.skeleton.intro.length) {
+    // P327 (Cowork item 2): an article never opens on a heading. When the prose intro fails its checks, code
+    // writes one plain sentence from the headline record — no labels, no fragments.
+    const r = args.skeleton.intro[0];
+    parts.push(`For ${args.search.toLowerCase()}, ${String(r.label).toLowerCase().replace(/[:.]$/, "")} sits at ${r.value}${cite(r.source)}.`);
+  }
   for (const section of args.skeleton.sections) {
     const facts = args.records.facts.filter((f) => f.section === section.heading);
     const options = args.records.options.filter((o) => section.options.includes(o.name));
@@ -778,9 +818,7 @@ export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; recor
     const paragraph = proseParagraphs(args.prose.sections.find((s) => s.heading.trim().toLowerCase() === section.heading.toLowerCase())?.paragraph ?? "",
       { pool, scope: section.records, used, allowedText: local });
     dropped.push(...paragraph.dropped);
-    // A section fact the paragraph never stated still reaches the reader, as one plain line (records are evidence; this is
-    // data, not a quote).
-    const fallback = section.records.filter((r) => !(used.get(r.id) ?? 0)).map((r) => `- **${r.label}:** ${proseDisplay(r.value)}${cite(r.source)}`);
+    // P327: facts the paragraph never state live in the section's table (built in skeletonFor) — no label lines.
     const body = section.body.replace(/\{\{SUITS:([^}]+)\}\}\n*/g, (_m, name: string) => {
       const option = options.find((o) => o.name === name);
       const ownPool: typeof pool = {};
@@ -792,7 +830,7 @@ export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; recor
       return suits.kept ? `${suits.kept}\n\n` : "";
     });
     // A heading with nothing left under it (its one record went to the intro, its table never formed) never prints.
-    if (paragraph.kept || body.trim() || fallback.length) parts.push(`## ${section.heading}`, ...(paragraph.kept ? [paragraph.kept] : []), ...(body.trim() ? [body] : []), ...fallback);
+    if (paragraph.kept || body.trim()) parts.push(`## ${section.heading}`, ...(paragraph.kept ? [paragraph.kept] : []), ...(body.trim() ? [body] : []));
   }
   const conclusion = keptProse(args.prose.conclusion, { allowedText: everything });
   dropped.push(...conclusion.dropped);

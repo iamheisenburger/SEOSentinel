@@ -95,7 +95,8 @@ test("P299 code prints every fact once, a section with no record has no heading,
   // v3.1: a section's facts are prose records (placeholders), not label: quote bullets; two or more money facts make a
   // table whose header carries "as of".
   const permits = skeleton.sections[1];
-  assert.equal(permits.body, "", "one fee and one rule: no table, two prose records");
+  assert.match(permits.body, /\| Item \(as of November 2026\) \| Amount \| Source \|/, "one fee: a dated one-row table (P327)");
+  assert.match(permits.body, /\| Item \| Detail \| Source \|/, "one rule: a detail table (P327)");
   assert.deepEqual(permits.records.map((r) => r.value), ["$125", "required within 30 days of the permit"]);
   assert.equal(permits.records[0].id.startsWith("r"), true);
   assert.equal(skeleton.faq!.body, "### Do I need a permit for a water heater in Austin?\n\nYes. A water heater permit in Austin costs $125 [5].");
@@ -198,9 +199,8 @@ test("P299 a comparison's attributes stated for both sides form one side-by-side
   assert.deepEqual(skeleton.sections.map((s) => s.heading), ["Ceramic vs cast iron at a glance", "Care"], "sections whose facts all went into the table have no heading");
   assert.equal(skeleton.sections[0].body, "| | Ceramic cookware | Cast iron cookware |\n| --- | --- | --- |\n| Maximum oven temperature | 500°F [1] | no limit [2] |\n" +
     "| Weight of a 10-inch skillet | 2.5 lb [1] | 5 lb [2] |");
-  // v3.1: a single-side fact is a prose record for its section (the model writes "cast iron needs seasoning" with the
-  // placeholder), never a printed "label: quote" row.
-  assert.equal(skeleton.sections[1].body, "");
+  // P327: a single-side fact is BOTH a prose record and a table row in its section's detail table.
+  assert.match(skeleton.sections[1].body, /\| Item \| Detail \| Source \|\n\| --- \| --- \| --- \|\n\| Seasoning \| needs seasoning \[2\] \| b.example \|/);
   assert.deepEqual(skeleton.sections[1].records.map((r) => r.value), ["needs seasoning"]);
   assert.match(skeleton.sections[1].records[0].label, /cast iron/i, "the record's label carries its side");
 });
@@ -228,8 +228,8 @@ test("P299 a comparison's single-side fact names its side", () => {
   const skeleton = skeletonFor({ format: "comparison", sections: ["Durability and lifespan"], sources: [{ url: "https://a.example", excerpt: "" }], readAt: Date.UTC(2026, 10, 3), sides,
     records: { options: [], faqs: [], dropped: [], facts: [{ section: "Durability and lifespan", subject: "ceramic cookware", kind: "duration", label: "Typical lifespan",
       value: "up to three years", quote: "q", source: 1 }] } });
-  // v3.1: the single-side fact is a prose record for its section, never a printed "label: quote" row.
-  assert.equal(skeleton.sections[0].body, "");
+  // P327: the single-side fact also prints as a detail row.
+  assert.match(skeleton.sections[0].body, /\| Typical lifespan \| up to three years \[1\] \| a.example \|/);
   assert.deepEqual(skeleton.sections[0].records.map((r) => r.value), ["up to three years"]);
   assert.match(skeleton.sections[0].records[0].label, /ceramic cookware/i, "the record's label carries its side");
 });

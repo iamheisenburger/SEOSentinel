@@ -123,8 +123,8 @@ test("P301 assembly: the intro states the headline fact by placeholder, and an u
     profile: "Summit Peak Roofing replaces asphalt shingle and metal roofs in Denver.", search: "roof replacement cost denver",
     cta: { label: "Try Summit Peak Roofing", url: "https://summit.example" } });
   assert.match(built.markdown, /^Most Denver homeowners pay \$7,400–\$16,500 \[1\] for a full roof replacement\./, "the search's answer is the first sentence"); // P311: both currencies kept
-  assert.match(built.markdown, /## Permits\n\n- \*\*.+:\*\* more than 10% of the roof square footage or two roof squares \(whichever is smaller\) \[2\]/,
-    "a fact the paragraph never stated still reaches the reader, as one plain line");
+  assert.match(built.markdown, /## Permits\n\n\| Item \| Detail \| Source \|\n\| --- \| --- \| --- \|\n\| Repair permit threshold \| more than 10% of the roof square footage or two roof squares \(whichever is smaller\) \[2\] \| denvergov\.org \|/,
+    "a fact the paragraph never stated still reaches the reader, as a table row (P327: no label lines)");
   assert.match(built.markdown, /\| Item \(as of November 2026\) \| Amount \| Source \|/, "two money facts make a dated table");
 });
 
