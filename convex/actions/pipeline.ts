@@ -7610,7 +7610,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   const raw = await callClaudeStructured({ system: `${UNTRUSTED_EVIDENCE_INSTRUCTION}\n\n${records.system}`, userMessage: records.userMessage,
     toolName: "extract_records", toolDescription: "Submit the article's fact records, each copied word for word from one excerpt.",
     inputSchema: RECORDS_INPUT_SCHEMA, outputSchema: RecordsSchema, maxTokens: 16000 });
-  const verified = verifiedRecords(raw, { sources, profile: args.profile, productName: args.productName, competitors, sections: args.plan.sections,
+  let verified = verifiedRecords(raw, { sources, profile: args.profile, productName: args.productName, competitors, sections: args.plan.sections,
     now: contentProviderPromptTime() });
   args.notes.push(`Assembly v3: ${verified.options.length} option(s), ${verified.facts.length} fact(s) and ${verified.faqs.length} answer(s) on record; ` +
     `code dropped ${verified.dropped.length} record(s) its excerpt doesn't state.`);
@@ -7636,11 +7636,52 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   // P310 calibration: an authority item (permit, fee, rebate, credit) holds alone — trust is non-negotiable. A
   // breadth miss (one more cost factor the sources didn't quote) does not reject the article: its section simply
   // never prints, so the article keeps only promises it fulfills. It is recorded for QA instead.
-  const authorityUnsatisfied = unsatisfied.filter((item) => /\b(?:permits?|fees?|rebates?|incentives?|tax credits?)\b/i.test(item));
+  // P312: the authority principle is about PROGRAM owners — permits, rebates, incentives, credits — not any fee
+  // ("payment processing fees" is a vendor fact under R10, not an authority hold; batch 15's lists were held on it).
+  const authorityUnsatisfied = unsatisfied.filter((item) => /\b(?:permits?|rebates?|incentives?|tax credits?)\b/i.test(item));
   if (unsatisfied.length > authorityUnsatisfied.length)
     args.notes.push(`Coverage: ${unsatisfied.length - authorityUnsatisfied.length} planned breadth item(s) without a verified record (their sections do not print).`);
+  // P312 recovery (roofing, batches 13-15: research kept 23 sources, none .gov): when an authority item is
+  // unsatisfied, CODE searches for the program owner's page directly — the item's terms plus the topic's own
+  // place, filtered to .gov/.mil/.edu hosts — reads it, and the records call runs ONCE more with it appended.
+  // If the record still does not verify, the hold stands. One iteration, no loop, ~$0.10 when it fires.
+  let recovered = 0;
+  if (authorityUnsatisfied.length && sources.length < 24) {
+    try {
+      const item = authorityUnsatisfied[0];
+      const place = /\b(?:in|for|near)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*$/.exec(args.topic.primaryKeyword)?.[1]
+        ?? /\b([A-Z][a-z]{3,})\b/.exec(args.topic.primaryKeyword.split(" ").slice(-2).join(" "))?.[1] ?? "";
+      const terms = [...new Set((item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !ITEM_FILLER.has(w)))].slice(0, 3).join(" ");
+      const [{ analyzeSERPFromDataForSEO }, { dataForSeoLocationCode, dataForSeoLanguageCode }] = await Promise.all([import("./seoData"), import("../lib/dataForSeoLocale")]);
+      const found = await analyzeSERPFromDataForSEO(`${terms} ${place}`.trim(), dataForSeoLocationCode(args.site.targetCountry), dataForSeoLanguageCode(args.site.language));
+      const hit = found.results.find((result) => {
+        try { const host = new URL(result.url).hostname.toLowerCase(); return /\.(gov|mil|edu)$/.test(host) && (!place || host.includes(place.split(" ")[0].toLowerCase()) || (result.title ?? "").toLowerCase().includes(place.split(" ")[0].toLowerCase())); }
+        catch { return false; }
+      });
+      if (hit) {
+        const page = await fetchPublicTextRendered(hit.url, 800);
+        const excerpt = ownerPageText(page.text, 5000);
+        if (excerpt.length >= 160) {
+          sources.push({ url: page.url, title: readableSourceTitle(hit.title, page.url, excerpt), excerpt });
+          const retryCall = recordsRequest({ search: args.topic.primaryKeyword, format: args.plan.format,
+            sections: args.plan.sections.map((heading) => ({ heading, covers: args.covers.get(heading) })), coverage: [item], options: args.options, questions: [],
+            productName: args.productName, profile: args.profile, competitors, sources, ownerPage: args.owner, sides });
+          const retried = await callClaudeStructured({ system: `${UNTRUSTED_EVIDENCE_INSTRUCTION}\n\n${retryCall.system}`, userMessage: retryCall.userMessage,
+            toolName: "extract_records", toolDescription: "Submit the one missing fact record, copied word for word from one excerpt.",
+            inputSchema: RECORDS_INPUT_SCHEMA, outputSchema: RecordsSchema, maxTokens: 4000 });
+          const checked = verifiedRecords({ ...raw, facts: [...(raw.facts ?? []), ...(retried.facts ?? [])],
+            faqs: [...(raw.faqs ?? []), ...(retried.faqs ?? [])], options: [...(raw.options ?? []), ...(retried.options ?? [])] } as Parameters<typeof verifiedRecords>[0],
+            { sources, profile: args.profile, productName: args.productName, competitors, sections: args.plan.sections, now: contentProviderPromptTime() });
+          if (checked.facts.length > verified.facts.length || checked.options.length > verified.options.length) { verified = checked; recovered = 1; }
+        }
+      }
+    } catch { /* the hold below stands */ }
+    if (recovered) args.notes.push("Assembly v3: an unsatisfied authority item was recovered by a direct program-owner search.");
+  }
+  const stillUnsatisfied = recovered ? unsatisfiedFigureItems(args.plan.coverage ?? [], verified, FIGURE_ITEM, ITEM_FILLER)
+    .filter((item) => /\b(?:permits?|rebates?|incentives?|tax credits?)\b/i.test(item)) : authorityUnsatisfied;
   const holds = [...(thin ? [args.plan.format === "list" ? "fewer than 3 options with checked records" : "fewer than 2 sections with checked records"] : []),
-    ...(authorityUnsatisfied.length ? [`planned authority item(s) with no verified record: ${authorityUnsatisfied.slice(0, 2).join("; ").slice(0, 180)}`] : []),
+    ...(stillUnsatisfied.length ? [`planned authority item(s) with no verified record: ${stillUnsatisfied.slice(0, 2).join("; ").slice(0, 180)}`] : []),
     ...(questionsUnanswered ? [`${args.questions.length} questions searchers ask and no verified answer`] : [])];
   if (holds.length) throw new TopicNotSourceable(holds);
   const skeleton = skeletonFor({ format: args.plan.format, sections: args.plan.sections, records: verified, sources, readAt: contentProviderPromptTime(), sides });
@@ -7668,7 +7709,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
       && figureRegex.test(built.markdown);
     return !inArticle;
   });
-  const authorityMisses = printedUnsatisfied.filter((item) => /\b(?:permits?|fees?|rebates?|incentives?|tax credits?)\b/i.test(item));
+  const authorityMisses = printedUnsatisfied.filter((item) => /\b(?:permits?|rebates?|incentives?|tax credits?)\b/i.test(item));
   if (printedUnsatisfied.length > authorityMisses.length)
     args.notes.push(`Coverage: ${printedUnsatisfied.length - authorityMisses.length} planned breadth item(s) never reached the article.`);
   if (authorityMisses.length)
