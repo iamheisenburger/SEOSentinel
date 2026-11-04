@@ -318,7 +318,15 @@ export function strictEvidenceSources<T extends { url: string }>(sources: T[], o
   const rejected: Array<{ source: T; reason: string }> = [];
   const seen = new Set<string>();
 
+  // P329 (Cowork's read: a test.denvergov.org page became a source): a test, staging or preview host and an
+  // image file are never evidence, whatever site they sit on.
+  const NON_EVIDENCE_URL = /^(?:https?:\/\/)?(?:test|stg|staging|dev|demo|beta|qa|sandbox|preview|preprod)[.-]/i;
+  const IMAGE_URL = /\.(?:png|jpe?g|gif|svg|webp|avif|ico|bmp|tiff?)(?:[?#]|$)/i;
   for (const source of sources) {
+    if (NON_EVIDENCE_URL.test(source.url.trim()) || IMAGE_URL.test(source.url)) {
+      rejected.push({ source, reason: "a test, staging or preview page, or an image file, is never evidence" });
+      continue;
+    }
     const quality = classifyEvidenceSource(source.url);
     // A comparison may cite a named product's own website for that product (P160).
     if (!quality.strictEligible && quality.url && firstPartyProductPage(source.url, options.firstPartyProducts ?? [])) {

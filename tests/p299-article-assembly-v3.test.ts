@@ -95,8 +95,7 @@ test("P299 code prints every fact once, a section with no record has no heading,
   // v3.1: a section's facts are prose records (placeholders), not label: quote bullets; two or more money facts make a
   // table whose header carries "as of".
   const permits = skeleton.sections[1];
-  assert.match(permits.body, /\| Item \(as of November 2026\) \| Amount \| Source \|/, "one fee: a dated one-row table (P327)");
-  assert.match(permits.body, /\| Item \| Detail \| Source \|/, "one rule: a detail table (P327)");
+  assert.equal(permits.body, "", "one fee and one rule are prose records only — no one-row tables (P329)");
   assert.deepEqual(permits.records.map((r) => r.value), ["$125", "required within 30 days of the permit"]);
   assert.equal(permits.records[0].id.startsWith("r"), true);
   assert.equal(skeleton.faq!.body, "### Do I need a permit for a water heater in Austin?\n\nYes. A water heater permit in Austin costs $125 [5].");
@@ -200,7 +199,7 @@ test("P299 a comparison's attributes stated for both sides form one side-by-side
   assert.equal(skeleton.sections[0].body, "| | Ceramic cookware | Cast iron cookware |\n| --- | --- | --- |\n| Maximum oven temperature | 500°F [1] | no limit [2] |\n" +
     "| Weight of a 10-inch skillet | 2.5 lb [1] | 5 lb [2] |");
   // P327: a single-side fact is BOTH a prose record and a table row in its section's detail table.
-  assert.match(skeleton.sections[1].body, /\| Item \| Detail \| Source \|\n\| --- \| --- \| --- \|\n\| Seasoning \| needs seasoning \[2\] \| b.example \|/);
+  assert.equal(skeleton.sections[1].body, "", "single-side facts are prose records only (P329)");
   assert.deepEqual(skeleton.sections[1].records.map((r) => r.value), ["needs seasoning"]);
   assert.match(skeleton.sections[1].records[0].label, /cast iron/i, "the record's label carries its side");
 });
@@ -229,7 +228,7 @@ test("P299 a comparison's single-side fact names its side", () => {
     records: { options: [], faqs: [], dropped: [], facts: [{ section: "Durability and lifespan", subject: "ceramic cookware", kind: "duration", label: "Typical lifespan",
       value: "up to three years", quote: "q", source: 1 }] } });
   // P327: the single-side fact also prints as a detail row.
-  assert.match(skeleton.sections[0].body, /\| Typical lifespan \| up to three years \[1\] \| a.example \|/);
+  assert.equal(skeleton.sections[0].body, "", "single-side facts are prose records only (P329)");
   assert.deepEqual(skeleton.sections[0].records.map((r) => r.value), ["up to three years"]);
   assert.match(skeleton.sections[0].records[0].label, /ceramic cookware/i, "the record's label carries its side");
 });

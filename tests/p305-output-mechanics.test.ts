@@ -247,3 +247,29 @@ test("P308: a 'between' before a placeholder folds the record's two amounts", ()
     { pool, scope: [], used, allowedText: "heat pump install" });
   assert.equal(out.kept, "New heat pumps typically cost $2,500–$10,000 [1] to install, depending on the home.");
 });
+
+// P329: no machine prose, no scrap tables, no test/image evidence.
+test("P329: an article without a written intro is HELD, never machine-glued", async () => {
+  const { assembledArticle, skeletonFor, verifiedRecords } = await import("../convex/lib/articleAssembly.ts");
+  const sources = [{ url: "https://a.example/cost", title: "Costs", excerpt: "Denver roofs average $11,712 installed" }];
+  const v = verifiedRecords({ options: [], facts: [
+      { section: "Costs", subject: "roof", kind: "cost", label: "Typical total cost", value: "$11,712", quote: "Denver roofs average $11,712 installed", source: 1 }], faqs: [] },
+    { sources, profile: "X", productName: "X", competitors: [], sections: ["Costs"], now });
+  const skeleton = skeletonFor({ format: "guide", sections: ["Costs"], records: v, sources, readAt: now });
+  const prose = { title: "T", metaTitle: "T", metaDescription: "D",
+    intro: "This paragraph states a raw figure $999 in its own words.", sections: [], options: [], conclusion: "Fine." };
+  const built = assembledArticle({ skeleton, prose, records: v, productName: "X", profile: "X", search: "s", cta: { label: "C", url: "https://x.example" } });
+  assert.equal(built.heldIntro, true, "the failed intro holds the article");
+  assert.doesNotMatch(built.markdown, /sits at/, "no machine-glue sentence is printed");
+});
+
+test("P329: test hosts and image files are never evidence", async () => {
+  const { strictEvidenceSources } = await import("../convex/lib/sourceQuality.ts");
+  const out = strictEvidenceSources([
+    { url: "https://test.denvergov.org/files/permit" },
+    { url: "https://staging.austinenergy.com/rebate" },
+    { url: "https://denvergov.org/logo.png" },
+  ], {});
+  assert.equal(out.accepted.length, 0);
+  assert.equal(out.rejected.length, 3);
+});

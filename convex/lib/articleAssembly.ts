@@ -546,15 +546,14 @@ export function skeletonFor(args: { format: string; sections: readonly string[];
     // P327 (Cowork items 1 and 2 of the batch-32 read): every section fact prints as a TABLE ROW — the bold
     // label line ("- **Subject: Label:** value") is gone entirely; a fact reaches prose only through a
     // placeholder. Money values carry the read date; every row names its source.
-    if (money.length) {
+    if (money.length >= 2) {
       lines.push(`| Item (as of ${asOf}) | Amount | Source |`, "| --- | --- | --- |",
         ...money.map((f) => `| ${cell(sentenceCase(rowLabel(f, args.sources)))} | ${cell(proseDisplay(f.value))}${cite(f.source)} | ${f.source > 0 ? cell(publisher(args.sources[f.source - 1]?.url ?? "")) : "Our pricing"} |`), "");
       for (const f of money) register(f, proseDisplay(f.value), f.source, rowLabel(f, args.sources));
     }
-    if (other.length) {
-      lines.push("| Item | Detail | Source |", "| --- | --- | --- |",
-        ...other.map((f) => `| ${cell(sentenceCase(rowLabel(f, args.sources)))} | ${cell(f.value.replace(/[.;,]+$/, ""))}${cite(f.source)} | ${f.source > 0 ? cell(publisher(args.sources[f.source - 1]?.url ?? "")) : "Our business" } |`), "");
-    }
+    // P329 (Cowork): tables are for price lists and side-by-side comparisons only. A qualitative fact is a
+    // prose record the model states through a placeholder; if the prose never states it, it does not print —
+    // never a one-row table of quoted scraps.
     const records: ProseRecord[] = [];
     // The subject prefixes a fact whose label doesn't already start with it (batch 8 printed "Stone-coated steel:
     // Stone-coated steel cost per square").
@@ -792,7 +791,7 @@ export function proseParagraphs(text: string, args: { pool: Record<string, { dis
 /** The article: intro, each section's paragraph over its block, the conclusion with the business's next step, the FAQ last.
  * A section fact its paragraph never stated falls back to one line in the block (never a "label: quote" dump). */
 export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; records: VerifiedRecords; productName: string; profile: string;
-  search: string; cta: { label: string; url: string } }): { markdown: string; dropped: string[] } {
+  search: string; cta: { label: string; url: string } }): { markdown: string; dropped: string[]; heldIntro: boolean } {
   const dropped: string[] = [];
   const recordText = (records: { quote: string }[], more: string[] = []) => [...records.map((r) => r.quote), ...more].join("\n");
   const everything = recordText([...args.records.facts, ...args.records.faqs, ...args.records.options.flatMap((o) => [...o.prices, ...o.features, ...o.limits, ...o.extras])],
@@ -804,12 +803,8 @@ export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; recor
   const intro = proseParagraphs(args.prose.intro, { pool, scope: args.skeleton.intro, used, allowedText: everything });
   dropped.push(...intro.dropped);
   if (intro.kept) parts.push(intro.kept);
-  else if (args.skeleton.intro.length) {
-    // P327 (Cowork item 2): an article never opens on a heading. When the prose intro fails its checks, code
-    // writes one plain sentence from the headline record — no labels, no fragments.
-    const r = args.skeleton.intro[0];
-    parts.push(`For ${args.search.toLowerCase()}, ${String(r.label).toLowerCase().replace(/[:.]$/, "")} sits at ${r.value}${cite(r.source)}.`);
-  }
+  // P329 (Cowork's read of the final five): there is NO machine-written intro. When the prose intro fails its
+  // checks, heldIntro marks the article and the pipeline holds it — a broken glue sentence never prints.
   for (const section of args.skeleton.sections) {
     const facts = args.records.facts.filter((f) => f.section === section.heading);
     const options = args.records.options.filter((o) => section.options.includes(o.name));
@@ -836,7 +831,8 @@ export function assembledArticle(args: { skeleton: Skeleton; prose: Prose; recor
   dropped.push(...conclusion.dropped);
   parts.push("## The bottom line", ...(conclusion.kept ? [conclusion.kept] : []), `[${args.cta.label}](${args.cta.url})`);
   if (args.skeleton.faq) parts.push(`## ${args.skeleton.faq.heading}`, args.skeleton.faq.body);
-  return { markdown: parts.filter((p) => p !== "").join("\n\n").replace(/\n{3,}/g, "\n\n").trim(), dropped };
+  const heldIntro = !intro.kept && args.skeleton.intro.length > 0;
+  return { markdown: parts.filter((p) => p !== "").join("\n\n").replace(/\n{3,}/g, "\n\n").trim(), dropped, heldIntro };
 }
 
 /** Readable text of a fetched page around its figures (an owner's pricing, fee, rebate or rules page), for a records excerpt:

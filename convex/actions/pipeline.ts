@@ -7698,9 +7698,12 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   // P328: the utility's name lives in the registrable domain, not the first subdomain — savings.austinenergy.com
   // is Austin Energy, "savings" is not a utility.
   const registrableLabel = (host: string) => host.replace(/\.(?:com|net|org|coop|us|gov|edu|mil|info|io|co)$/, "").split(".").pop() ?? host;
+  const NON_EVIDENCE_HOST = /^(?:test|stg|staging|dev|demo|beta|qa|sandbox|preview|preprod)[.-]/i;
   const ownerSource = (source: { url: string }, itemHints: readonly string[]) => {
     try {
-      const host = new URL(source.url).hostname.toLowerCase();
+      const url = new URL(source.url);
+      const host = url.hostname.toLowerCase();
+      if (NON_EVIDENCE_HOST.test(url.hostname) || /\.(?:png|jpe?g|gif|svg|webp|avif|ico|bmp|tiff?)$/i.test(url.pathname)) return false;
       return /\.(gov|mil|edu)$/.test(host) || UTILITY_LABEL.test(registrableLabel(host)) || itemHints.some((h) => host.includes(h.toLowerCase()));
     } catch { return false; }
   };
@@ -7766,7 +7769,9 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
       const UTILITY_LABEL = /^[a-z]{0,14}(?:gas|electric|energy|utility|power)s?(?:service|services|co|inc|company|utilities)?$/;
       const ownerResult = (result: { url: string; title?: string }) => {
         try {
-          const host = new URL(result.url).hostname.toLowerCase();
+          const ru = new URL(result.url);
+          if (NON_EVIDENCE_HOST.test(ru.hostname) || /\.(?:png|jpe?g|gif|svg|webp|avif|ico|bmp|tiff?)$/i.test(ru.pathname)) return false;
+          const host = ru.hostname.toLowerCase();
           const label = registrableLabel(host);
           const gov = /\.(gov|mil|edu)$/.test(host);
           const utility = utilityItem && UTILITY_LABEL.test(label);
@@ -7830,6 +7835,10 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   const built = assembledArticle({ skeleton, prose, records: verified, productName: args.productName, profile: args.profile, search: args.topic.primaryKeyword,
     cta: configuredCallToAction(args.site, args.productName) });
   if (built.dropped.length) args.notes.push(`Assembly v3: code dropped ${built.dropped.length} prose sentence(s) with a figure or name its section's records don't give.`);
+  // P329: no written intro, no article — a machine-made opening never prints (Cowork's read of the final five).
+  if (built.heldIntro) throw new TopicNotSourceable(["the prose intro failed its checks; no article without a written opening"]);
+  // P329: no written intro, no article — a machine-made opening never prints (Cowork's read of the final five).
+  if (built.heldIntro) throw new TopicNotSourceable(["the prose intro failed its checks; no article without a written opening"]);
   // P307: the article must carry its own weight beside the results it competes with (batch 10's roof: 511 words
   // against a 1,200-word median passed every other check).
   const bodyWords = built.markdown.replace(/^([ \t]*```[\w-]*[^\n]*\n)[\s\S]*?^[ \t]*```[ \t]*$/gm, " code ").split(/\s+/).filter(Boolean).length;
