@@ -149,7 +149,7 @@ function withoutUnbackedRows(markdown: string, haystack: string, illustrative: R
   return { markdown: lines.filter((line) => line !== "\u0000").join("\n"), removed };
 }
 
-const FIND_OUT_YOURSELF = /\b(?:ask (?:your|the|an?|for an?)\s+(?:[\w-]+\s+){0,2}?(?:installer|contractor|plumber|provider|seller|vendor|dealer|technician|accountant|bookkeeper|pro|professional|expert|utility|estimate|quote)s?\b|(?:installer|contractor|plumber|technician)['’]s assessment|check (?:it |this )?(?:in|during) (?:a|the|your) (?:free )?trial|(?:test|try) (?:it|this|them) yourself|get (?:an? )?(?:written )?(?:estimate|quote)s?\b|confirm (?:it |this |that |the [\w-]+ )?with (?:your|the)\b)/i;
+const FIND_OUT_YOURSELF = /\b(?:ask (?:your|the|an?|for an?)\s+(?:[\w-]+\s+){0,2}?(?:installer|contractor|plumber|provider|seller|vendor|dealer|technician|accountant|bookkeeper|pro|professional|expert|utility|estimate|quote)s?\b|(?:installer|contractor|plumber|technician)['’]s assessment|check (?:it |this )?(?:in|during) (?:a|the|your) (?:free )?trial|(?:test|try) (?:it|this|them) yourself|get (?:an? )?(?:written )?(?:estimate|quote)s?\b|confirm (?:it |this |that |the [\w-]+ )?with (?:your|the)\b|should confirm and handle\b|ask for (?:the |your |an? )?[\w-]*\s*(?:timeline|breakdown|itemization) in the (?:written )?estimate\b|confirm (?:the |these |those |amounts?|details?|figures?)\b[^.]{0,40}before you (?:count on|rely on|use)\b|is the place to confirm\b|limitation to test\b)/i;
 const QUANTITY = /(?:[$€£]\s?\d[\d,.]*(?:\s?(?:k|million|billion))?|\d[\d,.]*(?:\s?-\s?\d[\d,.]*)?\s?(?:°\s?[FC]\b|%|percent\b|years?\b|months?\b|weeks?\b|days?\b|hours?\b|minutes?\b|mph\b|psi\b|gpm\b|kwh?\b|btu\b|seer2?\b|hspf2?\b|afue\b|amps?\b|gallons?\b|feet\b|ft\b|inches\b|lbs?\b|pounds?\b))/gi;
 /** Later sentences that restate an earlier one: the same quantities (numbers and units), none new, with three or more of its
  * words and half of them, or the same claim (six or more of its words, most of the later sentence's). Option entries (a bold
@@ -266,7 +266,10 @@ export function backedFactsOnly(article: string, input: BackingInput): { markdow
       laterCopies.set(sentence, laterCopies.get(sentence)! - 1); return "repeat";
     }
     if (DEFLECTION.test(prose(sentence))) return "referral";
-    if (figureSection.has(sentence) && FIND_OUT_YOURSELF.test(prose(sentence))) return "referral";
+    if (/\b(?:not|no)\b[^.]{0,30}\b(?:given|stated|listed|published)\b[^.]{0,30}\b(?:by|in)\s+(?:these|the)\s+sources?\b/i.test(prose(sentence))) return "referral";
+    // P335 (Cowork): homework wordings are homework wherever they print, not only inside figure sections —
+    // "confirm the amounts before you count on them" under a permits heading was still reader homework.
+    if (FIND_OUT_YOURSELF.test(prose(sentence))) return "referral";
     if (restated.has(sentence) && !inExample(sentence)) return "repeat";
     if (inExample(sentence)) return null;
     const own = citations(sentence), cited = own.length ? own : blockCitations.get(sentence) ?? [];
@@ -344,12 +347,16 @@ export function rebuildSourcesSection(markdown: string, sources: readonly { url:
   const split = SOURCES_HEADING.exec(markdown);
   const body = (split ? markdown.slice(0, split.index) : markdown).trimEnd();
   if (!/\[\d+(?:\s*,\s*\d+)*\]/.test(body)) return markdown;
+  // P335 (Cowork: IRS sources listed, cited nowhere): the Sources tail carries only sources the body cites,
+  // each under its ORIGINAL number — the body's [n] citations never shift.
+  const original = sources;
+  const cited = new Set([...body.matchAll(/\[(\d+)(?:\s*,\s*\d+)*\]/g)].flatMap((m) => m[0].slice(1, -1).split(/\s*,\s*/).map(Number)));
   const name = (source: { url: string; title?: string }) => {
     const title = source.title?.replace(/[[\]]/g, "").replace(/\s+/g, " ").trim();
     if (title) return title;
     try { return new URL(source.url).hostname.replace(/^www\./, ""); } catch { return source.url; }
   };
-  const tail = `## Sources\n\n${sources.map((source, index) => `${index + 1}. [${name(source)}](${source.url})`).join("\n")}`;
+  const tail = `## Sources\n\n${original.map((source, index) => cited.has(index + 1) ? `${index + 1}. [${name(source)}](${source.url})` : null).filter(Boolean).join("\n")}`;
   return `${body}\n\n${tail}\n`;
 }
 /** P295 (Cowork's batch 4, fix 2): a heading that promises a figure (costs, prices, fees, rebates, lifespan, timeline,
@@ -383,7 +390,7 @@ export function withoutUntimedSections(article: string): { markdown: string; rem
   }
   return { markdown: `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}${tail}`, removed };
 }
-const EMPTY_CELL = /^\s*(?:—|–|-|n\/a|not (?:covered|stated|listed|published)(?: here)?)?\s*$/i;
+const EMPTY_CELL = /^\s*(?:—|–|-|n\/a|not (?:covered|stated|listed|published)(?: here)?|not (?:given|stated) (?:by|in) (?:these|the(?:\s+cited|\s+listed)?) sources?)?\s*$/i;
 export function withoutEmptyFigureSections(article: string): { markdown: string; removed: string[] } {
   const split = SOURCES_HEADING.exec(article), body = split ? article.slice(0, split.index) : article, tail = split ? article.slice(split.index) : "";
   const examples = exampleSections(body).filter((b) => b.trim());

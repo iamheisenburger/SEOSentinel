@@ -7699,12 +7699,13 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   // P328: the utility's name lives in the registrable domain, not the first subdomain — savings.austinenergy.com
   // is Austin Energy, "savings" is not a utility.
   const registrableLabel = (host: string) => host.replace(/\.(?:com|net|org|coop|us|gov|edu|mil|info|io|co)$/, "").split(".").pop() ?? host;
-  const NON_EVIDENCE_HOST = /^(?:test|stg|staging|dev|demo|beta|qa|sandbox|preview|preprod)[.-]/i;
+  const NON_EVIDENCE_LABEL = /^(?:test|tests|stg|staging|stage|dev|devel|demo|beta|qa|sandbox|preview|preprod|prelive|uat|acceptance)(?:[.-].*)?$/i;
+  const nonEvidence = (u: URL) => u.hostname.split(".").some((l) => NON_EVIDENCE_LABEL.test(l)) || /\.(?:png|jpe?g|gif|svg|webp|avif|ico|bmp|tiff?)$/i.test(u.pathname);
   const ownerSource = (source: { url: string }, itemHints: readonly string[]) => {
     try {
       const url = new URL(source.url);
       const host = url.hostname.toLowerCase();
-      if (NON_EVIDENCE_HOST.test(url.hostname) || /\.(?:png|jpe?g|gif|svg|webp|avif|ico|bmp|tiff?)$/i.test(url.pathname)) return false;
+      if (nonEvidence(url)) return false;
       return /\.(gov|mil|edu)$/.test(host) || UTILITY_LABEL.test(registrableLabel(host)) || itemHints.some((h) => host.includes(h.toLowerCase()));
     } catch { return false; }
   };
@@ -7772,7 +7773,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
       const ownerResult = (result: { url: string; title?: string }) => {
         try {
           const ru = new URL(result.url);
-          if (NON_EVIDENCE_HOST.test(ru.hostname) || /\.(?:png|jpe?g|gif|svg|webp|avif|ico|bmp|tiff?)$/i.test(ru.pathname)) return false;
+          if (nonEvidence(ru)) return false;
           const host = ru.hostname.toLowerCase();
           const label = registrableLabel(host);
           const gov = /\.(gov|mil|edu)$/.test(host);

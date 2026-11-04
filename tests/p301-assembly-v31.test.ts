@@ -77,8 +77,8 @@ test("P301 A4: citation numbers stay stable and the Sources list is rebuilt cano
   assert.match(out, /Pino logs at level 30 \[1\]/);
   assert.match(out, /urllib3 retries with backoff \[4\]/, "body numbers never shift");
   assert.doesNotMatch(out, /- \[1\]/, "the writer's gapped tail is replaced");
-  assert.match(out, /## Sources\n\n1\. \[Pino docs\]\(https:\/\/getpino\.io\)\n2\. \[urllib3 utilities\]\(https:\/\/urllib3\.readthedocs\.io\/util\.html\)\n3\. \[Unused page\]\(https:\/\/unused\.example\)\n4\. \[urllib3 retry module\]\(https:\/\/urllib3\.readthedocs\.io\/retry\.html\)\n$/,
-    "the canonical list covers every number, in array order");
+  assert.match(out, /## Sources\n\n1\. \[Pino docs\]\(https:\/\/getpino\.io\)\n4\. \[urllib3 retry module\]\(https:\/\/urllib3\.readthedocs\.io\/retry\.html\)\n$/,
+    "P335: cited entries keep their numbers; never-cited entries are omitted from the tail");
   assert.equal(rebuildSourcesSection("No citations here.", sources), "No citations here.", "nothing cited: unchanged");
 });
 

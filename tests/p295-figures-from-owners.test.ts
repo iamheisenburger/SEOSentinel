@@ -52,7 +52,7 @@ test("P295 fixes 3 and 4: a restated figure or claim goes; so does homework in a
   const out = backedFactsOnly(md, { sources, profile: "", allowedNames: [], topic: "heat pump vs gas furnace" });
   assert.equal(out.markdown.match(/40°F/g)?.length, 1, out.markdown);
   assert.doesNotMatch(out.markdown, /Get a written estimate before you sign/, "homework in a figure section goes");
-  assert.match(out.markdown, /Get a written quote from each installer you compare\./, "outside a figure section it is advice");
+  assert.doesNotMatch(out.markdown, /Get a written quote from each installer/, "P335: homework wordings delete wherever they print");
 });
 
 test("P295 fix 5: the FAQ is the last section; the plan's review applies fixes 2 and 5 before the gate", () => {

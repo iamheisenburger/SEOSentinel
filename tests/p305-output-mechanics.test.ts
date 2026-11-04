@@ -273,3 +273,48 @@ test("P329: test hosts and image files are never evidence", async () => {
   assert.equal(out.accepted.length, 0);
   assert.equal(out.rejected.length, 3);
 });
+
+// P335 (Cowork's final-review blocks, product side)
+test("P335: a pre-live host anywhere in the hostname is never evidence", async () => {
+  const { strictEvidenceSources } = await import("../convex/lib/sourceQuality.ts");
+  const out = strictEvidenceSources([
+    { url: "https://denver.prelive.opencities.com/files/permit" },
+    { url: "https://city.denvergov.org/permit" },
+  ], { reputableSecondary: true });
+  assert.equal(out.accepted.length, 1);
+  assert.equal(out.accepted[0].url.includes("prelive"), false);
+});
+
+test("P335: the Sources tail drops never-cited entries; body citations stay stable", async () => {
+  const { rebuildSourcesSection } = await import("../convex/lib/backedFacts.ts");
+  const out = rebuildSourcesSection("Costs run $300 [1].\n\n## Sources", [
+    { url: "https://a.example", title: "A" }, { url: "https://b.example", title: "B" },
+  ]);
+  assert.match(out, /\[A\]/);
+  assert.doesNotMatch(out, /\[B\]/);
+  assert.match(out, /\$300 \[1\]/, "the body's citation number is untouched");
+});
+
+test("P335: Cowork's homework wordings delete as referrals", async () => {
+  const { backedFactsOnly } = await import("../convex/lib/backedFacts.ts");
+  const md = "Permits in Austin need a filing.\n\nYour installer should confirm and handle the filing for you.\n\nConfirm the amounts are still offered before you count on them.\n\nKept sentence with no figures.";
+  const out = backedFactsOnly(md, { sources: [], profile: "", allowedNames: ["X"], topic: "t", wrongClaims: [] });
+  assert.doesNotMatch(out.markdown, /should confirm and handle/);
+  assert.doesNotMatch(out.markdown, /before you count on/);
+  assert.match(out.markdown, /Kept sentence/);
+  assert.ok(out.removed.length >= 2);
+});
+
+test("P335: 'Not given by these sources' counts as an empty table cell", async () => {
+  const { withoutEmptyFigureSections } = await import("../convex/lib/backedFacts.ts");
+  const md = "## Comparison\n\n| Attribute | A | B |\n| --- | --- | --- |\n| Weight | Not given by these sources | 5 lb [2] |\n| Care | Not given by these sources | Not given by these sources |";
+  const out = withoutEmptyFigureSections(md);
+  assert.equal(out.removed.length, 1, "the mostly-empty table goes whole");
+});
+
+test("P335: a decision promise with one option is a reader-visible defect", async () => {
+  const { readerVisibleDefects } = await import("../convex/lib/articleQuality.ts");
+  const md = "## Choosing\n\nA simple way to decide:\n\n- Metal roofs last longest.\n\nAsk for a written estimate on each material.";
+  const defects = readerVisibleDefects(md);
+  assert.ok(defects.some((d) => d.includes("introduces only 1 item")), defects.join("; "));
+});

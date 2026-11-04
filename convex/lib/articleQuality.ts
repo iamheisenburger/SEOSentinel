@@ -2266,6 +2266,17 @@ export function readerVisibleDefects(markdown: string): string[] {
       if (over.length) defects.push(`Reader-visible defect: the text references "step ${over[0]}" but the page's lists count to ${group.max}.`);
     }
   }
+  // P335 (Cowork f): a line promising a way to decide or choose introduces a list — with fewer than two
+  // items it is an empty promise ("A simple way to decide:" + one bullet).
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (!/[.:]\s*$/.test(t) || !/\b(?:way|ways) to (?:decide|choose|pick|compare|think about)\b|\b(?:your options|the choices|how to decide)\b/i.test(t)) continue;
+    let j = i + 1;
+    while (j < lines.length && !lines[j].trim()) j++;
+    let items = 0;
+    while (j < lines.length && /^(?:[-*+]|\d+[.)])\s/.test(lines[j].trim())) { items++; j++; }
+    if (items === 1) defects.push(`Reader-visible defect: "${t.replace(/[#*]/g, "").slice(0, 60)}" introduces only 1 item.`);
+  }
   // Numbered lists: "1. 1. 1." renders as 1, 2, 3; anything else must count up by one.
   for (let i = 0; i < lines.length; i++) {
     const item = LIST_ITEM.exec(lines[i]);
@@ -2362,6 +2373,18 @@ export function readerVisibleIssues(article: Pick<PublicationArticle, "markdown"
   const cited = citedNumberMismatches(article.markdown, article.sources ?? [], article.productEvidenceSnapshot ?? undefined);
   if (cited.length > 0) {
     issues.push(`Reader-visible defect: ${cited.length} cited sentence(s) state a number their source does not contain, e.g. «${cited[0].slice(0, 200)}».`);
+  }
+  // P335 (Cowork b): lookalike brand domains — two cited hosts whose registrable labels share a brand prefix
+  // (lodgescookware.com and lodgecastiron.com) are a store imitating the maker; the longer one is flagged.
+  {
+    const label = (url: string) => (/https?:\/\/([^\/]+)/.exec(url)?.[1] ?? "").replace(/^www\./, "").split(".")[0] ?? "";
+    const hosts = (article.sources ?? []).map((source) => label(source.url));
+    for (const host of hosts) {
+      if (host.length < 6) continue;
+      const twin = hosts.find((other) => other !== host && other.length < host.length && other.length >= 5
+        && (other.startsWith(host.slice(0, 5)) || host.startsWith(other.slice(0, 5))));
+      if (twin) { issues.push(`Reader-visible defect: two cited sources share a brand-like name ("${host}" / "${twin}") — one is likely a lookalike store.`); break; }
+    }
   }
   const product = productNumberMismatches(article.markdown, article.productEvidenceSnapshot, article.productEvidenceHash);
   if (product.length > 0) {

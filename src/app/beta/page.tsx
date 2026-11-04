@@ -32,7 +32,7 @@ const ASK = [
 ] as const;
 
 const FIT = [
-  "Your site has a Next.js, Astro, Hugo, Jekyll or Gatsby blog with Markdown posts in a GitHub repository. On any other platform Pentra writes each article and you paste it.",
+  "Pentra can publish straight to your site: WordPress (free plugin), Shopify, Webflow or Ghost (API connection), or a Next.js, Astro, Hugo, Jekyll or Gatsby blog with Markdown posts in a GitHub repository. On other platforms Pentra writes each article and you paste it in.",
   "You sell a real product or service and want more customers from Google.",
   "You can give SEO time. New articles usually take weeks to months to rank. In 60 days you'll see the full system working and early Search Console data, not a guaranteed traffic spike.",
 ] as const;
