@@ -7649,9 +7649,8 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   // place, filtered to .gov/.mil/.edu hosts — reads it, and the records call runs ONCE more with it appended.
   // If the record still does not verify, the hold stands. One iteration, no loop, ~$0.10 when it fires.
   let recovered = 0;
-  if (authorityUnsatisfied.length && sources.length < 24) {
+  for (const item of authorityUnsatisfied.slice(0, 2)) if (!recovered && sources.length < 24) {
     try {
-      const item = authorityUnsatisfied[0];
       const place = /\b(?:in|for|near)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*$/.exec(args.topic.primaryKeyword)?.[1]
         ?? /\b([A-Z][a-z]{3,})\b/.exec(args.topic.primaryKeyword.split(" ").slice(-2).join(" "))?.[1] ?? "";
       const terms = [...new Set((item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !ITEM_FILLER.has(w)))].slice(0, 2).join(" ");
@@ -7782,7 +7781,7 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
   // checked record and dropped every prose sentence its records don't back. It goes straight to the gate.
   const assembled = article.articlePlan?.assembly === "v3";
   // P295: what the reader check (a cited number its source doesn't contain) and the plan check (a number in no source) flag.
-  const flaggedNow = (markdown: string) => [...citedNumberMismatches(markdown, article.sources ?? []),
+  const flaggedNow = (markdown: string) => [...citedNumberMismatches(markdown, article.sources ?? [], article.productEvidenceSnapshot ?? undefined),
     ...planChecksForArticle(candidateFor({ ...fields, markdown })).filter((f) => ["number", "product", "name"].includes(f.check)).map((f) => f.line ?? "")];
   // P297 (Nov 3 2026): step 4's deletion runs on every review, a re-review included ($0, code only): batch 5's how-to was
   // re-reviewed after its one fix and held on sentences code would have deleted.

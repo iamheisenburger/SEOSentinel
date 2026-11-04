@@ -2323,7 +2323,10 @@ function articleClaimSentences(markdown: string): string[] {
 
 /** Rule 2a, invented statistics: a sentence that cites a source must not
  * state a number the cited sources' hash-valid excerpts do not contain. */
-export function citedNumberMismatches(markdown: string, sources: PublicationSource[]): string[] {
+export function citedNumberMismatches(markdown: string, sources: PublicationSource[], confirmedDetails?: string): string[] {
+  // P318: the business's own confirmed prices need no source (a sentence citing [5] for one option's price may
+  // also state the business's $59 from its confirmed details — batch 21's yoga held on exactly that).
+  const confirmed = new Set(confirmedDetails ? normalizedEvidenceNumbers(confirmedDetails) : []);
   return articleClaimSentences(markdown).filter((sentence) => {
     const citations = inlineCitationNumbers(sentence);
     if (citations.length === 0) return false;
@@ -2335,7 +2338,7 @@ export function citedNumberMismatches(markdown: string, sources: PublicationSour
       if (!source?.excerpt || !source.contentHash || sha256Hex(source.excerpt) !== source.contentHash) continue;
       for (const number of normalizedEvidenceNumbers(source.excerpt)) evidence.add(number);
     }
-    return [...numbers].some((number) => !evidence.has(number));
+    return [...numbers].some((number) => !evidence.has(number) && !confirmed.has(number));
   });
 }
 
@@ -2356,7 +2359,7 @@ export function productNumberMismatches(markdown: string, productEvidence?: stri
 /** Every rule-2a objective issue of an exact draft, as gate messages. */
 export function readerVisibleIssues(article: Pick<PublicationArticle, "markdown" | "sources" | "productEvidenceSnapshot" | "productEvidenceHash">): string[] {
   const issues = readerVisibleDefects(article.markdown);
-  const cited = citedNumberMismatches(article.markdown, article.sources ?? []);
+  const cited = citedNumberMismatches(article.markdown, article.sources ?? [], article.productEvidenceSnapshot ?? undefined);
   if (cited.length > 0) {
     issues.push(`Reader-visible defect: ${cited.length} cited sentence(s) state a number their source does not contain, e.g. «${cited[0].slice(0, 200)}».`);
   }
