@@ -7695,11 +7695,13 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   // denvergov permits, irs.gov credits) — the records model just failed to quote it verbatim. The extractor
   // runs over the authority sources already in hand BEFORE any new search: same code path, zero extra cost.
   const UTILITY_LABEL = /^[a-z]{0,14}(?:gas|electric|energy|utility|power)s?(?:service|services|co|inc|company|utilities)?$/;
+  // P328: the utility's name lives in the registrable domain, not the first subdomain — savings.austinenergy.com
+  // is Austin Energy, "savings" is not a utility.
+  const registrableLabel = (host: string) => host.replace(/\.(?:com|net|org|coop|us|gov|edu|mil|info|io|co)$/, "").split(".").pop() ?? host;
   const ownerSource = (source: { url: string }, itemHints: readonly string[]) => {
     try {
       const host = new URL(source.url).hostname.toLowerCase();
-      const label = host.replace(/^www\./, "").split(".")[0] ?? "";
-      return /\.(gov|mil|edu)$/.test(host) || UTILITY_LABEL.test(label) || itemHints.some((h) => host.includes(h.toLowerCase()));
+      return /\.(gov|mil|edu)$/.test(host) || UTILITY_LABEL.test(registrableLabel(host)) || itemHints.some((h) => host.includes(h.toLowerCase()));
     } catch { return false; }
   };
   const tryExtract = (item: string, index: number, owner: string, excerpt: string): boolean => {
@@ -7719,7 +7721,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
       const ownerIndices = sources.map((source, i) => ownerSource(source, itemHints) ? i : -1).filter((i) => i >= 0).slice(0, 3);
       for (const i of ownerIndices) {
         if (recovered) break;
-        const label = (new URL(sources[i].url).hostname.replace(/^www\./, "").split(".")[0] ?? "").split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+        const label = registrableLabel(new URL(sources[i].url).hostname).split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
         const owner = sources[i].title?.split(/[|:–-]/)[0]?.trim() || label;
         // The stored excerpt is a research quote (a line or two); try it free, then read the owner's whole page.
         if (tryExtract(item, i + 1, owner, sources[i].excerpt)) {
@@ -7765,7 +7767,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
       const ownerResult = (result: { url: string; title?: string }) => {
         try {
           const host = new URL(result.url).hostname.toLowerCase();
-          const label = host.replace(/^www\./, "").split(".")[0] ?? "";
+          const label = registrableLabel(host);
           const gov = /\.(gov|mil|edu)$/.test(host);
           const utility = utilityItem && UTILITY_LABEL.test(label);
           const hintOwner = hints.some((h) => host.includes(h.toLowerCase()));
@@ -7781,7 +7783,7 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
         if (body.length < 160) continue;
         // The page's own title leads the excerpt: the owner naming itself on its own page is the owner speaking
         // (R9b), and the extractor's quotes are slices of this same string, so verification is deterministic.
-        const hostLabel = (new URL(hit.url).hostname.replace(/^www\./, "").split(".")[0] ?? "").split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+        const hostLabel = registrableLabel(new URL(hit.url).hostname).split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
         const titleName = /^([A-Z][\w&'.-]*(?:\s+[A-Z][\w&'.-]*){0,3})/.exec((hit.title ?? "").trim())?.[1] ?? "";
         const k = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
         const owner = titleName && k(titleName).includes(k(hostLabel).slice(0, 10)) ? titleName : hostLabel;
