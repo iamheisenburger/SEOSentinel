@@ -237,3 +237,13 @@ test("P307: 'undefined' and bare-domain titles use the excerpt's first content l
   assert.equal(readableSourceTitle(undefined, "https://raw.githubusercontent.com/pinojs/pino/docs/api.md",
     "pino(opts, stream)\nsends JSON objects to a stream"), "pino(opts, stream)");
 });
+
+// P308 (batch 11's three range leaks): "between {{r}}" folds a two-amount value into one dashed range; FAQ answers
+// and the intro's money records print normalized.
+test("P308: a 'between' before a placeholder folds the record's two amounts", () => {
+  const pool = { r1: { display: "$2,500 and $10,000", source: 1, label: "installed cost" } };
+  const used = new Map<string, number>();
+  const out = proseParagraphs("New heat pumps typically cost between {{r1}} to install, depending on the home.",
+    { pool, scope: [], used, allowedText: "heat pump install" });
+  assert.equal(out.kept, "New heat pumps typically cost $2,500–10,000 [1] to install, depending on the home.");
+});

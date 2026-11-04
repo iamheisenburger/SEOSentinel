@@ -539,6 +539,7 @@ export function proseRequest(args: { search: string; productName: string; busine
   skeleton: Skeleton; records: VerifiedRecords; sources: readonly AssemblySource[] }): { system: string; userMessage: string } {
   const system = [
     "You write the prose of an article whose tables, prices and answers code has already placed from checked fact records. You write normal, readable paragraphs — and you finally may state the facts: every figure, price, percentage, date, plan name and product attribute in your paragraphs MUST be written as the placeholder shown, exactly like {{r7}}. Code replaces each placeholder with the fact and its citation, so never write a figure, price, year or percentage in your own words: use the placeholder.",
+    "State each record in its own clause. Never join two records into a range or ladder of your own ('from {{r1}} to {{r2}}', 'between {{r1}} and {{r2}}'): a range exists only inside a record's own value. Each price gets its own clause with its own verb.",
     "Write: 'intro', 2-4 sentences that answer the search directly — state the headline facts from INTRO FACTS by placeholder in the first sentence or two — then say what the reader will find; for each section, 'paragraph', 2-4 sentences that give the section's substance in flowing prose, using that section's facts by placeholder (a table below already lists some facts: your paragraph explains and connects, it does not read the table aloud); for each option, 'suits', 1-2 sentences on who it suits, from its own facts by placeholder; 'conclusion', 2-4 sentences on how to decide between the options or approaches, then at most one sentence on what the business does, from its confirmed details; 'title' (under 65 characters, in the search's words, no number or year); 'metaTitle' (under 60); 'metaDescription' (under 155: what the reader gets).",
     "Use each fact at most once in the whole article (the headline fact at most twice); a fact code already printed in a table above may appear in your paragraph only when the table's number needs saying in the sentence. Name no company, product, program, agency or person except through a placeholder or one the section's records name (and the business itself in the conclusion). Never tell the reader to check, confirm, verify, ask, call, contact or get a quote or estimate. Never write about the article, its blocks, tables, records or data ('this section covers', 'the table below shows', 'use it to', 'below you'll find'): write about the subject. Plain words, second person, no hype.",
   ].join(" ");
@@ -670,11 +671,17 @@ export function proseParagraphs(text: string, args: { pool: Record<string, { dis
   let filled = "", cursor = 0;
   for (const { match, text: display } of fills) {
     const record = args.pool[match[1]]!;
-    const before = paragraph.slice(0, match.index ?? 0).replace(/[\s(\[]+$/, "");
-    const follow = before.length > 0 && /[a-z,;:]$/.test(before) && /^[A-Z][a-z]/.test(display)
-      ? display.charAt(0).toLowerCase() + display.slice(1) : display;
     const at = match.index ?? 0;
-    filled += paragraph.slice(cursor, at) + `${follow}${cite(record.source)}`;
+    // The model writes "between {{r5}}" around a record that is itself "$2,500 and $10,000": fold the two into
+    // one dashed range instead of leaving "between $2,500 and $10,000" (P307, batch 11's heat pump and roof).
+    let text = display, cut = at;
+    const between = /\bbetween\s+$/i.exec(paragraph.slice(Math.max(0, cursor), at));
+    const amounts = /^([$€£]?\s?\d[\d,]*(?:\.\d+)?)\s+and\s+[$€£]?\s?(\d[\d,]*(?:\.\d+)?)$/.exec(display);
+    if (between && amounts) { text = `${amounts[1]}–${amounts[2]}`; cut = at - between[0].length; }
+    const before = paragraph.slice(0, cut).replace(/[\s(\[]+$/, "");
+    const follow = before.length > 0 && /[a-z,;:]$/.test(before) && /^[A-Z][a-z]/.test(text)
+      ? text.charAt(0).toLowerCase() + text.slice(1) : text;
+    filled += paragraph.slice(cursor, cut) + `${follow}${cite(record.source)}`;
     cursor = at + match[0].length;
   }
   const kept = filled + paragraph.slice(cursor);
