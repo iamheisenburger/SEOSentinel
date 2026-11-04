@@ -5376,7 +5376,10 @@ async function handleArticle(
       `Discarded ${unverifiedArticleSources.length} writer-supplied source URL(s) that were not independently verified.`,
     );
   }
-  const allSources = [...researchSources];
+  // P310: an assembled article cites against ranked + extras (the records call's list); the stored Sources list
+  // must be that same list — batch 13's drafts cited [12] while the stored array held 4, and every gate check
+  // of a cited number then failed against the wrong source.
+  const allSources = [...researchSources, ...assemblyExtras];
   const seenUrls = new Set<string>();
   const compDomainsForFilter = (site.competitors ?? []).map((c: string) =>
     c.replace(/^https?:\/\//, "").replace(/\/$/, "").toLowerCase(),
@@ -7624,9 +7627,14 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   const proseFloor = 600;
   // v3.1 (batch 7): a topic with too few checked records is not sourceable in ANY mode — a 43-word article reached the
   // gate in owner-review mode and burned its quality attempts. The slot takes the next topic instead.
+  // P310 calibration: an authority item (permit, fee, rebate, credit) holds alone — trust is non-negotiable. A
+  // breadth miss (one more cost factor the sources didn't quote) does not reject the article: its section simply
+  // never prints, so the article keeps only promises it fulfills. It is recorded for QA instead.
+  const authorityUnsatisfied = unsatisfied.filter((item) => /\b(?:permits?|fees?|rebates?|incentives?|tax credits?)\b/i.test(item));
+  if (unsatisfied.length > authorityUnsatisfied.length)
+    args.notes.push(`Coverage: ${unsatisfied.length - authorityUnsatisfied.length} planned breadth item(s) without a verified record (their sections do not print).`);
   const holds = [...(thin ? [args.plan.format === "list" ? "fewer than 3 options with checked records" : "fewer than 2 sections with checked records"] : []),
-    ...(unsatisfied.length >= 2 || (unsatisfied.length && figureItems.length <= 3)
-      ? [`${unsatisfied.length} of ${figureItems.length} planned figure item(s) have no verified record: ${unsatisfied.slice(0, 3).join("; ").slice(0, 200)}`] : []),
+    ...(authorityUnsatisfied.length ? [`planned authority item(s) with no verified record: ${authorityUnsatisfied.slice(0, 2).join("; ").slice(0, 180)}`] : []),
     ...(questionsUnanswered ? [`${args.questions.length} questions searchers ask and no verified answer`] : [])];
   if (holds.length) throw new TopicNotSourceable(holds);
   const skeleton = skeletonFor({ format: args.plan.format, sections: args.plan.sections, records: verified, sources, readAt: contentProviderPromptTime(), sides });
@@ -7655,9 +7663,10 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
     return !inArticle;
   });
   const authorityMisses = printedUnsatisfied.filter((item) => /\b(?:permits?|fees?|rebates?|incentives?|tax credits?)\b/i.test(item));
-  if (printedUnsatisfied.length >= 2 || authorityMisses.length)
-    throw new TopicNotSourceable([...(authorityMisses.length ? [`planned authority item(s) not in the article: ${authorityMisses.slice(0, 2).join("; ").slice(0, 180)}`] : []),
-      `${printedUnsatisfied.length} of ${figureItems.length} planned figure item(s) never reached the article: ${printedUnsatisfied.slice(0, 3).join("; ").slice(0, 180)}`]);
+  if (printedUnsatisfied.length > authorityMisses.length)
+    args.notes.push(`Coverage: ${printedUnsatisfied.length - authorityMisses.length} planned breadth item(s) never reached the article.`);
+  if (authorityMisses.length)
+    throw new TopicNotSourceable([`planned authority item(s) not in the article: ${authorityMisses.slice(0, 2).join("; ").slice(0, 180)}`]);
   const title = (statedNumbers(prose.title).length ? "" : prose.title.replace(/\s+/g, " ").trim()) || args.topic.label;
   return { title, slug: buildSlug(args.topic.primaryKeyword), markdown: built.markdown,
     metaTitle: clampMetaTitle(prose.metaTitle, 60, title) ?? title.slice(0, 60),
