@@ -140,3 +140,34 @@ test("P305: waveapps.com and squareup.com are Wave's and Square's own domains (t
   assert.equal(firstPartyProductPage("https://squareup.com/us/en/pricing", ["square"]), true);
   assert.equal(firstPartyProductPage("https://www.seobotreview.com/wave", ["wave"]), false);
 });
+
+// P306 (batch 10's Austin): the authority keeps its seat, and only an authority figures a permit.
+import { rankedResearchSources, missingFigureItems } from "../convex/lib/researchPasses.ts";
+
+test("P306: a .gov source past the cap keeps its seat beside the cost pages", () => {
+  const sources = [
+    { url: "https://homeshow.ai/blog/water-heater-cost-austin/" },
+    { url: "https://www.abacusplumbing.com/tank-tankless-hot-water-heaters" },
+    { url: "https://permitcalculator.com/cities/austin-tx/" },
+    { url: "https://koalacooling.com/plumbing-service/tankless" },
+    { url: "https://homeshow.ai/blog/water-heater-cost-austin-2/" },
+    { url: "https://www.austintexas.gov/department/permitting" },
+    { url: "https://www.texasgasservice.com/rebates" },
+  ];
+  const roles = new Map<string, "owner" | "publication" | "blog">([
+    ["https://www.austintexas.gov/department/permitting", "publication"],
+    ["https://www.texasgasservice.com/rebates", "owner"],
+  ]);
+  const ranked = rankedResearchSources(sources, roles, 6);
+  assert.ok(ranked.kept.some((s) => s.url.includes("austintexas.gov")), "the city's page survives the cap");
+  assert.ok(ranked.kept.some((s) => s.url.includes("homeshow.ai")), "the cost guides keep their seats too");
+});
+
+test("P306: a permit fee a third-party calculator states is not covered; the city's page covers it", () => {
+  const calculator = { title: "Permit pricing", url: "https://permitcalculator.com/cities/austin-tx/", excerpt: "Permit pricing for Austin runs $75 to $150 for most residential swaps." };
+  const city = { title: "Development Services", url: "https://www.austintexas.gov/department/development-services", excerpt: "The City of Austin charges a $98 fee to permit a water heater replacement." };
+  const missing = missingFigureItems(["water heater permit cost"], [calculator]);
+  assert.equal(missing.length, 1, "the permit item is still missing: only an authority page can cover it");
+  const covered = missingFigureItems(["water heater permit cost"], [calculator, city]);
+  assert.equal(covered.length, 0, "the city's own fee figure covers the item");
+});

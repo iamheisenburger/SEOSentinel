@@ -125,15 +125,25 @@ export const MIN_STRONG_SOURCES = 4;
  * publication. */
 export function rankedResearchSources<T extends { url: string }>(sources: readonly T[], roles: ReadonlyMap<string, SourceRole>, limit: number) {
   const role = (url: string): SourceRole => roles.get(url) ?? "publication";
-  const owners = sources.filter((source) => role(source.url) === "owner");
-  const publications = sources.filter((source) => role(source.url) === "publication");
-  const blogs = sources.filter((source) => role(source.url) === "blog");
-  const strong = [...owners, ...publications].slice(0, limit);
+  const authority = (source: T) => /^https?:\/\/[^/]*\.(?:gov|edu|mil)\//i.test(source.url);
+  // P306 (batch 10's Austin): the city's or county's own page is never the source the cap drops for a cost guide or a
+  // vendor page — batch 9 kept austintexas.gov and lost every dollar figure, batch 10 kept the dollars and lost the
+  // authority to a permit-estimate blog. Up to 3 authority pages keep a seat past the limit; both sides then reach the
+  // records call (P305's extras union carries the rest).
+  const pinned = sources.filter((source) => role(source.url) !== "blog" && authority(source)).slice(0, 3);
+  const pinnedUrls = new Set(pinned.map((source) => source.url));
+  const rest = sources.filter((source) => !pinnedUrls.has(source.url));
+  const owners = rest.filter((source) => role(source.url) === "owner");
+  const publications = rest.filter((source) => role(source.url) === "publication");
+  const blogs = rest.filter((source) => role(source.url) === "blog");
+  const strong = [...pinned, ...owners, ...publications].slice(0, limit);
   // P288 (Nov 3 2026): up to MIN_STRONG_SOURCES in all, not at most 2 blogs: a how-to's guides (QuickBooks, NetSuite,
   // Experian) and a local search's trade pages are all "blogs", and batch 3's how-to and Austin articles kept 2 sources.
   const context = blogs.slice(0, Math.max(0, Math.min(MIN_STRONG_SOURCES - strong.length, limit - strong.length)));
-  return { kept: [...strong, ...context], role, counts: { owner: Math.min(owners.length, limit), publication: strong.length - Math.min(owners.length, limit),
-    context: context.length, dropped: blogs.length - context.length } };
+  const keptUrls = new Set([...strong, ...context].map((source) => source.url));
+  return { kept: [...strong, ...context], role, counts: { owner: [...strong].filter((s) => role(s.url) === "owner").length,
+    publication: strong.length - pinned.length - [...strong].filter((s) => role(s.url) === "owner").length,
+    context: context.length, dropped: rest.filter((s) => !keptUrls.has(s.url)).filter((s) => role(s.url) === "blog").length } };
 }
 
 /** P295 (Nov 3 2026, Cowork's batch 4: 0 of 7, ops/COWORK-JUDGE-RESULTS.md fix 1): research covered the search, not the
@@ -147,8 +157,13 @@ const ITEM_FILLER = new Set(("from what which whether their each with that this 
   "item items figure figures program programs reputable guide guides").split(" "));
 const itemTerms = (item: string) => [...new Set((item.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !ITEM_FILLER.has(w)))];
 export const ITEM_LOOKUP_MAX = 6;
-export function missingFigureItems(coverage: readonly string[], sources: readonly { excerpt?: string; title?: string }[], uncoveredOptions: readonly string[] = []): string[] {
+export function missingFigureItems(coverage: readonly string[], sources: readonly { excerpt?: string; title?: string; url?: string }[], uncoveredOptions: readonly string[] = []): string[] {
   const texts = sources.map((source) => `${source.title ?? ""}\n${source.excerpt ?? ""}`.toLowerCase());
+  // P306 (batch 10's Austin): a permit, fee, rebate or credit is covered only by its owner — a .gov/.edu/.mil page (the
+  // utility's own domain passes the record checks later, R9b). A permit-estimate site's dollar figure is not the city's
+  // permit fee, and counting it skipped the austintexas.gov lookup batch 9 was praised for.
+  const authorityHost = (i: number) => /^https?:\/\/[^/]*\.(?:gov|edu|mil)\//i.test(sources[i]?.url ?? "");
+  const OWNED_RULE_ITEM = /\b(?:permits?|fees?|rebates?|incentives?|tax credits?)\b/i;
   // The figure the item asks for, not any digit: a price, fee, rebate or credit needs an amount of money; a temperature a
   // degree; a lifespan or timeline a duration (batch 5's Denver roofing passed on a year beside "cost" and lost its prices).
   const figureFor = (item: string) => /\b(?:costs?|prices?|pricing|fees?|rebates?|incentives?|tax credits?)\b/i.test(item) ? /[$€£]\s?\d|\d\s?(?:usd|dollars)/
@@ -163,9 +178,12 @@ export function missingFigureItems(coverage: readonly string[], sources: readonl
     if (terms.length < 2) return false;
     // An item is covered only where a source also has its TOPIC word — the item's first distinctive term (batch 8: "cash
     // value" asides in cost pages made the insurance item look covered while "insurance" appeared in 0 sources, and the
-    // permit item skipped its denvergov lookup the same way).
+    // permit item skipped its denvergov lookup the same way). A permit, fee, rebate or credit counts only on an
+    // authority host (P306).
     const topic = terms[0];
-    return texts.some((text) => text.includes(topic) && terms.filter((term) => text.includes(term)).length >= 2 &&
+    const needsAuthority = OWNED_RULE_ITEM.test(item);
+    return texts.some((text, i) => (!needsAuthority || authorityHost(i)) && text.includes(topic) &&
+      terms.filter((term) => text.includes(term)).length >= 2 &&
       terms.some((term) => { const at = text.indexOf(term); return at >= 0 && figure.test(text.slice(Math.max(0, at - 200), at + 200)); }));
   };
   const items = coverage.filter((item) => FIGURE_ITEM.test(item) && !figured(item));
