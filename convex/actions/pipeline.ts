@@ -7623,7 +7623,13 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
   // batch 10's roof published without the 10% permit threshold its own plan promised.
   const figureItems = (args.plan.coverage ?? []).filter((item) => FIGURE_ITEM.test(item));
   const unsatisfied = unsatisfiedFigureItems(args.plan.coverage ?? [], verified, FIGURE_ITEM, ITEM_FILLER);
-  const questionsUnanswered = args.plan.format !== "tutorial" && args.questions.length >= 2 && !verified.faqs.length;
+  // P310b: FAQ records verify rarely (question, answer and quote must all check), so "any questions and no FAQ"
+  // held nearly every assembled draft. The article holds only when the PLAN promised the answers ("Answers to the
+  // six People Also Ask questions" is a coverage item); otherwise a missing FAQ is a QA note, judged as usefulness.
+  const planPromisesAnswers = (args.plan.coverage ?? []).some((item) => /answers? to (?:the )?(?:six|five|four|three|\d+ )?(?:people also ask|common|searcher)/i.test(item));
+  const questionsUnanswered = args.plan.format !== "tutorial" && planPromisesAnswers && !verified.faqs.length;
+  if (args.plan.format !== "tutorial" && args.questions.length >= 2 && !verified.faqs.length && !planPromisesAnswers)
+    args.notes.push(`Coverage: ${args.questions.length} searcher question(s); no verified FAQ answers (no FAQ section printed).`);
   const proseFloor = 600;
   // v3.1 (batch 7): a topic with too few checked records is not sourceable in ANY mode — a 43-word article reached the
   // gate in owner-review mode and burned its quality attempts. The slot takes the next topic instead.
