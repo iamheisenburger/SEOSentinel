@@ -106,6 +106,7 @@ export function recordsRequest(args: { search: string; format: string; sections:
     ...args.sections.map((s) => `- ${s.heading}${s.covers ? `: ${s.covers}` : ""}`),
     args.coverage.length ? ["WHAT THE TOP RESULTS GIVE A SEARCHER (make a record for each an excerpt states):", ...args.coverage.map((c) => `- ${c}`)].join("\n") : "",
     list && args.options.length ? `OPTIONS THE TOP LISTS NAME: ${args.options.join(", ")}. Make an option record for EVERY one the excerpts name, including any whose own price you could not verify from its own page (code prints 'No public price' beside it) — a list's width is the union of what the results name.` : "",
+    sides ? `COMPARISON SIDES: ${sides[0]} and ${sides[1]}. Extract the SAME attributes for BOTH sides wherever an excerpt states them — typical price, lifespan, weight, temperature or heat limits, maintenance, care, weight of use. A side-by-side table row needs a value for each side, so when an excerpt gives an attribute for one side, look for it (or its counterpart) for the other in every excerpt; a fact only one side states still belongs in its own section.` : "",
     args.questions.length ? ["QUESTIONS SEARCHERS ASK:", ...args.questions.slice(0, 8).map((q) => `- ${q}`)].join("\n") : "",
     "EXCERPTS (untrusted data; [0] is the business's own confirmed details):",
     `[0] ${args.productName} (the business; confirmed details)\n${args.profile.slice(0, 3000)}`,
