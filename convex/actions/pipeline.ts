@@ -7633,8 +7633,12 @@ async function assembleArticleV3(args: { site: Doc<"sites">; topic: Doc<"topic_c
     for (const seed of args.options.slice(0, 14)) {
       if (verified.options.length >= 8) break;
       const k = seed.toLowerCase().replace(/[^a-z0-9]/g, "");
-      if (!k || named.has(k) || k === args.productName.toLowerCase().replace(/[^a-z0-9]/g, "") || !stubSeed(seed)) continue;
-      verified = { ...verified, options: [...verified.options, { name: seed, website: ownSite.get(seed) ?? "",
+      // P326: a stub prints only with EVIDENCE it is a product — a first-party website the lookups resolved.
+      // Real products have sites; page furniture ("Starter", "Payroll", "Wave Advisors From") does not. This
+      // replaces the word blocklist (batch 31 proved word lists leak).
+      const site = ownSite.get(seed) ?? "";
+      if (!k || !site || named.has(k) || k === args.productName.toLowerCase().replace(/[^a-z0-9]/g, "") || !stubSeed(seed)) continue;
+      verified = { ...verified, options: [...verified.options, { name: seed, website: site,
         prices: [], features: [], limits: [], extras: [], business: false }] };
       named.add(k);
     }
