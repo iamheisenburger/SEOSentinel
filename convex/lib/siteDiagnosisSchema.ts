@@ -19,7 +19,8 @@ export const siteDiagnosisRecord = {
     results: v.optional(v.number()), domains: v.optional(v.array(v.object({ domain: v.string(), rank: v.union(v.number(), v.null()) }))) }))),
   /** The buyer questions put to the AI assistants (kept and reused, so weeks compare) and each answer's verdict. */
   aiAnswers: v.optional(v.object({ questions: v.array(v.string()), checks: v.array(v.object({ question: v.string(),
-    assistant: v.union(v.literal("chatgpt"), v.literal("gemini"), v.literal("google_ai_mode")), answered: v.boolean(), named: v.boolean(), cited: v.boolean() })) })),
+    assistant: v.union(v.literal("chatgpt"), v.literal("gemini"), v.literal("google_ai_mode")), answered: v.boolean(), named: v.boolean(), cited: v.boolean(),
+    error: v.optional(v.string()) })) })),
   /** Google's mobile speed test for a few pages. */
   speed: v.optional(v.array(v.object({ url: v.string(), score: v.union(v.number(), v.null()), lcpMs: v.union(v.number(), v.null()) }))),
 };

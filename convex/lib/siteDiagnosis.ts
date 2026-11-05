@@ -66,6 +66,8 @@ export type DiagnosisInput = {
   /** Google's mobile speed test for a few of the site's pages, when it answered. */
   speed?: readonly SpeedCheck[];
   intents?: readonly QueryIntent[];
+  /** When buyer questions were asked but too few came back to judge: how many were asked and answered. */
+  aiAttempt?: { questions: number; answered: number } | null;
   /** Buyer questions put to the AI assistants (convex/lib/aiAnswers.ts): answers given, and how many named the business. */
   aiAnswers?: { asked: number; named: number; cited?: number; byAssistant?: readonly { assistant: string; asked: number; named: number }[] } | null;
   /** Days of Search Console history to judge (default 28, ending at its newest date). */
@@ -247,8 +249,11 @@ export function diagnoseSite(input: DiagnosisInput): Diagnosis {
       act(m.from, `Merge into ${path(m.to)} with a permanent redirect: ${path(m.to)} ranks higher for the same searches`);
       act(m.to, `Keeps the searches of ${path(m.from)}, which merges into it`);
     }
+    // A page that now redirects (merged) is no longer a page to improve.
+    const redirected = (url: string) => { const page = crawledAt.get(normalize(url)); return Boolean(page && isRedirect(page)); };
     const nearPageOne = [...byPage.values()].map((a) => ({ page: a.url, impressions: a.impressions, position: position(a) }))
-      .filter((p) => p.position > 10 && p.position <= 20 && p.impressions >= 50).sort((a, b) => b.impressions - a.impressions);
+      .filter((p) => p.position > 10 && p.position <= 20 && p.impressions >= 50 && !redirected(p.page))
+      .sort((a, b) => b.impressions - a.impressions);
     if (nearPageOne.length) {
       for (const p of nearPageOne) act(p.page, "Improve it: it sits just off page one");
       add({ factor: "pages", severity: "low", problem: "Pages close to page one", evidence: `${nearPageOne.length} pages sit at positions 11 to 20`,
@@ -439,7 +444,9 @@ export function diagnoseSite(input: DiagnosisInput): Diagnosis {
       evidence: `Named in ${input.aiAnswers.named} of ${input.aiAnswers.asked} answers to buyer questions${split ? ` (${split})` : ""}`,
       action: "Get listed on the pages the assistants cite; publish pages that answer those questions" }, share === 0 ? "failing" : "weak");
     else factors.ai = "ok";
-  } else add({ factor: "ai", severity: "medium", problem: "AI answers not measured", evidence: "Nobody has asked the AI assistants the buyer questions yet",
+  } else add({ factor: "ai", severity: "medium", problem: "AI answers not measured",
+    evidence: input.aiAttempt ? `Only ${input.aiAttempt.answered} of ${input.aiAttempt.questions} buyer questions got an answer this week, too few to judge`
+      : "Nobody has asked the AI assistants the buyer questions yet",
     action: "Ask ChatGPT, Gemini and Google AI Mode the buyer questions every week" }, "unknown");
 
   const order = { high: 0, medium: 1, low: 2 } as const;

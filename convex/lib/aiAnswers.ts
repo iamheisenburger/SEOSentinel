@@ -10,12 +10,28 @@ export const AI_QUESTION_COUNT = 5;
 export type AiAssistant = "chatgpt" | "gemini" | "google_ai_mode";
 export const AI_ASSISTANTS: readonly AiAssistant[] = ["chatgpt", "gemini", "google_ai_mode"];
 export const AI_ASSISTANT_NAMES: Record<AiAssistant, string> = { chatgpt: "ChatGPT", gemini: "Gemini", google_ai_mode: "Google AI Mode" };
-/** treg's endpoint for each assistant (crawl4ai: ChatGPT as a logged-out visitor sees it, and Google AI Mode; cloro: Gemini). */
+/** treg's endpoint for each assistant: crawl4ai for ChatGPT as a logged-out visitor sees it, cloro for Gemini and Google AI
+ * Mode (crawl4ai's AI Mode answers only short searches; a buyer's question came back "no direct answer", Nov 5 2026). */
 export const AI_ASSISTANT_ENDPOINTS: Record<AiAssistant, string> = {
-  chatgpt: "crawl4ai.ai-search.chatgpt.scrape", gemini: "cloro.ai-search.gemini.scrape", google_ai_mode: "crawl4ai.google.serp.ai_mode" };
+  chatgpt: "crawl4ai.ai-search.chatgpt.scrape", gemini: "cloro.ai-search.gemini.scrape", google_ai_mode: "cloro.google.serp.ai_mode" };
+
+/** A market as the two-letter country code the assistants' providers take ("United States" is US, never "UN"). */
+export function countryCode(country: string | null | undefined): string {
+  const key = (country ?? "").trim().toLowerCase();
+  if (/^[a-z]{2}$/.test(key)) return key === "uk" ? "GB" : key.toUpperCase();
+  const names: Record<string, string> = { "united states": "US", usa: "US", "united states of america": "US", america: "US",
+    "united kingdom": "GB", "great britain": "GB", england: "GB", canada: "CA", australia: "AU", germany: "DE", france: "FR", india: "IN",
+    brazil: "BR", japan: "JP", spain: "ES", italy: "IT", netherlands: "NL", sweden: "SE", singapore: "SG", "united arab emirates": "AE",
+    uae: "AE", mexico: "MX", ireland: "IE", "new zealand": "NZ", "south africa": "ZA" };
+  return names[key] ?? "US";
+}
 
 export type Business = { name: string; domain: string; summary?: string; audience?: string; features?: string[]; problems?: string[]; country?: string | null };
-export type AiAnswerCheck = { question: string; assistant: AiAssistant; answered: boolean; named: boolean; cited: boolean };
+export type AiAnswerCheck = { question: string; assistant: AiAssistant; answered: boolean; named: boolean; cited: boolean;
+  /** Why no answer came back (an HTTP status, "timeout", "no answer"), when none did. */
+  error?: string };
+/** The AI-answer factor is judged only on at least this many answers; fewer is "not measured", never a verdict. */
+export const AI_MIN_ANSWERS = 5;
 
 /** One cheap model call writes the buyer questions, from what the business sells and the searches buyers already make. */
 export function aiQuestionsRequest(business: Business, buyerSearches: readonly string[]) {
@@ -89,13 +105,12 @@ export function parseAssistantAnswer(assistant: AiAssistant, payload: unknown): 
     const text = typeof row?.answer_text === "string" ? row.answer_text : typeof row?.answer === "string" ? row.answer : "";
     return text ? { text, sources: [...urls(row?.citations), ...urls(row?.sources)] } : null;
   }
-  if (assistant === "gemini") {
-    const result = (payload as { success?: unknown; result?: { text?: unknown; markdown?: unknown; sources?: unknown; citationPills?: unknown } } | null)?.result;
-    const text = typeof result?.text === "string" ? result.text : typeof result?.markdown === "string" ? result.markdown : "";
-    return text ? { text, sources: [...urls(result?.sources), ...urls(result?.citationPills)] } : null;
-  }
+  // cloro (Gemini, Google AI Mode): { success, result: { text, markdown, sources } }; crawl4ai's AI Mode shape is read too.
+  const result = (payload as { success?: unknown; result?: { text?: unknown; markdown?: unknown; sources?: unknown; citationPills?: unknown } } | null)?.result;
+  const cloroText = typeof result?.text === "string" ? result.text : typeof result?.markdown === "string" ? result.markdown : "";
+  if (cloroText) return { text: cloroText, sources: [...urls(result?.sources), ...urls(result?.citationPills)] };
   const reply = payload as { answered?: unknown; answer?: { text?: unknown; sources?: unknown } } | null;
-  const text = reply?.answered !== false && typeof reply?.answer?.text === "string" ? reply.answer.text : "";
+  const text = assistant === "google_ai_mode" && reply?.answered !== false && typeof reply?.answer?.text === "string" ? reply.answer.text : "";
   return text ? { text, sources: urls(reply?.answer?.sources) } : null;
 }
 

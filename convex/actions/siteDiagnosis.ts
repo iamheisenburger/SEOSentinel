@@ -17,13 +17,13 @@ import { internal } from "../_generated/api";
 import { v } from "convex/values";
 import type { Id } from "../_generated/dataModel";
 import type { FunctionReturnType } from "convex/server";
-import { analyzeSERPFromDataForSEO, getDomainAuthorities, meterDataForSeoCost } from "./seoData";
+import { getDomainAuthorities, lighthouseMobile, meterDataForSeoCost, pageOneDomains } from "./seoData";
 import { dataForSeoLocationCode } from "../lib/dataForSeoLocale";
-import { crawlPages, pageSpeedCheck, readSitemap } from "../lib/pageCrawl";
+import { crawlPages, pageSpeedCheck, parsePageSpeed, readSitemap } from "../lib/pageCrawl";
 import { diagnoseSite, normalize, type CrawledPage, type GscRow, type PageOneCheck, type QueryIntent, type SpeedCheck } from "../lib/siteDiagnosis";
 import { foldQuestionsFor, slugKey, type Merge } from "../lib/duplicatePages";
-import { AI_ASSISTANT_ENDPOINTS, AI_ASSISTANTS, AI_QUESTIONS_MAX_TOKENS, AI_QUESTIONS_MODEL, AI_QUESTIONS_TOOL, aiAnswerTotals, aiQuestionsRequest,
-  judgeAnswer, parseAiQuestions, parseAssistantAnswer, type AiAnswerCheck, type AiAssistant, type Business } from "../lib/aiAnswers";
+import { AI_ASSISTANT_ENDPOINTS, AI_ASSISTANTS, AI_MIN_ANSWERS, AI_QUESTIONS_MAX_TOKENS, AI_QUESTIONS_MODEL, AI_QUESTIONS_TOOL, aiAnswerTotals, aiQuestionsRequest,
+  countryCode, judgeAnswer, parseAiQuestions, parseAssistantAnswer, type AiAnswerCheck, type AiAssistant, type Business } from "../lib/aiAnswers";
 import { parseSearchIntents, searchIntentRequest, SEARCH_INTENT_MAX_TOKENS, SEARCH_INTENT_MODEL, SEARCH_INTENT_TOOL } from "../lib/searchIntent";
 import { buyerFitCostMicroUsd } from "../lib/topicFit";
 import { structuredToolChoice } from "../lib/toolChoice";
@@ -76,8 +76,12 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean)
   const speedPages = [`https://${site.domain.replace(/^https?:\/\//, "").replace(/\/.*$/, "")}/`,
     ...[...shown].filter(([url]) => articleUrls.has(normalize(url))).sort((a, b) => b[1] - a[1]).map(([url]) => url), ...site.published.map((p) => p.url)]
     .filter((url, i, all) => all.findIndex((u) => normalize(u) === normalize(url)) === i).slice(0, 3);
-  const [crawled, speedChecks] = await Promise.all([crawlPages(seeds),
-    Promise.all(speedPages.map((url) => pageSpeedCheck(url))).then((checks) => checks.filter((c): c is SpeedCheck => c !== null))]);
+  // With a PageSpeed key Google's own test is free; without one (its keyless quota is used up) Lighthouse runs through
+  // DataForSEO in the paid part below.
+  const [crawled, freeSpeed] = await Promise.all([crawlPages(seeds), process.env.PAGESPEED_API_KEY
+    ? Promise.all(speedPages.map((url) => pageSpeedCheck(url))).then((checks) => checks.filter((c): c is SpeedCheck => c !== null))
+    : Promise.resolve([] as SpeedCheck[])]);
+  let speedChecks: SpeedCheck[] = freeSpeed;
   const targets = [...crawled.values()].flatMap((p) => (p.location && !crawled.has(normalize(p.location)) ? [p.location] : []));
   for (const [key, page] of await crawlPages([...new Set(targets)].slice(0, 40))) crawled.set(key, page);
   const byUrl = new Map(site.published.map((p) => [normalize(p.url), p]));
@@ -127,17 +131,18 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean)
           const serps: { query: string; domains: string[] }[] = [];
           for (const query of topQueries.slice(0, PAGE_ONE_QUERIES)) {
             try {
-              const serp = await analyzeSERPFromDataForSEO(query, location);
-              const domains = serp.results.filter((r) => r.type === undefined || r.type === "organic").slice(0, 10)
-                .map((r) => { try { return new URL(r.url).hostname.replace(/^www\./, ""); } catch { return ""; } })
-                .filter((d) => d && !d.endsWith(site.domain.replace(/^www\./, "")));
+              const domains = (await pageOneDomains(query, location)).filter((d) => !d.endsWith(site.domain.replace(/^www\./, "")));
               serps.push({ query, domains });
             } catch { /* that search stays unmeasured */ }
           }
+          // Speed as Google's Lighthouse measures it on a phone, when no PageSpeed key made it free above.
+          const speed = speedChecks.length ? [] : (await Promise.all(speedPages.map((url) => lighthouseMobile(url)
+            .then((answer) => answer ? parsePageSpeed(url, answer) : null).catch(() => null)))).filter((c): c is SpeedCheck => c !== null);
           const wanted = [...new Set([...serps.flatMap((s) => s.domains), ...(staleAuthority ? [site.domain] : [])])].slice(0, 50);
           const ranks = wanted.length ? await getDomainAuthorities(wanted, { maxDomains: 50 }) : [];
-          return { serps, ranks };
+          return { serps, ranks, speed };
         });
+        if (metered.result.speed.length) speedChecks = metered.result.speed;
         providerUsd = metered.usd; uncertain = metered.uncertain;
         const rankOf = new Map(metered.result.ranks.map((r) => [r.domain.replace(/^www\./, ""), r.domainRank]));
         const own = rankOf.get(site.domain.replace(/^www\./, ""));
@@ -180,8 +185,11 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean)
     }
   }
 
+  const answered = aiChecks.filter((c) => c.answered).length;
+  if (aiChecks.length && answered < AI_MIN_ANSWERS) notes.push(`AI answers not judged: ${answered} of ${aiChecks.length} questions were answered`);
   const inputs = { domain: site.domain, gsc, authority, pageOne, crawlComplete, sitemap, intents, speed: speedChecks, now: Date.now(),
-    aiAnswers: aiChecks.some((c) => c.answered) ? aiAnswerTotals(aiChecks) : null };
+    aiAnswers: answered >= AI_MIN_ANSWERS ? aiAnswerTotals(aiChecks) : null,
+    aiAttempt: aiChecks.length && answered < AI_MIN_ANSWERS ? { questions: aiChecks.length, answered } : null };
   let d = diagnoseSite({ ...inputs, pages });
 
   // Repairs: duplicates merge into the stronger page, and every redirect not yet live is delivered and checked.
@@ -225,26 +233,32 @@ async function askAssistants(siteId: Id<"sites">, questions: readonly string[], 
   const jobs = questions.flatMap((question) => AI_ASSISTANTS.map((assistant) => ({ question, assistant })));
   const checks: AiAnswerCheck[] = [];
   let costMicroUsd = 0, next = 0;
-  const ask = async (question: string, assistant: AiAssistant) => {
+  const market = countryCode(business.country);
+  /** One call: its answer, or why there was none. */
+  const call = async (question: string, assistant: AiAssistant): Promise<{ answer: { text: string; sources: string[] } | null; error?: string }> => {
     const endpoint = AI_ASSISTANT_ENDPOINTS[assistant];
-    const headers: Record<string, string> = { "X-Treg-Token": token, "X-Treg-Meta": `site=${siteId}, feature=site-diagnosis`,
-      "X-Treg-Route-Max-Cost": String(AI_CALL_MAX_MICRO_USD / 1e6) };
+    const body = assistant === "gemini" ? { prompt: question, country: market } : assistant === "google_ai_mode" ? { prompt: question, gl: market } : { prompt: question };
     try {
-      const response = assistant === "google_ai_mode"
-        ? await fetch(`https://treg.to/call/${endpoint}?${new URLSearchParams({ q: question, deep: "0" })}`, { headers, signal: AbortSignal.timeout(120_000) })
-        : await fetch(`https://treg.to/call/${endpoint}`, { method: "POST", headers: { ...headers, "Content-Type": "application/json" },
-          body: JSON.stringify(assistant === "gemini" ? { prompt: question, country: (business.country ?? "US").slice(0, 2).toUpperCase() } : { prompt: question }),
-          signal: AbortSignal.timeout(120_000) });
+      const response = await fetch(`https://treg.to/call/${endpoint}`, { method: "POST", signal: AbortSignal.timeout(150_000),
+        headers: { "X-Treg-Token": token, "X-Treg-Meta": `site=${siteId}, feature=site-diagnosis`, "X-Treg-Route-Max-Cost": String(AI_CALL_MAX_MICRO_USD / 1e6),
+          "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const charged = Number(response.headers.get("X-Treg-Cost-Micro") ?? 0);
       costMicroUsd += Number.isSafeInteger(charged) && charged >= 0 ? charged : AI_CALL_MAX_MICRO_USD;
-      const answer = response.ok ? parseAssistantAnswer(assistant, await response.json()) : null;
-      checks.push(answer ? { question, assistant, answered: true, ...judgeAnswer(answer, business) } : { question, assistant, answered: false, named: false, cited: false });
-    } catch {
+      if (!response.ok) return { answer: null, error: `HTTP ${response.status}` };
+      const answer = parseAssistantAnswer(assistant, await response.json());
+      return answer ? { answer } : { answer: null, error: "no answer" };
+    } catch (error) {
       costMicroUsd += AI_CALL_MAX_MICRO_USD;
-      checks.push({ question, assistant, answered: false, named: false, cited: false });
+      return { answer: null, error: error instanceof Error && error.name === "TimeoutError" ? "timeout" : "no response" };
     }
   };
-  await Promise.all(Array.from({ length: 5 }, async () => { while (next < jobs.length) { const job = jobs[next++]; await ask(job.question, job.assistant); } }));
+  const ask = async (question: string, assistant: AiAssistant) => {
+    let got = await call(question, assistant);
+    if (!got.answer) got = await call(question, assistant);
+    checks.push(got.answer ? { question, assistant, answered: true, ...judgeAnswer(got.answer, business) }
+      : { question, assistant, answered: false, named: false, cited: false, error: got.error ?? "no answer" });
+  };
+  await Promise.all(Array.from({ length: 3 }, async () => { while (next < jobs.length) { const job = jobs[next++]; await ask(job.question, job.assistant); } }));
   return { checks, costMicroUsd };
 }
 const host = (domain: string) => domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");

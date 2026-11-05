@@ -15,8 +15,9 @@ import { retiredArticle } from "./lib/pentraConsolidation";
 
 /** A site is diagnosed at most once in this long, unless forced. */
 export const DIAGNOSIS_INTERVAL_MS = 6 * 24 * 3600 * 1000;
-/** The hold for one run's paid checks (page one's strength, the readers' intent); a real run costs about $0.05-0.10. */
-export const DIAGNOSIS_RESERVATION_MICRO_USD = 250_000;
+/** The hold for one run's paid checks (page one's strength, the readers' intent, Lighthouse speed, the AI-answer questions
+ * with one retry each); a real run costs about $0.08-0.12, and every check at its price bound fits. */
+export const DIAGNOSIS_RESERVATION_MICRO_USD = 500_000;
 /** Search Console rows read per run (28 days); a bigger site is read up to this many and says so. */
 export const DIAGNOSIS_GSC_ROWS = 12_000;
 /** The sites the weekly run covers until its cost for every customer (about $0.05-0.10 a site a week) has the owner's

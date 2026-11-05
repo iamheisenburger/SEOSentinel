@@ -267,3 +267,56 @@ test("the dashboard shows what Pentra found and fixed, in plain words", async ()
     "Articles Google never shows", "named in 0 of 15 answers", "Merged duplicate", "/crm-lead-scoring-guide", "permanent redirect, checked live",
     "What Pentra does next: </span>Retitle the pages whose readers could buy. Earn links every week."]) assert.ok(html.includes(text), text);
 });
+
+test("page one is the sites that rank, never Google itself: goto results are read from Google's breadcrumb, each site once", async () => {
+  const requests: Array<{ url: string; body: unknown }> = [];
+  const items = [
+    { type: "organic", url: "https://www.google.com/goto?url=CAESabc", breadcrumb: "https://www.salesforce.com › resources › articles" },
+    { type: "organic", url: "https://www.hubspot.com/lead-scoring", breadcrumb: "https://www.hubspot.com › lead-scoring" },
+    { type: "people_also_ask", url: "https://www.google.com/search?q=x" },
+    { type: "organic", url: "https://www.google.com/goto?url=CAESdef", breadcrumb: "" },
+    { type: "organic", url: "https://www.hubspot.com/another", breadcrumb: "https://www.hubspot.com" },
+    { type: "organic", url: "https://support.google.com/answer/1" },
+    { type: "organic", url: "https://smallblog.example/post" }];
+  const text = buildSync({ entryPoints: ["convex/actions/seoData.ts"], bundle: true, platform: "node", format: "cjs", packages: "external", write: false }).outputFiles[0].text;
+  const mod = { exports: {} as Record<string, (...args: unknown[]) => Promise<unknown>> };
+  runInNewContext(text, { module: mod, exports: mod.exports, require: createRequire(import.meta.url), URL, URLSearchParams, TextEncoder, TextDecoder, console, Buffer,
+    setTimeout, clearTimeout, AbortSignal, process: { env: { DATAFORSEO_LOGIN: "login", DATAFORSEO_PASSWORD: "password" } },
+    fetch: async (url: string, init: { body: string }) => { requests.push({ url, body: JSON.parse(init.body) });
+      const lighthouse = url.includes("lighthouse");
+      return { ok: true, status: 200, json: async () => ({ status_code: 20000, cost: 0.002, tasks: [{ status_code: 20000, cost: 0.002,
+        result: [lighthouse ? { categories: { performance: { score: 0.62 } }, audits: { "largest-contentful-paint": { numericValue: 3100.4 } } } : { items }] }] }),
+        text: async () => "" }; } });
+  assert.deepEqual(plain(await mod.exports.pageOneDomains("lead scoring")), ["salesforce.com", "hubspot.com", "smallblog.example"]);
+  assert.match(requests[0].url, /serp\/google\/organic\/live\/advanced$/, "the advanced results carry Google's breadcrumb");
+  const crawl = bundle("convex/lib/pageCrawl.ts") as { parsePageSpeed: (url: string, psi: unknown) => unknown };
+  const answer = await mod.exports.lighthouseMobile("https://quillpad.example/");
+  assert.match(requests[1].url, /on_page\/lighthouse\/live\/json$/);
+  assert.deepEqual(plain(requests[1].body), [{ url: "https://quillpad.example/", for_mobile: true, categories: ["performance"] }]);
+  assert.deepEqual(plain(crawl.parsePageSpeed("https://quillpad.example/", answer)), { url: "https://quillpad.example/", score: 62, lcpMs: 3100 });
+});
+
+test("AI answers: a proper market code, Google AI Mode from cloro, and no verdict on too few answers", async () => {
+  const ai = await import("../convex/lib/aiAnswers.ts");
+  assert.equal(ai.countryCode("United States"), "US", "never \"UN\"");
+  assert.equal(ai.countryCode("uk"), "GB");
+  assert.equal(ai.countryCode(undefined), "US");
+  assert.equal(ai.AI_ASSISTANT_ENDPOINTS.google_ai_mode, "cloro.google.serp.ai_mode");
+  assert.deepEqual(ai.parseAssistantAnswer("google_ai_mode", { success: true, result: { text: "For a small B2B software company…", sources: [{ url: "https://intercom.com" }] } }),
+    { text: "For a small B2B software company…", sources: ["https://intercom.com"] });
+  const d = diagnoseSite({ domain: "leadpilot.example", gsc: [], aiAnswers: null, aiAttempt: { questions: 15, answered: 1 } });
+  const f = d.findings.find((x) => x.problem === "AI answers not measured")!;
+  assert.equal(f.evidence, "Only 1 of 15 buyer questions got an answer this week, too few to judge");
+  assert.equal(d.factors.ai, "unknown", "one answer is no verdict");
+  const action = readFileSync("convex/actions/siteDiagnosis.ts", "utf8");
+  assert.match(action, /if \(!got\.answer\) got = await call\(question, assistant\);/, "each question gets one retry");
+  assert.match(action, /error: got\.error \?\? "no answer"/, "every miss keeps its reason");
+  assert.match(action, /aiAnswers: answered >= AI_MIN_ANSWERS \? aiAnswerTotals\(aiChecks\) : null,/);
+});
+
+test("a merged page is no longer 'close to page one': only pages that still load are worth improving", () => {
+  const gsc = [...series("lead scoring system", 560, 15, `${site}/blog/kept`), ...series("lead handoff guide", 280, 16, `${site}/blog/merged`)];
+  const pages: CrawledPage[] = [live("/blog/kept"), { url: `${site}/blog/merged`, status: 308, location: `${site}/blog/kept` }];
+  const d = diagnoseSite({ domain: "quillpad.example", gsc, pages, now });
+  assert.deepEqual(d.findings.find((f) => f.problem === "Pages close to page one")!.items, ["/blog/kept (position 15, 560 impressions)"]);
+});

@@ -1457,6 +1457,32 @@ const titleKey = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, "
 const breadcrumbHost = (breadcrumb: unknown) => { try { return new URL(String(breadcrumb).split(/\s+›\s+/)[0].trim()).hostname.replace(/^www\./, ""); } catch { return ""; } };
 const urlHost = (url: string) => { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; } };
 
+/** Nov 2026: the sites on page one for a search, for the diagnosis's authority comparison. Google lists about half its
+ * results as its own goto links (google.com/goto?url=…); their site is read from the breadcrumb Google shows, and Google's
+ * own address is never counted as a competitor (the first diagnosis read "page one's median authority is 100": google.com
+ * seven times over). Each site once, in page order; one retry, as the plan's read does. */
+export async function pageOneDomains(keyword: string, locationCode: number = 2840, languageCode: string = "en"): Promise<string[]> {
+  const read = async (): Promise<any[]> => (await dataForSEORequest("serp/google/organic/live/advanced",
+    [{ keyword, location_code: locationCode, language_code: dataForSeoLanguageCode(languageCode), depth: 10 }], 45_000)).tasks?.[0]?.result?.[0]?.items ?? [];
+  let items: any[];
+  try { items = await read(); } catch { await new Promise((resolve) => setTimeout(resolve, 2_000)); items = await read(); }
+  const domains: string[] = [];
+  for (const item of items) {
+    if (item?.type !== "organic" || !item.url) continue;
+    const host = googleGoto(item.url) ? breadcrumbHost(item.breadcrumb) : urlHost(item.url);
+    if (host && !/(^|\.)google\.[a-z.]+$/.test(host) && !domains.includes(host)) domains.push(host);
+  }
+  return domains.slice(0, 10);
+}
+
+/** Nov 2026: Google's Lighthouse mobile performance audit for one page, through DataForSEO (the same engine as PageSpeed
+ * Insights, whose keyless quota is used up), shaped as PageSpeed's answer: { lighthouseResult }. */
+export async function lighthouseMobile(url: string): Promise<{ lighthouseResult: unknown } | null> {
+  const data = await dataForSEORequest("on_page/lighthouse/live/json", [{ url, for_mobile: true, categories: ["performance"] }], 90_000);
+  const result = data.tasks?.[0]?.result?.[0];
+  return result ? { lighthouseResult: result } : null;
+}
+
 /** P268 (Oct 31 2026): the fixed plan's read of Google's results. Cowork judged batch 2 0 of 5, and its plans saw almost
  * none of the results: the "regular" results never carry People Also Ask (no plan had an FAQ question), and Google lists
  * about half of its results as its own goto links, at random on each request, behind a script page nothing can follow
