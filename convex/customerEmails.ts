@@ -354,10 +354,15 @@ async function weeklyReport(ctx: QueryCtx, site: Doc<"sites">, domain: string) {
   }
   const answered = (diagnosis.aiAnswers?.checks ?? []).filter(c => c.answered);
   const next = /What Pentra does next\. ([^\n]+)/.exec(diagnosis.summary)?.[1]?.trim() ?? null;
+  // Phase 2: the searches checked against Google's real page one this week (topics carry their verdicts).
+  const topics = await ctx.db.query("topic_clusters").withIndex("by_site", q => q.eq("siteId", site._id)).take(1000);
+  const checkedThisWeek = topics.filter(t => t.pageOne && t.pageOne.checkedAt >= weekAgo);
+  const winnable = checkedThisWeek.filter(t => t.pageOne!.rankable);
   return weeklyReportEmail({ domain, search, factors: diagnosis.factors, fixed, published, improved,
     problems: diagnosis.findings.filter(f => f.severity !== "low").slice(0, 3).map(f => `${f.problem}: ${f.evidence}`),
     aiNamed: answered.length ? { named: answered.filter(c => c.named).length, asked: answered.length } : null,
-    citedSites: topCitedSites(answered.map(c => ({ ...c, sources: c.sources ?? [] }))), next });
+    citedSites: topCitedSites(answered.map(c => ({ ...c, sources: c.sources ?? [] }))),
+    checkedSearches: { checked: checkedThisWeek.length, winnable: winnable.length, examples: winnable.slice(0, 3).map(t => t.primaryKeyword) }, next });
 }
 
 export const markEmail = internalMutation({ args: { logId: v.id("customer_emails"), status: v.union(v.literal("pending"), v.literal("sent"),

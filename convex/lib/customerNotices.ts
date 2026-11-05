@@ -260,6 +260,8 @@ export type WeeklyReportInput = {
   aiNamed: { named: number; asked: number } | null;
   /** Phase 5: the sites the assistants cite most for the buyer questions (where to be listed or mentioned). */
   citedSites?: ReadonlyArray<{ site: string; answers: number }>;
+  /** Phase 2: searches checked against Google's real page one this week, and how many the site can win. */
+  checkedSearches?: { checked: number; winnable: number; examples: string[] };
   next: string | null;
 };
 
@@ -299,6 +301,12 @@ export function weeklyReportEmail(input: WeeklyReportInput): { subject: string; 
       lines.push(f.kind === "merged" ? `- Merged a duplicate article into the stronger one: ${f.from} now leads to ${f.to}${f.live ? "" : " (going live)"}`
         : `- Folded an article Google never showed into the one it does: ${f.from} now leads to ${f.to}${f.live ? "" : " (going live)"}`);
     }
+    lines.push("");
+  }
+  if (input.checkedSearches && input.checkedSearches.checked > 0) {
+    const c = input.checkedSearches;
+    lines.push(`Searches checked against Google's first page this week: ${c.checked}. Your site can win ${c.winnable} of them${c.winnable ? "; Pentra writes those next" : "; Pentra writes nothing it can't win"}.`);
+    for (const example of c.examples.slice(0, 3)) lines.push(`- "${example}"`);
     lines.push("");
   }
   lines.push(input.published.length ? `Published: ${input.published.length} new article${input.published.length === 1 ? "" : "s"}` : "Published: no new articles this week");

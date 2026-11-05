@@ -41,3 +41,13 @@ test("it follows the week's diagnosis on the rollout sites, once a week, after t
   assert.match(emails, /else if \(log\.kind === "weekly_report"\) \{\n    message = await weeklyReport\(ctx, site, domain\);/);
   assert.match(readFileSync("convex/schema.ts", "utf8"), /v\.literal\("draft_ready"\), v\.literal\("weekly_report"\)\)/);
 });
+
+test("P365: the weekly email says how many searches Pentra checked against Google's first page and how many the site can win", () => {
+  const base = { domain: "leadpilot.chat", search: "not_connected" as const, factors: {}, problems: [], fixed: [], published: [], improved: [], aiNamed: null, next: null };
+  const some = weeklyReportEmail({ ...base, checkedSearches: { checked: 14, winnable: 2, examples: ["lead qualification stages", "real estate lead qualification"] } });
+  assert.match(some.text, /Searches checked against Google's first page this week: 14\. Your site can win 2 of them; Pentra writes those next\.\n- "lead qualification stages"/);
+  const none = weeklyReportEmail({ ...base, checkedSearches: { checked: 9, winnable: 0, examples: [] } });
+  assert.match(none.text, /Your site can win 0 of them; Pentra writes nothing it can't win\./);
+  assert.doesNotMatch(weeklyReportEmail({ ...base, checkedSearches: { checked: 0, winnable: 0, examples: [] } }).text, /Searches checked/);
+  assert.match(readFileSync("convex/customerEmails.ts", "utf8"), /checkedSearches: \{ checked: checkedThisWeek\.length, winnable: winnable\.length/);
+});
