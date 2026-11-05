@@ -3,7 +3,9 @@
  * step (convex/actions/articleImages.ts, run on the owner's yes) makes an image per article, most-seen in Search Console
  * first, and records it here; the live-page repair chain (contentImprovements.requestRelatedReadingRepair) then adds it
  * above the article's first paragraph, one page at a time, through the exact correction path. */
-import { internalMutation, internalQuery } from "./_generated/server";
+import { internalMutation, internalQuery, type MutationCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { siteExecutionActive } from "./lib/planSiteAllowance";
 import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
@@ -68,6 +70,27 @@ export const record = internalMutation({ args: { siteId: v.id("sites"), pageId: 
     if (!page || page.siteId !== args.siteId) return null;
     const existing = await ctx.db.query("article_images").withIndex("by_site_page", (q) => q.eq("siteId", args.siteId).eq("pageId", args.pageId)).first();
     if (existing) return existing._id;
-    return await ctx.db.insert("article_images", { siteId: args.siteId, pageId: args.pageId, url: args.url, alt: args.alt.slice(0, 200),
+    const id = await ctx.db.insert("article_images", { siteId: args.siteId, pageId: args.pageId, url: args.url, alt: args.alt.slice(0, 200),
       status: "ready", costMicroUsd: args.costMicroUsd, createdAt: Date.now() });
+    await bringRepairForward(ctx, args.siteId);
+    return id;
   } });
+
+/** P358 (Nov 5 2026): a prepared image brings the live-page repair round forward. The round that visits every page had
+ * finished, clean, before any image existed, so the next one was a week away and no image reached its page. The
+ * round's own rules still hold (one page every two hours, never close to a publishing slot). */
+async function bringRepairForward(ctx: MutationCtx, siteId: Id<"sites">) {
+  const site = await ctx.db.get(siteId), schedule = site?.contentSchedule, now = Date.now();
+  // During a round, this carries to its end and starts the next one, so a page the round already passed gets its image too.
+  if (!schedule || (schedule.relatedRepairRetryAt !== undefined && schedule.relatedRepairRetryAt <= now)) return;
+  await ctx.db.patch(siteId, { contentSchedule: { ...schedule, relatedRepairRetryAt: now } });
+}
+
+/** For images prepared before P358: brings the repair round forward and starts it. */
+export const queueImageRepairs = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const ready = (await ctx.db.query("article_images").withIndex("by_site_page", (q) => q.eq("siteId", siteId)).take(1000)).filter((r) => r.status === "ready").length;
+  if (!ready) return { ready: 0 };
+  await bringRepairForward(ctx, siteId);
+  await ctx.scheduler.runAfter(0, internal.contentImprovements.requestRelatedReadingRepair, { siteId });
+  return { ready };
+} });

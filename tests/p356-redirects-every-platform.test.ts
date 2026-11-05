@@ -253,3 +253,19 @@ test("P357: no AI look decides whether a generated image is used; the prompt kee
     assert.match(prompt, /Do not show paper, documents, notes, books, signs, whiteboards, sticky notes or screens/);
   }
 });
+
+test("P358: a prepared image brings the live-page repair round forward, under the round's own spacing and slot rules", async () => {
+  // Nov 5 2026: 30 images were made, but the round that places them had finished clean before any existed, so the next
+  // round was a week away.
+  const images = readFileSync("convex/articleImages.ts", "utf8");
+  assert.match(images, /status: "ready", costMicroUsd: args\.costMicroUsd, createdAt: Date\.now\(\) \}\);\n    await bringRepairForward\(ctx, args\.siteId\);/);
+  assert.match(images, /contentSchedule: \{ \.\.\.schedule, relatedRepairRetryAt: now \}/);
+  const { relatedRepairAllowed, RELATED_REPAIR_VERSION } = await import("../convex/lib/contentCorrection.ts");
+  const now = 1_793_900_000_000;
+  const site = { serviceMode: "growth_first", autopilotEnabled: true, publishMethod: "github", contentSchedule: { autopilotSelectedAt: 1, autopublishConsentAt: 1,
+    nextDeadlineAt: now + 12 * 3_600_000, relatedRepairAt: now - 3 * 3_600_000, relatedRepairCleanAt: now - 3_600_000, relatedRepairCleanVersion: RELATED_REPAIR_VERSION } };
+  assert.equal(relatedRepairAllowed(site as never, now), false, "a clean round rests for a week");
+  assert.equal(relatedRepairAllowed({ ...site, contentSchedule: { ...site.contentSchedule, relatedRepairRetryAt: now } } as never, now), true, "an image brings it forward");
+  assert.equal(relatedRepairAllowed({ ...site, contentSchedule: { ...site.contentSchedule, relatedRepairRetryAt: now, nextDeadlineAt: now + 3_600_000 } } as never, now), false,
+    "never close to a publishing slot");
+});
