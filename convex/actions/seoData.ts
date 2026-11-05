@@ -209,6 +209,14 @@ export async function meterDataForSeoCost<T>(run: () => Promise<T>): Promise<{ r
   return { result, usd: meter.usd, uncertain: meter.uncertain };
 }
 
+/** A DataForSEO answer that reports a failure (the whole request, or a task in it) still states what it charged. */
+class DataForSeoAnsweredError extends Error {
+  reportedCost: number | null;
+  constructor(message: string, reportedCost: number | null) { super(message); this.reportedCost = reportedCost; }
+}
+const reportedCostOf = (data: any): number | null =>
+  typeof data?.cost === "number" && Number.isFinite(data.cost) && data.cost >= 0 ? data.cost : null;
+
 async function dataForSEORequest(
   endpoint: string,
   body: any[],
@@ -218,13 +226,19 @@ async function dataForSEORequest(
   try {
     const data = await dataForSEORequestUnmetered(endpoint, body, timeoutMs);
     if (meter) {
-      if (typeof data?.cost === "number" && Number.isFinite(data.cost) && data.cost >= 0) meter.usd += data.cost;
+      const cost = reportedCostOf(data);
+      if (cost !== null) meter.usd += cost;
       else meter.uncertain = true;
     }
     return data;
   } catch (error) {
-    // Credentials missing means nothing was sent; anything else may have been billed.
-    if (meter && !(error instanceof Error && error.message === "DataForSEO credentials not configured")) meter.uncertain = true;
+    // Credentials missing means nothing was sent. An answer that reports a failed task also reports what it charged
+    // (Nov 2026: a search with no results marked every diagnosis's charge uncertain and kept its hold). Anything else
+    // (a lost answer, an HTTP error) may have been billed.
+    if (meter && !(error instanceof Error && error.message === "DataForSEO credentials not configured")) {
+      if (error instanceof DataForSeoAnsweredError && error.reportedCost !== null) meter.usd += error.reportedCost;
+      else meter.uncertain = true;
+    }
     throw error;
   }
 }
@@ -255,8 +269,8 @@ async function dataForSEORequestUnmetered(
 
   const data = await response.json();
   if (data.status_code !== 20000) {
-    throw new Error(
-      `DataForSEO response failed with status code ${data.status_code ?? "unknown"}`,
+    throw new DataForSeoAnsweredError(
+      `DataForSEO response failed with status code ${data.status_code ?? "unknown"}`, reportedCostOf(data),
     );
   }
 
@@ -264,8 +278,8 @@ async function dataForSEORequestUnmetered(
     (task: { status_code?: number }) => task.status_code !== 20000,
   );
   if (failedTask) {
-    throw new Error(
-      `DataForSEO task failed with status code ${failedTask.status_code ?? "unknown"}`,
+    throw new DataForSeoAnsweredError(
+      `DataForSEO task failed with status code ${failedTask.status_code ?? "unknown"}`, reportedCostOf(data),
     );
   }
 

@@ -324,3 +324,19 @@ test("a merged page is no longer 'close to page one': only pages that still load
   const d = diagnoseSite({ domain: "quillpad.example", gsc, pages, now });
   assert.deepEqual(d.findings.find((f) => f.problem === "Pages close to page one")!.items, ["/blog/kept (position 15, 560 impressions)"]);
 });
+
+test("a DataForSEO answer that reports a failed task still states its charge: recorded, never left uncertain", async () => {
+  const text = buildSync({ entryPoints: ["convex/actions/seoData.ts"], bundle: true, platform: "node", format: "cjs", packages: "external", write: false }).outputFiles[0].text;
+  const mod = { exports: {} as Record<string, (...args: unknown[]) => Promise<unknown>> };
+  let reply: unknown = null, lost = false;
+  runInNewContext(text, { module: mod, exports: mod.exports, require: createRequire(import.meta.url), URL, URLSearchParams, TextEncoder, TextDecoder, console, Buffer,
+    setTimeout, clearTimeout, AbortSignal, process: { env: { DATAFORSEO_LOGIN: "login", DATAFORSEO_PASSWORD: "password" } },
+    fetch: async () => { if (lost) throw new Error("socket hang up"); return { ok: true, status: 200, json: async () => reply, text: async () => "" }; } });
+  const meter = mod.exports.meterDataForSeoCost as (run: () => Promise<unknown>) => Promise<{ result: unknown; usd: number; uncertain: boolean }>;
+  reply = { status_code: 20000, cost: 0.002, tasks: [{ status_code: 40102, status_message: "No Search Results.", cost: 0.002 }] };
+  assert.deepEqual(plain(await meter(async () => { try { await mod.exports.pageOneDomains("no such search"); } catch { /* the search stays unmeasured */ } return null; })),
+    { result: null, usd: 0.004, uncertain: false }, "each answer's own charge is recorded (the search and its one retry)");
+  lost = true;
+  assert.equal((await meter(async () => { try { await mod.exports.pageOneDomains("lost"); } catch { /* lost */ } return null; })).uncertain, true,
+    "a lost answer may have been billed: uncertain");
+});
