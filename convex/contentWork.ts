@@ -12,6 +12,7 @@ import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopi
 import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
 import { preSerpReachCeiling } from "./lib/winnableDiscovery";
 import { compareTopics, searchedWithin } from "./lib/topicOrder";
+import { groupBrake, PAGE_ONE_CHECKS_PER_RUN, pageOneStatus, topicChoiceRollout, topicWritable, type BrakeArticle } from "./lib/pageOne";
 import { measuredAuthorityIsFresh, tenantAuthorityFromStoredEvidence } from "./lib/expectedClickPortfolio";
 import { addSearchConsoleDays, isBrandedSearchQuery, publishedArticlePageUrl } from "./lib/searchPerformance";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
@@ -1279,7 +1280,8 @@ export const readiness = query({
         pricingScope: !pricing ? "unavailable" as const : pricing.validationAuthorizationId ? "validation_run" as const : "ordinary" as const },
       plan: await accountPlan(ctx, site),
       // P212: the inputs of the order Autopilot writes topics in, for the dashboard's "Coming up next".
-      topicOrder: { difficultyCeiling: siteDifficultyCeiling(site), authority: storedTenantAuthority(site) ?? null },
+      topicOrder: { difficultyCeiling: siteDifficultyCeiling(site), authority: storedTenantAuthority(site) ?? null,
+        phaseTwo: topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain) },
       autopilot: { selectable: Boolean(site.contentSetupRequestedAt), on: Boolean(s && !s.ownerReviewedOnly && site.autopilotEnabled && !site.approvalRequired),
         reviewAvailable: ["github", "wordpress"].includes(site.publishMethod ?? "") || isApiCmsMethod(site.publishMethod) || pasteDestination(site),
         autopilotAvailable: !pasteDestination(site),
@@ -1477,18 +1479,30 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
   // competitor and a page the site already has still exclude it.
   // A search the buyer-fit model kept for this business (P171) is not judged
   // again by word match; a changed profile has it judged again by the daily sweep.
-  const planned = topics.filter(t => ["planned", "pending"].includes(t.status ?? "planned") &&
+  // The topics Pentra's checks have not ruled out. Phase 2 judges these further (buyer fit, page one, the brake): the
+  // daily sweep and research run their checks on this list.
+  const candidates = topics.filter(t => ["planned", "pending"].includes(t.status ?? "planned") &&
     (ownerChosen(t) || (fit(t) || keptByBuyerFit(t)) && t.buyerFit?.eligible !== false && reachable(t)) &&
     !namesCompetitor(`${t.primaryKeyword} ${t.label}`, competitors) &&
     !planCheckpointTopicExecutionLocked(t) && !terminalContentFeasibility(t.contentFeasibilityStatus) &&
     ![...covered, ...pageCoverage, ...excludedIntents].some(c => contentIntentConflicts(t, c)));
+  // Phase 2 (Nov 2026): Autopilot writes only a search buyers make (the buyer-fit model kept it; word matching alone no
+  // longer admits one), that the site can win on Google's real page one (or already appears for at position 20 or
+  // better), and that isn't in a group of the site's articles Google shows to nobody (convex/lib/pageOne.ts). An owner's
+  // own search is written whatever these checks say.
+  // Built for every site; runs on the rollout sites first (convex/lib/pageOne.ts topicChoiceRollout).
+  const now = Date.now(), phaseTwo = topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain);
+  const planned = phaseTwo ? candidates.filter(t => ownerChosen(t) || topicWritable(t, now)) : [...candidates];
   // Keywords people measurably search for come first; within each group the
   // stored priority orders the work. Absence remains absent in storage.
   const searched = (t: Doc<"topic_clusters">) => searchedWithin(t, difficultyCeiling);
   // The order Autopilot writes in (convex/lib/topicOrder.ts), shown on the dashboard too (P212).
-  planned.sort(compareTopics({ difficultyCeiling, authority: storedTenantAuthority(site) ?? null }));
-  return { topics, pageCoverage, titleCoverage, fit, competitors, planned, searched };
+  const order = compareTopics({ difficultyCeiling, authority: storedTenantAuthority(site) ?? null });
+  candidates.sort(order); planned.sort(order);
+  return { topics, pageCoverage, titleCoverage, fit, competitors, candidates, planned, searched };
 }
+
+
 /** P211 (Oct 26 2026): the business's own pages by title (its service and product pages, posts it wrote) for the copy
  * checks, so Pentra never writes an article that competes with one. Word matching above reads their words; the
  * grouping call reads them by what a searcher wants. Pentra's own articles are listed apart, and the home page and
@@ -1539,13 +1553,24 @@ export function fallbackTopicProposals(site: Doc<"sites">, inventory: Awaited<Re
 async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: Id<"topic_clusters">,
   excludedIntents: { primaryKeyword: string; label?: string }[] = [],
   options: { demandOnly?: boolean; runway?: { planned: number; searched: number };
-    preloaded?: { pages: Doc<"pages">[]; topics: Doc<"topic_clusters">[] } } = {}) {
+    preloaded?: { pages: Doc<"pages">[]; topics: Doc<"topic_clusters">[] };
+    /** Phase 2: Autopilot's own choice. It writes only a topic that passed every check; a confirmed customer question
+     * becomes a topic to check, never an article straight away. */
+    autopilot?: boolean } = {}) {
   const inventory = await eligiblePlannedTopics(ctx, site, excludedIntents, options.preloaded?.topics, options.preloaded?.pages);
-  const { planned, searched } = inventory;
+  const { planned, candidates, searched } = inventory;
   if (options.runway) Object.assign(options.runway, { planned: planned.length, searched: planned.filter(searched).length });
-  if (preferredId) return planned.find(t => t._id === preferredId) ?? null;
+  // A topic the owner picked from the plan is theirs to have written, checked or not.
+  if (preferredId) return candidates.find(t => t._id === preferredId) ?? null;
   if (options.demandOnly) return planned.find(t => ownerChosen(t) || searched(t)) ?? null;
   if (planned[0]) return planned[0];
+  if (options.autopilot && topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain)) {
+    await queueFallbackTopicsForChecks(ctx, site, inventory, excludedIntents);
+    return null;
+  }
+  // An owner asking for a draft (Review first) reads it before anything is published: the best unchecked topic, then a
+  // confirmed customer question, rather than nothing.
+  if (candidates[0]) return candidates[0];
   const [proposal] = fallbackTopicProposals(site, inventory, excludedIntents);
   if (!proposal) return null;
   const id = await ctx.db.insert("topic_clusters", { siteId: site._id, primaryKeyword: proposal.primaryKeyword, label: proposal.label,
@@ -1553,6 +1578,27 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
     secondaryKeywords: [], intent: "informational", priority: 1, status: "planned", notes: proposal.notes,
     createdAt: Date.now(), updatedAt: Date.now() });
   return (await ctx.db.get(id))!;
+}
+
+/** Phase 2: when Autopilot has nothing it may write, the owner's confirmed customer questions (and feature guides)
+ * join the plan as topics to check: a question the owner confirmed their customers ask is a buyer's search by the owner's
+ * word; a feature guide waits for the buyer-fit model. Each is written only once its page one says the site can win it.
+ * At most three a day, so a site with nothing winnable doesn't fill its plan. */
+const FALLBACK_TOPICS_PER_DAY = 3;
+async function queueFallbackTopicsForChecks(ctx: MutationCtx, site: Doc<"sites">, inventory: Awaited<ReturnType<typeof eligiblePlannedTopics>>,
+  excludedIntents: { primaryKeyword: string; label?: string }[]) {
+  const now = Date.now(), dayAgo = now - 86_400_000;
+  const today = inventory.topics.filter(t => t._creationTime >= dayAgo && (t.notes === PAIN_POINT_TOPIC_NOTES || t.notes === ANCHOR_TOPIC_NOTES)).length;
+  const profileHash = confirmedContentProfileHash(site);
+  for (const proposal of fallbackTopicProposals(site, inventory, excludedIntents).slice(0, Math.max(0, FALLBACK_TOPICS_PER_DAY - today))) {
+    const confirmedQuestion = proposal.notes === PAIN_POINT_TOPIC_NOTES;
+    await ctx.db.insert("topic_clusters", { siteId: site._id, primaryKeyword: proposal.primaryKeyword, label: proposal.label,
+      planningCanonicalDomain: siteCanonicalDomain(site)!, planningDomainRevision: siteCanonicalDomainRevision(site),
+      secondaryKeywords: [], intent: "informational", priority: 1, status: "planned", notes: proposal.notes,
+      ...(confirmedQuestion ? { buyerFit: { eligible: true, reason: "A question the owner confirmed their customers ask", version: BUYER_FIT_VERSION,
+        checkedAt: now, profileHash } } : {}),
+      createdAt: now, updatedAt: now });
+  }
 }
 
 /** P257 (Oct 30 2026): the stages in which Pentra is still writing an owner's draft (its paid work is open). Only such a
@@ -1989,7 +2035,8 @@ export const buyerFitSweepContext = internalQuery({ args: { siteId: v.id("sites"
   const site = await ctx.db.get(siteId);
   if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return null;
   let planned: Doc<"topic_clusters">[];
-  try { planned = (await eligiblePlannedTopics(ctx, site)).planned; } catch { return null; }
+  // Phase 2: every topic still in the running is judged, not only the ones already writable.
+  try { planned = (await eligiblePlannedTopics(ctx, site)).candidates; } catch { return null; }
   const profileHash = confirmedContentProfileHash(site);
   const topics = planned.filter(t => !t.buyerFit || t.buyerFit.version < BUYER_FIT_VERSION || t.buyerFit.profileHash !== profileHash)
     .slice(0, BUYER_FIT_MAX_KEYWORDS).map(t => ({ topicId: t._id, keyword: t.primaryKeyword }));
@@ -2027,6 +2074,99 @@ export const recordBuyerFit = internalMutation({ args: { siteId: v.id("sites"), 
     }
     return { recorded };
   } });
+
+/** Phase 2: a page-one check as stored on a topic (convex/lib/pageOne.ts). */
+const pageOneVerdictValidator = v.object({ version: v.number(), checkedAt: v.number(), rankable: v.boolean(), reason: v.string(),
+  siteAuthority: v.union(v.number(), v.null()), reachable: v.number(), measured: v.number(), results: v.number(), medianAuthority: v.union(v.number(), v.null()) });
+const pageOneCheckValidator = v.object({ verdict: pageOneVerdictValidator, serpTopUrls: v.array(v.string()), observedAt: v.number(),
+  locationCode: v.number(), languageCode: v.string(), competitors: v.array(v.object({ position: v.number(), url: v.string(), domain: v.string(),
+    domainRank: v.number(), referringDomains: v.optional(v.number()), source: v.string(), measuredAt: v.number() })) });
+/** Phase 2: the topics still in the running that need a page-one check (none yet, or older than PAGE_ONE_FRESH_MS), in the
+ * order Autopilot would write them: kept by the buyer-fit model and not proven by Search Console. Domain authorities
+ * this site's topics measured in the last 30 days are passed on, so a page-one domain is measured once. */
+const KNOWN_AUTHORITY_MS = 30 * 86_400_000;
+export const pageOneCheckContext = internalQuery({ args: { siteId: v.id("sites"), limit: v.optional(v.number()) }, handler: async (ctx, { siteId, limit }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt || site.deletionStatus ||
+    !topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain)) return null;
+  let inventory: Awaited<ReturnType<typeof eligiblePlannedTopics>>;
+  try { inventory = await eligiblePlannedTopics(ctx, site); } catch { return null; }
+  const now = Date.now();
+  const due = inventory.candidates.filter(t => !ownerChosen(t) && t.buyerFit?.eligible === true && pageOneStatus(t, now) === "unchecked")
+    .slice(0, Math.max(0, Math.min(PAGE_ONE_CHECKS_PER_RUN, Math.floor(limit ?? PAGE_ONE_CHECKS_PER_RUN))));
+  const known = new Map<string, number>();
+  for (const t of inventory.topics) for (const c of t.serpAuthorityCompetitors ?? []) {
+    if (now - c.measuredAt <= KNOWN_AUTHORITY_MS && !known.has(c.domain)) known.set(c.domain, c.domainRank);
+  }
+  return { domain: siteCanonicalDomain(site) ?? site.domain, language: site.language ?? "en", targetCountry: site.targetCountry ?? null,
+    tenantAuthority: storedTenantAuthority(site) ?? null, topics: due.map(t => ({ topicId: t._id, keyword: t.primaryKeyword })),
+    knownAuthorities: [...known].slice(0, 500).map(([domain, rank]) => ({ domain, rank })) };
+} });
+/** The sweep's page-one checks are held before they are sent (each check: one results page and its new domains' authority). */
+export const PAGE_ONE_SWEEP_RESERVATION_MICRO_USD = 150_000;
+export const reservePageOneChecks = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site?.userId || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt) return null;
+  const reserved = await reserveSharedProviderBudget(ctx, { siteId, userId: site.userId, purpose: "topic_plan",
+    trigger: `page_one:${Math.floor(Date.now() / 86_400_000)}`, reservedMicroUsd: PAGE_ONE_SWEEP_RESERVATION_MICRO_USD, timestamp: Date.now() });
+  return reserved.ok ? reserved.reservationId : null;
+} });
+/** Records each page-one check on its topic (only a topic still planned on this site) and settles the sweep's hold at
+ * DataForSEO's reported cost; an uncertain cost (a request lost after it was sent) keeps the hold. */
+export const recordPageOneChecks = internalMutation({ args: { siteId: v.id("sites"), reservationId: v.optional(v.id("provider_spend_reservations")),
+  actualMicroUsd: v.number(), uncertain: v.boolean(), checks: v.array(v.object({ topicId: v.id("topic_clusters"), check: pageOneCheckValidator })) },
+  handler: async (ctx, { siteId, reservationId, actualMicroUsd, uncertain, checks }) => {
+    if (reservationId && !uncertain) {
+      const reservation = await ctx.db.get(reservationId);
+      const actual = Math.max(0, Math.ceil(actualMicroUsd));
+      if (reservation && reservation.siteId === siteId && reservation.purpose === "topic_plan" && reservation.settledAt === undefined &&
+        reservation.releasedAt === undefined && Number.isSafeInteger(actual) && actual <= reservation.reservedMicroUsd) {
+        if (actual === 0) await releaseSharedProviderReservation(ctx, { reservationId, siteId, purpose: "topic_plan", reason: "plan_cancelled_before_execution", timestamp: Date.now() });
+        else await settleSharedProviderReservation(ctx, { reservationId, siteId, purpose: "topic_plan", actualMicroUsd: actual,
+          reason: "verified_provider_receipt_actual_cost", timestamp: Date.now() });
+      }
+    }
+    let recorded = 0;
+    for (const { topicId, check } of checks) {
+      const topic = await ctx.db.get(topicId);
+      if (!topic || topic.siteId !== siteId || !["planned", "pending"].includes(topic.status ?? "planned")) continue;
+      await ctx.db.patch(topicId, { ...pageOneFields(check), updatedAt: Date.now() });
+      recorded++;
+    }
+    return { recorded };
+  } });
+
+/** Phase 2, the brake: each planned topic is held back while the site has BRAKE_MIN_ARTICLES or more settled articles on
+ * its subject and Google showed none of them in the last 28 days (Search Console, by page). Set or cleared daily by the
+ * sweep; nothing is deleted. Without Search Console nothing is braked (no evidence either way). */
+export const applyGroupBrakes = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site || site.serviceMode !== "growth_first" || site.deletionStatus || !(site.gscDateEpochs ?? []).length ||
+    !topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain)) return { checked: 0, braked: 0 };
+  const now = Date.now();
+  const windowStart = new Date(now - 28 * 86_400_000).toISOString().slice(0, 10);
+  let rows: Array<{ page?: string; impressions: number }>;
+  try { const read = await takeCurrentGscQueryRows(ctx, site, 3000, { startDate: windowStart }); if (read.exhausted) return { checked: 0, braked: 0 }; rows = read.rows; }
+  catch { return { checked: 0, braked: 0 }; }
+  const key = (url: string) => url.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[?#].*$/, "").replace(/\/+$/, "");
+  const shown = new Map<string, number>();
+  for (const r of rows) if (r.page) shown.set(key(r.page), (shown.get(key(r.page)) ?? 0) + r.impressions);
+  const published = (await ctx.db.query("article_summaries").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published"))
+    .order("desc").take(300)).filter(row => articleMatchesCurrentDomain(site, row) && typeof row.publishedAt === "number");
+  const articles: BrakeArticle[] = published.map(row => ({ subject: [row.title, ...(row.metaKeywords ?? []).slice(0, 2)].join(" "),
+    publishedAt: row.publishedAt!, impressions: row.publicUrl ? shown.get(key(row.publicUrl)) ?? 0 : 0 }));
+  let inventory: Awaited<ReturnType<typeof eligiblePlannedTopics>>;
+  try { inventory = await eligiblePlannedTopics(ctx, site); } catch { return { checked: 0, braked: 0 }; }
+  let braked = 0;
+  for (const t of inventory.candidates) {
+    if (ownerChosen(t)) continue;
+    const verdict = groupBrake(t.primaryKeyword, articles, now);
+    if (verdict.braked) braked++;
+    if (!verdict.braked && !t.groupBrake?.braked) continue;
+    await ctx.db.patch(t._id, { groupBrake: { braked: verdict.braked, reason: verdict.reason, checkedAt: now }, updatedAt: now });
+  }
+  return { checked: inventory.candidates.length, braked };
+} });
 
 /** C4 (P158, Oct 22 2026): the owner adds a search they want a page for
  * (convex/lib/ownerSearch.ts). It goes to the front of the plan, so Autopilot
@@ -2239,7 +2379,8 @@ export const planAuditContext = internalQuery({ args: { siteId: v.id("sites") },
   let planned: Doc<"topic_clusters">[];
   // P211: the site's pages are read once, for the plan and for the call's list of the business's own pages.
   const pages = await ctx.db.query("pages").withIndex("by_site", q => q.eq("siteId", siteId)).take(LIMIT + 1);
-  try { planned = (await eligiblePlannedTopics(ctx, site, [], undefined, pages)).planned.filter(t => !ownerChosen(t)); } catch { return null; }
+  // Phase 2: the audit reads every topic still in the running, so duplicates go before any is checked or written.
+  try { planned = (await eligiblePlannedTopics(ctx, site, [], undefined, pages)).candidates.filter(t => !ownerChosen(t)); } catch { return null; }
   const live = (await ctx.db.query("article_summaries").withIndex("by_site_status_created", q => q.eq("siteId", siteId).eq("status", "published"))
     .order("desc").take(PLAN_AUDIT_LIVE)).filter(row => articleMatchesCurrentDomain(site, row) && servedOnItsOwnUrl(site.domain, row.slug));
   const waiting: { job: Doc<"jobs">; topic: Doc<"topic_clusters"> }[] = [];
@@ -2397,7 +2538,17 @@ export const closeTopicResearchReservation = internalMutation({ args: { siteId: 
 /** Add researched keywords as planned topics: business-fit only, never a
  * duplicate of an existing topic, page or article intent. */
 type CandidateKeyword = { keyword: string; searchVolume: number; difficulty: number; difficultyMeasured: boolean;
-  source?: "search_console"; position?: number; fit?: { keep: boolean; reason: string }; secondary?: string[] };
+  source?: "search_console"; position?: number; fit?: { keep: boolean; reason: string }; secondary?: string[];
+  /** Phase 2: the page-one check research ran for this search before adding it. */
+  pageOne?: PageOneCheckRecord };
+/** Phase 2: one search's page-one check as research and the sweep record it. */
+type PageOneCheckRecord = { verdict: Doc<"topic_clusters">["pageOne"] & {}; serpTopUrls: string[]; observedAt: number; locationCode: number; languageCode: string;
+  competitors: Array<{ position: number; url: string; domain: string; domainRank: number; referringDomains?: number; source: string; measuredAt: number }> };
+/** The topic fields a page-one check writes (the result-overlap duplicate check reads serpTopUrls). */
+function pageOneFields(check: PageOneCheckRecord) {
+  return { pageOne: check.verdict, serpTopUrls: check.serpTopUrls.slice(0, 10), serpObservedAt: check.observedAt, serpLocationCode: check.locationCode,
+    serpLanguageCode: check.languageCode, serpAuthorityCompetitors: check.competitors.slice(0, 10) };
+}
 /** Add measured keywords as planned topics through Autopilot's topic gates:
  * search shape, the site's reach ceiling, no competitor names, a buyer-fit
  * drop, business fit and no repeat of an existing topic, article or page.
@@ -2414,9 +2565,11 @@ async function insertCandidateTopics(ctx: MutationCtx, site: Doc<"sites">, keywo
   let added = 0;
   const skipped = { shape: 0, difficulty: 0, competitor: 0, fit: 0, buyerFit: 0, intent: 0 };
   const profileHash = confirmedContentProfileHash(site);
-  // Searches the site already appears for come first: they are the nearest wins.
+  // Searches the site already appears for come first: they are the nearest wins. Phase 2: then searches its page one says
+  // it can win, so a run's cap is never spent on searches it can't.
   const fromSearchConsole = (k: { source?: string }) => Number(k.source === "search_console");
-  for (const k of [...keywords].sort((a, b) => fromSearchConsole(b) - fromSearchConsole(a) || b.searchVolume - a.searchVolume)) {
+  const winnable = (k: CandidateKeyword) => Number(k.pageOne?.verdict.rankable === true);
+  for (const k of [...keywords].sort((a, b) => fromSearchConsole(b) - fromSearchConsole(a) || winnable(b) - winnable(a) || b.searchVolume - a.searchVolume)) {
     if (added >= 15) break;
     const keyword = k.keyword.trim().toLowerCase().replace(/\s+/g, " ");
     if (keyword.split(" ").length < 2 || keyword.length > 80) { skipped.shape++; continue; }
@@ -2431,6 +2584,8 @@ async function insertCandidateTopics(ctx: MutationCtx, site: Doc<"sites">, keywo
       planningDomainRevision: siteCanonicalDomainRevision(site), secondaryKeywords: (k.secondary ?? []).slice(0, 5), intent: "informational",
       priority: Math.max(1, Math.min(90, Math.round(Math.log10(1 + k.searchVolume) * 20 - k.difficulty / 5))), status: "planned",
       searchVolume: k.searchVolume, keywordDifficulty: k.difficulty, keywordDifficultyMeasured: k.difficultyMeasured,
+      ...(k.source === "search_console" && typeof k.position === "number" ? { searchConsolePosition: k.position } : {}),
+      ...(k.pageOne ? pageOneFields(k.pageOne) : {}),
       notes: noteFor(k), createdAt: Date.now(), updatedAt: Date.now() });
     taken.push(proposal); added++;
   }
@@ -2462,7 +2617,9 @@ export const addResearchedTopics = internalMutation({ args: { siteId: v.id("site
     // P105: the buyer-fit verdict for this business, when the batch call gave one.
     fit: v.optional(v.object({ keep: v.boolean(), reason: v.string() })),
     // P179: the other wordings of the same search, written into the same article.
-    secondary: v.optional(v.array(v.string())) })),
+    secondary: v.optional(v.array(v.string())),
+    // Phase 2: its page-one check, when research ran one.
+    pageOne: v.optional(pageOneCheckValidator) })),
     // What the research run saw (seeds and discovery counts), kept with its outcome.
     research: v.optional(v.object({ seeds: v.array(v.string()), searchConsole: v.number(), discovered: v.optional(v.number()),
       excludedKnown: v.optional(v.number()), excludedFit: v.optional(v.number()), excludedIntent: v.optional(v.number()),
@@ -2821,7 +2978,7 @@ export const advance = internalMutation({
           siteId, trigger: "content_work", reason: "content_work_stage_changed" });
         return { scheduled: 0, mode: "topics_researching" };
       }
-      topic = await chooseTopic(ctx, site, undefined, [], { preloaded });
+      topic = await chooseTopic(ctx, site, undefined, [], { preloaded, autopilot: true });
     }
     if (!topic && !improvement) {
       // Wake exactly when keyword research may run again, instead of waiting

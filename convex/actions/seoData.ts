@@ -1489,6 +1489,32 @@ export async function pageOneDomains(keyword: string, locationCode: number = 284
   return domains.slice(0, 10);
 }
 
+/** Phase 2 (Nov 2026): page one for a search, as result addresses in page order, for the topic check (convex/lib/pageOne.ts).
+ * A result Google lists as its own goto link is read from the breadcrumb it shows ("https://www.ramp.com › Blog ›
+ * Accounting" → https://ramp.com/blog/accounting): its site is exact, its path the closest Google gives. One retry. */
+export async function pageOneResults(keyword: string, locationCode: number = 2840, languageCode: string = "en"): Promise<Array<{ url: string }>> {
+  const read = async (): Promise<any[]> => (await dataForSEORequest("serp/google/organic/live/advanced",
+    [{ keyword, location_code: locationCode, language_code: dataForSeoLanguageCode(languageCode), depth: 10 }], 45_000)).tasks?.[0]?.result?.[0]?.items ?? [];
+  let items: any[];
+  try { items = await read(); } catch { await new Promise((resolve) => setTimeout(resolve, 2_000)); items = await read(); }
+  const results: Array<{ url: string }> = [];
+  for (const item of items) {
+    if (item?.type !== "organic" || !item.url) continue;
+    let url = String(item.url);
+    if (googleGoto(url)) {
+      const host = breadcrumbHost(item.breadcrumb);
+      if (!host) continue;
+      const path = String(item.breadcrumb ?? "").split(/\s+›\s+/).slice(1).map((part) => part.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, ""))
+        .filter(Boolean).join("/");
+      url = `https://${host}/${path}`;
+    }
+    if (/(^|\.)google\.[a-z.]+$/.test(urlHost(url))) continue;
+    results.push({ url });
+    if (results.length >= 10) break;
+  }
+  return results;
+}
+
 /** Nov 2026: Google's Lighthouse mobile performance audit for one page, through DataForSEO (the same engine as PageSpeed
  * Insights, whose keyless quota is used up), shaped as PageSpeed's answer: { lighthouseResult }. */
 export async function lighthouseMobile(url: string): Promise<{ lighthouseResult: unknown } | null> {

@@ -11,7 +11,9 @@ import { clickPotential } from "./clickPotential.ts";
 export type OrderedTopic = { ownerChosenAt?: number; searchVolume?: number; keywordDifficulty?: number;
   keywordDifficultyMeasured?: boolean; priority?: number; primaryKeyword?: string };
 /** The site's reach (keyword difficulty ceiling) and measured authority, when fresh. */
-export type TopicOrderSite = { difficultyCeiling: number; authority: number | null };
+export type TopicOrderSite = { difficultyCeiling: number; authority: number | null;
+  /** Phase 2 (Nov 2026): the site writes only topics that pass convex/lib/pageOne.ts topicWritable (rollout sites first). */
+  phaseTwo?: boolean };
 
 /** A search people measurably make that the site can reach. */
 export const searchedWithin = (t: OrderedTopic, difficultyCeiling: number) =>

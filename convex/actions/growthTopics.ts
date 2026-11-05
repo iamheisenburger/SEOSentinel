@@ -5,8 +5,9 @@ import { internalAction, type ActionCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { v } from "convex/values";
-import { discoverKeywords, getDomainAuthority, getExactKeywordDemandFromDataForSEO, getExactKeywordDifficultyFromDataForSEO,
-  meterDataForSeoCost, type DomainAuthorityEvidence, type KeywordDiscoveryDiagnostics } from "./seoData";
+import { discoverKeywords, getDomainAuthorities, getDomainAuthority, getExactKeywordDemandFromDataForSEO, getExactKeywordDifficultyFromDataForSEO,
+  meterDataForSeoCost, pageOneResults, type DomainAuthorityEvidence, type KeywordDiscoveryDiagnostics } from "./seoData";
+import { hostOf, PAGE_ONE_CHECKS_PER_RUN, pageOneVerdict, PROVEN_POSITION, rankability, registrableDomain, topicChoiceRollout } from "../lib/pageOne";
 import { dataForSeoLocationCode } from "../lib/dataForSeoLocale";
 import { contentIntentConflicts, sharesBusinessSubject } from "../lib/autopilotBuffer";
 import { structuredToolChoice } from "../lib/toolChoice";
@@ -81,6 +82,61 @@ export async function judgeBuyerFit(business: BuyerFitBusiness, keywords: string
   return { verdicts: parseBuyerFit(request.keywords, tool && tool.type === "tool_use" ? tool.input : null),
     costMicroUsd: buyerFitCostMicroUsd(response.usage) };
 }
+
+/** Phase 2 (Nov 2026): page one for each search (one live results page each), the authority of every domain on them that
+ * isn't already known (one bulk request per 50 domains), and the verdict of convex/lib/pageOne.ts. Call it inside
+ * meterDataForSeoCost: every request's reported cost is counted there. A search whose results page fails is left
+ * unchecked (checked again next run); an unmeasured site authority makes every verdict "not measured", never a guess. */
+type PageOneCheck = { verdict: ReturnType<typeof pageOneVerdict>; serpTopUrls: string[]; observedAt: number; locationCode: number; languageCode: string;
+  competitors: Array<{ position: number; url: string; domain: string; domainRank: number; referringDomains?: number; source: string; measuredAt: number }> };
+export async function checkPageOne(site: { domain: string; language: string; targetCountry: string | null; tenantAuthority: number | null;
+  knownAuthorities?: ReadonlyArray<{ domain: string; rank: number }> }, keywords: readonly string[]): Promise<Map<string, PageOneCheck>> {
+  const locationCode = dataForSeoLocationCode(site.targetCountry ?? undefined), languageCode = site.language || "en";
+  const pages = new Map<string, Array<{ url: string }>>();
+  for (const keyword of [...new Set(keywords)].slice(0, PAGE_ONE_CHECKS_PER_RUN * 2)) {
+    try { const results = await pageOneResults(keyword, locationCode, languageCode); if (results.length) pages.set(keyword, results); }
+    catch { /* checked again next run */ }
+  }
+  const authorities = new Map<string, number>(), measuredAt = Date.now(), source = new Map<string, string>();
+  for (const k of site.knownAuthorities ?? []) { authorities.set(k.domain, k.rank); source.set(k.domain, "known"); }
+  const wanted = [...new Set([...pages.values()].flat().map((r) => hostOf(r.url)).filter((h) => h && !authorities.has(h) && !authorities.has(registrableDomain(h))))];
+  for (let i = 0; i < wanted.length; i += 50) {
+    try {
+      for (const e of await getDomainAuthorities(wanted.slice(i, i + 50), { maxDomains: 50, measuredAt })) { authorities.set(e.domain, e.domainRank); source.set(e.domain, e.source); }
+    } catch { /* those domains stay unmeasured: never assumed weak */ }
+  }
+  const checks = new Map<string, PageOneCheck>();
+  for (const [keyword, results] of pages) {
+    const judged = rankability({ results, siteDomain: site.domain, siteAuthority: site.tenantAuthority, authorities });
+    checks.set(keyword, { verdict: pageOneVerdict(judged, measuredAt), serpTopUrls: results.map((r) => r.url), observedAt: measuredAt, locationCode, languageCode,
+      competitors: judged.pageOne.flatMap((p, i) => p.authority === null ? [] : [{ position: i + 1, url: p.url, domain: hostOf(p.url) || p.domain,
+        domainRank: p.authority, source: source.get(hostOf(p.url)) ?? source.get(p.domain) ?? "dataforseo", measuredAt }]) });
+  }
+  return checks;
+}
+
+/** Phase 2: the planned topics due a page-one check, checked under their own spend hold (the daily sweep, after buyer fit). */
+async function checkPlannedTopicsPageOne(ctx: ActionCtx, siteId: Id<"sites">): Promise<{ checked: number; winnable: number }> {
+  const context: { domain: string; language: string; targetCountry: string | null; tenantAuthority: number | null;
+    topics: Array<{ topicId: Id<"topic_clusters">; keyword: string }>; knownAuthorities: Array<{ domain: string; rank: number }> } | null =
+    await ctx.runQuery(internal.contentWork.pageOneCheckContext, { siteId });
+  if (!context || context.topics.length === 0 || context.tenantAuthority === null) return { checked: 0, winnable: 0 };
+  const reservationId: Id<"provider_spend_reservations"> | null = await ctx.runMutation(internal.contentWork.reservePageOneChecks, { siteId });
+  if (!reservationId) return { checked: 0, winnable: 0 };
+  const metered = await meterDataForSeoCost(() => checkPageOne(context, context.topics.map((t) => t.keyword)));
+  const checks = context.topics.flatMap((t) => { const check = metered.result.get(t.keyword); return check ? [{ topicId: t.topicId, check }] : []; });
+  await ctx.runMutation(internal.contentWork.recordPageOneChecks, { siteId, reservationId, actualMicroUsd: Math.ceil(metered.usd * 1_000_000),
+    uncertain: metered.uncertain, checks });
+  return { checked: checks.length, winnable: checks.filter((c) => c.check.verdict.rankable).length };
+}
+
+/** Phase 2: one site's page-one checks and brake now (the daily sweep runs the same). */
+export const checkPlannedPageOne = internalAction({ args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<{ checked: number; winnable: number }> => {
+    const result = await checkPlannedTopicsPageOne(ctx, siteId);
+    await ctx.runMutation(internal.contentWork.applyGroupBrakes, { siteId });
+    return result;
+  } });
 
 /** Keyword research for an Autopilot site whose topics ran out. The spend is
  * reserved (and bounded) by contentWork.advance before this runs; any failure
@@ -211,7 +267,7 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
     // the others its secondary keywords, and a search an existing article or
     // planned topic already answers is dropped. Without an answer, every
     // search stays on its own (word matching still applies).
-    let keywords: Array<(typeof judged)[number] & { secondary?: string[] }> = judged, groupCostMicroUsd = 0;
+    let keywords: Array<(typeof judged)[number] & { secondary?: string[]; pageOne?: PageOneCheck }> = judged, groupCostMicroUsd = 0;
     const grouping = { merged: 0, covered: 0 };
     const kept = judged.filter(k => k.fit?.keep);
     if (kept.length >= 2) {
@@ -225,13 +281,32 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
         if (!(error instanceof Error && error.message === "ANTHROPIC_API_KEY not set")) groupCostMicroUsd = BUYER_FIT_CEILING_MICRO_USD;
       }
     }
+    // Phase 2 (Nov 2026): page one for the kept searches (a Search Console search at position 20 or better is already
+    // proven) and for planned topics due a check, in one go, so each domain on them is measured once. Without the site's
+    // own authority nothing is judged (the topics wait for the next run).
+    const proven = (k: (typeof keywords)[number]) => { const shown = k as { source?: string; position?: number };
+      return shown.source === "search_console" && typeof shown.position === "number" && shown.position <= PROVEN_POSITION; };
+    const toCheck = keywords.filter((k) => k.fit?.keep && !proven(k)).sort((a, b) => b.searchVolume - a.searchVolume).slice(0, PAGE_ONE_CHECKS_PER_RUN);
+    let due: { topics: Array<{ topicId: Id<"topic_clusters">; keyword: string }>; knownAuthorities: Array<{ domain: string; rank: number }> } | null = null;
+    try { due = await ctx.runQuery(internal.contentWork.pageOneCheckContext, { siteId }); } catch { /* the sweep checks them */ }
+    let pageOne = { usd: 0, uncertain: false, checks: new Map<string, PageOneCheck>() };
+    if (topicChoiceRollout(context.canonicalDomain) && tenantAuthority !== null && (toCheck.length > 0 || (due?.topics.length ?? 0) > 0)) {
+      const site = { domain: context.domain, language: context.language, targetCountry: context.targetCountry, tenantAuthority,
+        knownAuthorities: due?.knownAuthorities ?? [] };
+      const checked = await meterDataForSeoCost(() => checkPageOne(site, [...toCheck.map((k) => k.keyword), ...(due?.topics ?? []).map((t) => t.keyword)]));
+      pageOne = { usd: checked.usd, uncertain: checked.uncertain, checks: checked.result };
+    }
+    keywords = keywords.map((k) => { const check = pageOne.checks.get(k.keyword); return check ? { ...k, pageOne: check } : k; });
+    const plannedChecks = (due?.topics ?? []).flatMap((t) => { const check = pageOne.checks.get(t.keyword); return check ? [{ topicId: t.topicId, check }] : []; });
+    if (plannedChecks.length) await ctx.runMutation(internal.contentWork.recordPageOneChecks, { siteId, actualMicroUsd: 0, uncertain: true, checks: plannedChecks });
     // Settle at DataForSEO's reported cost plus the model calls (their list
     // price, or their ceiling when an answer was lost). An uncertain DataForSEO
     // total (a request that failed after it was sent) keeps the whole reservation.
-    if (!metered.uncertain) {
+    if (!metered.uncertain && !pageOne.uncertain) {
       const modelMicroUsd = seedCostMicroUsd + fitCostMicroUsd + groupCostMicroUsd;
+      const dataForSeoUsd = metered.usd + pageOne.usd;
       await ctx.runMutation(internal.contentWork.closeTopicResearchReservation, { siteId, reservationId,
-        sent: metered.usd > 0 || modelMicroUsd > 0, actualMicroUsd: Math.ceil(metered.usd * 1_000_000) + modelMicroUsd });
+        sent: dataForSeoUsd > 0 || modelMicroUsd > 0, actualMicroUsd: Math.ceil(dataForSeoUsd * 1_000_000) + modelMicroUsd });
     }
     // Always report back (even empty) so a waiting Autopilot slot continues.
     // What this run saw is kept with the outcome, so a thin run can be explained.
@@ -240,6 +315,8 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
       seedSource: read ? "model" as const : "site" as const, judged: fit.size, kept: [...fit.values()].filter(verdict => verdict.keep).length,
       method: TOPIC_RESEARCH_METHOD, grouped: grouping.merged, coveredByExisting: grouping.covered };
     const result: { added: number } = await ctx.runMutation(internal.contentWork.addResearchedTopics, { siteId, keywords, research, deferWake: true });
+    // Phase 2: the brake is set on the new topics before any is written.
+    try { await ctx.runMutation(internal.contentWork.applyGroupBrakes, { siteId }); } catch { /* the daily sweep sets it */ }
     // P284 (Nov 3 2026): the new topics are audited against the live articles before any is written. A topic researched
     // and written the same day reached the daily 02:40Z audit only as a paid draft: pentra.dev's /automate-blog-posts
     // (Nov 1) and /wordpress-seo-automation-what-to-automate (Nov 3) were both held as repeats of a live page.
@@ -311,6 +388,13 @@ export const sweepBuyerFit = internalAction({ args: { siteId: v.id("sites") },
       const audit = await auditPlan(ctx, siteId);
       if (audit && audit.dropped + audit.merged + audit.heldBack > 0) console.log(`Plan audit ${siteId}: ${JSON.stringify(audit)}`);
     } catch (error) { console.warn(`Plan audit skipped ${siteId}: ${error instanceof Error ? error.message : "unknown"}`); }
+    // Phase 2: then page one for the topics due a check (kept by buyer fit, in the order Autopilot would write them), and
+    // the brake. A failure here never loses the verdicts above.
+    try {
+      const pageOne = await checkPlannedTopicsPageOne(ctx, siteId);
+      if (pageOne.checked) console.log(`Page-one checks ${siteId}: ${JSON.stringify(pageOne)}`);
+      await ctx.runMutation(internal.contentWork.applyGroupBrakes, { siteId });
+    } catch (error) { console.warn(`Page-one checks skipped ${siteId}: ${error instanceof Error ? error.message : "unknown"}`); }
     return fit;
   } });
 

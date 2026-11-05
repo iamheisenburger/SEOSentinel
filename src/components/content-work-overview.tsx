@@ -13,6 +13,7 @@ import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 import { SearchConsolePrompt } from "./search-console-prompt";
 import { SiteDiagnosisCard } from "./site-diagnosis-card";
 import { compareTopics, withinReach, type TopicOrderSite } from "../../convex/lib/topicOrder";
+import { topicWritable } from "../../convex/lib/topicVerdict";
 export const money = (value: number | null) => value === null ? "Unknown" : `$${(value / 1_000_000).toFixed(4)}`;
 export const shownTime = (value: number, zone = "UTC") => new Intl.DateTimeFormat("en", { timeZone: zone, dateStyle: "medium", timeStyle: "long" }).format(value);
 export const fundingCopy = { available: "Internal capacity currently available; every paid admission rechecks it.", blocked: "Admission blocked by the existing spending or entitlement guards.", unknown: "Funding readiness unknown. No extra spending is authorized.", unconfigured: "Provider pricing is not configured. Preparation is not funded." };
@@ -324,14 +325,19 @@ function UpcomingTopics({ siteId, autopilot, order }: { siteId: Id<"sites">; aut
   // P212: in the order Autopilot writes them (the owner's own searches first, oldest first; then searched keywords the
   // site can win), never a search past the site's reach. The card sorted by stored priority and named topics that
   // would not be written next.
-  const next = (topics ?? []).filter(t => writableTopic(t) && (!order || withinReach(t, order.difficultyCeiling)))
+  // Phase 2: a rollout site shows only what Autopilot may write (a buyer search its page one says it can win). The time
+  // is read once when the card opens (verdicts last 45 days, so a page left open never shows a stale one for long).
+  const [now] = useState(() => Date.now());
+  const next = (topics ?? []).filter(t => writableTopic(t) && (!order || withinReach(t, order.difficultyCeiling)) &&
+    (!order?.phaseTwo || t.ownerChosenAt !== undefined || topicWritable(t, now)))
     .sort(order ? compareTopics(order) : (a, b) => Number(b.ownerChosenAt !== undefined) - Number(a.ownerChosenAt !== undefined) ||
       (a.ownerChosenAt ?? 0) - (b.ownerChosenAt ?? 0) || (b.priority ?? 0) - (a.priority ?? 0)).slice(0, 3);
   return <section className={CARD} aria-labelledby="upcoming-topics-heading">
     <h2 id="upcoming-topics-heading" className={H2}>Coming up next</h2>
     {topics === undefined ? <p className={BODY}>Loading…</p> : next.length === 0
       // P257 (Oct 30 2026): topic research runs for Autopilot only; a Review-first site read "researching" for good.
-      ? <p className={BODY}>{autopilot ? "Pentra is researching topics your customers search for. They'll appear here."
+      ? <p className={BODY}>{autopilot ? order?.phaseTwo ? "Pentra is finding searches your customers make that your site can win on Google's first page. They'll appear here."
+          : "Pentra is researching topics your customers search for. They'll appear here."
           : "Pentra picks each draft's topic from your business details when you ask for one. Add a search below to choose it yourself."}</p>
       : <ol className="space-y-2 text-[14px]">{next.map((t, n) => <li key={t._id} className="flex gap-3">
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#0EA5E9]/10 text-[12px] font-semibold text-[#0EA5E9]">{n + 1}</span>

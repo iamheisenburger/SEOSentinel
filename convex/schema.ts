@@ -896,6 +896,15 @@ export default defineSchema({
     // P194: when the daily plan audit last read this topic against the site's
     // live articles (convex/lib/researchGrouping.ts auditPlannedWork).
     planAudit: v.optional(v.object({ version: v.number(), checkedAt: v.number() })),
+    // Phase 2 (Nov 2026, convex/lib/pageOne.ts): whether the site can win this search, judged on Google's real page one
+    // (its domains' authority against the site's), with the reason. Autopilot writes only a winnable search.
+    pageOne: v.optional(v.object({ version: v.number(), checkedAt: v.number(), rankable: v.boolean(), reason: v.string(),
+      siteAuthority: v.union(v.number(), v.null()), reachable: v.number(), measured: v.number(), results: v.number(),
+      medianAuthority: v.union(v.number(), v.null()) })),
+    // Phase 2: the average position Search Console reported when the topic came from it (20 or better: winnable).
+    searchConsolePosition: v.optional(v.number()),
+    // Phase 2: held back while the site's settled articles on the same subject get no impressions (the brake).
+    groupBrake: v.optional(v.object({ braked: v.boolean(), reason: v.string(), checkedAt: v.number() })),
 
     // A topic that exhausts the bounded article-quality recovery contract is
     // terminal for this exact evidence generation. Without this receipt the

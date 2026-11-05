@@ -52,5 +52,6 @@ test("P257 an owner's search is refused only for a page about it, not a section 
 
 test("P257 a Review-first dashboard never says Pentra is researching topics", () => {
   const overview = readFileSync("src/components/content-work-overview.tsx", "utf8");
-  assert.match(overview, /\{autopilot \? "Pentra is researching topics your customers search for\. They'll appear here\."\s*: "Pentra picks each draft's topic from your business details when you ask for one\./);
+  // P359: an Autopilot site on Phase 2 says what it's looking for; Review first still never says "researching".
+  assert.match(overview, /\{autopilot \? order\?\.phaseTwo \? "Pentra is finding searches your customers make that your site can win on Google's first page\. They'll appear here\."\s*: "Pentra is researching topics your customers search for\. They'll appear here\."\s*: "Pentra picks each draft's topic from your business details when you ask for one\./);
 });

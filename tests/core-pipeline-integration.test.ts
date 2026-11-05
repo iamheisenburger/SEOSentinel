@@ -11399,3 +11399,49 @@ test("P260 an article's provider spend stops at $0.50: nothing is bought past it
     f.assertOffline();
   });
 });
+
+// Phase 2 (P359, Nov 5 2026): topic choice. On a rollout site (pentra.dev, leadpilot.chat) Autopilot writes only a search
+// the buyer-fit model kept that the site can win on Google's real page one (convex/lib/pageOne.ts); a topic still
+// unjudged or unchecked waits for its checks, and an unwinnable one is never written. Every other site keeps today's
+// choice until the rollout sites show results.
+test("P359 on a rollout site Autopilot writes only a checked, winnable buyer search; other sites keep today's choice", async t => {
+  for (const rollout of [true, false]) await t.test(rollout ? "rollout site" : "other site", async () => {
+    const f = setup({ growthFirst: true, businesses: [rollout ? { ...slcBusinesses[0], domain: "leadpilot.chat" } : slcBusinesses[0]] });
+    const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    f.setIdentity(saved.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+    f.setIdentity(null);
+    const current = f.get(site.id)!;
+    Object.assign(current, { seoAuthorityDomain: current.domain, seoAuthorityDomainRank: 4, seoAuthorityReferringDomains: 3,
+      seoAuthoritySource: "dataforseo_backlinks_bulk_pages_summary", seoAuthorityMeasuredAt: f.now() - 86_400_000 });
+    for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+    const base = { siteId: site.id, planningCanonicalDomain: current.canonicalDomain ?? current.domain, planningDomainRevision: current.canonicalDomainRevision ?? 0,
+      secondaryKeywords: [], intent: "informational", status: "planned", priority: 50, keywordDifficultyMeasured: true, keywordDifficulty: 8, createdAt: f.now(), updatedAt: f.now() };
+    const kept = { eligible: true, reason: "Irrigation buyers fixing their own systems", version: 1, checkedAt: f.now() };
+    const verdict = (rankable: boolean) => ({ version: 1, checkedAt: f.now() - 3_600_000, rankable, reason: rankable ? "3 of 10 results within reach" : "0 of 10 results within reach",
+      siteAuthority: 4, reachable: rankable ? 3 : 0, measured: 10, results: 10, medianAuthority: rankable ? 18 : 61 });
+    const loud = f.add("topic_clusters", { ...base, primaryKeyword: "irrigation valve pressure test", label: "Irrigation valve pressure test", searchVolume: 20_000 });
+    const unchecked = f.add("topic_clusters", { ...base, primaryKeyword: "irrigation zone leak detection", label: "Irrigation zone leak detection", searchVolume: 900, buyerFit: kept });
+    const unwinnable = f.add("topic_clusters", { ...base, primaryKeyword: "backflow preventer repair steps", label: "Backflow preventer repair steps", searchVolume: 700,
+      buyerFit: kept, pageOne: verdict(false) });
+    const winnable = f.add("topic_clusters", { ...base, primaryKeyword: "irrigation pump leak triage", label: "Irrigation pump leak triage", searchVolume: 60,
+      buyerFit: kept, pageOne: verdict(true) });
+    f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 5 * 3_600_000;
+    await f.invoke("contentWork:advance", { siteId: site.id });
+    const job = f.tables.jobs.find(j => j.contentWork && j.siteId === site.id)!;
+    assert.ok(job, "an article was started");
+    if (rollout) {
+      assert.equal(job.payload.topicId, winnable, "only the buyer search its page one says the site can win is written");
+      const due = await f.invoke("contentWork:pageOneCheckContext", { siteId: site.id });
+      assert.deepEqual(due.topics.map((t: { topicId: string }) => t.topicId), [unchecked],
+        "the kept topic without a page-one check is next to be checked; the unjudged one waits for buyer fit, the unwinnable one isn't checked again yet");
+      assert.equal(due.tenantAuthority, 4);
+    } else {
+      assert.equal(job.payload.topicId, loud, "other sites keep today's order");
+      assert.equal(await f.invoke("contentWork:pageOneCheckContext", { siteId: site.id }), null, "no page-one checks (and no spend) outside the rollout");
+    }
+    void unwinnable;
+    f.assertOffline();
+  });
+});
