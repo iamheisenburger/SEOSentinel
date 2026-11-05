@@ -237,3 +237,19 @@ test("images for live articles: a batch stops starting images in time, no provid
   assert.match(action, /const remaining = want - tried;/, "pages a batch didn't reach go to the next batch");
   assert.match(action, /reasons: reasons\.slice\(0, 6\)/);
 });
+
+test("P357: no AI look decides whether a generated image is used; the prompt keeps writing out instead", async () => {
+  // Nov 5 2026: the two-image trial after P356 made none: the look turned away all four attempts at 40-45/100 for
+  // "recognizable objects that may imply context" and "visual metaphor may mislead". Rule 2a: fix the input, never gate.
+  const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
+  const store = pipeline.slice(pipeline.indexOf("async function storeReviewedImage("), pipeline.indexOf("/** Generate an AI hero image for an article."));
+  assert.match(store, /if \(kind === "screenshot"\) \{/, "only a screenshot is looked at");
+  const { buildHeroImagePrompt, buildSupportingImagePrompt, buildMediaReviewPrompt } = await import("../convex/lib/mediaQuality.ts");
+  assert.throws(() => buildMediaReviewPrompt("hero", { title: "x" }), /Only screenshots/);
+  const screenshot = buildMediaReviewPrompt("screenshot", { productName: "Quillpad", domain: "quillpad.example" });
+  assert.match(screenshot, /Set passed to false only if it shows one of these: .*error page.*bot challenge, or a different website\. Otherwise set passed to true\./);
+  for (const prompt of [buildHeroImagePrompt({ title: "Lead scoring", niche: "sales" }),
+    buildSupportingImagePrompt({ title: "Lead scoring", primaryKeyword: "lead scoring", niche: "sales", sectionHeading: "Why", visualConcept: "a funnel" })]) {
+    assert.match(prompt, /Do not show paper, documents, notes, books, signs, whiteboards, sticky notes or screens/);
+  }
+});

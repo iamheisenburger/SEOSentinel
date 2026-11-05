@@ -88,24 +88,28 @@ test("a new article's image is bought inside its own ledger, charged from the AP
     return getFunctionName(ref as never) === "contentWork:beginProviderCall" ? admission : null; } };
   const scope = { ctx, job: { _id: "job", contentWork: { replacements: 0, revisions: 1 } }, workerToken: "worker", phase: "review" };
   let made = 0;
-  const make = async () => { made++; return { url: "https://files.example/hero.webp", attempts: [{ inputTokens: 300, outputTokens: 1568, reviewed: true }] }; };
+  const make = async () => { made++; return { url: "https://files.example/hero.webp", attempts: [{ inputTokens: 300, outputTokens: 1568, reviewed: false }] }; };
   assert.equal(await provider.withContentProvider(scope, () => provider.contentHeroImage(make)), "https://files.example/hero.webp");
   assert.equal(calls[0].name, "contentWork:beginProviderCall");
   assert.equal(calls[0].args.key, "0:1:review:hero_image");
   assert.equal(calls[0].args.ceilingMicroUsd, provider.HERO_IMAGE_CEILING_MICRO_USD);
   assert.equal(calls[1].name, "contentWork:completeProviderCall");
-  assert.equal(calls[1].args.actualMicroUsd, 1568 * 32 + 300 * 5 + 1_000, "$0.05 for the image, its prompt, and the look at it");
+  assert.equal(calls[1].args.actualMicroUsd, 1568 * 32 + 300 * 5, "$0.05 for the image and its prompt (P357: no look at it)");
   assert.ok(ARTICLE_OPTIONAL_STEP.test("0:1:review:hero_image"), "an optional step: bought only while it fits under the $0.50 cap");
   admission = { kind: "cached", result: { url: "https://files.example/hero.webp" } };
   assert.equal(await provider.withContentProvider(scope, () => provider.contentHeroImage(make)), "https://files.example/hero.webp");
   assert.equal(made, 1, "a retried job reuses the stored image");
 });
 
-test("no AI score decides anything an article gets: images wait only on code checks, and a look turns an image away only for a defect it names", () => {
+test("no AI score decides anything an article gets: images wait only on code checks, and no AI look decides whether a generated image is used", () => {
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
   assert.doesNotMatch(pipeline, /(?:editorialQualityScore|factCheckScore|reviewedConfidenceScore)(?: \?\? 0\))? *>= *\d{2}/,
     "a score threshold is a quality gate (rule 2a)");
-  assert.match(pipeline, /passed: review\.passed && review\.issues\.length === 0,/);
+  // P357 (Nov 5 2026): the look turned away every image of the first runs ("may imply context"); only a screenshot is
+  // looked at, for objective failures (an error, loading or blank page, the wrong site).
+  assert.match(pipeline, /if \(kind === "screenshot"\) \{\n    const review = await reviewMediaAsset\(/);
+  assert.doesNotMatch(pipeline, /record\.reviewed = true/);
+  assert.doesNotMatch(readFileSync("convex/lib/mediaQuality.ts", "utf8"), /strict production editor|polished|premium wide article hero/);
   const review = pipeline.slice(pipeline.indexOf("async function reviewPlannedArticle("), pipeline.indexOf("async function reviewExistingArticleHandler("));
   assert.match(review, /if \(preLinkIssues\.length === 0 && !media\.featuredImage && contentProviderActive\(\) && contentProviderMayRepairDraft\(\)\) \{/,
     "an image only for a new article that is ready to publish (never an owner's page or an improvement)");

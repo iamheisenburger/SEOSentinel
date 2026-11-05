@@ -17,6 +17,7 @@ const HARD_VISUAL_CONSTRAINTS = [
   "Do not include text, words, letters, numbers, labels, captions, logos, trademarks, or watermarks.",
   "Do not invent or imitate a product interface, dashboard, chat transcript, browser window, or app screen.",
   "Do not show a recognizable branded device or a distorted human hand, face, screen, or object.",
+  "Do not show paper, documents, notes, books, signs, whiteboards, sticky notes or screens: anything that could carry writing.",
   "The image must remain accurate and useful when viewed without a caption.",
 ].join(" ");
 
@@ -66,32 +67,18 @@ export function buildSupportingImagePrompt(args: {
   ].join(" ");
 }
 
+/** P357 (Nov 5 2026): only screenshots are looked at, and only for objective failures (rule 2a: no AI judgement of
+ * quality decides anything). Generated images are never looked at: their prompt keeps text and screens out. */
 export function buildMediaReviewPrompt(
   kind: MediaAssetKind,
   context: { title?: string; productName?: string; domain?: string },
 ): string {
-  const common = [
-    "Review this image as a strict production editor.",
-    "Return JSON only with passed, score (0-100), issues (string array), and description.",
-    "Pass only when the asset is clear, polished, relevant, non-deceptive, and free of visible generation defects.",
-  ];
-
-  if (kind === "screenshot") {
-    return [
-      ...common,
-      `This must be a real rendered screenshot of ${context.productName || context.domain || "the target website"} (${context.domain || "unknown domain"}).`,
-      "Fail if it shows a screenshot-service logo, spinner, loading state, blank page, error page, cookie wall, bot challenge, unrelated website, or mostly empty viewport.",
-      "Fail if the named product or expected website identity is not visibly recognizable.",
-    ].join(" ");
-  }
-
+  if (kind !== "screenshot") throw new Error("Only screenshots are reviewed");
   return [
-    ...common,
-    `The image supports the article "${context.title || "unknown article"}".`,
-    "Fail if it contains readable text, letters, numbers, logos, watermarks, fabricated product UI, malformed screens, distorted anatomy, or misleading factual diagrams.",
-    kind === "hero"
-      ? "It must work as a premium wide article hero with an immediately relevant central concept."
-      : "It must add a distinct explanatory visual idea rather than repeat a generic technology scene.",
+    "Return JSON only with passed, score (0-100), issues (string array), and description.",
+    `This should be a rendered screenshot of ${context.productName || context.domain || "the target website"} (${context.domain || "unknown domain"}).`,
+    "Set passed to false only if it shows one of these: a screenshot-service logo or error, a spinner or loading state, a blank or mostly empty page, an error page, a cookie wall covering the page, a bot challenge, or a different website. Otherwise set passed to true.",
+    "List in issues only which of those you see.",
   ].join(" ");
 }
 

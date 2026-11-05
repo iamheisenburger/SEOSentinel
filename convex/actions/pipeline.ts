@@ -608,13 +608,9 @@ async function reviewMediaAsset(
     model: "gpt-4o-mini",
     input,
   });
-  const review = parseJson<MediaReview>(MediaReviewSchema, response.output_text);
-  // P352 (Nov 2026): an image is turned away for a defect the look names (garbled text, a wrong subject, a watermark),
-  // never for its score: rule 2a, an AI score never decides what an article gets.
-  return {
-    ...review,
-    passed: review.passed && review.issues.length === 0,
-  };
+  // Screenshots only (storeReviewedImage): the look answers objective questions (an error or loading page, a blank
+  // page, the wrong site), and its own pass decides; never its score.
+  return parseJson<MediaReview>(MediaReviewSchema, response.output_text);
 }
 
 async function storeReviewedImage(
@@ -624,11 +620,14 @@ async function storeReviewedImage(
   kind: MediaAssetKind,
   context: { title?: string; productName?: string; domain?: string },
 ): Promise<string> {
-  const review = await reviewMediaAsset(imageBytes, mimeType, kind, context);
-  if (!review.passed) {
-    throw new Error(
-      `${kind} visual review failed (${review.score}/100): ${review.issues.join("; ") || review.description}`,
-    );
+  // Rule 2a (Arshad, Oct 30 2026: "are we adding this quality gate bs again?"): no AI look decides whether a generated
+  // image is used. A screenshot is checked for objective failures only (an error, loading or blank page, a bot wall, the
+  // wrong site): those are broken pages a reader would see.
+  if (kind === "screenshot") {
+    const review = await reviewMediaAsset(imageBytes, mimeType, kind, context);
+    if (!review.passed) {
+      throw new Error(`screenshot shows a failed page: ${review.issues.join("; ") || review.description}`.slice(0, 300));
+    }
   }
 
   const storageId = await ctx.storage.store(
@@ -677,9 +676,11 @@ async function generateHeroImage(
 /** The output tokens of one medium 1536x1024 gpt-image-1.5 image (OpenAI's own count), charged when a response omits usage. */
 const HERO_IMAGE_OUTPUT_TOKENS = 1_568;
 
-/** P352 (Nov 2026): a hero image for a new article, up to two attempts, each looked at for visible defects, with every
- * attempt's usage for the article's ledger (contentHeroImage). A look that turns an image away, or a request the API
- * refuses outright, leaves no image; only a lost provider answer throws (its cost stays at the ledger's ceiling). */
+/** P352 (Nov 2026): a hero image for a new article, with every attempt's usage for the article's ledger
+ * (contentHeroImage). P357 (Nov 5 2026): no AI look decides whether the image is used (rule 2a: the look turned away
+ * every image of the first runs, for reasons like "may imply context"); the prompt keeps text and screens out instead.
+ * A second attempt is made only when the API returned no image; a request the API refuses outright leaves no image;
+ * only a lost provider answer throws (its cost stays at the ledger's ceiling). */
 export async function makeReviewedHeroImage(ctx: ActionCtx, args: { title: string; niche: string; brandingPrompt?: string; brandColor?: string }):
   Promise<{ url: string | null; attempts: HeroImageAttempt[]; notes: string[] }> {
   const client = openaiClient();
@@ -706,7 +707,6 @@ export async function makeReviewedHeroImage(ctx: ActionCtx, args: { title: strin
     attempts.push(record);
     const b64 = response.data?.[0]?.b64_json;
     if (!b64) { notes.push(`attempt ${attempt}: no image returned`); continue; }
-    record.reviewed = true;
     try {
       return { url: await storeReviewedImage(ctx, Buffer.from(b64, "base64"), "image/webp", "hero", { title: args.title }), attempts, notes };
     } catch (error) {
