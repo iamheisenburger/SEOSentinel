@@ -17,7 +17,8 @@ import { internal } from "../_generated/api";
 import { v } from "convex/values";
 import type { Id } from "../_generated/dataModel";
 import type { FunctionReturnType } from "convex/server";
-import { getDomainAuthorities, lighthouseMobile, meterDataForSeoCost, pageOneDomains } from "./seoData";
+import { domainIntersection, getDomainAuthorities, lighthouseMobile, meterDataForSeoCost, pageOneDomains } from "./seoData";
+import { domainIntersectionRequest, linkCompetitors, parseDomainIntersection, type LinkOpportunity } from "../lib/linkOpportunities";
 import { dataForSeoLocationCode } from "../lib/dataForSeoLocale";
 import { crawlPages, pageSpeedCheck, parsePageSpeed, readSitemap } from "../lib/pageCrawl";
 import { diagnoseSite, normalize, type CrawledPage, type GscRow, type PageOneCheck, type QueryIntent, type SpeedCheck } from "../lib/siteDiagnosis";
@@ -123,7 +124,7 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
   const measurePart = async () => {
     const out = { intents: [] as QueryIntent[], pageOne: [] as PageOneCheck[], authority: site.authority ? { domainRank: site.authority.domainRank,
       referringDomains: site.authority.referringDomains } : null as { domainRank: number; referringDomains?: number } | null,
-      speed: [] as SpeedCheck[], microUsd: 0, uncertain: false, notes: [] as string[] };
+      speed: [] as SpeedCheck[], links: [] as LinkOpportunity[], microUsd: 0, uncertain: false, notes: [] as string[] };
     if (!paid) return out;
     const readers = async () => {
       // Who types the top searches, judged against what the business sells.
@@ -174,6 +175,17 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
       } catch (error) { out.notes.push(`Page one not measured: ${String(error).slice(0, 120)}`); }
     };
     await Promise.all([readers(), pageOneAndSpeed()]);
+    // Phase 4: the sites linking to the page-one competitors but not to this site, only when the owner turned it on.
+    if (site.linkOutreach && out.pageOne.length) {
+      try {
+        const competitors = linkCompetitors(out.pageOne, site.domain);
+        if (competitors.length >= 2) {
+          const metered = await meterDataForSeoCost(() => domainIntersection(domainIntersectionRequest(competitors, site.domain)));
+          out.microUsd += Math.ceil(metered.usd * 1e6); out.uncertain = out.uncertain || metered.uncertain;
+          out.links = parseDomainIntersection(metered.result, competitors, site.domain);
+        }
+      } catch (error) { out.notes.push(`Link opportunities not found: ${String(error).slice(0, 120)}`); }
+    }
     return out;
   };
   const aiPart = async () => {
@@ -218,6 +230,11 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
   });
   const crawlComplete = site.published.length < 300 && site.published.every((p) => crawled.has(normalize(p.url)));
 
+  if (measured.links.length) {
+    try { const recorded = await ctx.runMutation(internal.linkOpportunities.record, { siteId, opportunities: measured.links });
+      notes.push(`Link opportunities: ${measured.links.length} sites link to its page-one competitors but not to it (${recorded.added} new)`); }
+    catch (error) { notes.push(`Link opportunities not recorded: ${String(error).slice(0, 120)}`); }
+  }
   // Phase 5: the week's buyer questions become topics to check (Phase 2 decides whether each is written).
   if (aiQuestions.length && !repairsOnly) {
     try { await ctx.runMutation(internal.contentWork.addAiQuestionTopics, { siteId, questions: aiQuestions }); }

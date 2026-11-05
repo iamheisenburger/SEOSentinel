@@ -48,6 +48,8 @@ export const context = internalQuery({ args: { siteId: v.id("sites") }, handler:
     siteId, userId: site.userId, domain: site.domain, targetCountry: site.targetCountry ?? null,
     urlStructure: site.urlStructure ?? "/blog/[slug]", publishMethod: site.publishMethod ?? "github",
     repository: Boolean(site.repoOwner && site.repoName), ownerReview: Boolean(site.approvalRequired),
+    // Phase 4: whether the owner turned link finding on (off unless they did).
+    linkOutreach: site.linkOutreach ?? null,
     business: { name: site.siteName ?? site.domain, domain: site.domain, summary: site.siteSummary ?? site.niche, audience: site.targetAudienceSummary,
       features: site.keyFeatures, problems: site.painPoints, usage: site.productUsage },
     authority: typeof site.seoAuthorityDomainRank === "number"

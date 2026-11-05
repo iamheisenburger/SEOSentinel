@@ -1489,6 +1489,12 @@ export async function pageOneDomains(keyword: string, locationCode: number = 284
   return domains.slice(0, 10);
 }
 
+/** Phase 4 (Nov 2026): DataForSEO's domain intersection (live): the referring domains linking to every target and not to the
+ * excluded one (convex/lib/linkOpportunities.ts builds the request and reads the answer). Metered like every request. */
+export async function domainIntersection(body: unknown[]): Promise<unknown> {
+  return dataForSEORequest("backlinks/domain_intersection/live", body, 45_000);
+}
+
 /** Phase 2 (Nov 2026): page one for a search, as result addresses in page order, for the topic check (convex/lib/pageOne.ts).
  * A result Google lists as its own goto link is read from the breadcrumb it shows ("https://www.ramp.com › Blog ›
  * Accounting" → https://ramp.com/blog/accounting): its site is exact, its path the closest Google gives. One retry. */

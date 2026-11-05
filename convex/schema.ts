@@ -76,6 +76,10 @@ export default defineSchema({
     publicationLeaseExpiresAt: v.optional(v.number()),
     inferToneNiche: v.optional(v.boolean()),
     approvalRequired: v.optional(v.boolean()),
+    // Phase 4 (Nov 2026): earned links. Absent = off (nothing found, bought or sent). "find" lists the sites that link to
+    // the site's page-one competitors but not to it (convex/lib/linkOpportunities.ts); contacting anyone needs the owner's
+    // yes (Arshad's rule) and a later step.
+    linkOutreach: v.optional(v.union(v.literal("find"), v.literal("draft"), v.literal("send"))),
     repoOwner: v.optional(v.string()),
     repoName: v.optional(v.string()),
     repoDefaultBranch: v.optional(v.string()),
@@ -1815,6 +1819,18 @@ export default defineSchema({
   // Pentra's own blog serves the redirect itself; a GitHub site gets it in the redirect file its host reads ("repository");
   // WordPress, Shopify, Webflow, Ghost and webhook sites through their own connection ("platform"); one the owner added
   // by hand is "owner"; anything Pentra can't deliver is an action for the owner. A reverted row is kept as history.
+  // Phase 4 (Nov 2026): sites that link to a site's page-one competitors but not to it (DataForSEO domain intersection), found
+  // weekly when the owner turned link finding on. The owner (or, with their yes, Pentra) approaches them; nothing is deleted.
+  link_opportunities: defineTable({
+    siteId: v.id("sites"),
+    domain: v.string(),
+    rank: v.number(),
+    linksTo: v.array(v.string()),
+    status: v.union(v.literal("new"), v.literal("dismissed"), v.literal("won")),
+    foundAt: v.number(),
+    seenAt: v.number(),
+  }).index("by_site_domain", ["siteId", "domain"]),
+
   site_redirects: defineTable({
     siteId: v.id("sites"),
     fromSlug: v.string(),
