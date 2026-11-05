@@ -2075,6 +2075,34 @@ export const recordBuyerFit = internalMutation({ args: { siteId: v.id("sites"), 
     return { recorded };
   } });
 
+/** Phase 5 (Nov 2026): the buyer questions Pentra puts to ChatGPT, Gemini and Google AI Mode every week (written from the
+ * confirmed profile) join the plan as topics, so the site gets a page that answers each one directly: the assistants
+ * answer from pages like it. Each is a buyer's question by construction; Phase 2's page-one check still decides whether
+ * it is written. Rollout sites only; never a repeat of a topic or page the site has. */
+const AI_QUESTION_TOPIC_NOTES = "A buyer question Pentra asks ChatGPT, Gemini and Google AI Mode about this business every week. Answer it directly and honestly from supported business facts; name the business only where it truly fits.";
+export const addAiQuestionTopics = internalMutation({ args: { siteId: v.id("sites"), questions: v.array(v.string()) }, handler: async (ctx, { siteId, questions }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site || site.deletionStatus || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt ||
+    !topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain)) return { added: 0 };
+  let inventory: Awaited<ReturnType<typeof eligiblePlannedTopics>>;
+  try { inventory = await eligiblePlannedTopics(ctx, site); } catch { return { added: 0 }; }
+  const taken: { primaryKeyword: string }[] = [...inventory.topics, ...inventory.pageCoverage];
+  const now = Date.now(), profileHash = confirmedContentProfileHash(site), competitors = competitorNamesFor(site);
+  let added = 0;
+  for (const question of questions.slice(0, 5)) {
+    const label = question.trim().replace(/\s+/g, " ");
+    if (label.length < 15 || label.length > 160) continue;
+    const proposal = { primaryKeyword: label.toLowerCase().replace(/[?!.\s]+$/, ""), label };
+    if (namesCompetitor(label, competitors) || taken.some(t => contentIntentConflicts(proposal, t))) continue;
+    await ctx.db.insert("topic_clusters", { siteId, primaryKeyword: proposal.primaryKeyword, label, planningCanonicalDomain: siteCanonicalDomain(site)!,
+      planningDomainRevision: siteCanonicalDomainRevision(site), secondaryKeywords: [], intent: "commercial", priority: 1, status: "planned",
+      notes: AI_QUESTION_TOPIC_NOTES, buyerFit: { eligible: true, reason: "A buyer question Pentra asks AI assistants about this business", version: BUYER_FIT_VERSION,
+        checkedAt: now, profileHash }, createdAt: now, updatedAt: now });
+    taken.push(proposal); added++;
+  }
+  return { added };
+} });
+
 /** Phase 2: a page-one check as stored on a topic (convex/lib/pageOne.ts). */
 const pageOneVerdictValidator = v.object({ version: v.number(), checkedAt: v.number(), rankable: v.boolean(), reason: v.string(),
   siteAuthority: v.union(v.number(), v.null()), reachable: v.number(), measured: v.number(), results: v.number(), medianAuthority: v.union(v.number(), v.null()) });

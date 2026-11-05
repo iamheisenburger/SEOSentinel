@@ -11445,3 +11445,37 @@ test("P359 on a rollout site Autopilot writes only a checked, winnable buyer sea
     f.assertOffline();
   });
 });
+
+// Phase 5 (P362, Nov 5 2026): the buyer questions Pentra asks AI assistants every week become topics to check on a rollout
+// site (a buyer's question by construction; Phase 2's page-one check still decides), never a repeat of what the site has.
+test("P362 the week's AI buyer questions join a rollout site's plan as topics to check; other sites are untouched", async t => {
+  for (const rollout of [true, false]) await t.test(rollout ? "rollout site" : "other site", async () => {
+    const f = setup({ growthFirst: true, businesses: [rollout ? { ...slcBusinesses[0], domain: "leadpilot.chat" } : slcBusinesses[0]] });
+    const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    f.setIdentity(saved.userId);
+    const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+    await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+    f.setIdentity(null);
+    const current = f.get(site.id)!;
+    f.add("topic_clusters", { siteId: site.id, planningCanonicalDomain: current.canonicalDomain ?? current.domain, planningDomainRevision: current.canonicalDomainRevision ?? 0,
+      secondaryKeywords: [], intent: "informational", status: "planned", priority: 50, primaryKeyword: "irrigation pump leak triage", label: "Irrigation pump leak triage",
+      createdAt: f.now(), updatedAt: f.now() });
+    const before = (f.tables.topic_clusters ?? []).filter(t => t.siteId === site.id).length;
+    const result = await f.invoke("contentWork:addAiQuestionTopics", { siteId: site.id, questions: [
+      "How do I find a leak in my irrigation system before the water bill arrives?",
+      "Irrigation pump leak triage?",
+      "What should I check before hiring an irrigation repair company?"] });
+    const added = (f.tables.topic_clusters ?? []).filter(t => t.siteId === site.id).slice(before);
+    if (rollout) {
+      assert.equal(result.added, 2, "the question that repeats a topic the site has is left out");
+      for (const topic of added) {
+        assert.equal(topic.buyerFit?.eligible, true);
+        assert.equal(topic.pageOne, undefined, "no verdict is invented: the page-one check decides");
+        assert.equal(topic.status, "planned");
+      }
+    } else {
+      assert.equal(result.added, 0); assert.equal(added.length, 0);
+    }
+    f.assertOffline();
+  });
+});

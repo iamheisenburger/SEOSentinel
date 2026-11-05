@@ -255,6 +255,8 @@ export type WeeklyReportInput = {
   published: Array<{ title: string; url: string }>;
   improved: Array<{ title: string; url: string }>;
   aiNamed: { named: number; asked: number } | null;
+  /** Phase 5: the sites the assistants cite most for the buyer questions (where to be listed or mentioned). */
+  citedSites?: ReadonlyArray<{ site: string; answers: number }>;
   next: string | null;
 };
 
@@ -280,6 +282,7 @@ export function weeklyReportEmail(input: WeeklyReportInput): { subject: string; 
     lines.push("The five things that bring traffic, checked this week:");
     for (const [key, words] of factors) lines.push(`- ${words}: ${VERDICT_WORDS[input.factors[key]] ?? input.factors[key]}`);
     if (input.aiNamed) lines.push(`  (ChatGPT, Gemini and Google AI Mode named you in ${input.aiNamed.named} of ${input.aiNamed.asked} answers to buyer questions)`);
+    if (input.citedSites?.length) lines.push(`  (the sites they cite most for those questions: ${input.citedSites.slice(0, 4).map((s) => s.site).join(", ")})`);
     lines.push("");
   }
   if (input.problems.length) {

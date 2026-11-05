@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { plausibleEmail, sendCustomerEmail } from "./lib/customerEmail";
+import { topCitedSites } from "./lib/aiAnswers";
 import { addWebsiteEmail, draftReadyEmail, firstArticleEmail, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth, setupReminderEmail, type MissedSlotCause,
   type MonthlyImprovement, type MonthlySearch, type SetupStep, weeklyReportEmail, type WeeklySearch } from "./lib/customerNotices";
 import { contentConnectionComplete, pasteDestination } from "./lib/contentSelection";
@@ -355,7 +356,8 @@ async function weeklyReport(ctx: QueryCtx, site: Doc<"sites">, domain: string) {
   const next = /What Pentra does next\. ([^\n]+)/.exec(diagnosis.summary)?.[1]?.trim() ?? null;
   return weeklyReportEmail({ domain, search, factors: diagnosis.factors, fixed, published, improved,
     problems: diagnosis.findings.filter(f => f.severity !== "low").slice(0, 3).map(f => `${f.problem}: ${f.evidence}`),
-    aiNamed: answered.length ? { named: answered.filter(c => c.named).length, asked: answered.length } : null, next });
+    aiNamed: answered.length ? { named: answered.filter(c => c.named).length, asked: answered.length } : null,
+    citedSites: topCitedSites(answered.map(c => ({ ...c, sources: c.sources ?? [] }))), next });
 }
 
 export const markEmail = internalMutation({ args: { logId: v.id("customer_emails"), status: v.union(v.literal("pending"), v.literal("sent"),

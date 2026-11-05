@@ -141,7 +141,9 @@ test("AI answers: buyer questions that never name the business, each assistant's
     { question: "q1", assistant: "chatgpt", answered: true, named: true, cited: false },
     { question: "q1", assistant: "gemini", answered: true, named: false, cited: false },
     { question: "q1", assistant: "google_ai_mode", answered: false, named: false, cited: false }]);
-  assert.deepEqual(plain(totals), { asked: 2, named: 1, cited: 0, byAssistant: [{ assistant: "chatgpt", asked: 1, named: 1 }, { assistant: "gemini", asked: 1, named: 0 }] });
+  // P362: the totals also name the sites the answers cite most (none here).
+  assert.deepEqual(plain(totals), { asked: 2, named: 1, cited: 0, byAssistant: [{ assistant: "chatgpt", asked: 1, named: 1 }, { assistant: "gemini", asked: 1, named: 0 }],
+    citedSites: [] });
   const d = diagnoseSite({ domain: "leadpilot.example", gsc: [], aiAnswers: { asked: 15, named: 0, byAssistant: [{ assistant: "chatgpt", asked: 5, named: 0 },
     { assistant: "gemini", asked: 5, named: 0 }, { assistant: "google_ai_mode", asked: 5, named: 0 }] } });
   assert.equal(d.findings.find((f) => f.problem === "AI assistants don't name it")!.evidence,

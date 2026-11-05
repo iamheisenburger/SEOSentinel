@@ -28,8 +28,27 @@ export function countryCode(country: string | null | undefined): string {
 
 export type Business = { name: string; domain: string; summary?: string; audience?: string; features?: string[]; problems?: string[]; country?: string | null };
 export type AiAnswerCheck = { question: string; assistant: AiAssistant; answered: boolean; named: boolean; cited: boolean;
+  /** Phase 5 (Nov 2026): the sites the answer cited (hosts, without "www."), so Pentra knows where buyers' answers come from. */
+  sources?: string[];
   /** Why no answer came back (an HTTP status, "timeout", "no answer"), when none did. */
   error?: string };
+
+/** The cited sites of an answer: hosts, once each, the business's own left out, at most ten. */
+export function citedHosts(sources: readonly string[], business: Pick<Business, "domain">): string[] {
+  const own = business.domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+  const hosts = sources.flatMap((source) => { try { return [new URL(source).hostname.toLowerCase().replace(/^www\./, "")]; } catch { return []; } })
+    .filter((host) => host && host !== own && !host.endsWith(`.${own}`) && !/(^|\.)google\.[a-z.]+$|(^|\.)vertexaisearch\.cloud\.google\.com$/.test(host));
+  return [...new Set(hosts)].slice(0, 10);
+}
+
+/** Phase 5: the sites the assistants cite most across the week's answers (how many answers cite each): where the business
+ * needs to be listed or mentioned for buyers' AI answers to name it. */
+export function topCitedSites(checks: readonly AiAnswerCheck[], limit = 5): Array<{ site: string; answers: number }> {
+  const counts = new Map<string, number>();
+  for (const check of checks) if (check.answered) for (const host of new Set(check.sources ?? [])) counts.set(host, (counts.get(host) ?? 0) + 1);
+  return [...counts].map(([site, answers]) => ({ site, answers })).filter((s) => s.answers >= 2)
+    .sort((a, b) => b.answers - a.answers || a.site.localeCompare(b.site)).slice(0, limit);
+}
 /** The AI-answer factor is judged only on at least this many answers; fewer is "not measured", never a verdict. */
 export const AI_MIN_ANSWERS = 5;
 
@@ -121,5 +140,6 @@ export function aiAnswerTotals(checks: readonly AiAnswerCheck[]) {
     const mine = answered.filter((c) => c.assistant === assistant);
     return { assistant, asked: mine.length, named: mine.filter((c) => c.named).length };
   }).filter((a) => a.asked > 0);
-  return { asked: answered.length, named: answered.filter((c) => c.named).length, cited: answered.filter((c) => c.cited).length, byAssistant };
+  return { asked: answered.length, named: answered.filter((c) => c.named).length, cited: answered.filter((c) => c.cited).length, byAssistant,
+    citedSites: topCitedSites(checks) };
 }

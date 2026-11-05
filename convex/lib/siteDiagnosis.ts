@@ -69,7 +69,9 @@ export type DiagnosisInput = {
   /** When buyer questions were asked but too few came back to judge: how many were asked and answered. */
   aiAttempt?: { questions: number; answered: number } | null;
   /** Buyer questions put to the AI assistants (convex/lib/aiAnswers.ts): answers given, and how many named the business. */
-  aiAnswers?: { asked: number; named: number; cited?: number; byAssistant?: readonly { assistant: string; asked: number; named: number }[] } | null;
+  aiAnswers?: { asked: number; named: number; cited?: number; byAssistant?: readonly { assistant: string; asked: number; named: number }[];
+    /** Phase 5: the sites the assistants cite most (how many answers cite each). */
+    citedSites?: readonly { site: string; answers: number }[] } | null;
   /** Days of Search Console history to judge (default 28, ending at its newest date). */
   windowDays?: number;
   now?: number;
@@ -442,7 +444,9 @@ export function diagnoseSite(input: DiagnosisInput): Diagnosis {
     const split = (input.aiAnswers.byAssistant ?? []).map((a) => `${names[a.assistant] ?? a.assistant} ${a.named} of ${a.asked}`).join(", ");
     if (share < 0.2) add({ factor: "ai", severity: share === 0 ? "high" : "medium", problem: "AI assistants don't name it",
       evidence: `Named in ${input.aiAnswers.named} of ${input.aiAnswers.asked} answers to buyer questions${split ? ` (${split})` : ""}`,
-      action: "Get listed on the pages the assistants cite; publish pages that answer those questions" }, share === 0 ? "failing" : "weak");
+      action: (input.aiAnswers.citedSites ?? []).length
+        ? `Get listed or mentioned on the sites the assistants cite most for these questions (${input.aiAnswers.citedSites!.map((s) => `${s.site}, ${s.answers} answers`).join("; ")}); publish pages that answer those questions`
+        : "Get listed on the pages the assistants cite; publish pages that answer those questions" }, share === 0 ? "failing" : "weak");
     else factors.ai = "ok";
   } else add({ factor: "ai", severity: "medium", problem: "AI answers not measured",
     evidence: input.aiAttempt ? `Only ${input.aiAttempt.answered} of ${input.aiAttempt.questions} buyer questions got an answer this week, too few to judge`

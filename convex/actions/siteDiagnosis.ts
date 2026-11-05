@@ -24,7 +24,7 @@ import { diagnoseSite, normalize, type CrawledPage, type GscRow, type PageOneChe
 import { foldQuestionsFor, planUnshownMerges, slugKey, type Merge } from "../lib/duplicatePages";
 import { topicChoiceRollout } from "../lib/topicVerdict";
 import { AI_ASSISTANT_ENDPOINTS, AI_ASSISTANTS, AI_MIN_ANSWERS, AI_QUESTIONS_MAX_TOKENS, AI_QUESTIONS_MODEL, AI_QUESTIONS_TOOL, aiAnswerTotals, aiQuestionsRequest,
-  countryCode, judgeAnswer, parseAiQuestions, parseAssistantAnswer, type AiAnswerCheck, type AiAssistant, type Business } from "../lib/aiAnswers";
+  citedHosts, countryCode, judgeAnswer, parseAiQuestions, parseAssistantAnswer, type AiAnswerCheck, type AiAssistant, type Business } from "../lib/aiAnswers";
 import { parseSearchIntents, searchIntentRequest, SEARCH_INTENT_MAX_TOKENS, SEARCH_INTENT_MODEL, SEARCH_INTENT_TOOL } from "../lib/searchIntent";
 import { buyerFitCostMicroUsd } from "../lib/topicFit";
 import { structuredToolChoice } from "../lib/toolChoice";
@@ -218,6 +218,11 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
   });
   const crawlComplete = site.published.length < 300 && site.published.every((p) => crawled.has(normalize(p.url)));
 
+  // Phase 5: the week's buyer questions become topics to check (Phase 2 decides whether each is written).
+  if (aiQuestions.length && !repairsOnly) {
+    try { await ctx.runMutation(internal.contentWork.addAiQuestionTopics, { siteId, questions: aiQuestions }); }
+    catch (error) { notes.push(`AI questions not added as topics: ${String(error).slice(0, 120)}`); }
+  }
   const answered = aiChecks.filter((c) => c.answered).length;
   if (aiChecks.length && answered < AI_MIN_ANSWERS) notes.push(`AI answers not judged: ${answered} of ${aiChecks.length} questions were answered`);
   const inputs = { domain: site.domain, gsc, authority, pageOne, crawlComplete, sitemap, intents, speed: speedChecks, now: Date.now(),
@@ -301,7 +306,7 @@ async function askAssistants(siteId: Id<"sites">, questions: readonly string[], 
   const ask = async (question: string, assistant: AiAssistant) => {
     let got = await call(question, assistant);
     if (!got.answer && got.error !== "timeout" && Date.now() < deadline) got = await call(question, assistant);
-    checks.push(got.answer ? { question, assistant, answered: true, ...judgeAnswer(got.answer, business) }
+    checks.push(got.answer ? { question, assistant, answered: true, ...judgeAnswer(got.answer, business), sources: citedHosts(got.answer.sources, business) }
       : { question, assistant, answered: false, named: false, cited: false, error: got.error ?? "no answer" });
   };
   await Promise.all(Array.from({ length: 6 }, async () => {
