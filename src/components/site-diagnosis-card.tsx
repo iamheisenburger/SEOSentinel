@@ -45,7 +45,7 @@ export function SiteDiagnosisCard({ siteId }: { siteId: Id<"sites"> }) {
     {redirects.length > 0 && <div className="space-y-1.5">
       <p className="text-[12px] font-semibold uppercase tracking-[0.08em] text-[#62666D]">What Pentra fixed</p>
       <ul className="space-y-1.5 text-[14px]">{redirects.slice(0, 6).map((r) => <li key={r.fromSlug} className="text-[#F7F8F8]">
-        Merged duplicate <span className="font-mono text-[13px]">/{r.fromSlug}</span> into <span className="font-mono text-[13px]">/{r.toSlug}</span>
+        {r.reason === "merged_unshown" ? "Folded unseen article " : "Merged duplicate "}<span className="font-mono text-[13px]">/{r.fromSlug}</span> into <span className="font-mono text-[13px]">/{r.toSlug}</span>
         <span className="text-[#8A8F98]"> · {redirectStatus(r)}</span>
       </li>)}</ul>
     </div>}

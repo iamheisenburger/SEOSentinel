@@ -11,6 +11,7 @@
  */
 
 import type { GscRow } from "./siteDiagnosis.ts";
+import { sameGroup } from "./pageOne.ts";
 import { isBrandedSearchQuery } from "./searchPerformance.ts";
 
 /** A page's address as one key (no protocol, www, query or trailing slash), as the diagnosis keys pages. */
@@ -133,4 +134,58 @@ export function foldQuestionsFor(gsc: readonly GscRow[], from: string, to: strin
   const kept = shownFor(to);
   return [...shownFor(from)].filter(([query, n]) => n >= 5 && !kept.has(query)).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, limit).map(([query]) => query);
+}
+
+// ── Phase 3 (Nov 2026): articles Google never shows, folded into the strongest article on their subject ──
+//
+// The weekly diagnosis (Nov 5 2026): 55 of LeadPilot's 104 settled articles and 15 of pentra.dev's 18 got no impressions in
+// 28 days; for each its action was "merge it into a stronger page or rewrite it for a search the site can win". A page
+// Google has shown to nobody for two months adds nothing on its own and splits the site's subject across thin pages;
+// folded into the sibling Google does show (a permanent redirect, and its subject becomes a section of that page through
+// the fold), the subject has one stronger page. Only Pentra's own articles, only with Search Console's evidence, at most
+// MAX_UNSHOWN_MERGES_PER_RUN a week, never one without a shown sibling on its subject (it waits for a rewrite instead).
+
+/** An article this old that Google still shows to nobody, while a sibling on its subject is shown, adds nothing on its own. */
+export const UNSHOWN_MIN_AGE_DAYS = 60;
+/** The sibling it joins must itself be shown: this many impressions in the same 28 days. */
+export const UNSHOWN_SIBLING_MIN_IMPRESSIONS = 20;
+export const MAX_UNSHOWN_MERGES_PER_RUN = 3;
+export type UnshownMerge = { from: string; to: string; fromTitle: string; toTitle: string; toImpressions: number; ageDays: number };
+
+const urlKey = (url: string) => url.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[?#].*$/, "").replace(/\/+$/, "");
+
+export function planUnshownMerges(args: {
+  articles: ReadonlyArray<{ url: string; title: string; publishedAt: number | null }>;
+  gsc: ReadonlyArray<{ page?: string; impressions: number; clicks: number }>;
+  now: number;
+  /** Live, Pentra's own article, indexable, still on its own address. */
+  mayMerge: (url: string) => boolean;
+  /** Addresses already in a merge this run (either side). */
+  taken: ReadonlySet<string>;
+  limit?: number;
+}): UnshownMerge[] {
+  const limit = args.limit ?? MAX_UNSHOWN_MERGES_PER_RUN;
+  const shown = new Map<string, { impressions: number; clicks: number }>();
+  for (const row of args.gsc) {
+    if (!row.page) continue;
+    const k = urlKey(row.page), s = shown.get(k) ?? { impressions: 0, clicks: 0 };
+    s.impressions += row.impressions; s.clicks += row.clicks; shown.set(k, s);
+  }
+  const taken = new Set([...args.taken].map(urlKey));
+  const impressionsOf = (url: string) => shown.get(urlKey(url))?.impressions ?? 0;
+  const ageDays = (a: { publishedAt: number | null }) => a.publishedAt ? Math.floor((args.now - a.publishedAt) / 86_400_000) : 0;
+  const live = args.articles.filter((a) => args.mayMerge(a.url) && a.title.trim().length > 0);
+  const unshown = live.filter((a) => ageDays(a) >= UNSHOWN_MIN_AGE_DAYS && impressionsOf(a.url) === 0 && !taken.has(urlKey(a.url)))
+    .sort((a, b) => (a.publishedAt ?? 0) - (b.publishedAt ?? 0) || a.url.localeCompare(b.url));
+  const leaving = new Set(unshown.map((a) => urlKey(a.url)));
+  const siblings = live.filter((a) => impressionsOf(a.url) >= UNSHOWN_SIBLING_MIN_IMPRESSIONS && !leaving.has(urlKey(a.url)));
+  const merges: UnshownMerge[] = [];
+  for (const article of unshown) {
+    if (merges.length >= limit) break;
+    const best = siblings.filter((s) => sameGroup(article.title, s.title))
+      .sort((x, y) => (shown.get(urlKey(y.url))!.clicks - shown.get(urlKey(x.url))!.clicks) || impressionsOf(y.url) - impressionsOf(x.url) || x.url.localeCompare(y.url))[0];
+    if (!best) continue;
+    merges.push({ from: article.url, to: best.url, fromTitle: article.title, toTitle: best.title, toImpressions: impressionsOf(best.url), ageDays: ageDays(article) });
+  }
+  return merges;
 }

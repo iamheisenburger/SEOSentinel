@@ -21,7 +21,8 @@ import { getDomainAuthorities, lighthouseMobile, meterDataForSeoCost, pageOneDom
 import { dataForSeoLocationCode } from "../lib/dataForSeoLocale";
 import { crawlPages, pageSpeedCheck, parsePageSpeed, readSitemap } from "../lib/pageCrawl";
 import { diagnoseSite, normalize, type CrawledPage, type GscRow, type PageOneCheck, type QueryIntent, type SpeedCheck } from "../lib/siteDiagnosis";
-import { foldQuestionsFor, slugKey, type Merge } from "../lib/duplicatePages";
+import { foldQuestionsFor, planUnshownMerges, slugKey, type Merge } from "../lib/duplicatePages";
+import { topicChoiceRollout } from "../lib/topicVerdict";
 import { AI_ASSISTANT_ENDPOINTS, AI_ASSISTANTS, AI_MIN_ANSWERS, AI_QUESTIONS_MAX_TOKENS, AI_QUESTIONS_MODEL, AI_QUESTIONS_TOOL, aiAnswerTotals, aiQuestionsRequest,
   countryCode, judgeAnswer, parseAiQuestions, parseAssistantAnswer, type AiAnswerCheck, type AiAssistant, type Business } from "../lib/aiAnswers";
 import { parseSearchIntents, searchIntentRequest, SEARCH_INTENT_MAX_TOKENS, SEARCH_INTENT_MODEL, SEARCH_INTENT_TOOL } from "../lib/searchIntent";
@@ -55,9 +56,17 @@ const loadContext = (ctx: ActionCtx, siteId: Id<"sites">): Promise<Context | nul
 export const runInternal = internalAction({ args: { siteId: v.id("sites"), force: v.optional(v.boolean()) },
   handler: async (ctx, { siteId, force }): Promise<RunResult> => runDiagnosis(ctx, siteId, Boolean(force)) });
 
-async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean): Promise<RunResult> {
+/** Phase 3 (Nov 2026): the repairs alone (duplicate merges, unshown articles folded, every redirect delivered and checked),
+ * from Search Console and the crawl, which cost nothing: no paid check runs and no diagnosis is recorded (the weekly one
+ * stays on the dashboard). Rollout sites only, like the weekly run. */
+export const runRepairs = internalAction({ args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<RunResult> => runDiagnosis(ctx, siteId, true, { repairsOnly: true }) });
+
+async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean, options: { repairsOnly?: boolean } = {}): Promise<RunResult> {
+  const repairsOnly = Boolean(options.repairsOnly);
   const site = await loadContext(ctx, siteId);
   if (!site) return { skipped: "site not active" };
+  if (repairsOnly && !topicChoiceRollout(site.domain)) return { skipped: "not a rollout site" };
   if (!force && site.lastRunAt && Date.now() - site.lastRunAt < 6 * 24 * 3600 * 1000) return { skipped: "diagnosed this week" };
   const notes: string[] = [];
 
@@ -86,10 +95,10 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean)
     audience: site.business.audience ?? undefined, features: site.business.features ?? undefined, problems: site.business.problems ?? undefined,
     country: site.targetCountry };
   const staleAuthority = !site.authority || !site.authority.measuredAt || Date.now() - site.authority.measuredAt > 30 * 24 * 3600 * 1000;
-  const freeSpeedTest = Boolean(process.env.PAGESPEED_API_KEY);
+  const freeSpeedTest = Boolean(process.env.PAGESPEED_API_KEY) && !repairsOnly;
 
   // One hold for the run's paid checks, taken before any of them starts.
-  const wantsPaid = topQueries.length > 0 || staleAuthority || Boolean(process.env.TREG_TOKEN) || !freeSpeedTest;
+  const wantsPaid = !repairsOnly && (topQueries.length > 0 || staleAuthority || Boolean(process.env.TREG_TOKEN) || !freeSpeedTest);
   const week = Math.floor(Date.now() / (7 * 24 * 3600 * 1000));
   const hold = wantsPaid ? await ctx.runMutation(internal.siteDiagnosis.reserve, { siteId, trigger: `site_diagnosis:${week}${force ? `:forced:${Date.now()}` : ""}` }) : null;
   if (hold && !hold.ok) notes.push(`Paid checks skipped: provider budget (${hold.reason})`);
@@ -226,6 +235,15 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean)
     pages = pages.map((p) => moved.has(normalize(p.url)) ? { url: p.url, status: 308, location: moved.get(normalize(p.url))! } : p);
     d = diagnoseSite({ ...inputs, pages });
   }
+  // Phase 3 (Nov 2026): an article Google showed to nobody in 28 days, live 60+ days, folds into the article on its subject
+  // that Google does show (its subject becomes a section there). One without a shown sibling stays for a rewrite.
+  const folded = gsc.length && !site.ownerReview ? await recordUnshownMerges(ctx, site, pages, gsc, merged) : [];
+  if (folded.length) {
+    notes.push(`Folded ${folded.length} ${folded.length === 1 ? "article" : "articles"} Google never showed: ${folded.map((m) => `${m.fromSlug} → ${m.toSlug}`).join("; ")}`);
+    const moved = new Map(folded.map((m) => [normalize(addressOf(site, m.fromSlug).url), addressOf(site, m.toSlug).url]));
+    pages = pages.map((p) => moved.has(normalize(p.url)) ? { url: p.url, status: 308, location: moved.get(normalize(p.url))! } : p);
+    d = diagnoseSite({ ...inputs, pages });
+  }
   notes.push(...await deliverRedirects(ctx, site));
   // A merge recorded before folds existed gets its merged page's searches now (Search Console still holds them).
   if (gsc.length) {
@@ -237,6 +255,8 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean)
     }
   }
 
+  // A repairs-only run records no diagnosis: the weekly one, with its paid measurements, stays the site's record.
+  if (repairsOnly) return { siteType: d.siteType, factors: d.factors, findings: d.findings.length, merges: [...merged, ...folded], costMicroUsd: 0, notes };
   await ctx.runMutation(internal.siteDiagnosis.record, { siteId, diagnosis: {
     siteType: d.siteType, ...(d.window ? { window: d.window } : {}), totals: d.totals, factors: d.factors,
     findings: d.findings.map((f) => ({ ...f, ...(f.items ? { items: f.items.slice(0, 8) } : {}) })), pageActions: d.pageActions.slice(0, 150),
@@ -304,6 +324,24 @@ async function recordMerges(ctx: ActionCtx, site: Context, merges: readonly Merg
       foldQuestions: foldQuestionsFor(gsc, m.from, m.to, site.domain) }] : [];
   });
   return plan.length ? await ctx.runMutation(internal.siteRedirects.recordMerges, { siteId: site.siteId, merges: plan }) : [];
+}
+
+/** Phase 3: the unshown articles to fold (convex/lib/duplicatePages.ts planUnshownMerges), recorded like any merge (its
+ * own reason; the merged article's title is the section the kept article adds). Only Pentra's own live, indexable
+ * articles; nothing already merged this run, and no chain (recordMerges checks both again). */
+async function recordUnshownMerges(ctx: ActionCtx, site: Context, pages: readonly CrawledPage[], gsc: readonly GscRow[], merged: Recorded): Promise<Recorded> {
+  const crawledAt = new Map(pages.map((p) => [normalize(p.url), p]));
+  const mayFold = (url: string) => { const p = crawledAt.get(normalize(url)); return Boolean(p?.article && p.status === 200 && !p.noindex); };
+  const taken = new Set(merged.flatMap((m) => [addressOf(site, m.fromSlug).url, addressOf(site, m.toSlug).url]));
+  const plan = planUnshownMerges({ articles: site.published.filter((p) => !p.moved && !p.retired).map((p) => ({ url: p.url, title: p.title, publishedAt: p.publishedAt })),
+    gsc, now: Date.now(), mayMerge: mayFold, taken });
+  const slugOf = new Map(site.published.map((p) => [normalize(p.url), slugKey(p.slug)]));
+  const rows = plan.flatMap((m) => {
+    const fromSlug = slugOf.get(normalize(m.from)), toSlug = slugOf.get(normalize(m.to));
+    return fromSlug && toSlug ? [{ fromSlug, toSlug, reason: "merged_unshown" as const, foldQuestions: [m.fromTitle.slice(0, 120)],
+      evidence: `Google showed it to nobody in 28 days (live ${m.ageDays} days); "${m.toTitle.slice(0, 120)}" on the same subject was shown ${m.toImpressions} times` }] : [];
+  });
+  return rows.length ? await ctx.runMutation(internal.siteRedirects.recordMerges, { siteId: site.siteId, merges: rows }) : [];
 }
 
 /** Where an article lives: its published address when known, else built from the site's URL structure. `livePath` is the

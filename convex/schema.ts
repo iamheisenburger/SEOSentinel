@@ -1817,7 +1817,8 @@ export default defineSchema({
     siteId: v.id("sites"),
     fromSlug: v.string(),
     toSlug: v.string(),
-    reason: v.literal("merged_duplicate"),
+    // Phase 3 (Nov 2026): "merged_unshown" is an article Google showed to nobody, folded into the shown article on its subject.
+    reason: v.union(v.literal("merged_duplicate"), v.literal("merged_unshown")),
     evidence: v.optional(v.string()),
     delivery: v.union(v.literal("pending"), v.literal("pentra_blog"), v.literal("repository"), v.literal("platform"), v.literal("owner"),
       v.literal("not_delivered")),

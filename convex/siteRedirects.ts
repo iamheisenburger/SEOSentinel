@@ -45,7 +45,9 @@ async function isPublished(ctx: QueryCtx, site: Doc<"sites">, slug: string): Pro
  * are re-pointed straight at its new home. */
 export const recordMerges = internalMutation({
   args: { siteId: v.id("sites"), merges: v.array(v.object({ fromSlug: v.string(), toSlug: v.string(), evidence: v.string(),
-    foldQuestions: v.optional(v.array(v.string())) })) },
+    foldQuestions: v.optional(v.array(v.string())),
+    // Phase 3: an article Google showed to nobody, folded into the shown article on its subject.
+    reason: v.optional(v.union(v.literal("merged_duplicate"), v.literal("merged_unshown"))) })) },
   handler: async (ctx, { siteId, merges }) => {
     const site = await ctx.db.get(siteId);
     if (!site || site.deletionStatus) return [];
@@ -65,7 +67,7 @@ export const recordMerges = internalMutation({
         row.toSlug = toSlug;
       }
       const foldQuestions = (merge.foldQuestions ?? []).map((q) => q.trim()).filter((q) => q.length > 2 && q.length <= 120).slice(0, 3);
-      const id = await ctx.db.insert("site_redirects", { siteId, fromSlug, toSlug, reason: "merged_duplicate",
+      const id = await ctx.db.insert("site_redirects", { siteId, fromSlug, toSlug, reason: merge.reason ?? "merged_duplicate",
         evidence: merge.evidence.slice(0, 600), delivery: "pending", ...(foldQuestions.length ? { foldQuestions } : {}), createdAt: now });
       redirected.add(fromSlug);
       recorded.push({ id, fromSlug, toSlug });
@@ -119,5 +121,5 @@ export const listForSite = query({ args: { siteId: v.id("sites") }, handler: asy
   const site = await ctx.db.get(siteId);
   if (!identity || !site || site.userId !== identity.subject) return [];
   return (await activeRedirects(ctx, siteId)).map((row) => ({ fromSlug: row.fromSlug, toSlug: row.toSlug, evidence: row.evidence ?? null,
-    delivery: row.delivery, mechanism: row.mechanism ?? null, deliveryNote: row.deliveryNote ?? null, verifiedAt: row.verifiedAt ?? null, createdAt: row.createdAt }));
+    reason: row.reason, delivery: row.delivery, mechanism: row.mechanism ?? null, deliveryNote: row.deliveryNote ?? null, verifiedAt: row.verifiedAt ?? null, createdAt: row.createdAt }));
 } });
