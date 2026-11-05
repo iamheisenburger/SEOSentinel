@@ -135,6 +135,8 @@ export const checkPlannedPageOne = internalAction({ args: { siteId: v.id("sites"
   handler: async (ctx, { siteId }): Promise<{ checked: number; winnable: number }> => {
     const result = await checkPlannedTopicsPageOne(ctx, siteId);
     await ctx.runMutation(internal.contentWork.applyGroupBrakes, { siteId });
+    // A topic now known to be winnable is written at once: the site's scheduler is woken.
+    if (result.winnable > 0) await ctx.scheduler.runAfter(0, internal.autopilot.dispatchSiteFollowup, { siteId, trigger: "content_work", reason: "content_work_stage_changed" });
     return result;
   } });
 

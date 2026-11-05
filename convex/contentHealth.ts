@@ -1,3 +1,4 @@
+import { topicChoiceRollout } from "./lib/topicVerdict";
 import { internalAction, internalMutation, internalQuery, type QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -307,7 +308,8 @@ export const runContentHealth = internalAction({
       if (site.paused || site.reviewFirst || site.nextDeadlineAt === null || now - site.nextDeadlineAt < CUSTOMER_LATE_EMAIL_MS) continue;
       try {
         await ctx.runMutation(internal.customerEmails.noteMissedSlot, { siteId: site.siteId, deadlineAt: site.nextDeadlineAt,
-          cause: missedSlotCause({ destinationVerified: site.destinationVerified, plannedTopics: site.plannedTopics, failure: site.failure ?? null }) });
+          cause: missedSlotCause({ destinationVerified: site.destinationVerified, plannedTopics: site.plannedTopics, failure: site.failure ?? null,
+            phaseTwo: topicChoiceRollout(site.domain) }) });
       } catch (error) { console.warn(`Late-article email not decided for ${site.siteId}: ${error instanceof Error ? error.message : "unknown"}`); }
     }
     const attention = all.filter(s => s.status === "attention").length;

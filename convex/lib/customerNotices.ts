@@ -120,18 +120,20 @@ export function draftReadyEmail(input: { domain: string; title: string; articleI
 }
 
 /** Why a scheduled article is late, as the owner can act on it. */
-export type MissedSlotCause = "connection" | "plan" | "writing_service" | "internal" | "checks" | "no_topics" | "preparing";
+export type MissedSlotCause = "connection" | "plan" | "writing_service" | "internal" | "checks" | "no_topics" | "no_winnable" | "preparing";
 const WRITING_SERVICE_FAILURES = new Set(["content_provider_unavailable", "content_provider_credit_unavailable",
   "content_provider_request_rejected", "content_provider_result_ambiguous_reconciliation_required"]);
 
-export function missedSlotCause(input: { destinationVerified: boolean; plannedTopics: number | null; failure: string | null }): MissedSlotCause {
+export function missedSlotCause(input: { destinationVerified: boolean; plannedTopics: number | null; failure: string | null;
+  /** Phase 2 (P364): the site writes only searches it can win, so an empty plan means none is winnable yet. */
+  phaseTwo?: boolean }): MissedSlotCause {
   if (!input.destinationVerified) return "connection";
   const failure = input.failure ?? "";
   if (/entitlement|plan|billing|budget|funding|reservation/i.test(failure)) return "plan";
   if (WRITING_SERVICE_FAILURES.has(failure)) return "writing_service";
   if (internalContentProcessingError(failure)) return "internal";
   if (failure) return "checks";
-  if (input.plannedTopics === 0) return "no_topics";
+  if (input.plannedTopics === 0) return input.phaseTwo ? "no_winnable" : "no_topics";
   return "preparing";
 }
 
@@ -142,6 +144,7 @@ const MISSED_SLOT_WHY: Record<MissedSlotCause, string> = {
   internal: "an internal error on Pentra's side. We've been alerted and are fixing it.",
   checks: "the draft for this slot didn't pass Pentra's checks, so it wasn't published.",
   no_topics: "Pentra ran out of researched topics for your site and is researching new searches your customers make.",
+  no_winnable: "Pentra found no search your customers make that your site can win on Google's first page yet, so it wrote nothing rather than a page nobody would see. It checks new searches every day and improves your existing pages meanwhile.",
   preparing: "the article is taking longer than usual to prepare.",
 };
 const MISSED_SLOT_ACTION: Partial<Record<MissedSlotCause, string>> = {

@@ -21,6 +21,8 @@ export default defineSchema({
       autopilotSelectedAt: v.optional(v.number()),
       // Last automatic keyword research for an Autopilot site whose topics ran out.
       topicsReplenishedAt: v.optional(v.number()),
+      // Phase 2 (P364): when Pentra last asked for page-one checks because nothing was writable (at most twice a day).
+      pageOneCheckRequestedAt: v.optional(v.number()),
       // New topics that research added (0 backs off the next attempt).
       topicsReplenishAdded: v.optional(v.number()),
       // Research runs so far; rotates which business anchors seed the next one.

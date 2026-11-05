@@ -11479,3 +11479,31 @@ test("P362 the week's AI buyer questions join a rollout site's plan as topics to
     f.assertOffline();
   });
 });
+
+// Phase 2 (P364): a rollout site with nothing it may write asks for its waiting topics' page-one checks at once, not at the
+// nightly sweep, and at most twice a day.
+test("P364 a rollout site with nothing writable has its waiting topics checked now, at most every 12 hours", async () => {
+  const f = setup({ growthFirst: true, businesses: [{ ...slcBusinesses[0], domain: "leadpilot.chat" }] });
+  const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  f.setIdentity(saved.userId);
+  const r = await f.invoke("contentWork:readiness", { siteId: site.id });
+  await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
+  f.setIdentity(null);
+  const current = f.get(site.id)!;
+  Object.assign(current, { seoAuthorityDomain: current.domain, seoAuthorityDomainRank: 4, seoAuthorityReferringDomains: 3,
+    seoAuthoritySource: "dataforseo_backlinks_bulk_pages_summary", seoAuthorityMeasuredAt: f.now() - 86_400_000 });
+  for (const topic of f.tables.topic_clusters ?? []) if (topic.siteId === site.id) topic.status = "used";
+  f.add("topic_clusters", { siteId: site.id, planningCanonicalDomain: current.canonicalDomain ?? current.domain, planningDomainRevision: current.canonicalDomainRevision ?? 0,
+    secondaryKeywords: [], intent: "informational", status: "planned", priority: 50, keywordDifficultyMeasured: true, keywordDifficulty: 8, searchVolume: 300,
+    primaryKeyword: "irrigation zone leak detection", label: "Irrigation zone leak detection",
+    buyerFit: { eligible: true, reason: "buyers", version: 1, checkedAt: f.now() }, createdAt: f.now(), updatedAt: f.now() });
+  f.get(site.id)!.contentSchedule.nextDeadlineAt = f.now() + 5 * 3_600_000;
+  const checks = () => (f.tables._scheduled_functions ?? []).filter(s => (s as { name?: string }).name === "actions/growthTopics:checkPlannedPageOne").length;
+  await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(checks(), 1, "the waiting topic's check is asked for now");
+  assert.ok(f.get(site.id)!.contentSchedule.pageOneCheckRequestedAt > 0);
+  assert.ok(!f.tables.jobs.some(j => j.contentWork && j.siteId === site.id && j.contentWork.intent === "create"), "nothing unchecked is written meanwhile");
+  await f.invoke("contentWork:advance", { siteId: site.id });
+  assert.equal(checks(), 1, "not asked again within 12 hours");
+  f.assertOffline();
+});

@@ -29,7 +29,7 @@ const MISSED_SLOT_EMAIL_SPACING_MS = 24 * 3_600_000;
 /** Monthly reports: sites per page, and the gap between sends (Resend allows a few a second). */
 const REPORT_PAGE = 20, REPORT_SPACING_MS = 1_500, REPORT_GSC_ROW_LIMIT = 12_000;
 const missedSlotCauses = v.union(v.literal("connection"), v.literal("plan"), v.literal("writing_service"), v.literal("internal"),
-  v.literal("checks"), v.literal("no_topics"), v.literal("preparing"));
+  v.literal("checks"), v.literal("no_topics"), v.literal("no_winnable"), v.literal("preparing"));
 
 /** The owner's verified address, from pentra.dev's plan sync. No write when unchanged. */
 export const recordContact = internalMutation({ args: { userId: v.string(), email: v.string() }, handler: async (ctx, args) => {

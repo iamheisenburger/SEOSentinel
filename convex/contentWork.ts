@@ -2103,6 +2103,18 @@ export const addAiQuestionTopics = internalMutation({ args: { siteId: v.id("site
   return { added };
 } });
 
+/** Phase 2 (P364): a rollout site with nothing it may write asks for its waiting topics' page-one checks now (the nightly
+ * sweep would reach them hours later), at most every PAGE_ONE_RECHECK_GAP_MS; the check holds its own small budget and does
+ * nothing when no topic is waiting. The in-memory schedule is updated too, so this pass's later writes keep the time. */
+const PAGE_ONE_RECHECK_GAP_MS = 12 * 3_600_000;
+async function requestPageOneChecks(ctx: MutationCtx, site: Doc<"sites">, schedule: NonNullable<Doc<"sites">["contentSchedule"]>) {
+  const now = Date.now();
+  if (!topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain) || now - (schedule.pageOneCheckRequestedAt ?? 0) < PAGE_ONE_RECHECK_GAP_MS) return;
+  schedule.pageOneCheckRequestedAt = now;
+  await ctx.db.patch(site._id, { contentSchedule: { ...schedule }, updatedAt: now });
+  await ctx.scheduler.runAfter(0, internal.actions.growthTopics.checkPlannedPageOne, { siteId: site._id });
+}
+
 /** Phase 2: a page-one check as stored on a topic (convex/lib/pageOne.ts). */
 const pageOneVerdictValidator = v.object({ version: v.number(), checkedAt: v.number(), rankable: v.boolean(), reason: v.string(),
   siteAuthority: v.union(v.number(), v.null()), reachable: v.number(), measured: v.number(), results: v.number(), medianAuthority: v.union(v.number(), v.null()) });
@@ -2997,6 +3009,8 @@ export const advance = internalMutation({
     let topic = improvement ? null : reuse ? reuse.topic
       : await chooseTopic(ctx, site, undefined, [], { demandOnly: Boolean(schedule.autopilotSelectedAt), runway, preloaded });
     if (!improvement && !topic && schedule.autopilotSelectedAt) {
+      // Phase 2 (P364): topics waiting for their page-one check are checked now rather than at the nightly sweep.
+      await requestPageOneChecks(ctx, site, schedule);
       // No searched keyword is left: research new ones for the confirmed
       // business (within the ordinary spend limits). When the slot allows, the
       // article waits for that research; the cadence never does.

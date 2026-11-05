@@ -127,3 +127,13 @@ test("the rule a topic must pass, and where it runs first", () => {
     "a brake the sweep stopped renewing lapses");
   assert.deepEqual(["pentra.dev", "https://www.leadpilot.chat/", "LeadPilot.chat", "quillpad.example", "notpentra.dev"].map(topicChoiceRollout), [true, true, true, false, false]);
 });
+
+test("P364: a rollout site's unwritten slot is explained as no winnable search yet, never 'ran out of topics'", async () => {
+  const { missedSlotCause, missedSlotEmail } = await import("../convex/lib/customerNotices.ts");
+  const base = { destinationVerified: true, plannedTopics: 0, failure: null };
+  assert.equal(missedSlotCause({ ...base, phaseTwo: true }), "no_winnable");
+  assert.equal(missedSlotCause(base), "no_topics", "other sites keep today's wording");
+  const email = missedSlotEmail({ domain: "pentra.dev", deadlineAt: 1_793_900_000_000, timeZone: "UTC", cause: "no_winnable" });
+  assert.match(email.text, /found no search your customers make that your site can win on Google's first page yet, so it wrote nothing rather than a page nobody would see/);
+  assert.match(readFileSync("convex/contentHealth.ts", "utf8"), /phaseTwo: topicChoiceRollout\(site\.domain\) \}\) \}\);/);
+});
