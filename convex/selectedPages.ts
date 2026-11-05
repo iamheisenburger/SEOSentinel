@@ -1,6 +1,7 @@
 import { isApiCmsMethod } from "./lib/cmsDestinations";
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { moneyPagesFirst, nearPageOne } from "./lib/moneyPages";
+import { moneyPagesFirst, mostlyNonBuyerReaders, nearPageOne } from "./lib/moneyPages";
+import { topicChoiceRollout } from "./lib/topicVerdict";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -221,6 +222,12 @@ export async function exhaustedImprovementPages(ctx: QueryCtx | MutationCtx, sit
     now - (t.contentFeasibilityCheckedAt ?? t.updatedAt ?? 0) < REFRESH_COOLDOWN_MS).map(t => improvementText(t.label)));
 }
 
+/** Phase 3: the latest weekly diagnosis's reader labels by search (lowercase), or none. */
+async function readerLabels(ctx: MutationCtx, siteId: Id<"sites">): Promise<Map<string, string>> {
+  const latest = await ctx.db.query("site_diagnoses").withIndex("by_site_created", q => q.eq("siteId", siteId)).order("desc").first();
+  return new Map((latest?.intents ?? []).map(i => [i.query, i.label]));
+}
+
 /** Reuse the daily ingestion's exact tenant/date/epoch receipts. Weekly bounded
  * selection is discretionary; absent metrics do not veto unrelated creation. */
 export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jobs: Doc<"jobs">[],
@@ -267,6 +274,9 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
   }
   if (!candidates.length) return null;
   const exhausted = await exhaustedImprovementPages(ctx, site, now);
+  // Phase 3 (Nov 2026, rollout sites first): an improvement goes to a page buyers see. A page whose readers are mostly job
+  // seekers or learners (the weekly diagnosis's labels) waits, and a refresh answers a buyer's search before anyone else's.
+  const labels = topicChoiceRollout(site.domain) ? await readerLabels(ctx, site._id) : new Map<string, string>();
   let measurements: Awaited<ReturnType<typeof takeCurrentGscQueryRows>>;
   // The newest 28 days of Search Console data, not the oldest rows first.
   const windowStart = refreshWindowStart((site.gscDateEpochs ?? []).map(receipt => receipt.date));
@@ -281,11 +291,13 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
     // That Actually Drive Traffic" could never be refreshed or adopted).
     try { assertUnprotectedPage(page.slug, e.title, e.sourceContent, { pentraCreated: Boolean(e.managedArticleId) }); } catch { continue; }
     if (exhausted.has(improvementText(e.title))) continue;
+    if (mostlyNonBuyerReaders(page.url, measurements.rows, labels)) continue;
     if (refreshDue(e)) {
       // The search is usually the article's own keyword, so it is already in
       // the text: the refresh answers it in a dedicated section.
       const eligible = refreshOpportunities(measurements.rows, page.url).filter(o => !isBrandedSearchQuery(o.query, site.domain) &&
-        evaluateTopicBusinessFit({ keyword: o.query, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible);
+        evaluateTopicBusinessFit({ keyword: o.query, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible &&
+        (labels.get(o.query.trim().toLowerCase()) ?? "buyer") === "buyer");
       const best = eligible.find(o => !e.markdown.toLowerCase().includes(o.query)) ?? eligible[0];
       const managed = best && e.managedArticleId ? await ctx.db.get(e.managedArticleId) : null;
       const refreshTarget = best ? refreshInsertTarget(e, managed?.articleType) : undefined;

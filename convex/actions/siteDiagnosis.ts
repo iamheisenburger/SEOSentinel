@@ -269,6 +269,7 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
       authorityMeasured: Boolean(authority) }, costMicroUsd, ...(notes.length ? { notes: notes.map((n) => n.slice(0, 500)) } : {}),
     ...(pageOne.length ? { pageOne: pageOne.map((c) => ({ ...c, domains: c.domains?.slice(0, 10) })) } : {}),
     ...(speedChecks.length ? { speed: speedChecks } : {}),
+    ...(intents.length ? { intents: intents.slice(0, 80).map((i) => ({ query: i.query.trim().toLowerCase().slice(0, 200), label: i.label })) } : {}),
     ...(aiQuestions.length ? { aiAnswers: { questions: aiQuestions, checks: aiChecks } } : {}) } });
   return { siteType: d.siteType, factors: d.factors, findings: d.findings.length, merges: merged, costMicroUsd, notes };
 }
