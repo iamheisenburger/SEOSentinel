@@ -60,5 +60,5 @@ test("P295 fix 5: the FAQ is the last section; the plan's review applies fixes 2
   assert.equal(withFaqLast(md), "Intro.\n\n## Steps\n\nDo it.\n\n## Spring start-up\n\nOpen the valve.\n\n## FAQ\n\n### Q?\n\nA.\n\n## Sources\n\n1. A");
   assert.equal(withFaqLast("Intro.\n\n## FAQ\n\nA.\n\n## Sources\n\n1. A"), "Intro.\n\n## FAQ\n\nA.\n\n## Sources\n\n1. A");
   assert.match(readFileSync("convex/actions/pipeline.ts", "utf8"),
-    /fields = \{ \.\.\.fields, markdown: rebuildSourcesSection\(withPriceDate\(withFaqLast\(untimed\.markdown\), article\.createdAt \?\? Date\.now\(\)\), article\.sources \?\? \[\]\) \};\n\s+const candidate = candidateFor\(fields\);/);
+    /fields = \{ \.\.\.fields, markdown: rebuildSourcesSection\(withPriceDate\(withFaqLast\(untimed\.markdown\), article\.createdAt \?\? Date\.now\(\)\), article\.sources \?\? \[\]\) \};\n\s+(?:const|let) candidate = candidateFor\(fields\);/);
 });

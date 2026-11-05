@@ -19,9 +19,11 @@ import type { Id } from "../_generated/dataModel";
 import type { FunctionReturnType } from "convex/server";
 import { analyzeSERPFromDataForSEO, getDomainAuthorities, meterDataForSeoCost } from "./seoData";
 import { dataForSeoLocationCode } from "../lib/dataForSeoLocale";
-import { crawlPages, readSitemap } from "../lib/pageCrawl";
-import { diagnoseSite, normalize, type CrawledPage, type GscRow, type PageOneCheck, type QueryIntent } from "../lib/siteDiagnosis";
-import { slugKey, type Merge } from "../lib/duplicatePages";
+import { crawlPages, pageSpeedCheck, readSitemap } from "../lib/pageCrawl";
+import { diagnoseSite, normalize, type CrawledPage, type GscRow, type PageOneCheck, type QueryIntent, type SpeedCheck } from "../lib/siteDiagnosis";
+import { foldQuestionsFor, slugKey, type Merge } from "../lib/duplicatePages";
+import { AI_ASSISTANT_ENDPOINTS, AI_ASSISTANTS, AI_QUESTIONS_MAX_TOKENS, AI_QUESTIONS_MODEL, AI_QUESTIONS_TOOL, aiAnswerTotals, aiQuestionsRequest,
+  judgeAnswer, parseAiQuestions, parseAssistantAnswer, type AiAnswerCheck, type AiAssistant, type Business } from "../lib/aiAnswers";
 import { parseSearchIntents, searchIntentRequest, SEARCH_INTENT_MAX_TOKENS, SEARCH_INTENT_MODEL, SEARCH_INTENT_TOOL } from "../lib/searchIntent";
 import { buyerFitCostMicroUsd } from "../lib/topicFit";
 import { structuredToolChoice } from "../lib/toolChoice";
@@ -32,6 +34,9 @@ import { publishedArticleInternalHref } from "../lib/internalLinks";
 import { editVercelRedirects, type RedirectEntry } from "../lib/vercelRedirects";
 
 const MAX_PAGES = 200, PAGE_ONE_QUERIES = 5, INTENT_MIN_IMPRESSIONS = 5;
+/** Each AI-assistant question's price bound on treg, about three times its price (ChatGPT $0.0032, Gemini $0.0024, Google
+ * AI Mode $0.00015); a call whose answer was lost is charged at it. 15 calls at the bound fit the run's $0.25 hold. */
+const AI_CALL_MAX_MICRO_USD = 10_000;
 /** Vercel builds a commit in a minute or two; the redirects are checked after this, and once more later if not live yet. */
 const VERIFY_AFTER_MS = 6 * 60_000, VERIFY_RETRY_MS = 30 * 60_000;
 
@@ -65,12 +70,21 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean)
   for (const r of gsc) if (r.page) shown.set(r.page, (shown.get(r.page) ?? 0) + r.impressions);
   const seeds = [...new Set([...site.published.map((p) => p.url), ...[...shown].sort((a, b) => b[1] - a[1]).map(([url]) => url), ...(sitemap?.urls ?? [])])]
     .slice(0, MAX_PAGES);
-  const crawled = await crawlPages(seeds);
+  // Google's mobile speed test, beside the crawl: the home page and the two articles Google shows most (all articles
+  // share their template).
+  const articleUrls = new Set(site.published.map((p) => normalize(p.url)));
+  const speedPages = [`https://${site.domain.replace(/^https?:\/\//, "").replace(/\/.*$/, "")}/`,
+    ...[...shown].filter(([url]) => articleUrls.has(normalize(url))).sort((a, b) => b[1] - a[1]).map(([url]) => url), ...site.published.map((p) => p.url)]
+    .filter((url, i, all) => all.findIndex((u) => normalize(u) === normalize(url)) === i).slice(0, 3);
+  const [crawled, speedChecks] = await Promise.all([crawlPages(seeds),
+    Promise.all(speedPages.map((url) => pageSpeedCheck(url))).then((checks) => checks.filter((c): c is SpeedCheck => c !== null))]);
   const targets = [...crawled.values()].flatMap((p) => (p.location && !crawled.has(normalize(p.location)) ? [p.location] : []));
   for (const [key, page] of await crawlPages([...new Set(targets)].slice(0, 40))) crawled.set(key, page);
   const byUrl = new Map(site.published.map((p) => [normalize(p.url), p]));
-  const pages: CrawledPage[] = [...crawled.values()].map((p) => {
+  const removed = new Set(site.removed.map(normalize));
+  let pages: CrawledPage[] = [...crawled.values()].map((p) => {
     const article = byUrl.get(normalize(p.url));
+    if (removed.has(normalize(p.url))) return { ...p, removed: true };
     return article ? { ...p, article: true, indexVerdict: article.indexVerdict, coverageState: article.coverageState, publishedAt: article.publishedAt } : p;
   });
   const crawlComplete = site.published.length < 300 && site.published.every((p) => crawled.has(normalize(p.url)));
@@ -83,7 +97,11 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean)
     referringDomains: site.authority.referringDomains } : null;
   let costMicroUsd = 0;
   const staleAuthority = !site.authority || !site.authority.measuredAt || Date.now() - site.authority.measuredAt > 30 * 24 * 3600 * 1000;
-  if (topQueries.length || staleAuthority) {
+  let aiQuestions: string[] = [], aiChecks: AiAnswerCheck[] = [];
+  const business: Business = { name: site.business.name, domain: site.domain, summary: site.business.summary ?? undefined,
+    audience: site.business.audience ?? undefined, features: site.business.features ?? undefined, problems: site.business.problems ?? undefined,
+    country: site.targetCountry };
+  if (topQueries.length || staleAuthority || process.env.TREG_TOKEN) {
     const week = Math.floor(Date.now() / (7 * 24 * 3600 * 1000));
     const hold = await ctx.runMutation(internal.siteDiagnosis.reserve, { siteId, trigger: `site_diagnosis:${week}${force ? `:forced:${Date.now()}` : ""}` });
     if (!hold.ok) notes.push(`Paid checks skipped: provider budget (${hold.reason})`);
@@ -131,40 +149,113 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean)
         pageOne = metered.result.serps.map((s) => {
           const known = s.domains.map((d) => rankOf.get(d)).filter((n): n is number => typeof n === "number").sort((a, b) => a - b);
           return { query: s.query, medianRank: known.length ? known[Math.floor(known.length / 2)] : null, results: s.domains.length,
-            reachable: siteRank === null ? undefined : known.filter((n) => n <= siteRank + 10).length };
+            reachable: siteRank === null ? undefined : known.filter((n) => n <= siteRank + 10).length,
+            domains: s.domains.map((domain) => ({ domain, rank: rankOf.get(domain) ?? null })) };
         });
       } catch (error) { notes.push(`Page one not measured: ${String(error).slice(0, 120)}`); }
-      costMicroUsd = Math.ceil(providerUsd * 1e6) + modelMicroUsd;
+      // AI answers: the buyer questions (written once, then the same every week) put to ChatGPT, Gemini and Google AI Mode.
+      let tregMicroUsd = 0;
+      if (process.env.TREG_TOKEN) {
+        try {
+          aiQuestions = site.aiQuestions;
+          if (!aiQuestions.length && process.env.ANTHROPIC_API_KEY) {
+            const buyers = intents.filter((i) => i.label === "buyer").map((i) => i.query);
+            const request = aiQuestionsRequest(business, buyers.length ? buyers : topQueries.slice(0, 10));
+            const response = await new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 60_000, fetch }).messages.create({
+              model: AI_QUESTIONS_MODEL, max_tokens: AI_QUESTIONS_MAX_TOKENS, system: request.system, messages: [{ role: "user", content: request.userMessage }],
+              tools: [{ name: AI_QUESTIONS_TOOL, description: "Record the buyer questions.", input_schema: request.inputSchema, strict: true }],
+              tool_choice: structuredToolChoice(AI_QUESTIONS_MODEL, AI_QUESTIONS_TOOL) });
+            modelMicroUsd += buyerFitCostMicroUsd(response.usage);
+            const tool = response.content.find((b) => b.type === "tool_use" && b.name === AI_QUESTIONS_TOOL);
+            aiQuestions = parseAiQuestions(tool && tool.type === "tool_use" ? tool.input : null, business);
+          }
+          const asked = await askAssistants(siteId, aiQuestions, business);
+          aiChecks = asked.checks; tregMicroUsd = asked.costMicroUsd;
+          if (aiQuestions.length && !aiChecks.some((c) => c.answered)) notes.push("AI answers not measured: no assistant answered");
+        } catch (error) { notes.push(`AI answers not measured: ${String(error).slice(0, 120)}`); }
+      }
+      costMicroUsd = Math.ceil(providerUsd * 1e6) + modelMicroUsd + tregMicroUsd;
       if (!uncertain) await ctx.runMutation(internal.siteDiagnosis.close, { siteId, reservationId: hold.reservationId, sent: costMicroUsd > 0, actualMicroUsd: costMicroUsd });
       else notes.push("A provider charge is uncertain: the hold is kept");
     }
   }
 
-  const d = diagnoseSite({ domain: site.domain, gsc, authority, pageOne, pages, crawlComplete, sitemap, intents, now: Date.now() });
+  const inputs = { domain: site.domain, gsc, authority, pageOne, crawlComplete, sitemap, intents, speed: speedChecks, now: Date.now(),
+    aiAnswers: aiChecks.some((c) => c.answered) ? aiAnswerTotals(aiChecks) : null };
+  let d = diagnoseSite({ ...inputs, pages });
 
   // Repairs: duplicates merge into the stronger page, and every redirect not yet live is delivered and checked.
   if (d.merges.length && site.ownerReview) notes.push(`${d.merges.length} duplicate merges wait: owner review is on`);
-  const merged: Recorded = d.merges.length && !site.ownerReview ? await recordMerges(ctx, site, d.merges) : [];
-  if (merged.length) notes.push(`Merged ${merged.length} duplicate ${merged.length === 1 ? "article" : "articles"}: ${merged.map((m) => `${m.fromSlug} → ${m.toSlug}`).join("; ")}`);
+  const merged: Recorded = d.merges.length && !site.ownerReview ? await recordMerges(ctx, site, d.merges, gsc) : [];
+  if (merged.length) {
+    notes.push(`Merged ${merged.length} duplicate ${merged.length === 1 ? "article" : "articles"}: ${merged.map((m) => `${m.fromSlug} → ${m.toSlug}`).join("; ")}`);
+    // The record shows the site after this run's repairs: each merged page now redirects to the page it joined.
+    const moved = new Map(merged.map((m) => [normalize(addressOf(site, m.fromSlug).url), addressOf(site, m.toSlug).url]));
+    pages = pages.map((p) => moved.has(normalize(p.url)) ? { url: p.url, status: 308, location: moved.get(normalize(p.url))! } : p);
+    d = diagnoseSite({ ...inputs, pages });
+  }
   notes.push(...await deliverRedirects(ctx, site));
+  // A merge recorded before folds existed gets its merged page's searches now (Search Console still holds them).
+  if (gsc.length) {
+    const unfolded: Array<{ id: Id<"site_redirects">; fromSlug: string; toSlug: string; folded: boolean }> =
+      await ctx.runQuery(internal.siteRedirects.unfoldedInternal, { siteId });
+    for (const row of unfolded) {
+      const foldQuestions = foldQuestionsFor(gsc, addressOf(site, row.fromSlug).url, addressOf(site, row.toSlug).url, site.domain);
+      await ctx.runMutation(internal.siteRedirects.setFoldQuestions, { siteId, id: row.id, foldQuestions });
+    }
+  }
 
   await ctx.runMutation(internal.siteDiagnosis.record, { siteId, diagnosis: {
     siteType: d.siteType, ...(d.window ? { window: d.window } : {}), totals: d.totals, factors: d.factors,
     findings: d.findings.map((f) => ({ ...f, ...(f.items ? { items: f.items.slice(0, 8) } : {}) })), pageActions: d.pageActions.slice(0, 150),
     summary: d.summary, inputs: { searchConsole: gsc.length > 0, crawledPages: pages.length, intents: intents.length, pageOneChecked: pageOne.length,
-      authorityMeasured: Boolean(authority) }, costMicroUsd, ...(notes.length ? { notes: notes.map((n) => n.slice(0, 500)) } : {}) } });
+      authorityMeasured: Boolean(authority) }, costMicroUsd, ...(notes.length ? { notes: notes.map((n) => n.slice(0, 500)) } : {}),
+    ...(pageOne.length ? { pageOne: pageOne.map((c) => ({ ...c, domains: c.domains?.slice(0, 10) })) } : {}),
+    ...(speedChecks.length ? { speed: speedChecks } : {}),
+    ...(aiQuestions.length ? { aiAnswers: { questions: aiQuestions, checks: aiChecks } } : {}) } });
   return { siteType: d.siteType, factors: d.factors, findings: d.findings.length, merges: merged, costMicroUsd, notes };
 }
 
 const r1 = (n: number) => Math.round(n * 10) / 10;
+
+/** Every buyer question to every assistant through treg, a few at a time. Charged at treg's reported cost; a call whose
+ * answer was lost is charged at its price bound (never assumed free), and a refused one costs nothing. */
+async function askAssistants(siteId: Id<"sites">, questions: readonly string[], business: Business): Promise<{ checks: AiAnswerCheck[]; costMicroUsd: number }> {
+  const token = process.env.TREG_TOKEN!;
+  const jobs = questions.flatMap((question) => AI_ASSISTANTS.map((assistant) => ({ question, assistant })));
+  const checks: AiAnswerCheck[] = [];
+  let costMicroUsd = 0, next = 0;
+  const ask = async (question: string, assistant: AiAssistant) => {
+    const endpoint = AI_ASSISTANT_ENDPOINTS[assistant];
+    const headers: Record<string, string> = { "X-Treg-Token": token, "X-Treg-Meta": `site=${siteId}, feature=site-diagnosis`,
+      "X-Treg-Route-Max-Cost": String(AI_CALL_MAX_MICRO_USD / 1e6) };
+    try {
+      const response = assistant === "google_ai_mode"
+        ? await fetch(`https://treg.to/call/${endpoint}?${new URLSearchParams({ q: question, deep: "0" })}`, { headers, signal: AbortSignal.timeout(120_000) })
+        : await fetch(`https://treg.to/call/${endpoint}`, { method: "POST", headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify(assistant === "gemini" ? { prompt: question, country: (business.country ?? "US").slice(0, 2).toUpperCase() } : { prompt: question }),
+          signal: AbortSignal.timeout(120_000) });
+      const charged = Number(response.headers.get("X-Treg-Cost-Micro") ?? 0);
+      costMicroUsd += Number.isSafeInteger(charged) && charged >= 0 ? charged : AI_CALL_MAX_MICRO_USD;
+      const answer = response.ok ? parseAssistantAnswer(assistant, await response.json()) : null;
+      checks.push(answer ? { question, assistant, answered: true, ...judgeAnswer(answer, business) } : { question, assistant, answered: false, named: false, cited: false });
+    } catch {
+      costMicroUsd += AI_CALL_MAX_MICRO_USD;
+      checks.push({ question, assistant, answered: false, named: false, cited: false });
+    }
+  };
+  await Promise.all(Array.from({ length: 5 }, async () => { while (next < jobs.length) { const job = jobs[next++]; await ask(job.question, job.assistant); } }));
+  return { checks, costMicroUsd };
+}
 const host = (domain: string) => domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
 
-async function recordMerges(ctx: ActionCtx, site: Context, merges: readonly Merge[]): Promise<Recorded> {
+async function recordMerges(ctx: ActionCtx, site: Context, merges: readonly Merge[], gsc: readonly GscRow[]): Promise<Recorded> {
   const slugOf = new Map(site.published.map((p) => [normalize(p.url), slugKey(p.slug)]));
   const plan = merges.flatMap((m) => {
     const fromSlug = slugOf.get(normalize(m.from)), toSlug = slugOf.get(normalize(m.to));
     return fromSlug && toSlug ? [{ fromSlug, toSlug, evidence: `Google showed both for the same searches (${Math.round(Math.min(1, m.overlap) * 100)}% overlap, ` +
-      `e.g. "${m.searches[0]}"); the kept page ranks at ${r1(m.toPosition)} there, the merged one at ${r1(m.fromPosition)}` }] : [];
+      `e.g. "${m.searches[0]}"); the kept page ranks at ${r1(m.toPosition)} there, the merged one at ${r1(m.fromPosition)}`,
+      foldQuestions: foldQuestionsFor(gsc, m.from, m.to, site.domain) }] : [];
   });
   return plan.length ? await ctx.runMutation(internal.siteRedirects.recordMerges, { siteId: site.siteId, merges: plan }) : [];
 }

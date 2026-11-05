@@ -1357,9 +1357,9 @@ export default defineSchema({
       validationAuthorizationId: v.optional(v.id("provider_budget_authorizations")),
       intent: v.union(v.literal("create"), v.literal("improve")),
       operation: v.optional(v.union(v.literal("rollback"), v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"),
-        v.literal("related_reading_titles"))), rollbackOfRevisionId: v.optional(v.id("published_article_revisions")),
+        v.literal("related_reading_titles"), v.literal("image_addition"))), rollbackOfRevisionId: v.optional(v.id("published_article_revisions")),
       correction: v.optional(v.object({ key: v.string(), kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"),
-        v.literal("related_reading_titles")),
+        v.literal("related_reading_titles"), v.literal("image_addition")),
         before: v.string(), after: v.string(), sourceBefore: v.string(), sourceAfter: v.string(), reason: v.string(),
         field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))),
         targetPageId: v.optional(v.id("pages")), targetUrl: v.optional(v.string()), brokenUrl: v.optional(v.string()), observedAt: v.number() })),
@@ -1785,6 +1785,20 @@ export default defineSchema({
     ...siteDiagnosisRecord,
   }).index("by_site_created", ["siteId", "createdAt"]),
 
+  // Images made for articles published without one (Nov 2026; Autopilot published none from Aug 27): made and looked at
+  // by convex/actions/articleImages.ts (paid, run with the owner's yes), then added above the article's first paragraph
+  // by the live-page repair chain (contentImprovements.requestRelatedReadingRepair), one page at a time.
+  article_images: defineTable({
+    siteId: v.id("sites"),
+    pageId: v.id("pages"),
+    url: v.string(),
+    alt: v.string(),
+    status: v.union(v.literal("ready"), v.literal("queued"), v.literal("skipped")),
+    jobId: v.optional(v.id("jobs")),
+    costMicroUsd: v.number(),
+    createdAt: v.number(),
+  }).index("by_site_page", ["siteId", "pageId"]),
+
   // Permanent redirects Pentra made (Nov 2026): a duplicate article merged into the stronger page on its searches
   // (convex/lib/duplicatePages.ts). Both articles stay published in Pentra; only the weaker address now redirects.
   // Pentra's own blog serves the redirect itself; a site that renders its own pages from GitHub on Vercel gets it in its
@@ -1803,6 +1817,10 @@ export default defineSchema({
     verifyFailedAt: v.optional(v.number()),
     repointedAt: v.optional(v.number()),
     revertedAt: v.optional(v.number()),
+    /** The searches the merged page was shown for that the kept page doesn't answer yet: each becomes a section of the
+     * kept page through Pentra's page improvement, so the merged page's ground is kept, not lost. */
+    foldQuestions: v.optional(v.array(v.string())),
+    foldedQuestions: v.optional(v.array(v.string())),
     createdAt: v.number(),
   }).index("by_site_from", ["siteId", "fromSlug"]),
 
@@ -2252,7 +2270,7 @@ export default defineSchema({
     independentFundingApprovalReference: v.optional(v.string()),
     siteId: v.optional(v.id("sites")),
     userId: v.string(),
-    purpose: v.string(), // topic_plan | authority_discovery | onboarding_analysis | expected_click_evidence_backfill | expected_click_demand_backfill | cadence_micro_seed | cadence_micro_seed_fallback | site_diagnosis
+    purpose: v.string(), // topic_plan | authority_discovery | onboarding_analysis | expected_click_evidence_backfill | expected_click_demand_backfill | cadence_micro_seed | cadence_micro_seed_fallback | site_diagnosis | media_backfill
     trigger: v.string(),
     reservedMicroUsd: v.number(),
     // Original ceiling remains immutable. Settlement records either exact

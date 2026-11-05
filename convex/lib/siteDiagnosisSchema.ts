@@ -14,4 +14,12 @@ export const siteDiagnosisRecord = {
   inputs: v.object({ searchConsole: v.boolean(), crawledPages: v.number(), intents: v.number(), pageOneChecked: v.number(), authorityMeasured: v.boolean() }),
   costMicroUsd: v.number(),
   notes: v.optional(v.array(v.string())),
+  /** Page one for the site's main searches, as measured: each ranking site and its authority (null when unmeasured). */
+  pageOne: v.optional(v.array(v.object({ query: v.string(), medianRank: v.union(v.number(), v.null()), reachable: v.optional(v.number()),
+    results: v.optional(v.number()), domains: v.optional(v.array(v.object({ domain: v.string(), rank: v.union(v.number(), v.null()) }))) }))),
+  /** The buyer questions put to the AI assistants (kept and reused, so weeks compare) and each answer's verdict. */
+  aiAnswers: v.optional(v.object({ questions: v.array(v.string()), checks: v.array(v.object({ question: v.string(),
+    assistant: v.union(v.literal("chatgpt"), v.literal("gemini"), v.literal("google_ai_mode")), answered: v.boolean(), named: v.boolean(), cited: v.boolean() })) })),
+  /** Google's mobile speed test for a few pages. */
+  speed: v.optional(v.array(v.object({ url: v.string(), score: v.union(v.number(), v.null()), lcpMs: v.union(v.number(), v.null()) }))),
 };

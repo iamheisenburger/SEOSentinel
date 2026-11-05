@@ -41,6 +41,7 @@ test("tenant deletion drains every site-scoped sensitive and growth table", () =
     "site_health_checks",
     "site_diagnoses",
     "site_redirects",
+    "article_images",
     "pasted_publications",
     "autopilot_alerts",
     "autopilot_health",

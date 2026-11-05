@@ -7,9 +7,9 @@
  * lists.
  */
 import { fetchPage } from "./fetchPage";
-import { safePublicRedirectStatus } from "./safeOutbound";
+import { safeFetchPublicText, safePublicRedirectStatus } from "./safeOutbound";
 import { analyzePageHealth, canonicalHref, robotsTxtFindings, sitemapIndexChildren, sitemapUrls } from "./siteHealth";
-import { normalize, type CrawledPage } from "./siteDiagnosis";
+import { normalize, type CrawledPage, type SpeedCheck } from "./siteDiagnosis";
 
 export type CrawlDeps = {
   redirectStatus: (url: string) => Promise<{ status: number; location: string | null }>;
@@ -104,4 +104,27 @@ export async function readSitemap(domain: string, deps: Pick<CrawlDeps, "fetch">
   await read([...new Set([`${home}sitemap.xml`, ...declared])].slice(0, 4), true);
   await read(children.slice(0, 8), false);
   return { found, urls: [...urls].slice(0, limit) };
+}
+
+/** Google's mobile speed test (PageSpeed Insights) as a speed check, or null when its answer has neither number. */
+export function parsePageSpeed(url: string, psi: unknown): SpeedCheck | null {
+  const result = (psi as { lighthouseResult?: { categories?: { performance?: { score?: unknown } };
+    audits?: Record<string, { numericValue?: unknown } | undefined> } } | null)?.lighthouseResult;
+  const score = typeof result?.categories?.performance?.score === "number" ? Math.round(result.categories.performance.score * 100) : null;
+  const lcp = result?.audits?.["largest-contentful-paint"]?.numericValue;
+  const lcpMs = typeof lcp === "number" && Number.isFinite(lcp) ? Math.round(lcp) : null;
+  return score === null && lcpMs === null ? null : { url, score, lcpMs };
+}
+
+const PSI_FIELDS = "lighthouseResult.categories.performance.score,lighthouseResult.audits.largest-contentful-paint.numericValue";
+
+/** One page through Google's mobile speed test; free (an optional key raises its quota). Any error or quota limit means
+ * no speed check for that page, never a guess. */
+export async function pageSpeedCheck(url: string, fetchJson: (url: string) => Promise<unknown> = async (target) =>
+  JSON.parse((await safeFetchPublicText(target, { expectedHost: "www.googleapis.com", maxRedirects: 0, maxBytes: 200_000, timeoutMs: 60_000,
+    headers: { Accept: "application/json" } })).text)): Promise<SpeedCheck | null> {
+  const params = new URLSearchParams({ url, strategy: "mobile", category: "performance", fields: PSI_FIELDS });
+  if (process.env.PAGESPEED_API_KEY) params.set("key", process.env.PAGESPEED_API_KEY);
+  try { return parsePageSpeed(url, await fetchJson(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${params}`)); }
+  catch { return null; }
 }

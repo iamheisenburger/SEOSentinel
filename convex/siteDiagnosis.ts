@@ -11,6 +11,7 @@ import { siteExecutionActive } from "./lib/planSiteAllowance";
 import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
 import { releaseSharedProviderReservation, reserveSharedProviderBudget, settleSharedProviderReservation } from "./lib/providerSpendReservation";
 import { siteDiagnosisRecord } from "./lib/siteDiagnosisSchema";
+import { retiredArticle } from "./lib/pentraConsolidation";
 
 /** A site is diagnosed at most once in this long, unless forced. */
 export const DIAGNOSIS_INTERVAL_MS = 6 * 24 * 3600 * 1000;
@@ -32,11 +33,14 @@ export const context = internalQuery({ args: { siteId: v.id("sites") }, handler:
   const latest = await ctx.db.query("site_diagnoses").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).order("desc").first();
   const summaries = (await ctx.db.query("article_summaries").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "published"))
     .order("desc").take(300)).filter((row) => row.publishedAt && articleMatchesCurrentDomain(site, row));
-  const published = summaries.flatMap((row) => {
+  const addressed = summaries.flatMap((row) => {
     const url = row.publicUrl?.startsWith("https://") ? row.publicUrl : pageUrl(site, row.slug);
     return url ? [{ url, slug: row.slug, title: row.title, publishedAt: row.publishedAt ?? null, indexVerdict: row.gscIndexVerdict ?? null,
-      coverageState: row.gscCoverageState ?? null }] : [];
+      coverageState: row.gscCoverageState ?? null, retired: retiredArticle(site.domain, row.slug) }] : [];
   });
+  // An article taken down on purpose (retired) is not a live article: its address answering "not found" is intended.
+  const published = addressed.filter((row) => !row.retired);
+  const removed = addressed.filter((row) => row.retired).map((row) => row.url);
   return {
     siteId, userId: site.userId, domain: site.domain, targetCountry: site.targetCountry ?? null,
     urlStructure: site.urlStructure ?? "/blog/[slug]", publishMethod: site.publishMethod ?? "github",
@@ -46,7 +50,7 @@ export const context = internalQuery({ args: { siteId: v.id("sites") }, handler:
     authority: typeof site.seoAuthorityDomainRank === "number"
       ? { domainRank: site.seoAuthorityDomainRank, referringDomains: site.seoAuthorityReferringDomains, measuredAt: site.seoAuthorityMeasuredAt ?? null } : null,
     searchConsole: Boolean(site.gscProperty && site.gscDateEpochs?.length),
-    published, lastRunAt: latest?.createdAt ?? null,
+    published, removed, lastRunAt: latest?.createdAt ?? null, aiQuestions: latest?.aiAnswers?.questions ?? [],
   };
 } });
 
@@ -90,12 +94,18 @@ export const record = internalMutation({ args: { siteId: v.id("sites"), diagnosi
   return await ctx.db.insert("site_diagnoses", { siteId, createdAt: Date.now(), ...diagnosis });
 } });
 
-/** The owner's latest diagnosis (dashboard, weekly email). */
+/** The owner's latest diagnosis for the dashboard: where the site stands, the five factors, the biggest problems and the
+ * AI-answer check, without the page-by-page list (the weekly email and the per-page view read latestInternal). */
 export const latest = query({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const identity = await ctx.auth.getUserIdentity();
   const site = await ctx.db.get(siteId);
   if (!identity || !site || site.userId !== identity.subject) return null;
-  return await ctx.db.query("site_diagnoses").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).order("desc").first();
+  const d = await ctx.db.query("site_diagnoses").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).order("desc").first();
+  if (!d) return null;
+  const answered = (d.aiAnswers?.checks ?? []).filter((c) => c.answered);
+  return { createdAt: d.createdAt, siteType: d.siteType, window: d.window ?? null, factors: d.factors, summary: d.summary,
+    findings: d.findings.filter((f) => f.severity !== "low").slice(0, 6).map((f) => ({ factor: f.factor, severity: f.severity, problem: f.problem, evidence: f.evidence })),
+    ai: answered.length ? { asked: answered.length, named: answered.filter((c) => c.named).length, questions: d.aiAnswers!.questions } : null };
 } });
 
 export const latestInternal = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) =>

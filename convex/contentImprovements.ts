@@ -12,8 +12,7 @@ import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
 import { archiveConsumedImprovementArtifact } from "./articles";
 import type { Doc, Id } from "./_generated/dataModel";
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDomainBinding";
-import { pagePath, planCorrectiveChange, RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_SPACING_MS, RELATED_REPAIR_VERSION, relatedReadingHrefs, relatedReadingRepairProposal, relatedRepairAllowed,
-  stockDisclaimerRepairProposal, verifyCorrectivePatch } from "./lib/contentCorrection";
+import { pagePath, planCorrectiveChange, RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_SPACING_MS, RELATED_REPAIR_VERSION, relatedReadingHrefs, relatedReadingRepairProposal, relatedRepairAllowed, stockDisclaimerRepairProposal, verifyCorrectivePatch, firstPlainParagraph, imageAdditionReplacement } from "./lib/contentCorrection";
 import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
 import { canonicalBlogHref, consolidates, servedOnItsOwnUrl } from "./lib/pentraConsolidation";
 import { mergedSlugs } from "./siteRedirects";
@@ -62,7 +61,8 @@ export const correctionContext = internalQuery({ args: { siteId: v.id("sites"), 
     return { site, page, target: args.targetPageId ? await verifiedDestination(ctx, site, args.targetPageId) : null };
   } });
 export const priorCorrection = internalQuery({ args: { siteId: v.id("sites"), pageId: v.id("pages"), baseRevision: v.string(),
-  kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"), v.literal("related_reading_titles")),
+  kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"), v.literal("related_reading_titles"),
+    v.literal("image_addition")),
   before: v.string(), reason: v.string(),
   field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))), targetPageId: v.optional(v.id("pages")),
   replacement: v.optional(v.string()) },
@@ -72,10 +72,10 @@ export const priorCorrection = internalQuery({ args: { siteId: v.id("sites"), pa
     return jobs.find(j => { const cw = j.contentWork, c = cw?.correction; return cw?.targetPageId === args.pageId &&
       cw.baseRevision === args.baseRevision && c?.kind === args.kind && c.before === args.before && c.reason === args.reason &&
       c.field === args.field && c.targetPageId === args.targetPageId &&
-      (!["reader_text_repair", "related_reading_titles"].includes(args.kind) || c.after === args.replacement); })?._id ?? null;
+      (!["reader_text_repair", "related_reading_titles", "image_addition"].includes(args.kind) || c.after === args.replacement); })?._id ?? null;
   } });
 const correctivePatch = v.object({ kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"),
-  v.literal("related_reading_titles")),
+  v.literal("related_reading_titles"), v.literal("image_addition")),
   before: v.string(), after: v.string(), sourceBefore: v.string(), sourceAfter: v.string(), reason: v.string(),
   field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))),
   targetUrl: v.optional(v.string()), brokenUrl: v.optional(v.string()) });
@@ -84,7 +84,7 @@ export const requestCorrection = internalMutation({ args: { siteId: v.id("sites"
   operator: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<Id<"jobs">> => {
     if (args.operator && args.patch.kind !== "reader_text_repair") throw new Error("The operator path only repairs pipeline wording");
-    if (args.patch.kind === "related_reading_titles") throw new Error("Related reading title repairs are Autopilot's own");
+    if (args.patch.kind === "related_reading_titles" || args.patch.kind === "image_addition") throw new Error("Related reading title repairs and image additions are Autopilot's own");
     const site = await correctionOwner(ctx, args.siteId, args.operator === true);
     return insertCorrectionJob(ctx, site, args, { opportunity: "Owner-confirmed exact correction; not scheduled SEO delivery or growth",
       wake: "owner_confirmed_correction" });
@@ -150,6 +150,7 @@ async function insertCorrectionJob(ctx: MutationCtx, site: Doc<"sites">, args: {
 const RELATED_REPAIR_SCAN = 20;
 const RELATED_REPAIR_REASON = "Autopilot completes Related reading link titles it cut at its old 8-word limit, and points links to consolidated pages at the page they now lead to.";
 const STOCK_DISCLAIMER_REASON = "Autopilot removes the stock clause its writer added before P248 (\"a recommendation, not an industry standard\").";
+const IMAGE_ADDITION_REASON = "Autopilot adds the image it made and checked for its own article, published without one between Aug 27 and Nov 5 2026.";
 /** The titles of the published articles a Related reading list links, by href. */
 async function relatedReadingTitles(ctx: MutationCtx, site: Doc<"sites">, hrefs: string[]) {
   const titles = new Map<string, string>();
@@ -190,20 +191,31 @@ export const requestRelatedReadingRepair = internalMutation({ args: { siteId: v.
       { domain: site.domain, selfHref: pagePath(page) }) : null;
     // P250: a page whose links are whole may still carry the writer's stock disclaimer from before P248.
     const stock = related ? null : stockDisclaimerRepairProposal(e.markdown);
-    const proposal = related ?? stock;
+    // Nov 2026: an image prepared for this article (convex/actions/articleImages.ts) goes above its first paragraph.
+    const prepared = related || stock ? null : await ctx.db.query("article_images").withIndex("by_site_page", q => q.eq("siteId", siteId).eq("pageId", page._id)).first();
+    const opening = prepared?.status === "ready" ? firstPlainParagraph(e.markdown) : null;
+    const image = prepared && opening ? { before: opening, replacement: imageAdditionReplacement(opening, prepared) } : null;
+    const proposal = related ?? stock ?? image;
     if (!proposal) continue;
     // A page whose own work is unfinished (a refresh waiting for its slot) keeps
     // its source: the repair would make that work's exact base stale.
     const last = e.lastWorkJobId ? await ctx.db.get(e.lastWorkJobId) : null;
     if (last && !["verified", "failed"].includes(last.contentWork?.stage ?? "")) { retryAt ??= now + RELATED_REPAIR_RETRY_MS; continue; }
     let jobId: Id<"jobs">;
+    const kind = related ? "related_reading_titles" as const : stock ? "reader_text_repair" as const : "image_addition" as const;
     try {
-      const patch = planCorrectiveChange(site, page, { kind: stock ? "reader_text_repair" : "related_reading_titles", before: proposal.before,
-        replacement: proposal.replacement, reason: stock ? STOCK_DISCLAIMER_REASON : RELATED_REPAIR_REASON });
+      const patch = planCorrectiveChange(site, page, { kind, before: proposal.before, replacement: proposal.replacement,
+        reason: kind === "reader_text_repair" ? STOCK_DISCLAIMER_REASON : kind === "image_addition" ? IMAGE_ADDITION_REASON : RELATED_REPAIR_REASON });
       jobId = await insertCorrectionJob(ctx, site, { pageId: page._id, baseRevision: e.sourceRevision, permissionVersion: e.version, patch, observedAt: now },
-        { opportunity: stock ? "Autopilot removes its own stock disclaimer from a live page; not scheduled SEO delivery or growth"
+        { opportunity: kind === "reader_text_repair" ? "Autopilot removes its own stock disclaimer from a live page; not scheduled SEO delivery or growth"
+          : kind === "image_addition" ? "Autopilot adds the image it made for its own article; not scheduled SEO delivery or growth"
           : "Autopilot completes its own cut Related reading titles; not scheduled SEO delivery or growth", wake: "related_reading_repair" });
-    } catch { continue; } // a layout the exact path cannot map: the page keeps its titles
+      if (prepared && kind === "image_addition") await ctx.db.patch(prepared._id, { status: "queued", jobId });
+    } catch {
+      // A layout the exact path cannot map: the page keeps its titles (and an image that can't be placed is set aside).
+      if (prepared && kind === "image_addition") await ctx.db.patch(prepared._id, { status: "skipped" });
+      continue;
+    }
     await ctx.db.patch(siteId, { contentSchedule: { ...schedule, relatedRepairCursor: page._creationTime, relatedRepairAt: now,
       relatedRepairRetryAt: retryAt, relatedRepairPassVersion: passVersion }, updatedAt: now });
     await ctx.scheduler.runAt(now + RELATED_REPAIR_SPACING_MS, internal.contentImprovements.requestRelatedReadingRepair, { siteId });
@@ -297,7 +309,7 @@ export const claim = internalMutation({ args: claimArgs, handler: async (ctx, ar
     const id = await ctx.db.insert("published_article_revisions", {
       siteId: site._id, articleId: article._id, contentWorkJobId: job._id, selectedPageId: page._id,
       ...(page.editable.managedArticleId ? { servedArticleId: page.editable.managedArticleId } : {}),
-      selectedSource: page.editable, actionFingerprint: cw.opportunity ?? "selected_page_improvement", kind: rollback ? "rollback" : correction?.kind === "factual_correction" || correction?.kind === "reader_text_repair" || correction?.kind === "related_reading_titles" ? "editorial_correction" : correction ? "renderer_repair" : "content_improvement",
+      selectedSource: page.editable, actionFingerprint: cw.opportunity ?? "selected_page_improvement", kind: rollback ? "rollback" : correction?.kind === "factual_correction" || correction?.kind === "reader_text_repair" || correction?.kind === "related_reading_titles" || correction?.kind === "image_addition" ? "editorial_correction" : correction ? "renderer_repair" : "content_improvement",
       ...(rollback ? { rollbackOfRevisionId: rollback._id } : {}),
       revisionKey, status: "prepared", rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
       publicationConfigHash: article.publicationConfigHash!, publicationDate: 0, expectedPublicUrl: page.url,

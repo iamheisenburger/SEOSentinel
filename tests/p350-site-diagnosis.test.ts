@@ -65,14 +65,17 @@ test("its own pages compete for the same searches: measured by Search Console's 
   assert.deepEqual(d.merges, [], "nothing is merged without the crawl proving both are live, settled articles");
 });
 
-test("pages as crawled: one naming another page as the real one, no images, slow", () => {
+test("pages as crawled: one naming another page as the real one, no images, slow by Google's own speed test", () => {
   const d = diagnoseSite({ domain: "fernwood.example", gsc: [], pages: [
-    { url: "https://fernwood.example/blog/a", canonical: "https://fernwood.example/blog/b", images: 0, loadMs: 2600 },
-    { url: "https://fernwood.example/blog/c", canonical: "https://www.fernwood.example/blog/c/", images: 3, loadMs: 400 }] });
+    { url: "https://fernwood.example/blog/a", canonical: "https://fernwood.example/blog/b", images: 0, loadMs: 2600, article: true },
+    { url: "https://fernwood.example/blog/c", canonical: "https://www.fernwood.example/blog/c/", images: 3, loadMs: 9000, article: true }],
+    speed: [{ url: "https://fernwood.example/blog/a", score: 31, lcpMs: 6200 }, { url: "https://fernwood.example/blog/c", score: 92, lcpMs: 1800 }] });
   assert.equal(d.factors.pages, "failing");
   assert.deepEqual(d.findings.find((x) => x.problem === "Pages name a different page as the real one")!.items, ["/blog/a → /blog/b"]);
   assert.match(d.findings.find((x) => x.problem === "Pages without images")!.evidence, /^1 of 2 pages/);
-  assert.match(d.findings.find((x) => x.problem === "Slow pages")!.evidence, /^1 of 2 pages took over 2 seconds/);
+  const slow = d.findings.find((x) => x.problem === "Slow pages")!;
+  assert.equal(slow.evidence, "1 of 2 pages Google's mobile speed test checked are slow", "one timing from Pentra's server (9 s on /blog/c) decides nothing");
+  assert.deepEqual(slow.items, ["/blog/a (speed score 31/100, main content in 6.2s)"]);
 });
 
 test("authority: almost none, or far below page one, fails; a fair match passes", () => {
@@ -128,10 +131,10 @@ test("redirects are recorded, not followed: a chain, a dead end, and a ranked pa
 test("noindex and index coverage: settled pages Google hasn't indexed are named with Google's own reason; new ones get their grace", () => {
   const now = Date.UTC(2026, 10, 5), day = 86_400_000;
   const pages = [
-    { url: `${site}/blog/a`, status: 200, title: "A", images: 1, words: 900, indexVerdict: "PASS", publishedAt: now - 60 * day },
-    { url: `${site}/blog/b`, status: 200, title: "B", images: 1, words: 900, indexVerdict: "NEUTRAL", coverageState: "Crawled - currently not indexed", publishedAt: now - 40 * day },
-    { url: `${site}/blog/c`, status: 200, title: "C", images: 1, words: 900, indexVerdict: "NEUTRAL", coverageState: "Discovered - currently not indexed", publishedAt: now - 3 * day },
-    { url: `${site}/blog/d`, status: 200, title: "D", images: 1, words: 900, noindex: true },
+    { url: `${site}/blog/a`, status: 200, title: "A", images: 1, words: 900, indexVerdict: "PASS", publishedAt: now - 60 * day, article: true },
+    { url: `${site}/blog/b`, status: 200, title: "B", images: 1, words: 900, indexVerdict: "NEUTRAL", coverageState: "Crawled - currently not indexed", publishedAt: now - 40 * day, article: true },
+    { url: `${site}/blog/c`, status: 200, title: "C", images: 1, words: 900, indexVerdict: "NEUTRAL", coverageState: "Discovered - currently not indexed", publishedAt: now - 3 * day, article: true },
+    { url: `${site}/blog/d`, status: 200, title: "D", images: 1, words: 900, noindex: true, article: true },
   ];
   const d = diagnoseSite({ domain: "fernwood.example", gsc: [], pages, now });
   assert.deepEqual(d.findings.find((f) => f.problem === "Published pages Google hasn't indexed")!.items, ["/blog/b (Crawled - currently not indexed)"]);
@@ -159,7 +162,8 @@ test("every page gets its own actions, and the summary says where the site stand
   assert.deepEqual(d.pageActions.find((p) => p.url.endsWith("/blog/lighting"))!.actions, ["Improve it: it sits just off page one", "Add real images"]);
   assert.match(d.summary, /^This site got 0 clicks from 2520 search impressions in 28 days/);
   assert.match(d.summary, /Biggest problems\. It writes for searches it can't win: 67% of its non-branded impressions are past page 2\. Too little authority to compete: Domain rank 2 of 100, 9 sites link to it\./);
-  assert.match(d.summary, /What Pentra does next\. Choose only searches whose page one it can reach/);
+  assert.match(d.summary, /What Pentra does next\. Choose only searches whose page one it can reach at its authority; stop new articles on these\. Earn links every week/,
+    "each action its own sentence");
 });
 
 test("same topic or not: more than half of the search's words in the title", () => {

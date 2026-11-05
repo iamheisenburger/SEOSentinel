@@ -100,7 +100,8 @@ export type SharedProviderPurpose =
   | "expected_click_demand_backfill"
   | "cadence_micro_seed"
   | "cadence_micro_seed_fallback"
-  | "site_diagnosis";
+  | "site_diagnosis"
+  | "media_backfill";
 
 function utcDayStart(timestamp: number): number {
   const date = new Date(timestamp);
@@ -412,9 +413,10 @@ export async function inspectSharedProviderBudget(
   const site = await ctx.db.get(args.siteId);
   if (
     // The content engine owns growth-first spend; the exceptions are keyword
-    // research for a site the owner put on Autopilot whose topics ran out, and
-    // the weekly site diagnosis that tells the engine what to work on.
-    (site?.serviceMode === "growth_first" && args.purpose !== "content_work" && args.purpose !== "site_diagnosis" &&
+    // research for a site the owner put on Autopilot whose topics ran out, the
+    // weekly site diagnosis that tells the engine what to work on, and images for
+    // articles Autopilot published without one (Nov 2026, run on the owner's yes).
+    (site?.serviceMode === "growth_first" && args.purpose !== "content_work" && args.purpose !== "site_diagnosis" && args.purpose !== "media_backfill" &&
       !(args.purpose === "topic_plan" && site.contentSchedule?.autopilotSelectedAt)) ||
     !siteExecutionActive(site) ||
     !(await siteExecutionAuthorized(ctx, site)) ||

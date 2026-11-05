@@ -10,6 +10,12 @@
  * Google ranks higher on the searches they share, then the one with more impressions.
  */
 
+import type { GscRow } from "./siteDiagnosis.ts";
+import { isBrandedSearchQuery } from "./searchPerformance.ts";
+
+/** A page's address as one key (no protocol, www, query or trailing slash), as the diagnosis keys pages. */
+const normalize = (url: string) => url.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[?#].*$/, "").replace(/\/+$/, "");
+
 /** A slug as Pentra's redirects store it: no leading or trailing slash. */
 export const slugKey = (slug: string) => slug.trim().replace(/^\/+|\/+$/g, "");
 
@@ -112,4 +118,19 @@ export function planMerges(pages: readonly PageSearches[], mayMerge: (url: strin
     }
   }
   return merges.sort((x, y) => y.shared - x.shared || x.from.localeCompare(y.from)).slice(0, limit);
+}
+
+/** The searches a merged page was shown for that the page it joins was not (at least 5 impressions, most first): the
+ * ground the kept page should cover once the merged page redirects to it (Pentra's page improvement writes a section for
+ * each, convex/selectedPages.ts). */
+export function foldQuestionsFor(gsc: readonly GscRow[], from: string, to: string, domain: string, limit = 3): string[] {
+  const shownFor = (url: string) => {
+    const totals = new Map<string, number>();
+    for (const r of gsc) if (r.page && normalize(r.page) === normalize(url) && !isBrandedSearchQuery(r.query, domain))
+      totals.set(r.query, (totals.get(r.query) ?? 0) + r.impressions);
+    return totals;
+  };
+  const kept = shownFor(to);
+  return [...shownFor(from)].filter(([query, n]) => n >= 5 && !kept.has(query)).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit).map(([query]) => query);
 }

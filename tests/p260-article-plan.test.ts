@@ -170,7 +170,7 @@ test("P260 an article's provider spend is capped at $0.50; the cap skips the fix
   assert.match(work, /const cap = Math\.min\(cw\.budgetMicroUsd, ARTICLE_COST_CAP_MICRO_USD\);/);
   // P288: every optional step (the claims check included) runs only while its own highest price fits.
   assert.match(work, /if \(spent >= cap \|\| \(optional && spent \+ args\.ceilingMicroUsd > cap\)\) \{/);
-  assert.match(work, /export const ARTICLE_OPTIONAL_STEP = \/:remediate_final_article\$\|:review:submit_final_metadata\$\|:review:check_claims\$\/;/,
+  assert.match(work, /export const ARTICLE_OPTIONAL_STEP = \/:remediate_final_article\$\|:review:submit_final_metadata\$\|:review:check_claims\$\|:hero_image\$\/;/,
     "research passes are stopped only by spend (live trial: their $0.59 ceiling refused every second pass)");
   assert.match(work, /\/Content work \(budget exhausted\|rollover blocked\|cost cap reached\)\/\.test\(error\) \? error/);
   assert.match(pipeline, /\.catch\(\(error: unknown\) => \{ if \(costCapRefusal\(error\)\) return null; throw error; \}\) : null;/);

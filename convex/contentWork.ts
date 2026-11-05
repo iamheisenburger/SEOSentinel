@@ -1739,8 +1739,9 @@ export const MAX_CONTENT_REWRITES = 1;
 /** P260: the hard provider-spend cap per article (Arshad, Oct 30 2026). */
 export const ARTICLE_COST_CAP_MICRO_USD = 500_000;
 /** P260: the steps an article can do without (the one fix and the fix's metadata), by call key. A research pass is
- * stopped only by spend: its ceiling ($0.59) assumes a whole context window of results, about ten times its cost. */
-export const ARTICLE_OPTIONAL_STEP = /:remediate_final_article$|:review:submit_final_metadata$|:review:check_claims$/;
+ * stopped only by spend: its ceiling ($0.59) assumes a whole context window of results, about ten times its cost.
+ * P352: the hero image too (it is bought only when its whole price still fits under the cap). */
+export const ARTICLE_OPTIONAL_STEP = /:remediate_final_article$|:review:submit_final_metadata$|:review:check_claims$|:hero_image$/;
 
 async function reviseFailedWork(ctx: MutationCtx, site: Doc<"sites">, failed: Doc<"jobs">): Promise<CadenceScheduleResult> {
   const cw = failed.contentWork!;
@@ -2930,6 +2931,12 @@ export const advance = internalMutation({
     // P290: a replacement takes over its slot's count, unless the job it replaces counts for nothing (a held draft, P255).
     if (!improvement) await refreshAccountUsage(ctx, site, replacing && contentJobUsesAllowance(replacing) ? 0 : 1);
     if (improvement) await ctx.db.patch(improvement.page._id, { editable: { ...improvement.page.editable!, lastWorkJobId: jobId } });
+    // Nov 2026: a merged page's search is answered once; its job now exists.
+    if (improvement && "fold" in improvement && improvement.fold) {
+      const fold = await ctx.db.get(improvement.fold.redirectId);
+      if (fold && fold.siteId === siteId) await ctx.db.patch(fold._id, { foldQuestions: (fold.foldQuestions ?? []).filter((q) => q !== improvement.fold!.question),
+        foldedQuestions: [...(fold.foldedQuestions ?? []), improvement.fold.question] });
+    }
     // Research the next keywords before the searched ones run out, instead of
     // waiting for an empty inventory (which costs slots at a fast cadence).
     // It never takes the room the next article needs.

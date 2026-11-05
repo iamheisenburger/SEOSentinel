@@ -41,7 +41,8 @@ async function isPublished(ctx: QueryCtx, site: Doc<"sites">, slug: string): Pro
  * already redirected, and the new one not itself redirected (never a chain). Pages already merged into the old address
  * are re-pointed straight at its new home. */
 export const recordMerges = internalMutation({
-  args: { siteId: v.id("sites"), merges: v.array(v.object({ fromSlug: v.string(), toSlug: v.string(), evidence: v.string() })) },
+  args: { siteId: v.id("sites"), merges: v.array(v.object({ fromSlug: v.string(), toSlug: v.string(), evidence: v.string(),
+    foldQuestions: v.optional(v.array(v.string())) })) },
   handler: async (ctx, { siteId, merges }) => {
     const site = await ctx.db.get(siteId);
     if (!site || site.deletionStatus) return [];
@@ -59,8 +60,9 @@ export const recordMerges = internalMutation({
           ...(row.delivery === "repository" ? { delivery: "pending" as const, verifiedAt: undefined, verifyFailedAt: undefined } : {}) });
         row.toSlug = toSlug;
       }
+      const foldQuestions = (merge.foldQuestions ?? []).map((q) => q.trim()).filter((q) => q.length > 2 && q.length <= 120).slice(0, 3);
       const id = await ctx.db.insert("site_redirects", { siteId, fromSlug, toSlug, reason: "merged_duplicate",
-        evidence: merge.evidence.slice(0, 600), delivery: "pending", createdAt: now });
+        evidence: merge.evidence.slice(0, 600), delivery: "pending", ...(foldQuestions.length ? { foldQuestions } : {}), createdAt: now });
       redirected.add(fromSlug);
       recorded.push({ id, fromSlug, toSlug });
     }
@@ -71,6 +73,18 @@ export const recordMerges = internalMutation({
 /** The redirects still waiting to reach readers (new ones, re-pointed ones, and ones a failed delivery left). */
 export const pendingDelivery = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) =>
   (await activeRedirects(ctx, siteId)).filter((row) => row.delivery === "pending").map((row) => ({ id: row._id, fromSlug: row.fromSlug, toSlug: row.toSlug })) });
+
+/** Merges whose fold questions were never worked out (recorded before folds existed). */
+export const unfoldedInternal = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) =>
+  (await activeRedirects(ctx, siteId)).filter((row) => row.foldQuestions === undefined && row.foldedQuestions === undefined)
+    .map((row) => ({ id: row._id, fromSlug: row.fromSlug, toSlug: row.toSlug, folded: false })) });
+
+export const setFoldQuestions = internalMutation({ args: { siteId: v.id("sites"), id: v.id("site_redirects"), foldQuestions: v.array(v.string()) },
+  handler: async (ctx, { siteId, id, foldQuestions }) => {
+    const row = await ctx.db.get(id);
+    if (!row || row.siteId !== siteId || row.revertedAt !== undefined || row.foldQuestions !== undefined) return;
+    await ctx.db.patch(id, { foldQuestions: foldQuestions.map((q) => q.trim()).filter((q) => q.length > 2 && q.length <= 120).slice(0, 3) });
+  } });
 
 /** The site's redirects in force, with how each reaches readers. */
 export const activeInternal = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) =>

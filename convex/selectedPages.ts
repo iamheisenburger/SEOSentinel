@@ -18,8 +18,8 @@ import { REFRESH_COOLDOWN_MS, REFRESH_REVIEW_MS, refreshArticleOldEnough, refres
 import { isBrandedSearchQuery } from "./lib/searchPerformance";
 import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
 import { relatedReadingRepairProposal } from "./lib/contentCorrection";
-import { servedOnItsOwnUrl } from "./lib/pentraConsolidation";
-import { mergedSlugs } from "./siteRedirects";
+import { articleSlugOf, servedOnItsOwnUrl } from "./lib/pentraConsolidation";
+import { activeRedirects, mergedSlugs } from "./siteRedirects";
 import { pentraDeliveryKeys, publicRevisionProjection } from "./lib/publicRevisionProjection";
 
 async function owner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
@@ -246,6 +246,25 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
     now - (p.editable.lastImprovedAt ?? 0) >= CONTENT_PAGE_COOLDOWN_MS &&
     (p.editable.origin !== "published_refresh" || refreshDue(p.editable)) &&
     !jobs.some(j => j.contentWork?.targetPageId === p._id && !["verified","failed"].includes(j.contentWork.stage)));
+  // Nov 2026: a page that took in a merged duplicate first answers the searches the merged page was shown for, one
+  // section at a time (its ground is kept, not lost). The merged page's searches are already known, so this needs no
+  // Search Console wait or refresh age; the ordinary cooldown, the refresh rota and business fit still apply.
+  for (const fold of (await activeRedirects(ctx, site._id)).filter((r) => (r.foldQuestions?.length ?? 0) > 0)) {
+    const page = pages.find((p) => p.editable?.active && articleSlugOf(p.slug) === fold.toSlug);
+    const e = page?.editable;
+    if (!page || !e || !refreshAllowed || e.connectionHash !== contentConnectionHash(site) || e.profileHash !== confirmedContentProfileHash(site) ||
+      now - (e.lastImprovedAt ?? 0) < CONTENT_PAGE_COOLDOWN_MS ||
+      jobs.some(j => j.contentWork?.targetPageId === page._id && !["verified","failed"].includes(j.contentWork.stage))) continue;
+    try { assertUnprotectedPage(page.slug, e.title, e.sourceContent, { pentraCreated: Boolean(e.managedArticleId) }); } catch { continue; }
+    const question = fold.foldQuestions!.find(q => !e.markdown.toLowerCase().includes(q.toLowerCase()) &&
+      evaluateTopicBusinessFit({ keyword: q, label: e.title, ...tenantTopicBusinessSignals(site) }).eligible);
+    if (!question) { await ctx.db.patch(fold._id, { foldQuestions: [] }); continue; }
+    const managed = e.managedArticleId ? await ctx.db.get(e.managedArticleId) : null;
+    const editTarget = refreshInsertTarget(e, managed?.articleType) ?? targetedImprovement(e, site, question);
+    if (!editTarget) continue;
+    return { page, question, editTarget, fold: { redirectId: fold._id, question },
+      reason: `Merged duplicate: /${fold.fromSlug} now redirects here, and Google showed it for "${question}", which this page doesn't answer yet. No claim of causal growth.` };
+  }
   if (!candidates.length) return null;
   const exhausted = await exhaustedImprovementPages(ctx, site, now);
   let measurements: Awaited<ReturnType<typeof takeCurrentGscQueryRows>>;

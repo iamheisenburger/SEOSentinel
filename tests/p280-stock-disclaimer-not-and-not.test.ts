@@ -11,7 +11,7 @@ const markdown = (paragraph: string) => `## Find where visitors stall\n\n${parag
 const flagged = (paragraph: string) => readerVisibleIssues({ markdown: markdown(paragraph), sources: [] } as never).some((issue) => /pipeline text/.test(issue));
 
 test("P280 \"not measured data and not an industry taxonomy\" is repaired, the advice kept", () => {
-  assert.equal(RELATED_REPAIR_VERSION, 7, "a fresh repair pass runs under the new rules");
+  assert.ok(RELATED_REPAIR_VERSION >= 7, "a fresh repair pass runs under the new rules (Nov 2026: 8, prepared images)");
   const live = "Before changing anything, decide which kind of stall you have. The table below is an author-proposed diagnostic for prioritizing your effort, not measured data and not an industry taxonomy.";
   assert.ok(flagged(live));
   const proposal = stockDisclaimerRepairProposal(markdown(live));

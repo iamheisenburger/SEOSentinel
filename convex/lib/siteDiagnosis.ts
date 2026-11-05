@@ -35,16 +35,22 @@ export type CrawledPage = {
   loadMs?: number;
   /** A page Pentra published (an article), as opposed to the site's own pages. */
   article?: boolean;
+  /** An address taken down on purpose (a retired article): answering "not found" is what it should do. */
+  removed?: boolean;
   /** Google's verdict from Search Console's URL Inspection ("PASS", "NEUTRAL", "FAIL"), when inspected. */
   indexVerdict?: string | null;
   coverageState?: string | null;
   publishedAt?: number | null;
 };
+/** Google's mobile speed test (PageSpeed Insights) for one page: its performance score (0-100) and how long the main
+ * content takes to appear. Measured by Google, never by one fetch from Pentra's server. */
+export type SpeedCheck = { url: string; score: number | null; lcpMs: number | null };
 /** Who a search's reader is, judged against what the business sells (see searchIntent.ts). */
 export type IntentLabel = "buyer" | "learner" | "job_seeker" | "developer" | "other_product" | "navigational" | "unrelated";
 export type QueryIntent = { query: string; label: IntentLabel; reason?: string };
 /** One search's page one, measured: the median authority of the sites ranking there. */
-export type PageOneCheck = { query: string; medianRank: number | null; reachable?: number; results?: number };
+export type PageOneCheck = { query: string; medianRank: number | null; reachable?: number; results?: number;
+  domains?: { domain: string; rank: number | null }[] };
 export type DiagnosisInput = {
   domain: string;
   gsc: readonly GscRow[];
@@ -57,8 +63,11 @@ export type DiagnosisInput = {
   crawlComplete?: boolean;
   /** The addresses the site's sitemap lists, when it was read. */
   sitemap?: { found: boolean; urls: readonly string[] } | null;
+  /** Google's mobile speed test for a few of the site's pages, when it answered. */
+  speed?: readonly SpeedCheck[];
   intents?: readonly QueryIntent[];
-  aiAnswers?: { asked: number; named: number } | null;
+  /** Buyer questions put to the AI assistants (convex/lib/aiAnswers.ts): answers given, and how many named the business. */
+  aiAnswers?: { asked: number; named: number; cited?: number; byAssistant?: readonly { assistant: string; asked: number; named: number }[] } | null;
   /** Days of Search Console history to judge (default 28, ending at its newest date). */
   windowDays?: number;
   now?: number;
@@ -279,13 +288,22 @@ export function diagnoseSite(input: DiagnosisInput): Diagnosis {
         items: mismatched.slice(0, 8).map((m) => `${path(m.p.url)} (top search "${m.top}", position ${r1(m.position)}, ${m.impressions} impressions) → "${m.title}"`) },
         valuable.length ? "failing" : "weak");
     }
-    const broken = [...live.filter((p) => (p.status ?? 200) >= 400 || p.status === 0), ...deadEnds];
+    // An address taken down on purpose answers "not found" as it should (Nov 2026: pentra.dev's eight retired articles,
+    // removed for invented quotes, were reported as broken).
+    const broken = [...live.filter((p) => !p.removed && ((p.status ?? 200) >= 400 || p.status === 0)), ...deadEnds];
     if (broken.length) {
       for (const p of broken) act(p.url, "Fix it: the address doesn't load");
       add({ factor: "pages", severity: "high", problem: "Published pages that don't load", evidence: `${broken.length} published addresses end in an error`,
         action: "Bring each back, or redirect it to the page that replaced it", items: broken.slice(0, 8).map((p) => `${path(p.url)} (HTTP ${p.status ?? "?"})`) }, "failing");
     }
-    const ok = live.filter((p) => (p.status ?? 200) < 300);
+    const loads = live.filter((p) => (p.status ?? 200) < 300);
+    // The pages meant to rank: the articles, the home page, any page Google shows for a search, and (with no Search
+    // Console yet, as at onboarding) every page the owner's sitemap lists. A support page, a policy or a verification
+    // file is not judged as content (Nov 2026: /support and a 56-word verification page were flagged thin).
+    const home = normalize(`https://${input.domain}/`);
+    const listedInSitemap = new Set((input.sitemap?.urls ?? []).map(normalize));
+    const ok = loads.filter((p) => { const key = normalize(p.url);
+      return p.article || key === home || byPage.has(key) || (!input.gsc.length && listedInSitemap.has(key)); });
     const pointing = ok.filter((p) => p.canonical && normalize(p.canonical) !== normalize(p.url));
     if (pointing.length) {
       for (const p of pointing) act(p.url, "Make it name itself as the real page, or redirect it");
@@ -352,11 +370,14 @@ export function diagnoseSite(input: DiagnosisInput): Diagnosis {
       add({ factor: "pages", severity: "medium", problem: "Thin pages", evidence: `${thin.length} pages have under 300 words`, action: "Expand or merge them",
         items: thin.slice(0, 8).map((p) => `${path(p.url)} (${p.words} words)`) }, "weak");
     }
-    const slow = ok.filter((p) => (p.loadMs ?? 0) > 2000);
+    // Speed as Google measures it on a phone (one fetch from Pentra's server measured the network, not the page).
+    const timed = (input.speed ?? []).filter((c) => c.score !== null || c.lcpMs !== null);
+    const slow = timed.filter((c) => (c.score !== null && c.score < 50) || (c.lcpMs !== null && c.lcpMs > 4000));
     if (slow.length) {
-      for (const p of slow) act(p.url, "Make it load faster");
-      add({ factor: "pages", severity: "medium", problem: "Slow pages", evidence: `${slow.length} of ${ok.length} pages took over 2 seconds to load`,
-        action: "Serve articles as static, cached pages" }, "weak");
+      for (const c of slow) act(c.url, "Make it load faster on phones");
+      add({ factor: "pages", severity: "medium", problem: "Slow pages", evidence: `${slow.length} of ${timed.length} pages Google's mobile speed test checked are slow`,
+        action: "Make the main content appear within 2.5 seconds on a phone: lighter images and scripts, cached pages",
+        items: slow.map((c) => `${path(c.url)} (speed score ${c.score ?? "?"}/100, main content in ${c.lcpMs !== null ? `${r1(c.lcpMs / 1000)}s` : "?"})`) }, "weak");
     }
     const unstructured = ok.filter((p) => p.structuredData === false);
     if (unstructured.length) add({ factor: "pages", severity: "low", problem: "Pages without structured data", evidence: `${unstructured.length} of ${ok.length} pages have none`,
@@ -412,8 +433,11 @@ export function diagnoseSite(input: DiagnosisInput): Diagnosis {
   // 5. AI answers: are the AI assistants naming the business when buyers ask?
   if (input.aiAnswers && input.aiAnswers.asked > 0) {
     const share = input.aiAnswers.named / input.aiAnswers.asked;
+    const names: Record<string, string> = { chatgpt: "ChatGPT", gemini: "Gemini", google_ai_mode: "Google AI Mode" };
+    const split = (input.aiAnswers.byAssistant ?? []).map((a) => `${names[a.assistant] ?? a.assistant} ${a.named} of ${a.asked}`).join(", ");
     if (share < 0.2) add({ factor: "ai", severity: share === 0 ? "high" : "medium", problem: "AI assistants don't name it",
-      evidence: `Named in ${input.aiAnswers.named} of ${input.aiAnswers.asked} buyer questions`, action: "Get listed on the pages the assistants cite; publish pages that answer those questions" }, share === 0 ? "failing" : "weak");
+      evidence: `Named in ${input.aiAnswers.named} of ${input.aiAnswers.asked} answers to buyer questions${split ? ` (${split})` : ""}`,
+      action: "Get listed on the pages the assistants cite; publish pages that answer those questions" }, share === 0 ? "failing" : "weak");
     else factors.ai = "ok";
   } else add({ factor: "ai", severity: "medium", problem: "AI answers not measured", evidence: "Nobody has asked the AI assistants the buyer questions yet",
     action: "Ask ChatGPT, Gemini and Google AI Mode the buyer questions every week" }, "unknown");
@@ -435,7 +459,7 @@ export function summarize(siteType: Diagnosis["siteType"], totals: Diagnosis["to
   const top = findings.filter((f) => f.severity === "high").slice(0, 3);
   const problems = (top.length ? top : findings.slice(0, 3)).map((f) => `${f.problem}: ${f.evidence}.`);
   const next = [...new Set((top.length ? top : findings.slice(0, 3)).map((f) => f.action))];
-  return [standing, problems.length ? `Biggest problems. ${problems.join(" ")}` : "", next.length ? `What Pentra does next. ${next.join("; ")}.` : ""]
+  return [standing, problems.length ? `Biggest problems. ${problems.join(" ")}` : "", next.length ? `What Pentra does next. ${next.map((a) => `${a}.`).join(" ")}` : ""]
     .filter(Boolean).join("\n");
 }
 

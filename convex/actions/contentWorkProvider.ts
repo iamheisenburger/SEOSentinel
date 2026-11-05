@@ -126,6 +126,35 @@ export async function contentStructuredCall(args: { system: string; userMessage:
   return result.input;
 }
 
+/** P352 (Nov 2026): OpenAI's list price for gpt-image-1.5, $32 per million image output tokens (a medium 1536x1024 image
+ * is 1,568 tokens: $0.05) and $5 per million text input tokens; gpt-4o-mini's look at the image for visible defects is a
+ * fraction of a cent, charged as a flat bound. The step's ceiling covers two images and their looks. */
+export const HERO_IMAGE_CEILING_MICRO_USD = 120_000;
+const IMAGE_OUTPUT_MICRO_USD_PER_TOKEN = 32, IMAGE_TEXT_INPUT_MICRO_USD_PER_TOKEN = 5, IMAGE_REVIEW_MICRO_USD = 1_000;
+export type HeroImageAttempt = { inputTokens: number; outputTokens: number; reviewed: boolean };
+export const heroImageCostMicroUsd = (attempts: readonly HeroImageAttempt[]) => attempts.reduce((sum, a) =>
+  sum + Math.ceil(a.outputTokens * IMAGE_OUTPUT_MICRO_USD_PER_TOKEN + a.inputTokens * IMAGE_TEXT_INPUT_MICRO_USD_PER_TOKEN) +
+    (a.reviewed ? IMAGE_REVIEW_MICRO_USD : 0), 0);
+
+/** P352: the hero image of a new article, bought inside the article's own ledger and its $0.50 cap. It is an optional
+ * step (ARTICLE_OPTIONAL_STEP): it runs only while its highest possible price still fits, and a cap refusal publishes
+ * the article without it. Charged from the API's own usage receipts; a retried job reuses the stored image, never buys
+ * another. `make` returns the image (or null when none passed its look) with every attempt's usage, and throws only
+ * when a provider answer was lost (its cost then stays at the ceiling, as for every uncertain call). */
+export async function contentHeroImage(make: () => Promise<{ url: string | null; attempts: HeroImageAttempt[] }>): Promise<string | null> {
+  const s = scope.getStore();
+  if (!s?.job.contentWork) throw new Error("Missing content provider scope");
+  const cw = s.job.contentWork;
+  const admission = await s.ctx.runMutation(internal.contentWork.beginProviderCall, { jobId: s.job._id, workerToken: s.workerToken,
+    key: `${cw.replacements}:${cw.revisions}:${s.phase}:hero_image`, requestHash: sha256Hex(`hero_image:v1:${s.job._id}`),
+    ceilingMicroUsd: HERO_IMAGE_CEILING_MICRO_USD });
+  if (admission.kind === "cached") return (admission.result as { url?: string | null } | undefined)?.url ?? null;
+  const made = await make();
+  await s.ctx.runMutation(internal.contentWork.completeProviderCall, { jobId: s.job._id, workerToken: s.workerToken, key: admission.key,
+    actualMicroUsd: Math.min(HERO_IMAGE_CEILING_MICRO_USD, heroImageCostMicroUsd(made.attempts)), result: { url: made.url } });
+  return made.url;
+}
+
 /** Autopilot live web research is on unless the deployment turns it off. */
 /** Live web research is opt-in (PENTRA_CONTENT_WEB_RESEARCH=on). In production its
  * citation-heavy drafts failed the publication gate and left slots empty, so the

@@ -13,7 +13,7 @@ import { backedFactsOnly, rebuildSourcesSection, withFaqLast, withoutEmptyFigure
 import { fetchPublicTextRendered } from "../lib/tregFetch";
 import { sourcingGaps, TopicNotSourceable, undocumentedCodeNames, type SourcingCounts } from "../lib/topicSourcing";
 import { withoutStockDisclaimers } from "../lib/contentCorrection";
-import { articlePlanEnabled, contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider } from "./contentWorkProvider";
+import { articlePlanEnabled, contentHeroImage, contentProviderActive, contentProviderAutopilotDraft, contentProviderMayRepairDraft, contentProviderPromptTime, contentResearchCall, contentStructuredCall, contentWebResearchEnabled, withContentProvider, type HeroImageAttempt } from "./contentWorkProvider";
 import { autopilotCompanyNameIssue, autopilotCompanyNameNote, autopilotEditPassIssue, autopilotPublicationConsented, autopilotVerificationNote,
   checkableFactCheckFindings, unsearchedCompanyMentions } from "../lib/autopilotEditor";
 class ContentQualityRejection extends Error {}
@@ -609,9 +609,11 @@ async function reviewMediaAsset(
     input,
   });
   const review = parseJson<MediaReview>(MediaReviewSchema, response.output_text);
+  // P352 (Nov 2026): an image is turned away for a defect the look names (garbled text, a wrong subject, a watermark),
+  // never for its score: rule 2a, an AI score never decides what an article gets.
   return {
     ...review,
-    passed: review.passed && review.score >= 85 && review.issues.length === 0,
+    passed: review.passed && review.issues.length === 0,
   };
 }
 
@@ -670,6 +672,48 @@ async function generateHeroImage(
 
   const imageBytes = Buffer.from(b64, "base64");
   return storeReviewedImage(ctx, imageBytes, "image/webp", "hero", { title });
+}
+
+/** The output tokens of one medium 1536x1024 gpt-image-1.5 image (OpenAI's own count), charged when a response omits usage. */
+const HERO_IMAGE_OUTPUT_TOKENS = 1_568;
+
+/** P352 (Nov 2026): a hero image for a new article, up to two attempts, each looked at for visible defects, with every
+ * attempt's usage for the article's ledger (contentHeroImage). A look that turns an image away, or a request the API
+ * refuses outright, leaves no image; only a lost provider answer throws (its cost stays at the ledger's ceiling). */
+export async function makeReviewedHeroImage(ctx: ActionCtx, args: { title: string; niche: string; brandingPrompt?: string; brandColor?: string }):
+  Promise<{ url: string | null; attempts: HeroImageAttempt[]; notes: string[] }> {
+  const client = openaiClient();
+  const prompt = buildHeroImagePrompt({ title: args.title, niche: args.niche, brandingPrompt: args.brandingPrompt, brandColor: args.brandColor });
+  const attempts: HeroImageAttempt[] = [], notes: string[] = [];
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    let response;
+    try {
+      response = await client.images.generate({ model: "gpt-image-1.5", prompt, n: 1, size: "1536x1024", quality: "medium",
+        output_format: "webp", output_compression: 80 });
+    } catch (error) {
+      // An answer from the API (a refusal, a rate limit, a server error) made no image and charged nothing; only a lost
+      // connection leaves the cost uncertain.
+      if (error instanceof OpenAI.APIError && error.status !== undefined && error.status >= 400 && error.status !== 408) {
+        attempts.push({ inputTokens: 0, outputTokens: 0, reviewed: false });
+        notes.push(`attempt ${attempt}: not made (HTTP ${error.status})`);
+        continue;
+      }
+      throw error;
+    }
+    const usage = (response as { usage?: { input_tokens?: number; output_tokens?: number } }).usage;
+    const record: HeroImageAttempt = { inputTokens: usage?.input_tokens ?? Buffer.byteLength(prompt, "utf8"),
+      outputTokens: usage?.output_tokens ?? HERO_IMAGE_OUTPUT_TOKENS, reviewed: false };
+    attempts.push(record);
+    const b64 = response.data?.[0]?.b64_json;
+    if (!b64) { notes.push(`attempt ${attempt}: no image returned`); continue; }
+    record.reviewed = true;
+    try {
+      return { url: await storeReviewedImage(ctx, Buffer.from(b64, "base64"), "image/webp", "hero", { title: args.title }), attempts, notes };
+    } catch (error) {
+      notes.push(`attempt ${attempt}: ${error instanceof Error ? error.message.slice(0, 160) : "turned away"}`);
+    }
+  }
+  return { url: null, attempts, notes };
 }
 
 /** Generate one factual-neutral, text-free supporting image. */
@@ -5959,13 +6003,11 @@ async function handleArticle(
 
   // ── Step 5c: Attach only reviewed, contextually relevant media ──
   const reviewedInlineMediaUrls: string[] = [];
+  // P352 (Nov 2026): media waits only on what code checks (a number with no citation would hold the article anyway),
+  // never on an AI score (rule 2a).
   const strictProsePassed =
     !isStrictPublication ||
-    (
-      (editorialQualityScore ?? 0) >= 85 &&
-      (factCheckScore ?? 0) >= 85 &&
-      uncitedEvidenceRequiredParagraphs(finalMarkdown).length === 0
-    );
+    uncitedEvidenceRequiredParagraphs(finalMarkdown).length === 0;
 
   if (enableImages && isStrictPublication && strictProsePassed) {
     await reportProgress(10, "Preparing reviewed article media...");
@@ -7881,12 +7923,15 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
   const deliveryConfig = publicationDeliveryConfig(site);
   const deliveryConfigHash = publicationDeliveryConfigHash(deliveryConfig);
   const productHeadingPattern = new RegExp(`^##\\s+.*(?:${productName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}|how\\s+.*helps?).*$`, "im");
+  // P352: the article's media (its hero image is added once the article is ready to publish).
+  const media = { featuredImage: article.featuredImage, reviewedMediaUrls: article.reviewedMediaUrls ?? [], notes: article.mediaQualityNotes ?? [] };
   const candidateFor = (fields: { title: string; markdown: string; metaTitle?: string; metaDescription?: string }): Doc<"articles"> => {
     const productEvidenceStatus = productHeadingPattern.test(fields.markdown)
       ? (article.productEvidenceSnapshot && article.productEvidenceHash ? "passed" : "failed") : "not_applicable";
     return { ...article, ...fields, ...calculateArticleStats(fields.markdown), qualityPlan: "fixed_v1", claimEvidence: [], claimEvidenceStatus: "not_applicable",
-      productEvidenceStatus, mediaQualityStatus: publicationMediaQualityStatus({ markdown: fields.markdown, featuredImage: article.featuredImage,
-        reviewedMediaUrls: article.reviewedMediaUrls ?? [], productEvidenceStatus }), factCheckScore: undefined, editorialQualityScore: undefined,
+      featuredImage: media.featuredImage, reviewedMediaUrls: media.reviewedMediaUrls,
+      productEvidenceStatus, mediaQualityStatus: publicationMediaQualityStatus({ markdown: fields.markdown, featuredImage: media.featuredImage,
+        reviewedMediaUrls: media.reviewedMediaUrls, productEvidenceStatus }), factCheckScore: undefined, editorialQualityScore: undefined,
       publicationConfigHash: deliveryConfigHash };
   };
   // P287: a year the title doesn't give leaves the search title in code, so a held draft re-checked at $0 is not held for it.
@@ -8002,10 +8047,34 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
   // v3.1 (batch 6, A4; revised after batch 7): citation numbers stay stable against the article's sources array, and the
   // Sources list is rebuilt canonically from it (never a gap, never a disagreement with the stored array).
   fields = { ...fields, markdown: rebuildSourcesSection(withPriceDate(withFaqLast(untimed.markdown), article.createdAt ?? Date.now()), article.sources ?? []) };
-  const candidate = candidateFor(fields);
-  const quality = evaluatePublicationQuality(candidate, "strict");
-  const failures = planChecksForArticle(candidate);
-  const preLinkIssues = issuesBlockingPreLinkReview([...quality.issues, ...readerVisibleIssues(candidate)]);
+  let candidate = candidateFor(fields);
+  let quality = evaluatePublicationQuality(candidate, "strict");
+  let failures = planChecksForArticle(candidate);
+  let preLinkIssues = issuesBlockingPreLinkReview([...quality.issues, ...readerVisibleIssues(candidate)]);
+  // P352 (Nov 2026): every new article Pentra publishes carries an image (since Aug 27 Autopilot published none: its jobs
+  // ran with images off and this review never made one). Bought only once the article is ready to publish, inside its
+  // $0.50 ledger, never on an AI score; an article whose image can't be made publishes without one.
+  if (preLinkIssues.length === 0 && !media.featuredImage && contentProviderActive() && contentProviderMayRepairDraft()) {
+    const heroNotes: string[] = [];
+    const hero = await contentHeroImage(async () => {
+      const made = await makeReviewedHeroImage(ctx, { title: fields.title, niche: site.niche ?? "", brandingPrompt: site.imageBrandingPrompt ?? undefined,
+        brandColor: site.brandPrimaryColor ?? undefined });
+      heroNotes.push(...made.notes);
+      return made;
+    }).catch((error: unknown) => {
+      heroNotes.push(costCapRefusal(error) ? "skipped: the article reached its $0.50 cost cap" : `unavailable: ${error instanceof Error ? error.message.slice(0, 120) : "unknown"}`);
+      return null;
+    });
+    media.notes = [...media.notes, hero ? "Hero image made and looked at for visible defects." : `Hero image not added (${heroNotes.join("; ").slice(0, 300) || "turned away"}).`];
+    if (hero) {
+      media.featuredImage = hero;
+      media.reviewedMediaUrls = [...media.reviewedMediaUrls.filter((url) => url !== hero), hero];
+      candidate = candidateFor(fields);
+      quality = evaluatePublicationQuality(candidate, "strict");
+      failures = planChecksForArticle(candidate);
+      preLinkIssues = issuesBlockingPreLinkReview([...quality.issues, ...readerVisibleIssues(candidate)]);
+    }
+  }
   const readyForPublication = preLinkIssues.length === 0;
   const contentHash = readyForPublication ? publicationArtifactHash(candidate) : undefined;
   const qualityRevisionCount = (article.qualityRevisionCount ?? 0) + (incrementRevision || fixedNow ? 1 : 0);
@@ -8021,8 +8090,8 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
       `Fixed article plan v1: ${article.articlePlan?.format ?? "guide"}, ${article.articlePlan?.sections.length ?? 0} outline section(s).`,
       ...fixNotes, ...planCheckIssues(failures), ...planCheckNotes(failures),
     ],
-    featuredImage: article.featuredImage, reviewedMediaUrls: article.reviewedMediaUrls ?? [],
-    mediaQualityStatus: candidate.mediaQualityStatus ?? "passed", mediaQualityNotes: article.mediaQualityNotes ?? [],
+    featuredImage: media.featuredImage, reviewedMediaUrls: media.reviewedMediaUrls,
+    mediaQualityStatus: candidate.mediaQualityStatus ?? "passed", mediaQualityNotes: media.notes,
     productEvidenceStatus: candidate.productEvidenceStatus ?? "not_applicable",
     productEvidenceSnapshot: article.productEvidenceSnapshot, productEvidenceHash: article.productEvidenceHash,
     claimEvidence: [], claimEvidenceStatus: "not_applicable", contentHash,
@@ -8624,11 +8693,9 @@ async function reviewExistingArticleHandler(
     // sound. The retry path must then be capable of completing those deferred
     // assets; otherwise every initially quarantined article is permanently
     // blocked by its missing hero/product evidence even after the prose passes.
+    // P352: never on an AI score or the claim ledger (rule 2a); only the code checks defer media spend.
     const proseReadyForMedia =
-      reviewedConfidenceScore >= 85 &&
-      editorialQualityScore >= 85 &&
       evidenceDefects.length === 0 &&
-      unsupportedClaims.length === 0 &&
       deterministicClaimAudit.passed;
     let reviewedProductImage = selectReviewedProductImage(
       finalReviewMarkdown,

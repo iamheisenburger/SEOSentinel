@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as actions_articleImages from "../actions/articleImages.js";
 import type * as actions_backlinks from "../actions/backlinks.js";
 import type * as actions_cadenceMicroSeed from "../actions/cadenceMicroSeed.js";
 import type * as actions_contentCorrections from "../actions/contentCorrections.js";
@@ -37,6 +38,7 @@ import type * as actions_siteHealth from "../actions/siteHealth.js";
 import type * as actions_smartlead from "../actions/smartlead.js";
 import type * as actions_syndication from "../actions/syndication.js";
 import type * as actions_underfilledPlanRecovery from "../actions/underfilledPlanRecovery.js";
+import type * as articleImages from "../articleImages.js";
 import type * as articles from "../articles.js";
 import type * as autopilot from "../autopilot.js";
 import type * as blog from "../blog.js";
@@ -55,6 +57,7 @@ import type * as growthLoop from "../growthLoop.js";
 import type * as http from "../http.js";
 import type * as jobs from "../jobs.js";
 import type * as lib_accountDeletion from "../lib/accountDeletion.js";
+import type * as lib_aiAnswers from "../lib/aiAnswers.js";
 import type * as lib_anthropicText from "../lib/anthropicText.js";
 import type * as lib_articleAssembly from "../lib/articleAssembly.js";
 import type * as lib_articleExecutionBudget from "../lib/articleExecutionBudget.js";
@@ -259,6 +262,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "actions/articleImages": typeof actions_articleImages;
   "actions/backlinks": typeof actions_backlinks;
   "actions/cadenceMicroSeed": typeof actions_cadenceMicroSeed;
   "actions/contentCorrections": typeof actions_contentCorrections;
@@ -288,6 +292,7 @@ declare const fullApi: ApiFromModules<{
   "actions/smartlead": typeof actions_smartlead;
   "actions/syndication": typeof actions_syndication;
   "actions/underfilledPlanRecovery": typeof actions_underfilledPlanRecovery;
+  articleImages: typeof articleImages;
   articles: typeof articles;
   autopilot: typeof autopilot;
   blog: typeof blog;
@@ -306,6 +311,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   jobs: typeof jobs;
   "lib/accountDeletion": typeof lib_accountDeletion;
+  "lib/aiAnswers": typeof lib_aiAnswers;
   "lib/anthropicText": typeof lib_anthropicText;
   "lib/articleAssembly": typeof lib_articleAssembly;
   "lib/articleExecutionBudget": typeof lib_articleExecutionBudget;

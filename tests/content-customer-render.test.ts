@@ -41,6 +41,8 @@ function render(component: string, queryState: unknown = state, outcome: unknown
         if (fn === "searchPerformance:contentOutcome") return outcome;
         if (fn === "selectedPages:list") return { complete: true, pages: [] };
         if (fn === "siteHealth:latest") return null;
+        if (fn === "siteDiagnosis:latest") return null;
+        if (fn === "siteRedirects:listForSite") return [];
         if (fn === "topics:listBySite" && topicRows) return topicRows;
         if (fn === "topics:listBySite") return [
           { _id: "t1", label: "Irrigation valve inspection checklist", primaryKeyword: "irrigation valve inspection", status: "planned", priority: 90 },
@@ -209,7 +211,7 @@ test("SLC29 synthetic overview separates upcoming, verified, organic and issues 
   const { html, calls } = render("content-work-overview");
   for (const heading of ["Upcoming work", "Verified changes", "Organic clicks", "Needs attention"]) assert.match(html, new RegExp(heading));
   assert.match(html, /Overdue/); assert.match(html, /Loading measurements/); assert.doesNotMatch(html, /0 clicks/);
-  assert.deepEqual(calls, ["contentWork:readiness", "siteHealth:latest"]);
+  assert.deepEqual(calls, ["contentWork:readiness", "siteDiagnosis:latest", "siteRedirects:listForSite", "siteHealth:latest"]);
   assert.match(html, /Refresh measurements/);
 });
 

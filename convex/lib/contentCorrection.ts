@@ -6,7 +6,7 @@ import { isApiCmsMethod } from "./cmsDestinations.ts";
 import { canonicalBlogHref, consolidates } from "./pentraConsolidation.ts";
 
 export type CorrectiveInput = {
-  kind: "factual_correction" | "technical_repair" | "reader_text_repair" | "related_reading_titles";
+  kind: "factual_correction" | "technical_repair" | "reader_text_repair" | "related_reading_titles" | "image_addition";
   before: string; reason: string; field?: "siteSummary" | "productUsage";
   targetUrl?: string;
   /** reader_text_repair: the exact paragraph written in place of the process
@@ -41,6 +41,31 @@ function readerTextRepair(markdown: string, before: string, replacement: string)
   const next = exactReplacement(markdown, before, replacement);
   const previous = new Set(otherDefects(markdown));
   if (otherDefects(next).some((defect) => !previous.has(defect))) throw new Error("The repair would leave another reader-visible defect on the page");
+  return replacement;
+}
+/** Nov 2026: Autopilot published no image from Aug 27 to Nov 5 (its jobs ran with images off). An image Pentra made and
+ * looked at for visible defects (stored in Pentra's own file storage) is added above an article's first paragraph, and
+ * nothing else on the page changes. A page that already shows an image keeps the page as it is. No model runs here. */
+const IMAGE_ADDITION_LINE = /^!\[([^\]\n]{1,200})\]\((https:\/\/[a-z0-9-]+\.convex\.(?:cloud|site)\/api\/storage\/[A-Za-z0-9-]+)\)$/;
+export function imageAdditionReplacement(before: string, image: { url: string; alt: string }): string {
+  return `![${image.alt.replace(/[\[\]\n]/g, " ").replace(/\s+/g, " ").trim().slice(0, 200)}](${image.url})\n\n${before}`;
+}
+/** The first plain paragraph of an article's body (not a heading, list, table, quote, image, markup or code), within
+ * the correction path's bounds: where an added image goes. */
+export function firstPlainParagraph(markdown: string): string | null {
+  for (const block of markdown.split(/\n\s*\n/).map((b) => b.trim())) {
+    if (!block || /^(?:#|[-*+]\s|\d+[.)]\s|>|\||!\[|<|```|---)/.test(block)) continue;
+    return block.length >= 15 && contentWords(block) <= 100 && !block.includes("\n") ? block : null;
+  }
+  return null;
+}
+function imageAddition(markdown: string, before: string, replacement: string): string {
+  if (/!\[[^\]]*\]\(|<img\b/i.test(markdown)) throw new Error("The page already shows an image");
+  const cut = replacement.indexOf("\n\n");
+  if (cut < 0 || replacement.slice(cut + 2) !== before || !IMAGE_ADDITION_LINE.test(replacement.slice(0, cut))) {
+    throw new Error("An image addition places one image Pentra stored above the paragraph and changes nothing else");
+  }
+  if (/^\s*(?:#|[-*+]\s|\d+[.)]\s|>|\||!\[|<)/.test(before)) throw new Error("An image goes above a plain paragraph");
   return replacement;
 }
 /** P176 (Oct 24 2026): Pentra's Related reading list used to cut a linked
@@ -236,6 +261,10 @@ export function planCorrectiveChange(site: Doc<"sites">, page: Doc<"pages">, inp
     if (input.field || input.targetUrl || input.replacement === undefined) throw new Error("A Related reading repair takes only the exact repaired list");
     if (e.kind !== "github") throw new Error("A Related reading repair maps only to a GitHub Markdown source");
     after = relatedTitlesRepair(e.markdown, before, input.replacement, { domain: site?.domain, selfHref: pagePath(page) });
+  } else if (input.kind === "image_addition") {
+    if (input.field || input.targetUrl || input.replacement === undefined) throw new Error("An image addition takes only the image and its paragraph");
+    if (e.kind !== "github") throw new Error("An image addition maps only to a GitHub Markdown source");
+    after = imageAddition(e.markdown, before, input.replacement);
   } else {
     if (input.field || !input.targetUrl) throw new Error("Technical correction requires a verified same-site destination");
     const links = [...before.matchAll(/\[([^\]\n]+)\]\((https:\/\/[^\s)]+)\)/g)];
@@ -277,7 +306,7 @@ export const RELATED_REPAIR_SLOT_LEAD_MS = 6 * 3_600_000, RELATED_REPAIR_SPACING
 /** P220 (Oct 26 2026): the rules the link repair runs by. A change to them (2, P218: links to consolidated pages)
  * makes every page due once more: a pass records the rules it started under, and a site whose last finished pass
  * ran under earlier rules runs a fresh one, instead of resting a week with pages passed under the old rules. */
-export const RELATED_REPAIR_VERSION = 7; // 3: P221 (a title cut after a dropped leading question word); 4: P250 (the stock disclaimer); 5: P272 (its variants); 6: P279 (two modifiers, a sentence of its own); 7: P280 ("not X and not a standard")
+export const RELATED_REPAIR_VERSION = 8; // 3: P221 (a title cut after a dropped leading question word); 4: P250 (the stock disclaimer); 5: P272 (its variants); 6: P279 (two modifiers, a sentence of its own); 7: P280 ("not X and not a standard"); 8: Nov 2026 (prepared images added)
 export function relatedRepairAllowed(site: Doc<"sites">, now: number): boolean {
   const s = site.contentSchedule;
   return Boolean(s && site.serviceMode === "growth_first" && site.autopilotEnabled && s.autopilotSelectedAt && s.autopublishConsentAt &&
@@ -292,7 +321,7 @@ export function relatedRepairAllowed(site: Doc<"sites">, now: number): boolean {
 export function verifyCorrectivePatch(site: Doc<"sites">, page: Doc<"pages">, patch: CorrectivePatch) {
   const expected = planCorrectiveChange(site, page, { kind: patch.kind, before: patch.before, reason: patch.reason,
     ...(patch.field ? { field: patch.field } : {}), ...(patch.targetUrl ? { targetUrl: patch.targetUrl } : {}),
-    ...(patch.kind === "reader_text_repair" || patch.kind === "related_reading_titles" ? { replacement: patch.after } : {}) });
+    ...(patch.kind === "reader_text_repair" || patch.kind === "related_reading_titles" || patch.kind === "image_addition" ? { replacement: patch.after } : {}) });
   for (const key of ["after", "sourceBefore", "sourceAfter", "brokenUrl"] as const) if (expected[key] !== patch[key]) throw new Error("Correction lost its exact owner/source evidence");
   return exactReplacement(page.editable!.markdown, patch.before, patch.after);
 }
