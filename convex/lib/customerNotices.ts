@@ -239,3 +239,70 @@ export function monthlyReportEmail(input: { domain: string; month: { label: stri
   lines.push("", "Your dashboard: https://pentra.dev/dashboard", "", "Pentra", "", settingsFooter(input.domain));
   return { subject: `Your ${input.month.label} report for ${input.domain}`, text: lines.join("\n") };
 }
+
+/** Phase 6 (Nov 2026): the weekly results email, sent right after the weekly diagnosis (rollout sites first). What Google
+ * showed this week against the week before, what Pentra found, what it fixed and published, and what it does next, in
+ * plain words. Nothing is claimed that the diagnosis or Search Console didn't measure. */
+export type WeeklySearch = { clicks: number; impressions: number; previousClicks: number; previousImpressions: number } | "not_connected";
+export type WeeklyReportInput = {
+  domain: string;
+  search: WeeklySearch;
+  /** The diagnosis's verdict per factor (searches, pages, authority, clicks, ai). */
+  factors: Record<string, string>;
+  /** Its biggest problems, in its own words ("problem: evidence"). */
+  problems: string[];
+  fixed: Array<{ kind: "merged" | "folded"; from: string; to: string; live: boolean }>;
+  published: Array<{ title: string; url: string }>;
+  improved: Array<{ title: string; url: string }>;
+  aiNamed: { named: number; asked: number } | null;
+  next: string | null;
+};
+
+const FACTOR_WORDS: Record<string, string> = { searches: "Searches it can win", pages: "Pages worth ranking", authority: "Authority (links)",
+  clicks: "Clicks once shown", ai: "Named by AI assistants" };
+const VERDICT_WORDS: Record<string, string> = { good: "good", ok: "good", weak: "weak", failing: "failing", unknown: "not measured yet" };
+
+export function weeklyReportEmail(input: WeeklyReportInput): { subject: string; text: string } {
+  const count = (n: number) => n.toLocaleString("en-US");
+  const change = (now: number, before: number) => before === 0 ? (now === 0 ? "no change" : `up from 0`)
+    : now === before ? "no change" : `${now > before ? "up" : "down"} ${Math.round(Math.abs(now - before) / before * 100)}% on the week before`;
+  const lines = [`Your week on Google for ${input.domain}, and what Pentra did about it.`, ""];
+  if (typeof input.search === "object") {
+    const s = input.search;
+    lines.push("From your Search Console (the last 7 days Google has data for):",
+      `- ${count(s.clicks)} clicks (${change(s.clicks, s.previousClicks)})`,
+      `- ${count(s.impressions)} impressions (${change(s.impressions, s.previousImpressions)})`, "");
+  } else {
+    lines.push("Connect Google Search Console in your dashboard to see your clicks and impressions here, week by week.", "");
+  }
+  const factors = Object.entries(FACTOR_WORDS).filter(([key]) => input.factors[key]);
+  if (factors.length) {
+    lines.push("The five things that bring traffic, checked this week:");
+    for (const [key, words] of factors) lines.push(`- ${words}: ${VERDICT_WORDS[input.factors[key]] ?? input.factors[key]}`);
+    if (input.aiNamed) lines.push(`  (ChatGPT, Gemini and Google AI Mode named you in ${input.aiNamed.named} of ${input.aiNamed.asked} answers to buyer questions)`);
+    lines.push("");
+  }
+  if (input.problems.length) {
+    lines.push("Biggest problems:");
+    for (const p of input.problems.slice(0, 3)) lines.push(`- ${p}`);
+    lines.push("");
+  }
+  if (input.fixed.length) {
+    lines.push("Fixed this week:");
+    for (const f of input.fixed.slice(0, 8)) {
+      lines.push(f.kind === "merged" ? `- Merged a duplicate article into the stronger one: ${f.from} now leads to ${f.to}${f.live ? "" : " (going live)"}`
+        : `- Folded an article Google never showed into the one it does: ${f.from} now leads to ${f.to}${f.live ? "" : " (going live)"}`);
+    }
+    lines.push("");
+  }
+  lines.push(input.published.length ? `Published: ${input.published.length} new article${input.published.length === 1 ? "" : "s"}` : "Published: no new articles this week");
+  for (const a of input.published.slice(0, 5)) lines.push(`- "${a.title}" ${a.url}`);
+  if (input.improved.length) {
+    lines.push(`Improved: ${input.improved.length} existing article${input.improved.length === 1 ? "" : "s"}`);
+    for (const a of input.improved.slice(0, 5)) lines.push(`- "${a.title}" ${a.url}`);
+  }
+  lines.push("");
+  if (input.next) lines.push(`Next: ${input.next}`, "");
+  lines.push("Your dashboard: https://pentra.dev/dashboard", "", "Pentra", "", settingsFooter(input.domain));
+  return { subject: `Your week on Google: ${input.domain}`, text: lines.join("\n") };
+}

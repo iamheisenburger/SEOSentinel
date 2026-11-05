@@ -1881,7 +1881,7 @@ export default defineSchema({
   customer_emails: defineTable({
     siteId: v.id("sites"),
     kind: v.union(v.literal("first_article"), v.literal("missed_slot"), v.literal("monthly_report"), v.literal("setup_reminder"),
-      v.literal("draft_ready")),
+      v.literal("draft_ready"), v.literal("weekly_report")),
     key: v.string(),
     status: v.union(v.literal("pending"), v.literal("sent"), v.literal("skipped"), v.literal("failed")),
     reason: v.optional(v.string()),

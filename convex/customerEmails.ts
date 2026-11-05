@@ -4,7 +4,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { plausibleEmail, sendCustomerEmail } from "./lib/customerEmail";
 import { addWebsiteEmail, draftReadyEmail, firstArticleEmail, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth, setupReminderEmail, type MissedSlotCause,
-  type MonthlyImprovement, type MonthlySearch, type SetupStep } from "./lib/customerNotices";
+  type MonthlyImprovement, type MonthlySearch, type SetupStep, weeklyReportEmail, type WeeklySearch } from "./lib/customerNotices";
 import { contentConnectionComplete, pasteDestination } from "./lib/contentSelection";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { publicationDestinationBlockers } from "./lib/autopilotReadiness";
@@ -290,6 +290,9 @@ export const noticeContext = internalQuery({ args: { logId: v.id("customer_email
       nextAt: site.contentSchedule && !site.contentSchedule.paused && site.contentSchedule.nextDeadlineAt > Date.now()
         ? site.contentSchedule.nextDeadlineAt : null, timeZone });
     if (!message) skipReason = "nothing_to_report";
+  } else if (log.kind === "weekly_report") {
+    message = await weeklyReport(ctx, site, domain);
+    if (!message) skipReason = "nothing_to_report";
   } else if (log.kind === "setup_reminder") {
     // Started since it was noted: nothing is left to tell.
     if (site.userId && !(await setupStarted(ctx, site))) message = setupReminderEmail({ domain, step: await setupStep(ctx, site) });
@@ -311,6 +314,49 @@ export const noticeContext = internalQuery({ args: { logId: v.id("customer_email
   }
   return { attempts: log.attempts, message, skipReason, contact: contact ? { email: contact.email, emailUpdates: contact.emailUpdates } : null };
 } });
+
+/** Phase 6 (Nov 2026): the weekly results email's content, read right after the week's diagnosis: Google's last 7 complete
+ * days against the 7 before (Search Console, by page), the five factors and biggest problems the diagnosis measured, what
+ * Pentra fixed (merges and folds recorded this week, and whether each is live), published and improved, and what it does
+ * next. Only measured numbers; nothing without a diagnosis from the last three days. */
+async function weeklyReport(ctx: QueryCtx, site: Doc<"sites">, domain: string) {
+  const DAY = 86_400_000, now = Date.now(), weekAgo = now - 7 * DAY;
+  const diagnosis = await ctx.db.query("site_diagnoses").withIndex("by_site_created", q => q.eq("siteId", site._id)).order("desc").first();
+  if (!diagnosis || now - diagnosis.createdAt > 3 * DAY) return null;
+  let search: WeeklySearch = "not_connected";
+  if (gscConnectionMatchesCurrentDomain(site) && site.gscReceiptStatus !== "revoked") {
+    const dates = (site.gscDateEpochs ?? []).map(r => r.date).sort(), end = dates[dates.length - 1];
+    if (end) {
+      const day = (back: number) => new Date(Date.parse(`${end}T00:00:00Z`) - back * DAY).toISOString().slice(0, 10);
+      const thisStart = day(6), previousStart = day(13), previousEnd = day(7);
+      if (isCompleteGscDateRange(site.gscDateEpochs ?? [], previousStart, end)) {
+        const read = await takeCurrentGscPageRows(ctx, site, REPORT_GSC_ROW_LIMIT, { startDate: previousStart, endDate: end });
+        if (!read.exhausted) {
+          const sum = (from: string, to: string, field: "clicks" | "impressions") => read.rows.filter(r => r.date >= from && r.date <= to).reduce((n, r) => n + r[field], 0);
+          search = { clicks: sum(thisStart, end, "clicks"), impressions: sum(thisStart, end, "impressions"),
+            previousClicks: sum(previousStart, previousEnd, "clicks"), previousImpressions: sum(previousStart, previousEnd, "impressions") };
+        }
+      }
+    }
+  }
+  const redirects = (await ctx.db.query("site_redirects").withIndex("by_site_from", q => q.eq("siteId", site._id)).take(1000))
+    .filter(r => r.revertedAt === undefined && r.createdAt >= weekAgo);
+  const fixed = redirects.map(r => ({ kind: r.reason === "merged_unshown" ? "folded" as const : "merged" as const, from: `/${r.fromSlug}`, to: `/${r.toSlug}`,
+    live: r.verifiedAt !== undefined }));
+  const published = (await collectCurrentDomainPublishedSummariesSince(ctx, site, weekAgo)).filter(a => typeof a.publishedAt === "number")
+    .sort((a, b) => a.publishedAt! - b.publishedAt!).map(a => ({ title: a.title, url: a.publicUrl ?? publishedArticlePageUrl(site.domain, site.urlStructure, a.slug) }));
+  const improved: Array<{ title: string; url: string }> = [];
+  for (const job of (await ctx.db.query("jobs").withIndex("by_site_content_stage", q => q.eq("siteId", site._id).eq("contentWork.stage", "verified"))
+    .order("desc").take(50)).filter(j => j.contentWork?.intent === "improve" && !j.contentWork.ownerRequest && (j.contentWork.verifiedAt ?? 0) >= weekAgo)) {
+    const page = job.contentWork!.targetPageId ? await ctx.db.get(job.contentWork!.targetPageId) : null;
+    if (page && page.siteId === site._id) improved.push({ title: page.editable?.title ?? page.title ?? page.url, url: page.url });
+  }
+  const answered = (diagnosis.aiAnswers?.checks ?? []).filter(c => c.answered);
+  const next = /What Pentra does next\. ([^\n]+)/.exec(diagnosis.summary)?.[1]?.trim() ?? null;
+  return weeklyReportEmail({ domain, search, factors: diagnosis.factors, fixed, published, improved,
+    problems: diagnosis.findings.filter(f => f.severity !== "low").slice(0, 3).map(f => `${f.problem}: ${f.evidence}`),
+    aiNamed: answered.length ? { named: answered.filter(c => c.named).length, asked: answered.length } : null, next });
+}
 
 export const markEmail = internalMutation({ args: { logId: v.id("customer_emails"), status: v.union(v.literal("pending"), v.literal("sent"),
   v.literal("skipped"), v.literal("failed")), reason: v.optional(v.string()), attempts: v.number() },

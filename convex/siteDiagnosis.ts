@@ -1,7 +1,7 @@
 /** Site diagnosis (Nov 2026): what the weekly run reads, where it records, its spend hold, and the weekly schedule. The
  * scoring is the pure convex/lib/siteDiagnosis.ts; the run (crawl, Search Console, page one, readers) is
  * convex/actions/siteDiagnosis.ts. */
-import { internalMutation, internalQuery, query } from "./_generated/server";
+import { internalMutation, internalQuery, query, type MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
@@ -94,8 +94,21 @@ export const close = internalMutation({ args: { siteId: v.id("sites"), reservati
 export const record = internalMutation({ args: { siteId: v.id("sites"), diagnosis: v.object(siteDiagnosisRecord) }, handler: async (ctx, { siteId, diagnosis }) => {
   const site = await ctx.db.get(siteId);
   if (!site || site.deletionStatus) return null;
-  return await ctx.db.insert("site_diagnoses", { siteId, createdAt: Date.now(), ...diagnosis });
+  const id = await ctx.db.insert("site_diagnoses", { siteId, createdAt: Date.now(), ...diagnosis });
+  // Phase 6 (Nov 2026): the owner's weekly results email follows the week's diagnosis (rollout sites first), once a week,
+  // after the redirects it delivered have had time to be checked live.
+  if (DIAGNOSIS_ROLLOUT_DOMAINS.includes(bareDomain(site.domain))) await noteWeeklyReport(ctx, site);
+  return id;
 } });
+
+const WEEKLY_REPORT_DELAY_MS = 20 * 60_000;
+async function noteWeeklyReport(ctx: MutationCtx, site: Doc<"sites">) {
+  const now = Date.now(), week = new Date(now - ((new Date(now).getUTCDay() + 6) % 7) * 86_400_000).toISOString().slice(0, 10);
+  const logged = await ctx.db.query("customer_emails").withIndex("by_site_kind_key", (q) => q.eq("siteId", site._id).eq("kind", "weekly_report").eq("key", week)).first();
+  if (logged) return;
+  const logId = await ctx.db.insert("customer_emails", { siteId: site._id, kind: "weekly_report", key: week, status: "pending", attempts: 0, createdAt: now, updatedAt: now });
+  await ctx.scheduler.runAfter(WEEKLY_REPORT_DELAY_MS, internal.customerEmails.send, { logId });
+}
 
 /** The owner's latest diagnosis for the dashboard: where the site stands, the five factors, the biggest problems and the
  * AI-answer check, without the page-by-page list (the weekly email and the per-page view read latestInternal). */
