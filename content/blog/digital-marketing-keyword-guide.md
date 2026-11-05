@@ -28,6 +28,8 @@ internalLinks:
 
 ## What "digital marketing keyword" actually means
 
+![Digital Marketing Keywords: How to Find and Organize the Terms That Actually Drive Traffic](https://wary-starfish-773.convex.cloud/api/storage/d929f1b1-463c-41a4-b5b1-04efd7a8b933)
+
 If you searched "digital marketing keyword," you're likely trying to do one of two things: find keywords *about* digital marketing (for a blog, agency site, or course), or figure out how to pick keywords *for* a digital marketing campaign in general. Both paths matter, and this guide covers both. But the more useful reframe is this: a keyword is not a word, it's a proxy for a decision someone is trying to make. Your job is to figure out which decision, then decide whether your page is the right answer to it.
 
 This article walks through the practical mechanics: how to source candidate keywords, how to sort them by intent so you don't waste effort on the wrong ones, how to structure them into a plan you can execute, and how to keep that plan from decaying once you've published. Nothing here requires a specific tool — the process works with a spreadsheet and free discovery methods. Where automation genuinely removes manual work, that's noted plainly, without inflating it into something bigger than the underlying evidence supports.
