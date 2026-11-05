@@ -203,9 +203,15 @@ export function retiredArticle(domain: string, slug: string): boolean {
   return PENTRA_RETIRED.has(clean) || (Object.prototype.hasOwnProperty.call(PENTRA_CONSOLIDATED, clean) && PENTRA_RETIRED.has(PENTRA_CONSOLIDATED[clean]));
 }
 
-/** True when an article is still served on its own URL (not consolidated away or retired). */
-export function servedOnItsOwnUrl(domain: string, slug: string): boolean {
-  return consolidatedTarget(domain, slug) === null && !retiredArticle(domain, slug);
+/** The article slug a stored slug, path or link names: its last path segment (article slugs have no "/"). */
+export function articleSlugOf(value: string): string {
+  return value.trim().replace(/[?#].*$/, "").replace(/\/+$/, "").split("/").pop() ?? "";
+}
+
+/** True when an article is still served on its own URL: not consolidated away or retired (pentra.dev), and not merged
+ * into a stronger page on its searches (any site, Nov 2026: `merged` is convex/siteRedirects.ts's mergedSlugs). */
+export function servedOnItsOwnUrl(domain: string, slug: string, merged?: ReadonlySet<string>): boolean {
+  return consolidatedTarget(domain, slug) === null && !retiredArticle(domain, slug) && !merged?.has(articleSlugOf(slug));
 }
 
 /** A link inside an article body, pointed straight at the article a consolidated
@@ -220,8 +226,9 @@ export function canonicalBlogHref(domain: string, href: string): string {
 /** P217 (Oct 26 2026): link destinations still served on their own URL. A consolidated pentra.dev page redirects, and
  * a link to it read as the merged page's title on the page it now leads to: 45 Related reading links on 19 of
  * pentra.dev's live pages, 10 lists linking one page twice. New links go to pages served on their own URL only. */
-export function servedDestinations<T extends { href: string }>(domain: string, destinations: T[]): T[] {
-  return destinations.filter(destination => canonicalBlogHref(domain, destination.href) === destination.href && !retiredHref(domain, destination.href));
+export function servedDestinations<T extends { href: string }>(domain: string, destinations: T[], merged?: ReadonlySet<string>): T[] {
+  return destinations.filter(destination => canonicalBlogHref(domain, destination.href) === destination.href && !retiredHref(domain, destination.href) &&
+    !merged?.has(articleSlugOf(destination.href)));
 }
 
 /** P246: a link to a retired pentra.dev article. */

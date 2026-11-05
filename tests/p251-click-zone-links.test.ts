@@ -36,7 +36,7 @@ test("P251 the article pipeline reads the site's click zone once and passes it t
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
   assert.match(pipeline, /internal\.searchPerformance\.pageClickZoneInternal, \{ siteId \}\)\.catch\(\(\) => \[\]\)/);
   // P278: the siblings are the pages served on their own URL.
-  assert.match(pipeline, /const servedSiblings = servedDestinations\(site\.domain, relatedArticles\);/);
+  assert.match(pipeline, /const servedSiblings = servedDestinations\(site\.domain, relatedArticles, merged\);/);
   assert.match(pipeline, /destinations: servedSiblings,\n    limit: 3,\n    clickZone,/);
   assert.match(readFileSync("convex/searchPerformance.ts", "utf8"), /export const pageClickZoneInternal = internalQuery/);
 });

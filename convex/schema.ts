@@ -1,4 +1,5 @@
 import { defineSchema, defineTable } from "convex/server";
+import { siteDiagnosisRecord } from "./lib/siteDiagnosisSchema";
 import { v } from "convex/values";
 import { publicationDeferralBoundaryValidator } from "./lib/publicationDeferral";
 import { publicationInventoryValidator } from "./lib/publicationEligibility";
@@ -1775,6 +1776,36 @@ export default defineSchema({
     error: v.optional(v.string()),
   }).index("by_site_checked", ["siteId", "checkedAt"]),
 
+  // Site diagnosis (Nov 2026, convex/lib/siteDiagnosis.ts): the five things search traffic needs (searches it can win,
+  // pages worth ranking, authority, clicks, AI answers), scored from the site's own data, weekly and at setup. Every run
+  // is kept, so week-to-week change is visible.
+  site_diagnoses: defineTable({
+    siteId: v.id("sites"),
+    createdAt: v.number(),
+    ...siteDiagnosisRecord,
+  }).index("by_site_created", ["siteId", "createdAt"]),
+
+  // Permanent redirects Pentra made (Nov 2026): a duplicate article merged into the stronger page on its searches
+  // (convex/lib/duplicatePages.ts). Both articles stay published in Pentra; only the weaker address now redirects.
+  // Pentra's own blog serves the redirect itself; a site that renders its own pages from GitHub on Vercel gets it in its
+  // vercel.json; any other platform shows it as an action. A reverted row is kept as history, never deleted.
+  site_redirects: defineTable({
+    siteId: v.id("sites"),
+    fromSlug: v.string(),
+    toSlug: v.string(),
+    reason: v.literal("merged_duplicate"),
+    evidence: v.optional(v.string()),
+    delivery: v.union(v.literal("pending"), v.literal("pentra_blog"), v.literal("repository"), v.literal("not_delivered")),
+    deliveryNote: v.optional(v.string()),
+    commitSha: v.optional(v.string()),
+    /** When fetching the old address answered with a permanent redirect to the new one. */
+    verifiedAt: v.optional(v.number()),
+    verifyFailedAt: v.optional(v.number()),
+    repointedAt: v.optional(v.number()),
+    revertedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_site_from", ["siteId", "fromSlug"]),
+
   // Articles an owner published themselves on another platform (paste), with
   // Pentra's check of the public page. Evidence only; the article is unchanged.
   pasted_publications: defineTable({
@@ -2221,7 +2252,7 @@ export default defineSchema({
     independentFundingApprovalReference: v.optional(v.string()),
     siteId: v.optional(v.id("sites")),
     userId: v.string(),
-    purpose: v.string(), // topic_plan | authority_discovery | onboarding_analysis | expected_click_evidence_backfill | expected_click_demand_backfill | cadence_micro_seed | cadence_micro_seed_fallback
+    purpose: v.string(), // topic_plan | authority_discovery | onboarding_analysis | expected_click_evidence_backfill | expected_click_demand_backfill | cadence_micro_seed | cadence_micro_seed_fallback | site_diagnosis
     trigger: v.string(),
     reservedMicroUsd: v.number(),
     // Original ceiling remains immutable. Settlement records either exact

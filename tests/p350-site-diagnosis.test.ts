@@ -2,7 +2,8 @@
 // only (Fernwood Decks, Quillpad, Brightwater): every rule fires on a measured symptom, never on who the site is.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { diagnoseSite, type GscRow } from "../convex/lib/siteDiagnosis.ts";
+import { diagnoseSite, sharesTopic, type GscRow } from "../convex/lib/siteDiagnosis.ts";
+import { parseSearchIntents, searchIntentRequest } from "../convex/lib/searchIntent.ts";
 
 const day = (i: number) => new Date(Date.UTC(2026, 9, 1 + i)).toISOString().slice(0, 10);
 /** Spread a query's impressions and clicks evenly over 28 days at one position, on one page (impressions in 28s). */
@@ -56,11 +57,12 @@ test("a strong site: good clicks, so the job is pages just off page one (good to
   assert.deepEqual(near.items, ["/blog/lighting (position 14, 840 impressions)"]);
 });
 
-test("its own pages compete for one search: merge them", () => {
+test("its own pages compete for the same searches: measured by Search Console's overlap", () => {
   const gsc = [...series("deck stain", 600, 0, 22, "https://fernwood.example/blog/stain"), ...series("deck stain", 400, 0, 25, "https://fernwood.example/blog/stain-2")];
   const d = diagnoseSite({ domain: "fernwood.example", gsc });
   const f = d.findings.find((x) => x.problem === "Its own pages compete for the same searches")!;
-  assert.deepEqual(f.items, ["deck stain: /blog/stain, /blog/stain-2"]);
+  assert.deepEqual(f.items, ['/blog/stain and /blog/stain-2: 100% overlap (e.g. "deck stain")']);
+  assert.deepEqual(d.merges, [], "nothing is merged without the crawl proving both are live, settled articles");
 });
 
 test("pages as crawled: one naming another page as the real one, no images, slow", () => {
@@ -68,7 +70,7 @@ test("pages as crawled: one naming another page as the real one, no images, slow
     { url: "https://fernwood.example/blog/a", canonical: "https://fernwood.example/blog/b", images: 0, loadMs: 2600 },
     { url: "https://fernwood.example/blog/c", canonical: "https://www.fernwood.example/blog/c/", images: 3, loadMs: 400 }] });
   assert.equal(d.factors.pages, "failing");
-  assert.deepEqual(d.findings.find((x) => x.problem === "Pages point Google to a different page")!.items, ["/blog/a → /blog/b"]);
+  assert.deepEqual(d.findings.find((x) => x.problem === "Pages name a different page as the real one")!.items, ["/blog/a → /blog/b"]);
   assert.match(d.findings.find((x) => x.problem === "Pages without images")!.evidence, /^1 of 2 pages/);
   assert.match(d.findings.find((x) => x.problem === "Slow pages")!.evidence, /^1 of 2 pages took over 2 seconds/);
 });
@@ -97,4 +99,84 @@ test("searches for the business's own name are not counted as earned traffic", (
   assert.equal(d.totals.impressions, 504);
   assert.equal(d.totals.clicks, 0);
   assert.equal(d.totals.brandedClicks, 25);
+});
+
+const site = "https://fernwood.example";
+test("redirects are recorded, not followed: a chain, a dead end, and a ranked page sent to another topic (weighted by what the ranking was worth)", () => {
+  const gsc = [...series("deck lighting ideas", 840, 0, 14, `${site}/blog/lighting`), ...series("deck stain colors", 560, 0, 44, `${site}/blog/stain-colors`),
+    ...series("deck builder", 280, 0, 30, `${site}/blog/builder`)];
+  const pages = [
+    { url: `${site}/blog/lighting`, status: 308, location: `${site}/blog/railings` },
+    { url: `${site}/blog/stain-colors`, status: 308, location: `${site}/blog/pressure-washing` },
+    { url: `${site}/blog/old`, status: 301, location: `${site}/blog/lighting` },
+    { url: `${site}/blog/gone`, status: 301, location: `${site}/blog/missing` },
+    { url: `${site}/blog/railings`, status: 200, title: "Deck Railing Styles and Costs", images: 2, words: 1400, structuredData: true },
+    { url: `${site}/blog/pressure-washing`, status: 200, title: "How to Pressure Wash a Deck", images: 1, words: 1200, structuredData: true },
+    { url: `${site}/blog/missing`, status: 404 },
+  ];
+  const d = diagnoseSite({ domain: "fernwood.example", gsc, pages });
+  const mismatch = d.findings.find((f) => f.problem === "Ranked pages redirect to a page about something else")!;
+  assert.equal(mismatch.severity, "high", "the lighting page ranked at 14: a real loss");
+  assert.deepEqual(mismatch.items, ['/blog/lighting (top search "deck lighting ideas", position 14, 840 impressions) → "Deck Railing Styles and Costs"',
+    '/blog/stain-colors (top search "deck stain colors", position 44, 560 impressions) → "How to Pressure Wash a Deck"']);
+  assert.deepEqual(d.findings.find((f) => f.problem === "Redirect chains")!.items, ["/blog/old → /blog/lighting → …"]);
+  assert.deepEqual(d.findings.find((f) => f.problem === "Published pages that don't load")!.items, ["/blog/missing (HTTP 404)", "/blog/gone (HTTP 301)"]);
+  const low = diagnoseSite({ domain: "fernwood.example", gsc: series("deck stain colors", 560, 0, 44, `${site}/blog/stain-colors`), pages: pages.slice(1, 2).concat(pages.slice(5, 6)) });
+  assert.equal(low.findings.find((f) => f.problem === "Ranked pages redirect to a page about something else")!.severity, "low", "position 44 was worth little");
+});
+
+test("noindex and index coverage: settled pages Google hasn't indexed are named with Google's own reason; new ones get their grace", () => {
+  const now = Date.UTC(2026, 10, 5), day = 86_400_000;
+  const pages = [
+    { url: `${site}/blog/a`, status: 200, title: "A", images: 1, words: 900, indexVerdict: "PASS", publishedAt: now - 60 * day },
+    { url: `${site}/blog/b`, status: 200, title: "B", images: 1, words: 900, indexVerdict: "NEUTRAL", coverageState: "Crawled - currently not indexed", publishedAt: now - 40 * day },
+    { url: `${site}/blog/c`, status: 200, title: "C", images: 1, words: 900, indexVerdict: "NEUTRAL", coverageState: "Discovered - currently not indexed", publishedAt: now - 3 * day },
+    { url: `${site}/blog/d`, status: 200, title: "D", images: 1, words: 900, noindex: true },
+  ];
+  const d = diagnoseSite({ domain: "fernwood.example", gsc: [], pages, now });
+  assert.deepEqual(d.findings.find((f) => f.problem === "Published pages Google hasn't indexed")!.items, ["/blog/b (Crawled - currently not indexed)"]);
+  assert.match(d.findings.find((f) => f.problem === "Published pages Google hasn't indexed")!.evidence, /^1 of 2 inspected pages/);
+  assert.deepEqual(d.findings.find((f) => f.problem === "Published pages tell Google not to index them")!.items, ["/blog/d"]);
+});
+
+test("who the readers are: page-one rankings in front of job seekers and definition lookups, with the breakdown", () => {
+  const gsc = [...series("what is a deck foreman", 840, 0, 4, `${site}/blog/foreman`), ...series("deck foreman salary", 280, 0, 6, `${site}/blog/foreman`),
+    ...series("composite deck builder near me", 280, 3, 7, `${site}/blog/builders`)];
+  const intents = [{ query: "what is a deck foreman", label: "learner" as const }, { query: "deck foreman salary", label: "job_seeker" as const },
+    { query: "composite deck builder near me", label: "buyer" as const }];
+  const d = diagnoseSite({ domain: "fernwood.example", gsc, intents });
+  const f = d.findings.find((x) => x.problem === "Its page-one rankings reach people who won't buy")!;
+  assert.equal(f.severity, "high");
+  assert.equal(f.evidence, "80% of its page-one impressions come from people looking up a definition or explanation (840), job seekers (280)");
+  assert.equal(d.totals.nonBuyerPageOneShare, 0.8);
+  assert.ok(d.pageActions.find((p) => p.url.endsWith("/blog/foreman"))!.actions.some((a) => /^Retitle/.test(a)));
+});
+
+test("every page gets its own actions, and the summary says where the site stands, its biggest problems and what Pentra does next", () => {
+  const gsc = [...series("deck lighting ideas", 840, 0, 14, `${site}/blog/lighting`), ...series("deck builder", 1680, 0, 48, `${site}/blog/builder`)];
+  const d = diagnoseSite({ domain: "fernwood.example", gsc, authority: { domainRank: 2, referringDomains: 9 },
+    pages: [{ url: `${site}/blog/lighting`, status: 200, title: "Deck Lighting Ideas", images: 0, words: 1100, structuredData: true }] });
+  assert.deepEqual(d.pageActions.find((p) => p.url.endsWith("/blog/lighting"))!.actions, ["Improve it: it sits just off page one", "Add real images"]);
+  assert.match(d.summary, /^This site got 0 clicks from 2520 search impressions in 28 days/);
+  assert.match(d.summary, /Biggest problems\. It writes for searches it can't win: 67% of its non-branded impressions are past page 2\. Too little authority to compete: Domain rank 2 of 100, 9 sites link to it\./);
+  assert.match(d.summary, /What Pentra does next\. Choose only searches whose page one it can reach/);
+});
+
+test("same topic or not: more than half of the search's words in the title", () => {
+  assert.equal(sharesTopic("best free seo tools", "Free AI Tools for SEO Optimization: A Practical Guide"), true);
+  assert.equal(sharesTopic("keyword clustering", "Keywords for Research: How to Find Search Terms"), false);
+  assert.equal(sharesTopic("seo workflow", "Intelligent Content Automation"), false);
+  assert.equal(sharesTopic("deck builders", "How to Choose a Deck Builder"), true);
+});
+
+test("search intent: one request for all searches; only the requested searches with a known label come back", () => {
+  const business = { name: "Fernwood Decks", domain: "fernwood.example", summary: "Builds composite and wood decks in Knoxville." };
+  const req = searchIntentRequest(business, ["What is a deck foreman", "deck foreman salary", "deck foreman salary", "composite deck builder near me"]);
+  assert.deepEqual(req.queries, ["what is a deck foreman", "deck foreman salary", "composite deck builder near me"]);
+  assert.match(req.userMessage, /What it sells: Builds composite and wood decks in Knoxville\./);
+  assert.deepEqual(parseSearchIntents(req.queries, { intents: [
+    { query: "what is a deck foreman", label: "learner", reason: "wants a definition" }, { query: "deck foreman salary", label: "salary" },
+    { query: "composite deck builder near me", label: "buyer", reason: "looking for a builder" }, { query: "not asked", label: "buyer" },
+    { query: "what is a deck foreman", label: "buyer" }] }),
+    [{ query: "what is a deck foreman", label: "learner", reason: "wants a definition" }, { query: "composite deck builder near me", label: "buyer", reason: "looking for a builder" }]);
 });

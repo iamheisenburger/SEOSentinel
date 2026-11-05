@@ -180,6 +180,8 @@ crons.daily(
 
 // Weekly on-page health check for sites on the content service.
 crons.weekly("site-health", { dayOfWeek: "monday", hourUTC: 7, minuteUTC: 30 }, internal.siteHealth.scheduleWeekly, {});
+// Site diagnosis (Nov 2026): every Autopilot site scored weekly on the five things search traffic needs, from its own data.
+crons.weekly("site-diagnosis", { dayOfWeek: "tuesday", hourUTC: 6, minuteUTC: 20 }, internal.siteDiagnosis.scheduleWeekly, {});
 // A new Autopilot site's first site health check (P151).
 crons.interval("site-health-first-check", { hours: 2 }, internal.siteHealth.scheduleFirstChecks, {});
 // D4 (P127): each content-service site's owner gets last month's report on the

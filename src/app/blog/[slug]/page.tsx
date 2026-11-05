@@ -55,6 +55,16 @@ const getPublishedArticle = cache(async (domain: string, slug: string) =>
   publishedOrCommitted(domain, slug, () => convexHttp.query(api.blog.getPublishedBySlug, { domain, slug })),
 );
 
+// Nov 2026: an article merged into a stronger page on the same searches (convex/siteRedirects.ts) answers with a
+// permanent redirect. Read beside the article itself, so it adds no wait; unreadable means no redirect.
+const getMergedTarget = cache(async (domain: string, slug: string) => {
+  try {
+    return await convexHttp.query(api.blog.redirectForSlug, { domain, slug });
+  } catch {
+    return null;
+  }
+});
+
 // The listing behind "Related guides", read at most hourly per domain (P167).
 const getPublishedList = cachedPublishedListing;
 
@@ -105,11 +115,9 @@ function safeSiteOrigin(raw: string): string | undefined {
   }
 }
 
-function canonicalUrlFor(article: PublishedArticle): string | undefined {
-  const origin = safeSiteOrigin(article.domain);
-  if (!origin) return undefined;
-
-  const configuredTemplate = article.urlStructure ?? "/blog/[slug]";
+/** An article's path under the site's URL structure; an unsafe structure falls back to this route's own. */
+function articlePath(urlStructure: string | undefined, slug: string): string {
+  const configuredTemplate = urlStructure ?? "/blog/[slug]";
   let decodedTemplate = "";
   try {
     decodedTemplate = decodeURIComponent(configuredTemplate);
@@ -132,8 +140,13 @@ function canonicalUrlFor(article: PublishedArticle): string | undefined {
     )
       ? `/${pathSegments.join("/")}`
       : "/blog/[slug]";
-  const path = pathTemplate.replace(/\[slug\]/i, encodeURIComponent(article.slug));
-  const canonical = new URL(path, origin);
+  return pathTemplate.replace(/\[slug\]/i, encodeURIComponent(slug));
+}
+
+function canonicalUrlFor(article: PublishedArticle): string | undefined {
+  const origin = safeSiteOrigin(article.domain);
+  if (!origin) return undefined;
+  const canonical = new URL(articlePath(article.urlStructure, article.slug), origin);
   return canonical.origin === origin ? canonical.toString() : undefined;
 }
 
@@ -195,7 +208,8 @@ export async function generateMetadata({
   if (retiredArticle(domain, slug)) return { title: "Article not found", robots: { index: false, follow: false } };
   const merged = consolidatedTarget(domain, slug);
   if (merged) permanentRedirect(`/blog/${merged}`);
-  const article = await getPublishedArticle(domain, slug);
+  const [moved, article] = await Promise.all([getMergedTarget(domain, slug), getPublishedArticle(domain, slug)]);
+  if (moved) permanentRedirect(articlePath(moved.urlStructure, moved.toSlug));
 
   if (!article) {
     return {
@@ -242,7 +256,9 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
   // A consolidated duplicate on pentra.dev permanently points to its group's article.
   const merged = consolidatedTarget(domain, slug);
   if (merged) permanentRedirect(`/blog/${merged}`);
-  const article = await getPublishedArticle(domain, slug);
+  // A duplicate merged into the stronger page on its searches permanently points there (Nov 2026).
+  const [moved, article] = await Promise.all([getMergedTarget(domain, slug), getPublishedArticle(domain, slug)]);
+  if (moved) permanentRedirect(articlePath(moved.urlStructure, moved.toSlug));
   if (!article) notFound();
 
   // Related guides (P159): each article links the ones on its subject and the

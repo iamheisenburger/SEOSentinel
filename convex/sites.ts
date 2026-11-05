@@ -9,7 +9,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { withUserFacingErrors } from "./lib/userError";
 import {
   ALL_FEATURE_KEYS,
@@ -909,6 +909,33 @@ function githubRepositoryChanged(
       Object.prototype.hasOwnProperty.call(patch, key) &&
       patch[key] !== site[key],
   );
+}
+
+/** A published address never changes what it is (Nov 2026). Every published article's address is built from the site's
+ * URL structure, so changing it after the first publication would move every article at once: links, Google's index and
+ * Search Console history would all point at addresses that no longer serve them. A platform that decides its own
+ * addresses (WordPress, Shopify, Webflow, Ghost) is exempt: only a structure Pentra or the site's own code serves is fixed. */
+export const URL_STRUCTURE_LOCKED_MESSAGE =
+  "The URL structure can't change after an article is published: every published article would move to a new address and lose its place in Google. Keep the current structure.";
+
+export function sameUrlStructure(a: string | undefined, b: string | undefined): boolean {
+  const key = (value: string | undefined) => (value?.trim() || "/blog/[slug]").replace(/\/+$/, "");
+  return key(a) === key(b);
+}
+
+export async function assertPublishedAddressesKept(
+  ctx: MutationCtx,
+  site: Doc<"sites">,
+  next: Record<string, unknown>,
+) {
+  const structure = next.urlStructure;
+  if (typeof structure !== "string" || sameUrlStructure(structure, site.urlStructure)) return;
+  const method = typeof next.publishMethod === "string" ? next.publishMethod : site.publishMethod;
+  if (isApiCmsMethod(method) || method === "wordpress") return;
+  const published =
+    (await ctx.db.query("article_summaries").withIndex("by_site_status", (q) => q.eq("siteId", site._id).eq("status", "published")).first()) ??
+    (await ctx.db.query("articles").withIndex("by_site_status_created", (q) => q.eq("siteId", site._id).eq("status", "published")).first());
+  if (published) throw new ConvexError(URL_STRUCTURE_LOCKED_MESSAGE);
 }
 
 function clearStaleGitHubBranch(
@@ -3656,6 +3683,7 @@ export const upsert = mutation({
             definedData.approvalRequired ?? currentSite!.approvalRequired,
         },
       );
+      await assertPublishedAddressesKept(ctx, currentSite!, definedData);
       const authorityDomainChanged =
         normalizedAuthorityDomain(currentSite!.domain) !==
         normalizedAuthorityDomain(domain);
@@ -3976,6 +4004,7 @@ export const updateSite = mutation({
       patch.cadencePerWeek = requestedCadence;
       patch.cadenceRequestedPerWeek = requestedCadence;
     }
+    await assertPublishedAddressesKept(ctx, site, patch);
     clearStaleGitHubBranch(site, patch);
     const publisherConnectionInvalidated = publisherConnectionChanged(
       site,
@@ -4083,6 +4112,8 @@ const SITE_DELETION_STAGES = [
   "search_page_daily",
   "search_performance",
   "site_health_checks",
+  "site_diagnoses",
+  "site_redirects",
   "pasted_publications",
   "autopilot_alerts",
   "autopilot_health",
@@ -4795,6 +4826,10 @@ async function deletionRowsForStage(
       return ctx.db.query("search_performance").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "site_health_checks":
       return ctx.db.query("site_health_checks").withIndex("by_site_checked", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "site_diagnoses":
+      return ctx.db.query("site_diagnoses").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "site_redirects":
+      return ctx.db.query("site_redirects").withIndex("by_site_from", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "pasted_publications":
       return ctx.db.query("pasted_publications").withIndex("by_site_status", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "autopilot_alerts":

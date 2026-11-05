@@ -4,6 +4,7 @@ import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { publicRevisionProjection, projectPublicArticleRows } from "./lib/publicRevisionProjection";
 import { servedOnItsOwnUrl } from "./lib/pentraConsolidation";
+import { mergedSlugs, redirectTarget } from "./siteRedirects";
 import { BLOG_LISTING_MAX_AGE_MS, HOSTED_BLOG_DOMAINS, type BlogListingRow, type BlogSitemapRow } from "./lib/blogListing";
 import {
   articleMatchesCurrentDomain,
@@ -158,8 +159,8 @@ async function currentArticleBySlug(
 /** P233 (Oct 27 2026): a page consolidated away redirects (pentra.dev; P193/P227), so it is never listed and never in
  * the sitemap. It was projected anyway, reading its revisions and improvements: 88 of pentra.dev's 147 published
  * articles, a growing share of the listing's ~3 MB a call as Related reading repairs add revisions. */
-function servedRows<T extends { slug?: string }>(site: Doc<"sites">, rows: T[]): T[] {
-  return rows.filter((row) => servedOnItsOwnUrl(site.domain, row.slug ?? ""));
+function servedRows<T extends { slug?: string }>(site: Doc<"sites">, rows: T[], merged: ReadonlySet<string>): T[] {
+  return rows.filter((row) => servedOnItsOwnUrl(site.domain, row.slug ?? "") && !merged.has(normalizeSlug(row.slug ?? "")));
 }
 
 /** The listing (the /blog index, related guides, the home page's latest guides) and the sitemap's rows, computed from
@@ -169,7 +170,8 @@ async function livePublicRows(ctx: QueryCtx, site: Doc<"sites">): Promise<{ list
   const published = useSummaries
     ? await currentPublishedSummaries(ctx, site)
     : await currentPublishedArticles(ctx, site);
-  const served = servedRows(site, [...published]);
+  // Nov 2026: an article merged into a stronger page (convex/siteRedirects.ts) redirects, so it is never listed either.
+  const served = servedRows(site, [...published], await mergedSlugs(ctx, site._id));
   const projected = await projectPublicArticleRows(ctx, site, served);
   const listing = projected.map((a) => ({
       _id: "articleId" in a ? a.articleId : a._id,
@@ -240,6 +242,17 @@ export const refreshHostedBlogListings = internalMutation({
       refreshed++;
     }
     return { refreshed };
+  },
+});
+
+/** Where a merged article's address now points (convex/siteRedirects.ts), for the blog route's permanent redirect. */
+export const redirectForSlug = query({
+  args: { domain: v.string(), slug: v.string() },
+  handler: async (ctx, { domain, slug }) => {
+    const site = await findSiteByDomain(ctx, domain);
+    if (!site) return null;
+    const toSlug = await redirectTarget(ctx, site._id, normalizeSlug(slug));
+    return toSlug ? { toSlug, urlStructure: site.urlStructure ?? "/blog/[slug]" } : null;
   },
 });
 

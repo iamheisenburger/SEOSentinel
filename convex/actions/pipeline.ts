@@ -6314,6 +6314,8 @@ async function handleLinks(
     } : {}) };
   }
   const pages = await ctx.runQuery(internal.pages.listBySiteInternal, { siteId });
+  // Nov 2026: articles merged into a stronger page redirect; a new link never points at one.
+  const merged = new Set((await ctx.runQuery(internal.siteRedirects.activeInternal, { siteId })).map((row: { fromSlug: string }) => row.fromSlug));
   const siteArticles = await ctx.runQuery(
     internal.articles.listBySiteInternal,
     { siteId },
@@ -6393,7 +6395,7 @@ async function handleLinks(
   ].filter(
     (destination, index, all) =>
       all.findIndex((candidate) => candidate.href === destination.href) === index,
-  ));
+  ), merged);
 
   if (!article.markdown || destinations.length === 0) {
     if (expectedSealedContentHash && options.relinkJobId) {
@@ -6436,7 +6438,7 @@ async function handleLinks(
   // P278 (Nov 1 2026): siblings come from the pages served on their own URL only. The best matches for pentra.dev's
   // "seo optimization automation" were articles merged away (P193); they filled the top 3, the check after the choice
   // dropped them, and the list fell back to two homepage sections.
-  const servedSiblings = servedDestinations(site.domain, relatedArticles);
+  const servedSiblings = servedDestinations(site.domain, relatedArticles, merged);
   // P281: pages no other article links to come first among siblings about as related, counted from the live Markdown of
   // the site's pages this step already read (no extra read).
   const linkingPages = pages.flatMap((page: { slug: string; editable?: { markdown?: string } }) => {

@@ -37,7 +37,7 @@ function fixture(summaryMode = false) {
   // Convex drops undefined fields. Do not let an in-memory spread hide that fact.
   const tables: Record<string, Row[]> = JSON.parse(JSON.stringify({ sites: [site], articles: [article], published_article_revisions: [revision],
     article_summaries: [{ ...article, _id: "summary", articleId: "article", articleCreatedAt: 800 }],
-    maintenance_state: summaryMode ? [{ key: "publication-integrity-v4", status: "completed" }] : [], blog_listings: [] }));
+    maintenance_state: summaryMode ? [{ key: "publication-integrity-v4", status: "completed" }] : [], blog_listings: [], site_redirects: [] }));
   const reads: string[] = [];
   const ctx = { db: {
     get: async (id: string) => structuredClone(Object.values(tables).flat().find(row => row._id === id) ?? null),
@@ -235,7 +235,7 @@ test("P233 the listing and sitemap never read the revisions of a page consolidat
   const articles = [row("served", "publish-blog-posts-wordpress-nextjs-automatically", 1000), row("merged", "auto-posting-wordpress-methods-and-checks", 900)];
   const tables: Record<string, Row[]> = { sites: [site], articles, published_article_revisions: [],
     article_summaries: articles.map(a => ({ ...a, _id: `summary-${a._id}`, articleId: a._id, articleCreatedAt: a.createdAt })),
-    maintenance_state: [{ key: "publication-integrity-v4", status: "completed" }], blog_listings: [] };
+    maintenance_state: [{ key: "publication-integrity-v4", status: "completed" }], blog_listings: [], site_redirects: [] };
   const revisionReads: unknown[] = [];
   const ctx = { db: {
     get: async (id: string) => structuredClone(Object.values(tables).flat().find(r => r._id === id) ?? null),
@@ -259,6 +259,43 @@ test("P233 the listing and sitemap never read the revisions of a page consolidat
   assert.equal(listed.join(","), "publish-blog-posts-wordpress-nextjs-automatically");
   assert.ok(revisionReads.length > 0, "the served page's revisions are still read");
   assert.ok(!revisionReads.includes("merged"), "the merged page's revisions are never read");
+});
+
+// Nov 2026 (Phase 1): an article Pentra merged into a stronger page on its searches (convex/siteRedirects.ts) redirects
+// on any hosted blog, so it leaves the listing and the sitemap the moment the merge is recorded, revisions unread.
+test("a merged article leaves the listing and the sitemap, and its revisions are never read", async () => {
+  const site: Row = { _id: "site", domain: "quillpad.example", publishMethod: "github", repoOwner: "owner", repoName: "repo", repoDefaultBranch: "main" };
+  const row = (id: string, slug: string, at: number) => ({ _id: id, siteId: "site", status: "published", title: slug, slug, metaDescription: "d",
+    readingTime: 3, publishedAt: at, createdAt: at });
+  const articles = [row("kept", "lead-scoring-system", 1000), row("merged", "crm-lead-scoring-guide", 900)];
+  const tables: Record<string, Row[]> = { sites: [site], articles, published_article_revisions: [],
+    article_summaries: articles.map(a => ({ ...a, _id: `summary-${a._id}`, articleId: a._id, articleCreatedAt: a.createdAt })),
+    maintenance_state: [{ key: "publication-integrity-v4", status: "completed" }], blog_listings: [],
+    site_redirects: [{ _id: "redirect", siteId: "site", fromSlug: "crm-lead-scoring-guide", toSlug: "lead-scoring-system", delivery: "pentra_blog" }] };
+  const revisionReads: unknown[] = [];
+  const ctx = { db: {
+    get: async (id: string) => structuredClone(Object.values(tables).flat().find(r => r._id === id) ?? null),
+    query(table: string) {
+      const conditions: Array<(r: Row) => boolean> = [];
+      const range = { eq(key: string, value: unknown) {
+        if (table === "published_article_revisions" && (key === "articleId" || key === "servedArticleId")) revisionReads.push(value);
+        conditions.push(r => r[key] === value); return range; } };
+      const rows = () => structuredClone(tables[table].filter(r => conditions.every(fn => fn(r))));
+      const chain = { withIndex(_name: string, fn: (q: typeof range) => unknown) { fn(range); return chain; }, order() { return chain; },
+        async first() { return rows()[0] ?? null; }, async take(n: number) { return rows().slice(0, n); }, async collect() { return rows(); } };
+      return chain;
+    },
+  } };
+  const runtime = { exports: {} as Record<string, { _handler(ctx: unknown, args: unknown): Promise<Row> }> };
+  runInNewContext(source, { module: runtime, exports: runtime.exports, require: createRequire(import.meta.url), URL, TextEncoder, TextDecoder });
+  const slugs = (await runtime.exports.listPublishedSlugs._handler(ctx, { domain: "quillpad.example" })).articles.map((a: Row) => a.slug);
+  const listed = (await runtime.exports.listPublishedByDomain._handler(ctx, { domain: "quillpad.example" }) as unknown as Row[]).map(a => a.slug);
+  assert.equal(slugs.join(","), "lead-scoring-system");
+  assert.equal(listed.join(","), "lead-scoring-system");
+  assert.ok(!revisionReads.includes("merged"), "the merged page's revisions are never read");
+  tables.site_redirects[0].revertedAt = 2000;
+  const restored = (await runtime.exports.listPublishedByDomain._handler(ctx, { domain: "quillpad.example" }) as unknown as Row[]).map(a => a.slug);
+  assert.equal(restored.join(","), "lead-scoring-system,crm-lead-scoring-guide", "a reverted merge lists the page again");
 });
 
 // P241 (Oct 29 2026): the sitemap (51.5 MB) and the listing (25.7 MB) were Convex's largest readers in the 24 hours to

@@ -105,6 +105,7 @@ import {
 import { PUBLISHED_REVISION_LEASE_MS } from "./lib/publishedRevision";
 import { contentJobUsesAllowance } from "./lib/contentUsage";
 import { servedDestinations, servedOnItsOwnUrl } from "./lib/pentraConsolidation";
+import { mergedSlugs } from "./siteRedirects";
 import { publicRevisionProjection } from "./lib/publicRevisionProjection";
 import {
   appendRelatedInternalLinks,
@@ -2768,7 +2769,8 @@ async function deterministicInternalLinkRepair(
       .take(100),
     takeCurrentDomainArticles(ctx, site, 100),
   ]);
-  // P217: never a page consolidated away (pentra.dev).
+  // P217: never a page consolidated away (pentra.dev), nor one merged into a stronger page (Nov 2026).
+  const merged = await mergedSlugs(ctx, site._id);
   const destinations = servedDestinations(site.domain, [
     ...sitePages
       .filter((page) => pageMatchesCurrentDomain(site, page))
@@ -2797,7 +2799,7 @@ async function deterministicInternalLinkRepair(
     (destination, index, all) =>
       all.findIndex((candidate) => candidate.href === destination.href) ===
         index,
-  ));
+  ), merged);
   const selfHref = publishedArticleInternalHref(
     site.urlStructure,
     article.slug,

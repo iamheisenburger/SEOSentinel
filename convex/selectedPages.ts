@@ -19,6 +19,7 @@ import { isBrandedSearchQuery } from "./lib/searchPerformance";
 import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
 import { relatedReadingRepairProposal } from "./lib/contentCorrection";
 import { servedOnItsOwnUrl } from "./lib/pentraConsolidation";
+import { mergedSlugs } from "./siteRedirects";
 import { pentraDeliveryKeys, publicRevisionProjection } from "./lib/publicRevisionProjection";
 
 async function owner(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) {
@@ -235,8 +236,10 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
   // page-2 refresh when a refresh slot is free and the 60-day cooldown is over.
   const refreshDue = (e: NonNullable<Doc<"pages">["editable"]>) => refreshablePentraPage(e, now) &&
     refreshAllowed && now - (e.lastImprovedAt ?? 0) >= REFRESH_COOLDOWN_MS;
-  // P219: never a page consolidated away (pentra.dev): it redirects, so no change to it can be seen live.
-  const candidates = pages.filter(p => p.editable?.active && servedOnItsOwnUrl(site.domain, p.slug) &&
+  // P219: never a page consolidated away (pentra.dev) or merged into a stronger page (Nov 2026): it redirects, so no
+  // change to it can be seen live.
+  const merged = await mergedSlugs(ctx, site._id);
+  const candidates = pages.filter(p => p.editable?.active && servedOnItsOwnUrl(site.domain, p.slug, merged) &&
     p.editable.connectionHash === contentConnectionHash(site) && p.editable.profileHash === confirmedContentProfileHash(site) &&
     // Page-2 refresh candidates are re-checked daily (Search Console moves daily).
     now - (p.editable.lastReviewedAt ?? 0) >= (p.editable.origin === "published_refresh" || refreshDue(p.editable) ? REFRESH_REVIEW_MS : CONTENT_PAGE_REVIEW_MS) &&
@@ -308,9 +311,10 @@ export const refreshAdoptionContext = internalQuery({ args: { siteId: v.id("site
   const published = await ctx.db.query("article_summaries").withIndex("by_site_status", q => q.eq("siteId", site._id).eq("status", "published")).take(2001);
   const unadopted = published.filter(row => row.publicUrl && row.publicUrlStatus === "verified" && !adopted.has(row.publicUrl));
   const contentDir = publicationDeliveryConfig(site).contentDir;
+  const merged = await mergedSlugs(ctx, site._id);
   const candidateFor = (article: Doc<"articles"> | null, url: string, forRepair: boolean) =>
     // P219: a page consolidated away redirects: nothing adopted for it could be verified live.
-    !article || !contentDir || article.siteId !== site._id || article.status !== "published" || !servedOnItsOwnUrl(site.domain, article.slug) ||
+    !article || !contentDir || article.siteId !== site._id || article.status !== "published" || !servedOnItsOwnUrl(site.domain, article.slug, merged) ||
       article.publicationReceipt?.method !== "github" ||
       !article.publicationDeliveryHash || (!forRepair && article.contentWorkSourceJobId) ? null
       : { articleId: article._id, path: `${contentDir}/${article.slug.replace(/^\//, "")}.md`, url,

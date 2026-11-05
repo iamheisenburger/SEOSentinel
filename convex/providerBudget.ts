@@ -185,7 +185,7 @@ export const getSiteReservationAudit = internalQuery({
     const ordinaryIds = new Set((await ordinaryProviderReservationRows(ctx, reservations.filter(r => r.siteId === siteId && r.userId === site.userId), snapshotAt)).map(r => r._id));
     let independentConsumedMicroUsd = 0;
     const purposes = new Set(["topic_plan", "onboarding_analysis", "authority_discovery",
-      "expected_click_demand_backfill", "expected_click_evidence_backfill", "cadence_micro_seed", "cadence_micro_seed_fallback"]);
+      "expected_click_demand_backfill", "expected_click_evidence_backfill", "cadence_micro_seed", "cadence_micro_seed_fallback", "site_diagnosis"]);
     const rows = reservations.slice(0, SITE_RESERVATION_READ_LIMIT)
       .filter(r => r.siteId === siteId && r.userId === site.userId).map(r => {
         const consumedMicroUsd = r.releasedAt !== undefined ? 0 : providerReservationConsumedMicroUsd(r);

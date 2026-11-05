@@ -117,10 +117,10 @@ test("P217 new internal links go only to pentra.dev pages served on their own UR
 // pentra.dev's 19 queued pages were such redirects, and P209 would have renewed another for the repair.
 test("P219 the link repair, its adoption and page refreshes never pick a page consolidated away", () => {
   const improvements = readFileSync("convex/contentImprovements.ts", "utf8"), selected = readFileSync("convex/selectedPages.ts", "utf8");
-  assert.match(improvements, /for \(const page of pages\) \{\n    const e = page\.editable;\n    \/\/ P219[^\n]*\n    if \(!servedOnItsOwnUrl\(site\.domain, page\.slug\)\) continue;/,
+  assert.match(improvements, /for \(const page of pages\) \{\n    const e = page\.editable;\n    \/\/ P219[^\n]*\n    \/\/[^\n]*\n    if \(!servedOnItsOwnUrl\(site\.domain, page\.slug, merged\)\) continue;/,
     "the repair chain skips a page that redirects");
-  assert.match(selected, /const candidates = pages\.filter\(p => p\.editable\?\.active && servedOnItsOwnUrl\(site\.domain, p\.slug\)/, "page refreshes skip it");
-  assert.match(selected, /article\.status !== "published" \|\| !servedOnItsOwnUrl\(site\.domain, article\.slug\)/, "adoption skips it");
+  assert.match(selected, /const candidates = pages\.filter\(p => p\.editable\?\.active && servedOnItsOwnUrl\(site\.domain, p\.slug, merged\)/, "page refreshes skip it");
+  assert.match(selected, /article\.status !== "published" \|\| !servedOnItsOwnUrl\(site\.domain, article\.slug, merged\)/, "adoption skips it");
   assert.match(readFileSync("convex/opsProbes.ts", "utf8"), /!servedOnItsOwnUrl\(site\.domain, row\.slug\) \? "redirects"/, "the probe says so");
   assert.equal(servedOnItsOwnUrl("pentra.dev", "/international-keyword-research"), false, "a queued page that redirects");
 });

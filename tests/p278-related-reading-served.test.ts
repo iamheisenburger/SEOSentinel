@@ -19,7 +19,7 @@ test("P278 siblings come from pages served on their own URL, so merged articles 
   assert.ok(!choose([...merged, served]).includes(served.href), "chosen from every article, the merged ones fill the list");
   assert.deepEqual(choose(servedDestinations("pentra.dev", [...merged, served])), [served.href], "chosen from served pages, the live one is listed");
   const pipeline = readFileSync("convex/actions/pipeline.ts", "utf8");
-  assert.match(pipeline, /const servedSiblings = servedDestinations\(site\.domain, relatedArticles\);/);
+  assert.match(pipeline, /const servedSiblings = servedDestinations\(site\.domain, relatedArticles, merged\);/);
   assert.match(pipeline, /destinations: servedSiblings,\n    limit: 3,\n    clickZone,/);
   assert.match(pipeline, /pages\.filter\(\(page: \{ slug: string \}\) => !page\.slug\.includes\("#"\)\);/, "a section of a page is not reading");
 });

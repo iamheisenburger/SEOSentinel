@@ -16,6 +16,7 @@ import { pagePath, planCorrectiveChange, RELATED_REPAIR_RETRY_MS, RELATED_REPAIR
   stockDisclaimerRepairProposal, verifyCorrectivePatch } from "./lib/contentCorrection";
 import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
 import { canonicalBlogHref, consolidates, servedOnItsOwnUrl } from "./lib/pentraConsolidation";
+import { mergedSlugs } from "./siteRedirects";
 import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { closeVerifiedContentWake } from "./jobs";
 
@@ -174,10 +175,12 @@ export const requestRelatedReadingRepair = internalMutation({ args: { siteId: v.
   let retryAt = schedule.relatedRepairCursor ? schedule.relatedRepairRetryAt : undefined;
   // P220: the rules this pass runs by (a pass already under way keeps the ones it started with).
   const passVersion = schedule.relatedRepairCursor ? schedule.relatedRepairPassVersion ?? 1 : RELATED_REPAIR_VERSION;
+  const merged = await mergedSlugs(ctx, siteId);
   for (const page of pages) {
     const e = page.editable;
-    // P219: a page consolidated away (pentra.dev) redirects: its repair could never be verified live.
-    if (!servedOnItsOwnUrl(site.domain, page.slug)) continue;
+    // P219: a page consolidated away (pentra.dev), or merged into a stronger page (Nov 2026), redirects: its repair could
+    // never be verified live.
+    if (!servedOnItsOwnUrl(site.domain, page.slug, merged)) continue;
     if (!e?.active || e.kind !== "github" || e.profileHash !== confirmedContentProfileHash(site) || e.connectionHash !== contentConnectionHash(site) ||
       schedule.profileHash !== e.profileHash || schedule.connectionHash !== e.connectionHash) continue;
     const hrefs = relatedReadingHrefs(e.markdown);

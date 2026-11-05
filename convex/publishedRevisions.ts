@@ -74,6 +74,7 @@ import { correctionInputHash, validatePublishedCorrection, PUBLISHED_CORRECTION_
 import { validateClaimEvidenceLedger } from "./lib/articleQuality";
 import { artifactSnapshot, REVISION_ARTIFACT_RENDERER_VERSION, revisionArtifactRendererVersion } from "./lib/revisionArtifact";
 import { servedDestinations } from "./lib/pentraConsolidation";
+import { mergedSlugs } from "./siteRedirects";
 export { artifactSnapshot } from "./lib/revisionArtifact";
 import {
   primaryFallbackReceiptFingerprint,
@@ -846,14 +847,14 @@ export const prepareForCadenceRecovery = internalMutation({
         !base.artifact.publicationConfigHash ||
         base.artifact.publicationConfigHash !== currentConfigHash
       ) continue;
-      // P217: never a page consolidated away (pentra.dev).
+      // P217: never a page consolidated away (pentra.dev), nor one merged into a stronger page (Nov 2026).
       const liveDestinations = servedDestinations(site.domain, verifiedTargets
         .filter((target) => target.articleId !== article._id)
         .map((target) => ({
           href: publishedArticleInternalHref(site.urlStructure, target.slug),
           title: target.title,
           keywords: target.metaKeywords,
-        })));
+        })), await mergedSlugs(ctx, site._id));
       let next: PublishedRevisionArtifact | null = null;
       try {
         next = deterministicInternalLinkRevision({
@@ -1153,7 +1154,7 @@ export const prepareForGrowthAction = internalMutation({
         href: publishedArticleInternalHref(site.urlStructure, target.slug),
         title: target.title,
         keywords: target.metaKeywords,
-      })));
+      })), await mergedSlugs(ctx, site._id));
       try {
         next = deterministicInternalLinkRevision({
           artifact: base.artifact,

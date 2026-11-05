@@ -99,7 +99,8 @@ export type SharedProviderPurpose =
   | "expected_click_evidence_backfill"
   | "expected_click_demand_backfill"
   | "cadence_micro_seed"
-  | "cadence_micro_seed_fallback";
+  | "cadence_micro_seed_fallback"
+  | "site_diagnosis";
 
 function utcDayStart(timestamp: number): number {
   const date = new Date(timestamp);
@@ -410,9 +411,10 @@ export async function inspectSharedProviderBudget(
   // same serializable transaction that will append the reservation receipt.
   const site = await ctx.db.get(args.siteId);
   if (
-    // The content engine owns growth-first spend; the one exception is keyword
-    // research for a site the owner put on Autopilot whose topics ran out.
-    (site?.serviceMode === "growth_first" && args.purpose !== "content_work" &&
+    // The content engine owns growth-first spend; the exceptions are keyword
+    // research for a site the owner put on Autopilot whose topics ran out, and
+    // the weekly site diagnosis that tells the engine what to work on.
+    (site?.serviceMode === "growth_first" && args.purpose !== "content_work" && args.purpose !== "site_diagnosis" &&
       !(args.purpose === "topic_plan" && site.contentSchedule?.autopilotSelectedAt)) ||
     !siteExecutionActive(site) ||
     !(await siteExecutionAuthorized(ctx, site)) ||

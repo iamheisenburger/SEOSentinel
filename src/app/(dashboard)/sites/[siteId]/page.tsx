@@ -3,6 +3,7 @@
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useAction, useQuery, useMutation } from "convex/react";
+import { ConvexError } from "convex/values";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { api } from "../../../../../convex/_generated/api";
 import type { Id } from "../../../../../convex/_generated/dataModel";
@@ -224,7 +225,8 @@ export default function SiteDetailPage() {
             }),
         ctaText: ctaText || undefined,
         ctaUrl: ctaUrl || undefined,
-        urlStructure: urlStructure || undefined,
+        // Published addresses never change, so a site that has published keeps its structure.
+        ...(publishedCount > 0 ? {} : { urlStructure: urlStructure || undefined }),
         externalLinking,
         sourceCitations,
         youtubeEmbeds,
@@ -241,7 +243,9 @@ export default function SiteDetailPage() {
       setTimeout(() => setSaved(false), 2000);
     } catch (error) {
       setSaveError(
-        error instanceof Error ? error.message : "Settings could not be saved.",
+        error instanceof ConvexError && typeof error.data === "string"
+          ? error.data
+          : error instanceof Error ? error.message : "Settings could not be saved.",
       );
     } finally {
       setSaving(false);
@@ -384,6 +388,7 @@ export default function SiteDetailPage() {
           ctaText={ctaText} setCtaText={setCtaText}
           ctaUrl={ctaUrl} setCtaUrl={setCtaUrl}
           urlStructure={urlStructure} setUrlStructure={setUrlStructure}
+          urlStructureLocked={publishedCount > 0}
           externalLinking={externalLinking} setExternalLinking={setExternalLinking}
           sourceCitations={sourceCitations} setSourceCitations={setSourceCitations}
           youtubeEmbeds={youtubeEmbeds} setYoutubeEmbeds={setYoutubeEmbeds}
@@ -766,6 +771,7 @@ function SettingsTab({
   ctaText, setCtaText,
   ctaUrl, setCtaUrl,
   urlStructure, setUrlStructure,
+  urlStructureLocked,
   externalLinking, setExternalLinking,
   sourceCitations, setSourceCitations,
   youtubeEmbeds, setYoutubeEmbeds,
@@ -796,6 +802,7 @@ function SettingsTab({
   ctaText: string; setCtaText: (v: string) => void;
   ctaUrl: string; setCtaUrl: (v: string) => void;
   urlStructure: string; setUrlStructure: (v: string) => void;
+  urlStructureLocked: boolean;
   externalLinking: boolean; setExternalLinking: (v: boolean) => void;
   sourceCitations: boolean; setSourceCitations: (v: boolean) => void;
   youtubeEmbeds: boolean; setYoutubeEmbeds: (v: boolean) => void;
@@ -998,8 +1005,10 @@ function SettingsTab({
         <FieldRow label="CTA URL (optional)" description="Where the CTA button links to">
           <Input value={ctaUrl} onChange={(e) => setCtaUrl(e.target.value)} placeholder="https://yoursite.com/signup" />
         </FieldRow>
-        <FieldRow label="URL structure" description="How article URLs are formatted">
-          <Input value={urlStructure} onChange={(e) => setUrlStructure(e.target.value)} placeholder="/blog/[slug]" />
+        <FieldRow label="URL structure" description={urlStructureLocked
+          ? "Fixed once an article is published, so every published address keeps working and keeps its place in Google."
+          : "How article URLs are formatted"}>
+          <Input value={urlStructure} onChange={(e) => setUrlStructure(e.target.value)} placeholder="/blog/[slug]" disabled={urlStructureLocked} />
         </FieldRow>
         <ToggleRow
           label="Link to sources"

@@ -38,7 +38,7 @@ function metaContent(html: string, name: string): string | null {
   return null;
 }
 
-function canonicalHref(html: string): string | null {
+export function canonicalHref(html: string): string | null {
   for (const tag of html.match(/<link\b[^>]*>/gi) ?? []) {
     if (/\brel\s*=\s*["'][^"']*\bcanonical\b[^"']*["']/i.test(tag)) {
       return /\bhref\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] ?? null;
