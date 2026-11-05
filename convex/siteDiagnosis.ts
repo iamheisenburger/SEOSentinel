@@ -112,6 +112,13 @@ export const latest = query({ args: { siteId: v.id("sites") }, handler: async (c
 export const latestInternal = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) =>
   await ctx.db.query("site_diagnoses").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).order("desc").first() });
 
+/** One run now, through the scheduler (an operator's run after a deploy: the CLI gives up on an action after five minutes,
+ * while the run itself has an action's ten). */
+export const runSoon = internalMutation({ args: { siteId: v.id("sites"), force: v.optional(v.boolean()) }, handler: async (ctx, { siteId, force }) => {
+  await ctx.scheduler.runAfter(0, internal.actions.siteDiagnosis.runInternal, { siteId, ...(force ? { force: true } : {}) });
+  return { scheduled: true };
+} });
+
 /** Weekly: every site in the rollout on the new Pentra setup that chose Autopilot or was diagnosed before, spaced 30
  * seconds apart. */
 export const scheduleWeekly = internalMutation({ args: {}, handler: async (ctx) => {

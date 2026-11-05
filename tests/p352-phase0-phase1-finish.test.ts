@@ -144,7 +144,7 @@ test("AI answers: buyer questions that never name the business, each assistant's
     "Named in 0 of 15 answers to buyer questions (ChatGPT 0 of 5, Gemini 0 of 5, Google AI Mode 0 of 5)");
   assert.equal(d.factors.ai, "failing");
   const action = readFileSync("convex/actions/siteDiagnosis.ts", "utf8");
-  assert.match(action, /aiQuestions = site\.aiQuestions;/, "the same questions every week, so weeks compare");
+  assert.match(action, /out\.questions = site\.aiQuestions;/, "the same questions every week, so weeks compare");
   assert.match(action, /costMicroUsd \+= AI_CALL_MAX_MICRO_USD;/, "a lost answer is charged at its bound, never assumed free");
 });
 
@@ -309,7 +309,11 @@ test("AI answers: a proper market code, Google AI Mode from cloro, and no verdic
   assert.equal(f.evidence, "Only 1 of 15 buyer questions got an answer this week, too few to judge");
   assert.equal(d.factors.ai, "unknown", "one answer is no verdict");
   const action = readFileSync("convex/actions/siteDiagnosis.ts", "utf8");
-  assert.match(action, /if \(!got\.answer\) got = await call\(question, assistant\);/, "each question gets one retry");
+  assert.match(action, /if \(!got\.answer && got\.error !== "timeout" && Date\.now\(\) < deadline\) got = await call\(question, assistant\);/,
+    "a call that failed fast gets one retry; one that timed out does not");
+  assert.match(action, /error: "not asked \(time limit\)"/, "a question still waiting at the time limit is recorded as unasked");
+  assert.match(action, /const \[crawlResult, measured, ai\] = await Promise\.all\(\[crawlPart\(\), measurePart\(\), aiPart\(\)\]\);/,
+    "the crawl, the paid checks and the AI questions run side by side, well inside an action's ten minutes");
   assert.match(action, /error: got\.error \?\? "no answer"/, "every miss keeps its reason");
   assert.match(action, /aiAnswers: answered >= AI_MIN_ANSWERS \? aiAnswerTotals\(aiChecks\) : null,/);
 });

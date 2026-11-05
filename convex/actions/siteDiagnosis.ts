@@ -34,9 +34,11 @@ import { publishedArticleInternalHref } from "../lib/internalLinks";
 import { editVercelRedirects, type RedirectEntry } from "../lib/vercelRedirects";
 
 const MAX_PAGES = 200, PAGE_ONE_QUERIES = 5, INTENT_MIN_IMPRESSIONS = 5;
-/** Each AI-assistant question's price bound on treg, about three times its price (ChatGPT $0.0032, Gemini $0.0024, Google
- * AI Mode $0.00015); a call whose answer was lost is charged at it. 15 calls at the bound fit the run's $0.25 hold. */
+/** Each AI-assistant question's price bound on treg, about three times its price (ChatGPT $0.0032, Gemini and Google AI Mode
+ * $0.0024); a call whose answer was lost is charged at it. 30 calls at the bound fit the run's $0.50 hold. */
 const AI_CALL_MAX_MICRO_USD = 10_000;
+/** The AI-answer questions' time inside the run: started beside the crawl, they never take the run near an action's limit. */
+const AI_TIME_LIMIT_MS = 4 * 60_000, AI_CALL_TIMEOUT_MS = 100_000;
 /** Vercel builds a commit in a minute or two; the redirects are checked after this, and once more later if not live yet. */
 const VERIFY_AFTER_MS = 6 * 60_000, VERIFY_RETRY_MS = 30 * 60_000;
 
@@ -63,27 +65,135 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean)
     if (read.capped) notes.push(`Search Console read capped at ${gsc.length} rows`);
   }
 
-  // The pages: every published article, every address Search Console shows (old addresses included), every address the
-  // sitemap lists, then where each redirect lands (for its title).
-  const sitemap = await readSitemap(site.domain).catch(() => null);
+  // What the paid checks and the crawl both need, from Search Console and the published articles.
   const shown = new Map<string, number>();
   for (const r of gsc) if (r.page) shown.set(r.page, (shown.get(r.page) ?? 0) + r.impressions);
-  const seeds = [...new Set([...site.published.map((p) => p.url), ...[...shown].sort((a, b) => b[1] - a[1]).map(([url]) => url), ...(sitemap?.urls ?? [])])]
-    .slice(0, MAX_PAGES);
-  // Google's mobile speed test, beside the crawl: the home page and the two articles Google shows most (all articles
-  // share their template).
+  const totals = new Map<string, number>();
+  for (const r of gsc) if (!isBrandedSearchQuery(r.query, site.domain)) totals.set(r.query, (totals.get(r.query) ?? 0) + r.impressions);
+  const topQueries = [...totals].filter(([, n]) => n >= INTENT_MIN_IMPRESSIONS).sort((a, b) => b[1] - a[1]).map(([q]) => q);
+  // Speed is measured on the home page and the two articles Google shows most (all articles share their template).
   const articleUrls = new Set(site.published.map((p) => normalize(p.url)));
   const speedPages = [`https://${site.domain.replace(/^https?:\/\//, "").replace(/\/.*$/, "")}/`,
     ...[...shown].filter(([url]) => articleUrls.has(normalize(url))).sort((a, b) => b[1] - a[1]).map(([url]) => url), ...site.published.map((p) => p.url)]
     .filter((url, i, all) => all.findIndex((u) => normalize(u) === normalize(url)) === i).slice(0, 3);
-  // With a PageSpeed key Google's own test is free; without one (its keyless quota is used up) Lighthouse runs through
-  // DataForSEO in the paid part below.
-  const [crawled, freeSpeed] = await Promise.all([crawlPages(seeds), process.env.PAGESPEED_API_KEY
-    ? Promise.all(speedPages.map((url) => pageSpeedCheck(url))).then((checks) => checks.filter((c): c is SpeedCheck => c !== null))
-    : Promise.resolve([] as SpeedCheck[])]);
-  let speedChecks: SpeedCheck[] = freeSpeed;
-  const targets = [...crawled.values()].flatMap((p) => (p.location && !crawled.has(normalize(p.location)) ? [p.location] : []));
-  for (const [key, page] of await crawlPages([...new Set(targets)].slice(0, 40))) crawled.set(key, page);
+  const business: Business = { name: site.business.name, domain: site.domain, summary: site.business.summary ?? undefined,
+    audience: site.business.audience ?? undefined, features: site.business.features ?? undefined, problems: site.business.problems ?? undefined,
+    country: site.targetCountry };
+  const staleAuthority = !site.authority || !site.authority.measuredAt || Date.now() - site.authority.measuredAt > 30 * 24 * 3600 * 1000;
+  const freeSpeedTest = Boolean(process.env.PAGESPEED_API_KEY);
+
+  // One hold for the run's paid checks, taken before any of them starts.
+  const wantsPaid = topQueries.length > 0 || staleAuthority || Boolean(process.env.TREG_TOKEN) || !freeSpeedTest;
+  const week = Math.floor(Date.now() / (7 * 24 * 3600 * 1000));
+  const hold = wantsPaid ? await ctx.runMutation(internal.siteDiagnosis.reserve, { siteId, trigger: `site_diagnosis:${week}${force ? `:forced:${Date.now()}` : ""}` }) : null;
+  if (hold && !hold.ok) notes.push(`Paid checks skipped: provider budget (${hold.reason})`);
+  const paid = Boolean(hold?.ok);
+  const anthropic = () => new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 60_000, fetch });
+
+  // Three parts at once, so the run stays well inside an action's time: the crawl (free), the paid measurements (who the
+  // readers are, page one's strength, speed), and the AI-answer questions (their own time limit).
+  const crawlPart = async () => {
+    // Every published article, every address Search Console shows (old addresses included), every address the sitemap
+    // lists, then where each redirect lands (for its title).
+    const sitemap = await readSitemap(site.domain).catch(() => null);
+    const seeds = [...new Set([...site.published.map((p) => p.url), ...[...shown].sort((a, b) => b[1] - a[1]).map(([url]) => url), ...(sitemap?.urls ?? [])])]
+      .slice(0, MAX_PAGES);
+    const [crawled, freeSpeed] = await Promise.all([crawlPages(seeds), freeSpeedTest
+      ? Promise.all(speedPages.map((url) => pageSpeedCheck(url))).then((checks) => checks.filter((c): c is SpeedCheck => c !== null))
+      : Promise.resolve([] as SpeedCheck[])]);
+    const targets = [...crawled.values()].flatMap((p) => (p.location && !crawled.has(normalize(p.location)) ? [p.location] : []));
+    for (const [key, page] of await crawlPages([...new Set(targets)].slice(0, 40))) crawled.set(key, page);
+    return { sitemap, crawled, freeSpeed };
+  };
+  const measurePart = async () => {
+    const out = { intents: [] as QueryIntent[], pageOne: [] as PageOneCheck[], authority: site.authority ? { domainRank: site.authority.domainRank,
+      referringDomains: site.authority.referringDomains } : null as { domainRank: number; referringDomains?: number } | null,
+      speed: [] as SpeedCheck[], microUsd: 0, uncertain: false, notes: [] as string[] };
+    if (!paid) return out;
+    const readers = async () => {
+      // Who types the top searches, judged against what the business sells.
+      if (!topQueries.length || !process.env.ANTHROPIC_API_KEY) return;
+      try {
+        const request = searchIntentRequest(site.business, topQueries);
+        const response = await anthropic().messages.create({
+          model: SEARCH_INTENT_MODEL, max_tokens: SEARCH_INTENT_MAX_TOKENS, system: request.system, messages: [{ role: "user", content: request.userMessage }],
+          tools: [{ name: SEARCH_INTENT_TOOL, description: "Record who types each search.", input_schema: request.inputSchema, strict: true }],
+          tool_choice: structuredToolChoice(SEARCH_INTENT_MODEL, SEARCH_INTENT_TOOL) });
+        out.microUsd += buyerFitCostMicroUsd(response.usage);
+        const tool = response.content.find((b) => b.type === "tool_use" && b.name === SEARCH_INTENT_TOOL);
+        out.intents = parseSearchIntents(request.queries, tool && tool.type === "tool_use" ? tool.input : null);
+      } catch (error) { out.notes.push(`Readers not judged: ${String(error).slice(0, 120)}`); }
+    };
+    const pageOneAndSpeed = async () => {
+      // Page one for the main searches (all at once), every ranking site's authority (and the site's own, when stale), and
+      // speed as Google's Lighthouse measures it on a phone when no PageSpeed key makes it free.
+      try {
+        const metered = await meterDataForSeoCost(async () => {
+          const location = dataForSeoLocationCode(site.targetCountry ?? undefined);
+          const [serps, speed] = await Promise.all([
+            Promise.all(topQueries.slice(0, PAGE_ONE_QUERIES).map(async (query) => {
+              try { return { query, domains: (await pageOneDomains(query, location)).filter((d) => !d.endsWith(site.domain.replace(/^www\./, ""))) }; }
+              catch { return null; } // that search stays unmeasured
+            })).then((all) => all.filter((x): x is { query: string; domains: string[] } => x !== null)),
+            freeSpeedTest ? Promise.resolve([] as SpeedCheck[]) : Promise.all(speedPages.map((url) => lighthouseMobile(url)
+              .then((answer) => answer ? parsePageSpeed(url, answer) : null).catch(() => null))).then((all) => all.filter((c): c is SpeedCheck => c !== null))]);
+          const wanted = [...new Set([...serps.flatMap((s) => s.domains), ...(staleAuthority ? [site.domain] : [])])].slice(0, 50);
+          const ranks = wanted.length ? await getDomainAuthorities(wanted, { maxDomains: 50 }) : [];
+          return { serps, ranks, speed };
+        });
+        out.speed = metered.result.speed;
+        out.microUsd += Math.ceil(metered.usd * 1e6); out.uncertain = metered.uncertain;
+        const rankOf = new Map(metered.result.ranks.map((r) => [r.domain.replace(/^www\./, ""), r.domainRank]));
+        const own = rankOf.get(site.domain.replace(/^www\./, ""));
+        if (staleAuthority && typeof own === "number") {
+          const evidence = metered.result.ranks.find((r) => r.domain.replace(/^www\./, "") === site.domain.replace(/^www\./, ""));
+          out.authority = { domainRank: own, referringDomains: evidence?.referringDomains };
+        }
+        const siteRank = out.authority?.domainRank ?? null;
+        out.pageOne = metered.result.serps.map((s) => {
+          const known = s.domains.map((d) => rankOf.get(d)).filter((n): n is number => typeof n === "number").sort((a, b) => a - b);
+          return { query: s.query, medianRank: known.length ? known[Math.floor(known.length / 2)] : null, results: s.domains.length,
+            reachable: siteRank === null ? undefined : known.filter((n) => n <= siteRank + 10).length,
+            domains: s.domains.map((domain) => ({ domain, rank: rankOf.get(domain) ?? null })) };
+        });
+      } catch (error) { out.notes.push(`Page one not measured: ${String(error).slice(0, 120)}`); }
+    };
+    await Promise.all([readers(), pageOneAndSpeed()]);
+    return out;
+  };
+  const aiPart = async () => {
+    // The buyer questions (written once from what the business sells, then the same every week) put to ChatGPT, Gemini
+    // and Google AI Mode.
+    const out = { questions: [] as string[], checks: [] as AiAnswerCheck[], microUsd: 0, notes: [] as string[] };
+    if (!paid || !process.env.TREG_TOKEN) return out;
+    try {
+      out.questions = site.aiQuestions;
+      if (!out.questions.length && process.env.ANTHROPIC_API_KEY) {
+        const request = aiQuestionsRequest(business, topQueries.slice(0, 10));
+        const response = await anthropic().messages.create({
+          model: AI_QUESTIONS_MODEL, max_tokens: AI_QUESTIONS_MAX_TOKENS, system: request.system, messages: [{ role: "user", content: request.userMessage }],
+          tools: [{ name: AI_QUESTIONS_TOOL, description: "Record the buyer questions.", input_schema: request.inputSchema, strict: true }],
+          tool_choice: structuredToolChoice(AI_QUESTIONS_MODEL, AI_QUESTIONS_TOOL) });
+        out.microUsd += buyerFitCostMicroUsd(response.usage);
+        const tool = response.content.find((b) => b.type === "tool_use" && b.name === AI_QUESTIONS_TOOL);
+        out.questions = parseAiQuestions(tool && tool.type === "tool_use" ? tool.input : null, business);
+      }
+      const asked = await askAssistants(siteId, out.questions, business, Date.now() + AI_TIME_LIMIT_MS);
+      out.checks = asked.checks; out.microUsd += asked.costMicroUsd;
+    } catch (error) { out.notes.push(`AI answers not measured: ${String(error).slice(0, 120)}`); }
+    return out;
+  };
+  const [crawlResult, measured, ai] = await Promise.all([crawlPart(), measurePart(), aiPart()]);
+  notes.push(...measured.notes, ...ai.notes);
+  const { sitemap, crawled } = crawlResult;
+  const intents = measured.intents, pageOne = measured.pageOne, authority = measured.authority;
+  const speedChecks = freeSpeedTest ? crawlResult.freeSpeed : measured.speed;
+  const aiQuestions = ai.questions, aiChecks = ai.checks;
+  const costMicroUsd = measured.microUsd + ai.microUsd;
+  if (hold?.ok) {
+    if (!measured.uncertain) await ctx.runMutation(internal.siteDiagnosis.close, { siteId, reservationId: hold.reservationId, sent: costMicroUsd > 0, actualMicroUsd: costMicroUsd });
+    else notes.push("A provider charge is uncertain: the hold is kept");
+  }
   const byUrl = new Map(site.published.map((p) => [normalize(p.url), p]));
   const removed = new Set(site.removed.map(normalize));
   let pages: CrawledPage[] = [...crawled.values()].map((p) => {
@@ -92,98 +202,6 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean)
     return article ? { ...p, article: true, indexVerdict: article.indexVerdict, coverageState: article.coverageState, publishedAt: article.publishedAt } : p;
   });
   const crawlComplete = site.published.length < 300 && site.published.every((p) => crawled.has(normalize(p.url)));
-
-  // Paid checks, under one hold: who the readers are, and how strong page one is.
-  const totals = new Map<string, number>();
-  for (const r of gsc) if (!isBrandedSearchQuery(r.query, site.domain)) totals.set(r.query, (totals.get(r.query) ?? 0) + r.impressions);
-  const topQueries = [...totals].filter(([, n]) => n >= INTENT_MIN_IMPRESSIONS).sort((a, b) => b[1] - a[1]).map(([q]) => q);
-  let intents: QueryIntent[] = [], pageOne: PageOneCheck[] = [], authority = site.authority ? { domainRank: site.authority.domainRank,
-    referringDomains: site.authority.referringDomains } : null;
-  let costMicroUsd = 0;
-  const staleAuthority = !site.authority || !site.authority.measuredAt || Date.now() - site.authority.measuredAt > 30 * 24 * 3600 * 1000;
-  let aiQuestions: string[] = [], aiChecks: AiAnswerCheck[] = [];
-  const business: Business = { name: site.business.name, domain: site.domain, summary: site.business.summary ?? undefined,
-    audience: site.business.audience ?? undefined, features: site.business.features ?? undefined, problems: site.business.problems ?? undefined,
-    country: site.targetCountry };
-  if (topQueries.length || staleAuthority || process.env.TREG_TOKEN) {
-    const week = Math.floor(Date.now() / (7 * 24 * 3600 * 1000));
-    const hold = await ctx.runMutation(internal.siteDiagnosis.reserve, { siteId, trigger: `site_diagnosis:${week}${force ? `:forced:${Date.now()}` : ""}` });
-    if (!hold.ok) notes.push(`Paid checks skipped: provider budget (${hold.reason})`);
-    else {
-      let modelMicroUsd = 0, providerUsd = 0, uncertain = false;
-      // Who types the top searches, judged against what the business sells.
-      if (topQueries.length && process.env.ANTHROPIC_API_KEY) {
-        try {
-          const request = searchIntentRequest(site.business, topQueries);
-          const response = await new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 60_000, fetch }).messages.create({
-            model: SEARCH_INTENT_MODEL, max_tokens: SEARCH_INTENT_MAX_TOKENS, system: request.system, messages: [{ role: "user", content: request.userMessage }],
-            tools: [{ name: SEARCH_INTENT_TOOL, description: "Record who types each search.", input_schema: request.inputSchema, strict: true }],
-            tool_choice: structuredToolChoice(SEARCH_INTENT_MODEL, SEARCH_INTENT_TOOL) });
-          modelMicroUsd += buyerFitCostMicroUsd(response.usage);
-          const tool = response.content.find((b) => b.type === "tool_use" && b.name === SEARCH_INTENT_TOOL);
-          intents = parseSearchIntents(request.queries, tool && tool.type === "tool_use" ? tool.input : null);
-        } catch (error) { notes.push(`Readers not judged: ${String(error).slice(0, 120)}`); }
-      }
-      // Page one for the main searches: the live results, then every ranking site's authority (and the site's own, when stale).
-      try {
-        const metered = await meterDataForSeoCost(async () => {
-          const location = dataForSeoLocationCode(site.targetCountry ?? undefined);
-          const serps: { query: string; domains: string[] }[] = [];
-          for (const query of topQueries.slice(0, PAGE_ONE_QUERIES)) {
-            try {
-              const domains = (await pageOneDomains(query, location)).filter((d) => !d.endsWith(site.domain.replace(/^www\./, "")));
-              serps.push({ query, domains });
-            } catch { /* that search stays unmeasured */ }
-          }
-          // Speed as Google's Lighthouse measures it on a phone, when no PageSpeed key made it free above.
-          const speed = speedChecks.length ? [] : (await Promise.all(speedPages.map((url) => lighthouseMobile(url)
-            .then((answer) => answer ? parsePageSpeed(url, answer) : null).catch(() => null)))).filter((c): c is SpeedCheck => c !== null);
-          const wanted = [...new Set([...serps.flatMap((s) => s.domains), ...(staleAuthority ? [site.domain] : [])])].slice(0, 50);
-          const ranks = wanted.length ? await getDomainAuthorities(wanted, { maxDomains: 50 }) : [];
-          return { serps, ranks, speed };
-        });
-        if (metered.result.speed.length) speedChecks = metered.result.speed;
-        providerUsd = metered.usd; uncertain = metered.uncertain;
-        const rankOf = new Map(metered.result.ranks.map((r) => [r.domain.replace(/^www\./, ""), r.domainRank]));
-        const own = rankOf.get(site.domain.replace(/^www\./, ""));
-        if (staleAuthority && typeof own === "number") {
-          const evidence = metered.result.ranks.find((r) => r.domain.replace(/^www\./, "") === site.domain.replace(/^www\./, ""));
-          authority = { domainRank: own, referringDomains: evidence?.referringDomains };
-        }
-        const siteRank = authority?.domainRank ?? null;
-        pageOne = metered.result.serps.map((s) => {
-          const known = s.domains.map((d) => rankOf.get(d)).filter((n): n is number => typeof n === "number").sort((a, b) => a - b);
-          return { query: s.query, medianRank: known.length ? known[Math.floor(known.length / 2)] : null, results: s.domains.length,
-            reachable: siteRank === null ? undefined : known.filter((n) => n <= siteRank + 10).length,
-            domains: s.domains.map((domain) => ({ domain, rank: rankOf.get(domain) ?? null })) };
-        });
-      } catch (error) { notes.push(`Page one not measured: ${String(error).slice(0, 120)}`); }
-      // AI answers: the buyer questions (written once, then the same every week) put to ChatGPT, Gemini and Google AI Mode.
-      let tregMicroUsd = 0;
-      if (process.env.TREG_TOKEN) {
-        try {
-          aiQuestions = site.aiQuestions;
-          if (!aiQuestions.length && process.env.ANTHROPIC_API_KEY) {
-            const buyers = intents.filter((i) => i.label === "buyer").map((i) => i.query);
-            const request = aiQuestionsRequest(business, buyers.length ? buyers : topQueries.slice(0, 10));
-            const response = await new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 60_000, fetch }).messages.create({
-              model: AI_QUESTIONS_MODEL, max_tokens: AI_QUESTIONS_MAX_TOKENS, system: request.system, messages: [{ role: "user", content: request.userMessage }],
-              tools: [{ name: AI_QUESTIONS_TOOL, description: "Record the buyer questions.", input_schema: request.inputSchema, strict: true }],
-              tool_choice: structuredToolChoice(AI_QUESTIONS_MODEL, AI_QUESTIONS_TOOL) });
-            modelMicroUsd += buyerFitCostMicroUsd(response.usage);
-            const tool = response.content.find((b) => b.type === "tool_use" && b.name === AI_QUESTIONS_TOOL);
-            aiQuestions = parseAiQuestions(tool && tool.type === "tool_use" ? tool.input : null, business);
-          }
-          const asked = await askAssistants(siteId, aiQuestions, business);
-          aiChecks = asked.checks; tregMicroUsd = asked.costMicroUsd;
-          if (aiQuestions.length && !aiChecks.some((c) => c.answered)) notes.push("AI answers not measured: no assistant answered");
-        } catch (error) { notes.push(`AI answers not measured: ${String(error).slice(0, 120)}`); }
-      }
-      costMicroUsd = Math.ceil(providerUsd * 1e6) + modelMicroUsd + tregMicroUsd;
-      if (!uncertain) await ctx.runMutation(internal.siteDiagnosis.close, { siteId, reservationId: hold.reservationId, sent: costMicroUsd > 0, actualMicroUsd: costMicroUsd });
-      else notes.push("A provider charge is uncertain: the hold is kept");
-    }
-  }
 
   const answered = aiChecks.filter((c) => c.answered).length;
   if (aiChecks.length && answered < AI_MIN_ANSWERS) notes.push(`AI answers not judged: ${answered} of ${aiChecks.length} questions were answered`);
@@ -226,9 +244,11 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean)
 
 const r1 = (n: number) => Math.round(n * 10) / 10;
 
-/** Every buyer question to every assistant through treg, a few at a time. Charged at treg's reported cost; a call whose
- * answer was lost is charged at its price bound (never assumed free), and a refused one costs nothing. */
-async function askAssistants(siteId: Id<"sites">, questions: readonly string[], business: Business): Promise<{ checks: AiAnswerCheck[]; costMicroUsd: number }> {
+/** Every buyer question to every assistant through treg, six at a time, inside a time limit for the whole set (a question
+ * still waiting at the limit is recorded as unasked, never guessed). Charged at treg's reported cost; a call whose answer
+ * was lost is charged at its price bound (never assumed free), and a refused one costs nothing. A call that failed fast is
+ * tried once more; one that timed out is not (ChatGPT's slow answers would take the run past its time). */
+async function askAssistants(siteId: Id<"sites">, questions: readonly string[], business: Business, deadline: number): Promise<{ checks: AiAnswerCheck[]; costMicroUsd: number }> {
   const token = process.env.TREG_TOKEN!;
   const jobs = questions.flatMap((question) => AI_ASSISTANTS.map((assistant) => ({ question, assistant })));
   const checks: AiAnswerCheck[] = [];
@@ -239,7 +259,7 @@ async function askAssistants(siteId: Id<"sites">, questions: readonly string[], 
     const endpoint = AI_ASSISTANT_ENDPOINTS[assistant];
     const body = assistant === "gemini" ? { prompt: question, country: market } : assistant === "google_ai_mode" ? { prompt: question, gl: market } : { prompt: question };
     try {
-      const response = await fetch(`https://treg.to/call/${endpoint}`, { method: "POST", signal: AbortSignal.timeout(150_000),
+      const response = await fetch(`https://treg.to/call/${endpoint}`, { method: "POST", signal: AbortSignal.timeout(Math.max(10_000, Math.min(AI_CALL_TIMEOUT_MS, deadline + 60_000 - Date.now()))),
         headers: { "X-Treg-Token": token, "X-Treg-Meta": `site=${siteId}, feature=site-diagnosis`, "X-Treg-Route-Max-Cost": String(AI_CALL_MAX_MICRO_USD / 1e6),
           "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const charged = Number(response.headers.get("X-Treg-Cost-Micro") ?? 0);
@@ -254,11 +274,17 @@ async function askAssistants(siteId: Id<"sites">, questions: readonly string[], 
   };
   const ask = async (question: string, assistant: AiAssistant) => {
     let got = await call(question, assistant);
-    if (!got.answer) got = await call(question, assistant);
+    if (!got.answer && got.error !== "timeout" && Date.now() < deadline) got = await call(question, assistant);
     checks.push(got.answer ? { question, assistant, answered: true, ...judgeAnswer(got.answer, business) }
       : { question, assistant, answered: false, named: false, cited: false, error: got.error ?? "no answer" });
   };
-  await Promise.all(Array.from({ length: 3 }, async () => { while (next < jobs.length) { const job = jobs[next++]; await ask(job.question, job.assistant); } }));
+  await Promise.all(Array.from({ length: 6 }, async () => {
+    while (next < jobs.length) {
+      const job = jobs[next++];
+      if (Date.now() >= deadline) { checks.push({ question: job.question, assistant: job.assistant, answered: false, named: false, cited: false, error: "not asked (time limit)" }); continue; }
+      await ask(job.question, job.assistant);
+    }
+  }));
   return { checks, costMicroUsd };
 }
 const host = (domain: string) => domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
