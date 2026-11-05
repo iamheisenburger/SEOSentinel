@@ -1,5 +1,6 @@
 "use node";
 
+import { servingHost, type ServingHost } from "./platformRedirects.ts";
 import { lookup } from "node:dns/promises";
 import { request } from "node:https";
 import { isIP } from "node:net";
@@ -316,18 +317,17 @@ export async function safeRequestPublicHttps(
   return { url: target.url.href, ...response };
 }
 
-/** One pinned GET without following redirects: the status and Location only
- * (used to tell permanent from temporary redirects). */
-export async function safePublicRedirectStatus(input: string, timeoutMs = 8_000): Promise<{ status: number; location: string | null; vercel: boolean }> {
+/** One pinned GET without following redirects: the status and Location (used to tell permanent from temporary
+ * redirects), who serves the address (where a repository's redirect file applies), and the page itself. */
+export async function safePublicRedirectStatus(input: string, timeoutMs = 8_000):
+  Promise<{ status: number; location: string | null; vercel: boolean; host: ServingHost; text: string }> {
   const target = await resolvePinnedPublicUrl(input);
   const response = await requestPinnedText(target, { maxRedirects: 0, maxBytes: 512_000, timeoutMs,
     allowedContentTypes: [/^text\/html(?:;|$)/i, /^text\/plain(?:;|$)/i, /^application\/xhtml\+xml(?:;|$)/i],
     headers: { "User-Agent": "PentraSiteHealth/1.0 (+https://pentra.dev)" } });
   const header = response.headers.location;
-  const server = response.headers.server;
-  // Whether Vercel serves the address (where a site's vercel.json redirects apply).
-  const vercel = Boolean(response.headers["x-vercel-id"]) || /\bvercel\b/i.test(Array.isArray(server) ? server.join(" ") : server ?? "");
-  return { status: response.status, location: (Array.isArray(header) ? header[0] : header) ?? null, vercel };
+  const host = servingHost(response.headers);
+  return { status: response.status, location: (Array.isArray(header) ? header[0] : header) ?? null, vercel: host === "vercel", host, text: response.text };
 }
 
 /**

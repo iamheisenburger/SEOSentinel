@@ -1801,15 +1801,20 @@ export default defineSchema({
 
   // Permanent redirects Pentra made (Nov 2026): a duplicate article merged into the stronger page on its searches
   // (convex/lib/duplicatePages.ts). Both articles stay published in Pentra; only the weaker address now redirects.
-  // Pentra's own blog serves the redirect itself; a site that renders its own pages from GitHub on Vercel gets it in its
-  // vercel.json; any other platform shows it as an action. A reverted row is kept as history, never deleted.
+  // Pentra's own blog serves the redirect itself; a GitHub site gets it in the redirect file its host reads ("repository");
+  // WordPress, Shopify, Webflow, Ghost and webhook sites through their own connection ("platform"); one the owner added
+  // by hand is "owner"; anything Pentra can't deliver is an action for the owner. A reverted row is kept as history.
   site_redirects: defineTable({
     siteId: v.id("sites"),
     fromSlug: v.string(),
     toSlug: v.string(),
     reason: v.literal("merged_duplicate"),
     evidence: v.optional(v.string()),
-    delivery: v.union(v.literal("pending"), v.literal("pentra_blog"), v.literal("repository"), v.literal("not_delivered")),
+    delivery: v.union(v.literal("pending"), v.literal("pentra_blog"), v.literal("repository"), v.literal("platform"), v.literal("owner"),
+      v.literal("not_delivered")),
+    /** How the old address leads on: a permanent redirect, or (Ghost, whose integration keys can't add redirects) an
+     * instant refresh with the kept article as canonical page, which Google treats as a permanent redirect. */
+    mechanism: v.optional(v.union(v.literal("redirect"), v.literal("page_refresh"))),
     deliveryNote: v.optional(v.string()),
     commitSha: v.optional(v.string()),
     /** When fetching the old address answered with a permanent redirect to the new one. */

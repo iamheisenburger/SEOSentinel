@@ -11,7 +11,8 @@ import { siteExecutionActive } from "./lib/planSiteAllowance";
 import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
 import { releaseSharedProviderReservation, reserveSharedProviderBudget, settleSharedProviderReservation } from "./lib/providerSpendReservation";
 import { siteDiagnosisRecord } from "./lib/siteDiagnosisSchema";
-import { retiredArticle } from "./lib/pentraConsolidation";
+import { retiredArticle, servedOnItsOwnUrl } from "./lib/pentraConsolidation";
+import { mergedSlugs } from "./siteRedirects";
 
 /** A site is diagnosed at most once in this long, unless forced. */
 export const DIAGNOSIS_INTERVAL_MS = 6 * 24 * 3600 * 1000;
@@ -32,12 +33,13 @@ export const context = internalQuery({ args: { siteId: v.id("sites") }, handler:
   const site = await ctx.db.get(siteId);
   if (!site || !siteExecutionActive(site) || !site.userId || site.deletionStatus) return null;
   const latest = await ctx.db.query("site_diagnoses").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).order("desc").first();
+  const merged = await mergedSlugs(ctx, siteId);
   const summaries = (await ctx.db.query("article_summaries").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "published"))
     .order("desc").take(300)).filter((row) => row.publishedAt && articleMatchesCurrentDomain(site, row));
   const addressed = summaries.flatMap((row) => {
     const url = row.publicUrl?.startsWith("https://") ? row.publicUrl : pageUrl(site, row.slug);
     return url ? [{ url, slug: row.slug, title: row.title, publishedAt: row.publishedAt ?? null, indexVerdict: row.gscIndexVerdict ?? null,
-      coverageState: row.gscCoverageState ?? null, retired: retiredArticle(site.domain, row.slug) }] : [];
+      coverageState: row.gscCoverageState ?? null, retired: retiredArticle(site.domain, row.slug), moved: !servedOnItsOwnUrl(site.domain, row.slug, merged) }] : [];
   });
   // An article taken down on purpose (retired) is not a live article: its address answering "not found" is intended.
   const published = addressed.filter((row) => !row.retired);

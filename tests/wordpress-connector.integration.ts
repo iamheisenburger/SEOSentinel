@@ -400,6 +400,48 @@ test('real WordPress/core database: authentication, permissions, CAS, replay, ed
       baseRevision: written.data.revision, rollbackKey: body.key }));
     assert.equal(rolled.status, 200); assert.equal(rolled.data.content, s.content);
   });
+  await t.test('1.3.0 redirects: a merged post forwards in one hop, leaves the lists and sitemap; only Pentra\'s own posts', async () => {
+    const id = randomUUID().slice(0, 8), create = (slug: string, extra: Json = {}) => command({ operation: 'create', slug, ...extra });
+    const old = create(`merged-${id}`), kept = create(`kept-${id}`), later = create(`later-${id}`);
+    const foreign = create(`foreign-${id}`, { author: 'other' });
+    create(`draft-${id}`, { status: 'draft' });
+    const path = (url: string) => new URL(url).pathname;
+    const go = async (p: string) => { const r = await fetch(root + p, { redirect: 'manual' }); return { status: r.status, location: r.headers.get('location') }; };
+    const text = async (p: string) => (await fetch(root + p)).text();
+    assert.equal((await request('connection')).data.redirects, 1);
+    assert.notEqual((await request('redirects', scoped({ redirects: [{ from: path(old.url), to: path(kept.url) }] }), env.lowAuth)).status, 200);
+    const added = await request('redirects', scoped({ redirects: [{ from: path(old.url), to: path(kept.url) },
+      { from: path(foreign.url), to: path(kept.url) }, { from: path(later.url), to: `/blog/draft-${id}/` },
+      { from: '/', to: path(kept.url) }, { from: `/blog/back\\slash-${id}/`, to: path(kept.url) }, { from: path(kept.url), to: path(kept.url) }] }));
+    assert.equal(added.status, 200, JSON.stringify(added.data));
+    assert.deepEqual(added.data.redirects, [{ from: `/blog/merged-${id}`, to: kept.url }]);
+    assert.equal(added.data.rejected.length, 5, JSON.stringify(added.data.rejected));
+    for (const p of [path(old.url), path(old.url).replace(/\/$/, ''), path(old.url).toUpperCase()]) assert.deepEqual(await go(p), { status: 301, location: kept.url }, p);
+    assert.deepEqual(await go(path(old.url) + '?utm_source=news'), { status: 301, location: kept.url + '?utm_source=news' });
+    for (const p of [foreign.url, later.url, kept.url]) assert.equal((await go(path(p))).status, 200, p);
+    // The merged post leaves the feed (the blog's main list) and the sitemap; the kept one stays.
+    const feed = await text('/feed/');
+    assert.ok(!feed.includes(old.url) && feed.includes(kept.url), 'feed');
+    assert.deepEqual(command({ operation: 'public', value: '1' }), { ok: true });
+    try {
+      // The local database keeps every earlier run's posts: the newest are on the last sitemap pages.
+      const pages = [...(await text('/wp-sitemap.xml')).matchAll(/wp-sitemap-posts-post-(\d+)\.xml/g)].map(m => Number(m[1]));
+      const last = Math.max(...pages);
+      const sitemap = (await text(`/wp-sitemap-posts-post-${last}.xml`)) + (last > 1 ? await text(`/wp-sitemap-posts-post-${last - 1}.xml`) : '');
+      assert.ok(sitemap.includes(kept.url) && !sitemap.includes(old.url), 'sitemap');
+    } finally { assert.deepEqual(command({ operation: 'public', value: '0' }), { ok: true }); }
+    // Merging the kept post again re-points: the first address goes straight to the newest home, never two hops.
+    const repointed = await request('redirects', scoped({ redirects: [{ from: path(kept.url), to: path(later.url) }] }));
+    assert.deepEqual(repointed.data.redirects, [{ from: `/blog/kept-${id}`, to: later.url }]);
+    assert.deepEqual(await go(path(old.url)), { status: 301, location: later.url });
+    assert.deepEqual(await go(path(kept.url)), { status: 301, location: later.url });
+    // Sending the same redirect again changes nothing; removing one restores the post.
+    assert.deepEqual((await request('redirects', scoped({ redirects: [{ from: path(kept.url), to: path(later.url) }] }))).data.redirects, repointed.data.redirects);
+    const removed = await request('redirects', scoped({ remove: [path(kept.url), path(old.url)] }));
+    assert.equal(removed.status, 200); assert.deepEqual(removed.data.rejected, []);
+    for (const p of [old.url, kept.url]) assert.equal((await go(path(p))).status, 200, p);
+    assert.ok((await text('/feed/')).includes(old.url), 'restored to the feed');
+  });
   if (env.database === 'mysql') await t.test('nontransactional receipt table fails closed before creation', async () => {
     assert.equal(command({ operation: 'receipt_engine', transactional: false }).ok, true);
     try { assert.notEqual((await request('connection')).status, 200); }

@@ -17,6 +17,18 @@ enabling the updated publisher. Existing receipt/permission tables are reused;
 no data reset or new authentication credential is needed. Older installations
 fail closed with an update requirement, never silently retry an uncertain write.
 
+Version 1.3.0 adds forwarding for merged articles. When Pentra finds two of its
+articles shown for the same searches, it merges the weaker into the stronger:
+`POST /wp-json/pentra/v1/redirects` stores a permanent (301) redirect from the
+old address, answered before WordPress picks a template, straight to the kept
+article's current address (one hop, query string kept). Only a post Pentra
+published there (or the connection's own user wrote) can be redirected, and only
+to a published post or page; anything else is returned as rejected and left
+alone. The merged post itself is not changed: it leaves the blog's lists, feeds,
+search and sitemaps (core, Yoast SEO, Rank Math), and the common page caches are
+cleared for it. Deactivating the plugin restores everything. Update by uploading
+the new ZIP the same way; nothing else changes.
+
 Install only `pentra-conditional-publisher.php` in a same-named plugin directory
 and activate it on the explicitly authorized WordPress destination. Use core
 WordPress application-password authentication over HTTPS. The authenticated

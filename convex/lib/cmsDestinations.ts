@@ -181,13 +181,13 @@ export function cmsAdapterSealInput(site: CmsConnection): {
 export const CMS_SETUP_STEPS: Record<ApiCmsMethod, string[]> = {
   shopify: [
     "In your Shopify admin go to Settings → Apps → Develop apps → Build apps in Dev Dashboard, and click Create app (name it Pentra).",
-    "For the App URL enter https://pentra.dev. Under Access, enter the scopes read_content,write_content, then click Release.",
+    "For the App URL enter https://pentra.dev. Under Access, enter the scopes read_content,write_content,write_online_store_navigation (the last lets Pentra forward an article it merges), then click Release.",
     "Open the app's Installs section and click Install app on your store.",
     "In the app's Settings, copy the Client ID and Client secret into Pentra. (An older custom app's Admin API access token starting with shpat_ also works.)",
     "Enter your store's myshopify.com address and the blog to publish to (Shopify's default blog is \"news\").",
   ],
   webflow: [
-    "In Webflow, open Site settings → Apps & integrations → API access and generate a site API token with CMS read and write and Sites read access.",
+    "In Webflow, open Site settings → Apps & integrations → API access and generate a site API token with CMS read and write and Sites read and write access (Sites write lets Pentra add redirects on Enterprise plans).",
     "Enter the token and the slug of your blog collection (the part of the address before each post, for example \"blog\" in yoursite.com/blog/post-name).",
     "Your Webflow site must be published on the same domain as this Pentra website.",
     "Once, in the Designer: open the blog's template page settings and set its SEO title to the post's Title field (or its Name) and its meta description to the post's summary field, then publish. Pentra fills both, so Google shows each article's own headline and description.",

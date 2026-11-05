@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Pentra Conditional Publisher
  * Description: Authenticated, revision-bound publishing of explicitly selected classic posts/pages.
- * Version: 1.2.0
+ * Version: 1.3.0
  * Requires PHP: 8.1
  * License: GPL-2.0-or-later
  */
@@ -56,7 +56,7 @@ final class Pentra_Conditional_Publisher {
             ? true : new WP_Error('pentra_forbidden', 'Publishing capability required.', ['status' => 403]);
     }
     static function routes() {
-        foreach (['connection' => 'GET', 'source' => 'GET', 'receipt' => 'GET', 'select' => 'POST', 'revoke' => 'POST', 'write' => 'POST'] as $name => $method) {
+        foreach (['connection' => 'GET', 'source' => 'GET', 'receipt' => 'GET', 'select' => 'POST', 'revoke' => 'POST', 'write' => 'POST', 'redirects' => 'POST'] as $name => $method) {
             register_rest_route(self::NS, '/' . $name, [
                 'methods' => $method, 'permission_callback' => [__CLASS__, 'auth'],
                 'callback' => function($request) use ($name) {
@@ -65,7 +65,8 @@ final class Pentra_Conditional_Publisher {
                         // Never echo SQL, credentials, request bodies or stack traces.
                         $safe = ['binding_changed', 'source_changed', 'permission_revoked', 'idempotency_conflict',
                             'unsupported_content', 'protected_content', 'invalid_request', 'post_forbidden',
-                            'no_change', 'rollback_conflict', 'transactional_tables_required', 'unsupported_database_driver', 'receipt_unavailable'];
+                            'no_change', 'rollback_conflict', 'transactional_tables_required', 'unsupported_database_driver', 'receipt_unavailable',
+                            'redirect_rejected'];
                         $code = in_array($e->getMessage(), $safe, true) ? $e->getMessage() : 'database_operation_failed';
                         return new WP_Error('pentra_' . $code, $code, ['status' => $code === 'post_forbidden' ? 403 : ($code === 'receipt_unavailable' ? 404 : 409)]);
                     }
@@ -139,9 +140,10 @@ final class Pentra_Conditional_Publisher {
         global $wpdb;
         self::assert_engine();
         $origin = untrailingslashit(home_url());
-        if ($name === 'connection') { return ['version'=>1, 'atomic'=>true, 'receiptLookup'=>1, 'site'=>$origin, 'userId'=>get_current_user_id()]; }
+        if ($name === 'connection') { return ['version'=>1, 'atomic'=>true, 'receiptLookup'=>1, 'redirects'=>1, 'site'=>$origin, 'userId'=>get_current_user_id()]; }
         if ($r['site'] !== $origin) { throw new RuntimeException('binding_changed'); }
         $binding = self::hex($r['binding']);
+        if ($name === 'redirects') { return self::add_redirects($r, $binding); }
         if ($name === 'write') { return self::write($r, $binding); }
         if ($name === 'receipt') { return self::receipt($r, $binding); }
         $id = filter_var($r['id'], FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]]);
@@ -314,6 +316,98 @@ final class Pentra_Conditional_Publisher {
             return $receipt;
         } catch (Throwable $e) { $wpdb->query('ROLLBACK'); throw $e; }
     }
+    /** 1.3.0: permanent redirects for articles Pentra merged into a stronger article on the same searches. Stored in one
+     *  option and answered with a 301 before WordPress picks a template, so the old address leads straight to the
+     *  article it joined, at that article's current address (one hop, query string kept). Paths are from the domain
+     *  root, as the article addresses are. Only a post Pentra published here (or this connection's own user wrote) can
+     *  be redirected, and only to a published post or page; anything else is returned as rejected and nothing about it
+     *  changes. The merged post itself stays as it is, left out of the blog's lists, feeds and sitemaps; deactivating
+     *  the connector restores everything. Adding a redirect again changes nothing, a new destination re-points it, and
+     *  "remove" ends one. */
+    const REDIRECTS = 'pentra_redirects';
+    static function key($value) {
+        if (!is_string($value) || $value === '' || $value[0] !== '/' || str_starts_with($value, '//') || strlen($value) > 400 ||
+            preg_match('/[\s?#\\\\]|\x00/', $value)) { throw new RuntimeException('redirect_rejected'); }
+        return strtolower('/' . trim(rawurldecode($value), '/'));
+    }
+    static function root() {
+        $home = wp_parse_url(home_url());
+        return $home['scheme'] . '://' . $home['host'] . (isset($home['port']) ? ':' . $home['port'] : '');
+    }
+    static function own_post($id, $binding) {
+        $post = get_post($id);
+        if (!$post || !in_array($post->post_type, ['post', 'page'], true) || !current_user_can('edit_post', $id)) { return false; }
+        $p = self::permission($id);
+        if ($p && (int)$p['active'] && (int)$p['owner_id'] === get_current_user_id() && hash_equals($p['binding'], $binding)) { return true; }
+        return (int)$post->post_author === get_current_user_id();
+    }
+    static function redirect_map() {
+        $map = get_option(self::REDIRECTS, []);
+        return is_array($map) ? array_filter($map, function($entry) { return is_array($entry) && (int)($entry['source'] ?? 0) > 0 && (int)($entry['to'] ?? 0) > 0; }) : [];
+    }
+    /** The post a redirect finally lands on: re-pointed merges are followed here, so a reader never takes two hops. */
+    static function final_target($map, $id) {
+        $next = [];
+        foreach ($map as $entry) { $next[(int)$entry['source']] = (int)$entry['to']; }
+        for ($hop = 0; $hop < 5 && isset($next[$id]); $hop++) { $id = $next[$id]; }
+        return $id > 0 && !isset($next[$id]) && get_post_status($id) === 'publish' ? $id : 0;
+    }
+    static function add_redirects($r, $binding) {
+        $items = $r['redirects'] ?? []; $remove = $r['remove'] ?? [];
+        if (!is_array($items) || !is_array($remove) || count($items) + count($remove) < 1 || count($items) > 50 || count($remove) > 50) {
+            throw new RuntimeException('invalid_request');
+        }
+        $map = self::redirect_map(); $root = self::root(); $added = []; $rejected = []; $touched = [];
+        foreach ($remove as $from) {
+            try { $key = self::key($from); } catch (Throwable $e) { $rejected[] = is_string($from) ? $from : ''; continue; }
+            if (isset($map[$key])) { $touched[] = (int)$map[$key]['source']; unset($map[$key]); }
+        }
+        foreach ($items as $item) {
+            $raw = is_array($item) && is_string($item['from'] ?? null) ? $item['from'] : '';
+            try {
+                $from = self::key($item['from'] ?? null); $to = self::key($item['to'] ?? null);
+                $source = isset($map[$from]) ? (int)$map[$from]['source'] : url_to_postid($root . $from . '/');
+                $target = url_to_postid($root . $to . '/');
+                if ($from === $to || $from === '/' || !$source || !$target || $source === $target || isset($map[$to]) ||
+                    !self::own_post($source, $binding) || get_post_status($target) !== 'publish' ||
+                    !in_array(get_post_type($target), ['post', 'page'], true)) { throw new RuntimeException('redirect_rejected'); }
+            } catch (Throwable $e) { $rejected[] = $raw; continue; }
+            $map[$from] = ['source' => $source, 'to' => $target];
+            $touched[] = $source;
+            $added[] = ['from' => $from, 'to' => get_permalink($target)];
+        }
+        if (count($map) > 2000) { throw new RuntimeException('redirect_rejected'); }
+        if ($touched) {
+            update_option(self::REDIRECTS, $map, true);
+            foreach (array_unique($touched) as $id) { self::purge($id); }
+        }
+        return ['redirects' => $added, 'rejected' => $rejected, 'count' => count($map)];
+    }
+    /** Page caches would keep serving the old article: its cached copy is dropped in the common caching plugins. */
+    static function purge($id) {
+        clean_post_cache($id);
+        if (function_exists('rocket_clean_post')) { rocket_clean_post($id); }
+        if (function_exists('w3tc_flush_post')) { w3tc_flush_post($id); }
+        if (function_exists('wpsc_delete_post_cache')) { wpsc_delete_post_cache($id); }
+        do_action('litespeed_purge_post', $id);
+    }
+    static function serve_redirect() {
+        $map = self::redirect_map();
+        if (!$map || is_admin() || is_preview()) { return; }
+        $uri = (string)($_SERVER['REQUEST_URI'] ?? '');
+        try { $key = self::key((string)wp_parse_url($uri, PHP_URL_PATH)); } catch (Throwable $e) { return; }
+        if (!isset($map[$key])) { return; }
+        $target = self::final_target($map, (int)$map[$key]['to']);
+        $url = $target ? get_permalink($target) : '';
+        if (!$url) { return; }
+        $query = (string)wp_parse_url($uri, PHP_URL_QUERY);
+        wp_safe_redirect($query !== '' ? $url . (str_contains($url, '?') ? '&' : '?') . $query : $url, 301, 'Pentra');
+        exit;
+    }
+    /** The merged posts, left out of the blog's own lists and sitemaps. */
+    static function hidden() {
+        return array_values(array_unique(array_map(function($entry) { return (int)$entry['source']; }, self::redirect_map())));
+    }
     static function metadata() {
         global $wpdb;
         static $cache = [];
@@ -340,6 +434,22 @@ final class Pentra_Conditional_Publisher {
 }
 register_activation_hook(__FILE__, ['Pentra_Conditional_Publisher', 'install']);
 add_action('rest_api_init', ['Pentra_Conditional_Publisher', 'routes']);
+add_action('template_redirect', ['Pentra_Conditional_Publisher', 'serve_redirect'], 0);
+// 1.3.0: a merged post leaves the blog's lists, feeds, search and sitemaps (core, Yoast SEO, Rank Math).
+add_action('pre_get_posts', function($query) {
+    if (is_admin() || !$query->is_main_query() || $query->is_singular()) { return; }
+    $ids = Pentra_Conditional_Publisher::hidden(); if (!$ids) { return; }
+    $query->set('post__not_in', array_merge(array_map('intval', (array)$query->get('post__not_in')), $ids));
+});
+add_filter('wp_sitemaps_posts_query_args', function($args) {
+    $ids = Pentra_Conditional_Publisher::hidden();
+    if ($ids) { $args['post__not_in'] = array_merge(array_map('intval', (array)($args['post__not_in'] ?? [])), $ids); }
+    return $args;
+});
+add_filter('wpseo_exclude_from_sitemap_by_post_ids', function($ids) { return array_merge((array)$ids, Pentra_Conditional_Publisher::hidden()); });
+add_filter('rank_math/sitemap/entry', function($url, $type = '', $object = null) {
+    return $type === 'post' && is_object($object) && in_array((int)($object->ID ?? 0), Pentra_Conditional_Publisher::hidden(), true) ? false : $url;
+}, 10, 3);
 add_action('wp_head', ['Pentra_Conditional_Publisher', 'head'], 1);
 add_filter('pre_get_document_title', function($title) {
     $meta = Pentra_Conditional_Publisher::metadata(); return $meta['title'] ?? $title;

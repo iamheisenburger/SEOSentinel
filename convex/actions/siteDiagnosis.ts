@@ -28,7 +28,11 @@ import { parseSearchIntents, searchIntentRequest, SEARCH_INTENT_MAX_TOKENS, SEAR
 import { buyerFitCostMicroUsd } from "../lib/topicFit";
 import { structuredToolChoice } from "../lib/toolChoice";
 import { isBrandedSearchQuery } from "../lib/searchPerformance";
-import { safePublicRedirectStatus } from "../lib/safeOutbound";
+import { safePublicRedirectStatus, safeRequestPublicHttps, validatePublicHttpsUrl } from "../lib/safeOutbound";
+import { createHmac } from "node:crypto";
+import { redirectOnCms, type CmsRequest, type CmsSite } from "../lib/cmsPublishers";
+import { wordpressRedirectKey, wordpressRedirects } from "../lib/wordpressConditional";
+import { editNetlifyToml, editRedirectsFile, pageForwardsTo, webhookRedirectEvent } from "../lib/platformRedirects";
 import { HOSTED_BLOG_DOMAINS } from "../lib/blogListing";
 import { publishedArticleInternalHref } from "../lib/internalLinks";
 import { editVercelRedirects, type RedirectEntry } from "../lib/vercelRedirects";
@@ -38,7 +42,7 @@ const MAX_PAGES = 200, PAGE_ONE_QUERIES = 5, INTENT_MIN_IMPRESSIONS = 5;
  * $0.0024); a call whose answer was lost is charged at it. 30 calls at the bound fit the run's $0.50 hold. */
 const AI_CALL_MAX_MICRO_USD = 10_000;
 /** The AI-answer questions' time inside the run: started beside the crawl, they never take the run near an action's limit. */
-const AI_TIME_LIMIT_MS = 4 * 60_000, AI_CALL_TIMEOUT_MS = 100_000;
+const AI_TIME_LIMIT_MS = 4 * 60_000, AI_CALL_TIMEOUT_MS = 150_000;
 /** Vercel builds a commit in a minute or two; the redirects are checked after this, and once more later if not live yet. */
 const VERIFY_AFTER_MS = 6 * 60_000, VERIFY_RETRY_MS = 30 * 60_000;
 
@@ -72,9 +76,11 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean)
   for (const r of gsc) if (!isBrandedSearchQuery(r.query, site.domain)) totals.set(r.query, (totals.get(r.query) ?? 0) + r.impressions);
   const topQueries = [...totals].filter(([, n]) => n >= INTENT_MIN_IMPRESSIONS).sort((a, b) => b[1] - a[1]).map(([q]) => q);
   // Speed is measured on the home page and the two articles Google shows most (all articles share their template).
-  const articleUrls = new Set(site.published.map((p) => normalize(p.url)));
+  // An article that now redirects (consolidated or merged) is not measured: its address isn't a page.
+  const articleUrls = new Set(site.published.filter((p) => !p.moved).map((p) => normalize(p.url)));
   const speedPages = [`https://${site.domain.replace(/^https?:\/\//, "").replace(/\/.*$/, "")}/`,
-    ...[...shown].filter(([url]) => articleUrls.has(normalize(url))).sort((a, b) => b[1] - a[1]).map(([url]) => url), ...site.published.map((p) => p.url)]
+    ...[...shown].filter(([url]) => articleUrls.has(normalize(url))).sort((a, b) => b[1] - a[1]).map(([url]) => url),
+    ...site.published.filter((p) => !p.moved).map((p) => p.url)]
     .filter((url, i, all) => all.findIndex((u) => normalize(u) === normalize(url)) === i).slice(0, 3);
   const business: Business = { name: site.business.name, domain: site.domain, summary: site.business.summary ?? undefined,
     audience: site.business.audience ?? undefined, features: site.business.features ?? undefined, problems: site.business.problems ?? undefined,
@@ -300,124 +306,245 @@ async function recordMerges(ctx: ActionCtx, site: Context, merges: readonly Merg
   return plan.length ? await ctx.runMutation(internal.siteRedirects.recordMerges, { siteId: site.siteId, merges: plan }) : [];
 }
 
-/** Where an article lives: its published address when known, else built from the site's URL structure. */
-function addressOf(site: Context, slug: string): { url: string; path: string } {
+/** Where an article lives: its published address when known, else built from the site's URL structure. `livePath` is the
+ * published address's own path: WordPress and the hosted platforms decide their addresses themselves. */
+function addressOf(site: Context, slug: string): { url: string; path: string; livePath: string } {
   const path = publishedArticleInternalHref(site.urlStructure, slug);
   const known = site.published.find((p) => slugKey(p.slug) === slug)?.url;
-  return { url: known ?? `https://${host(site.domain)}${path}`, path };
+  let livePath = path;
+  if (known) { try { livePath = new URL(known).pathname; } catch { /* the built path */ } }
+  return { url: known ?? `https://${host(site.domain)}${path}`, path, livePath };
 }
 
-/** Whether an old address now answers with a permanent redirect to the page it was merged into. A site that moves every
- * address to its www (or bare) host first is followed one step on that host change only. */
+const bare = (path: string) => path.replace(/\/+$/, "") || "/";
+
+/** Loads an address the way a reader would, following only the site's own tidying of it (its www or bare host, a
+ * trailing slash): the answer there, with where it redirects and the page. */
+async function reach(from: string): Promise<{ status: number; location: URL | null; text: string } | null> {
+  let at = from;
+  for (let hop = 0; hop < 3; hop++) {
+    const answer = await safePublicRedirectStatus(at);
+    if (answer.status < 300 || answer.status >= 400 || !answer.location) return { status: answer.status, location: null, text: answer.text };
+    const next = new URL(answer.location, at), here = new URL(at);
+    if (bare(next.pathname) === bare(here.pathname) && host(next.host) === host(here.host) && next.href !== here.href) { at = next.toString(); continue; }
+    return { status: answer.status, location: next, text: "" };
+  }
+  return null;
+}
+
+/** Whether an old address now answers with a permanent redirect to the page it was merged into. */
 async function redirectsTo(from: string, toPath: string): Promise<boolean> {
   try {
-    let at = from;
-    for (let hop = 0; hop < 2; hop++) {
-      const answer = await safePublicRedirectStatus(at);
-      if (answer.status < 300 || answer.status >= 400 || !answer.location) return false;
-      const next = new URL(answer.location, at), here = new URL(at);
-      if (next.pathname === here.pathname && host(next.host) === host(here.host) && next.host !== here.host) { at = next.toString(); continue; }
-      return (answer.status === 301 || answer.status === 308) && next.pathname.replace(/\/+$/, "") === toPath.replace(/\/+$/, "");
-    }
-    return false;
+    const answer = await reach(from);
+    return Boolean(answer?.location && (answer.status === 301 || answer.status === 308) && bare(answer.location.pathname) === bare(toPath));
   } catch { return false; }
 }
 
+/** Whether a redirect reaches readers, as it was delivered: a permanent redirect, or a page that forwards on load to the
+ * kept article and names it as canonical (Ghost). */
+async function forwards(site: Context, row: { fromSlug: string; toSlug: string; mechanism?: string | null }): Promise<boolean> {
+  const from = addressOf(site, row.fromSlug), to = addressOf(site, row.toSlug);
+  if (row.mechanism !== "page_refresh") return redirectsTo(from.url, to.livePath);
+  try {
+    const answer = await reach(from.url);
+    return Boolean(answer && answer.status === 200 && pageForwardsTo(answer.text, to.url));
+  } catch { return false; }
+}
+
+type Row = { id: Id<"site_redirects">; fromSlug: string; toSlug: string; delivery?: string };
+type Mark = { id: Id<"site_redirects">; delivery: "pentra_blog" | "repository" | "platform" | "owner" | "not_delivered"; note?: string;
+  mechanism?: "redirect" | "page_refresh"; commitSha?: string; verified?: boolean };
+/** Delivered by Pentra and checked by loading the old address. */
+const DELIVERED = new Set(["pentra_blog", "repository", "platform"]);
+
 /** Every redirect still waiting to reach readers goes out where the site's pages are served:
  *   - a blog Pentra renders itself: its route serves the redirect as soon as it's recorded (the stored listing and
- *     sitemap are refreshed so the merged page leaves them at once);
- *   - a site that renders its own pages from GitHub on Vercel: one commit of its vercel.json, checked after the build;
- *   - anything else: recorded as an action for the owner until Pentra can deliver there.
- * Pentra's own repository is never written: its blog is served by its own route. */
+ *     sitemap are refreshed so the merged page leaves them at once); Pentra's own repository is never written;
+ *   - a GitHub site: the redirect file its host reads (vercel.json, netlify.toml, Cloudflare Pages' _redirects);
+ *   - WordPress (Pentra's plugin), Shopify, Webflow, Ghost and webhook sites: through that connection;
+ *   - anything Pentra can't deliver: one exact step for the owner, tried again every week, and recorded as the owner's
+ *     once the old address forwards.
+ * Each delivery is checked by loading the old address after the site has had time to take it. */
 async function deliverRedirects(ctx: ActionCtx, site: Context): Promise<string[]> {
-  const pending: Array<{ id: Id<"site_redirects">; fromSlug: string; toSlug: string }> =
-    await ctx.runQuery(internal.siteRedirects.pendingDelivery, { siteId: site.siteId });
+  const siteId = site.siteId;
+  const pending: Row[] = await ctx.runQuery(internal.siteRedirects.pendingDelivery, { siteId });
   if (!pending.length) {
     // Nothing new: any redirect delivered earlier but not yet seen live is checked again now.
-    const unchecked = (await ctx.runQuery(internal.siteRedirects.activeInternal, { siteId: site.siteId }))
-      .filter((r) => (r.delivery === "repository" || r.delivery === "pentra_blog") && !r.verifiedAt);
-    if (unchecked.length) await ctx.scheduler.runAfter(0, internal.actions.siteDiagnosis.verifyRedirects, { siteId: site.siteId, attempt: 2 });
+    const unchecked = (await ctx.runQuery(internal.siteRedirects.activeInternal, { siteId })).filter((r) => DELIVERED.has(r.delivery) && !r.verifiedAt);
+    if (unchecked.length) await ctx.scheduler.runAfter(0, internal.actions.siteDiagnosis.verifyRedirects, { siteId, attempt: 2 });
     return unchecked.length ? [`${unchecked.length} delivered redirects not yet seen live: checked again`] : [];
   }
-  const siteId = site.siteId;
   const from = (slug: string) => addressOf(site, slug);
   if (HOSTED_BLOG_DOMAINS.includes(host(site.domain))) {
     await ctx.runMutation(internal.blog.refreshHostedBlogListings, { domains: [site.domain] });
     const rows = [];
-    for (const r of pending) rows.push({ id: r.id, delivery: "pentra_blog" as const, verified: await redirectsTo(from(r.fromSlug).url, from(r.toSlug).path) });
+    for (const r of pending) rows.push({ id: r.id, delivery: "pentra_blog" as const, mechanism: "redirect" as const, verified: await redirectsTo(from(r.fromSlug).url, from(r.toSlug).path) });
     await ctx.runMutation(internal.siteRedirects.markDelivery, { siteId, rows });
     const live = rows.filter((r) => r.verified).length;
     return [`${live} of ${rows.length} redirects checked live on Pentra's blog`];
   }
-  if (site.publishMethod === "github" && site.repository) {
-    const probe = await safePublicRedirectStatus(from(pending[0].fromSlug).url).catch(() => null);
-    if (!probe) return ["Redirects wait: the site didn't answer; retried next week"];
-    if (!probe.vercel) {
-      await ctx.runMutation(internal.siteRedirects.markDelivery, { siteId, rows: pending.map((r) => ({ id: r.id, delivery: "not_delivered" as const,
-        note: `This site isn't served by Vercel: add a permanent redirect from ${from(r.fromSlug).path} to ${from(r.toSlug).path}` })) });
-      return [`${pending.length} redirects need the owner: the site isn't served by Vercel`];
-    }
-    const entries: RedirectEntry[] = pending.map((r) => ({ source: from(r.fromSlug).path, destination: from(r.toSlug).path }));
-    const commit = await commitVercelRedirects(ctx, siteId, entries);
-    if (!commit.ok) {
-      await ctx.runMutation(internal.siteRedirects.markDelivery, { siteId, rows: pending.map((r) => ({ id: r.id, delivery: "not_delivered" as const,
-        note: `${commit.reason}: add a permanent redirect from ${from(r.fromSlug).path} to ${from(r.toSlug).path}` })) });
-      return [`Redirects not delivered: ${commit.reason}`];
-    }
-    await ctx.runMutation(internal.siteRedirects.markDelivery, { siteId, rows: pending.map((r) => ({ id: r.id, delivery: "repository" as const,
-      ...(commit.sha ? { commitSha: commit.sha } : {}) })) });
-    await ctx.scheduler.runAfter(VERIFY_AFTER_MS, internal.actions.siteDiagnosis.verifyRedirects, { siteId, attempt: 1 });
-    return [commit.sha ? `Committed ${entries.length} redirects to the site's vercel.json (${commit.sha.slice(0, 7)}); checked after the build`
-      : `${entries.length} redirects were already in the site's vercel.json`];
+  const marks: Mark[] = [], todo: Row[] = [];
+  // One Pentra couldn't deliver before may have been added by the owner since: recorded as theirs, never written again.
+  for (const r of pending) {
+    if (r.delivery === "not_delivered" && await redirectsTo(from(r.fromSlug).url, from(r.toSlug).livePath)) marks.push({ id: r.id, delivery: "owner", mechanism: "redirect", verified: true });
+    else todo.push(r);
   }
-  await ctx.runMutation(internal.siteRedirects.markDelivery, { siteId, rows: pending.map((r) => ({ id: r.id, delivery: "not_delivered" as const,
-    note: `Add a permanent redirect from ${from(r.fromSlug).path} to ${from(r.toSlug).path} on your platform` })) });
-  return [`${pending.length} redirects need the owner on this platform`];
+  if (todo.length) {
+    try { marks.push(...await deliverToSite(ctx, site, todo)); }
+    catch (error) {
+      // No clear answer (the platform down, a lost response): nothing is assumed; the next run reads the site first.
+      const reason = error instanceof Error ? error.message.slice(0, 120) : "no answer";
+      marks.push(...todo.map((r) => ({ id: r.id, delivery: "not_delivered" as const, note: `Pentra couldn't reach the site's platform (${reason}); it tries again next week` })));
+    }
+  }
+  await ctx.runMutation(internal.siteRedirects.markDelivery, { siteId, rows: marks });
+  const sent = marks.filter((m) => m.delivery === "repository" || m.delivery === "platform").length;
+  // Checked once the site has taken them (a build, a cache); earlier ones not yet seen live are checked with them.
+  const unchecked = (await ctx.runQuery(internal.siteRedirects.activeInternal, { siteId })).filter((r) => DELIVERED.has(r.delivery) && !r.verifiedAt).length;
+  if (unchecked) await ctx.scheduler.runAfter(sent ? VERIFY_AFTER_MS : 0, internal.actions.siteDiagnosis.verifyRedirects, { siteId, attempt: sent ? 1 : 2 });
+  const owner = marks.filter((m) => m.delivery === "owner").length, waiting = marks.filter((m) => m.delivery === "not_delivered");
+  return [`${sent} of ${marks.length} redirects delivered (${site.publishMethod ?? "no platform"})${owner ? `, ${owner} added by the owner` : ""}` +
+    `${waiting.length ? `, ${waiting.length} need the owner: ${waiting[0].note}` : ""}`];
 }
 
-/** One commit of the site's vercel.json with Pentra's redirects added (convex/lib/vercelRedirects.ts). The file is read
- * at the branch head and written with its sha, so a change made meanwhile is never overwritten; a write whose outcome
- * is unknown is reconciled next time by reading the file again (the entries already there are not written twice). */
-async function commitVercelRedirects(ctx: ActionCtx, siteId: Id<"sites">, entries: RedirectEntry[]): Promise<{ ok: true; sha: string | null } | { ok: false; reason: string }> {
+/** Hosted-platform requests: the pinned public-HTTPS client, no redirects, JSON only (as publishing uses). */
+const cmsRequest: CmsRequest = async (url, init) => {
+  const target = new URL(url);
+  const response = await safeRequestPublicHttps(target.href, { method: init.method, expectedHost: target.hostname, headers: init.headers,
+    body: init.body, maxBytes: 2_000_000, allowedContentTypes: [/^application\/json(?:;|$)/i] });
+  return { status: response.status, text: response.text };
+};
+
+async function deliverToSite(ctx: ActionCtx, site: Context, rows: Row[]): Promise<Mark[]> {
+  const from = (slug: string) => addressOf(site, slug);
+  const byHand = (r: Row, why: string): Mark => ({ id: r.id, delivery: "not_delivered",
+    note: `${why}: add a permanent redirect from ${from(r.fromSlug).livePath} to ${from(r.toSlug).livePath}` });
+  const method = site.publishMethod;
+  if (method === "github") return site.repository ? deliverToRepository(ctx, site, rows) : rows.map((r) => byHand(r, "GitHub isn't connected"));
+  if (method !== "wordpress" && method !== "shopify" && method !== "webflow" && method !== "ghost" && method !== "webhook") {
+    return rows.map((r) => byHand(r, "Pentra doesn't publish to this site directly"));
+  }
+  const full = await ctx.runQuery(internal.sites.getFull, { siteId: site.siteId });
+  if (!full) return rows.map((r) => byHand(r, "The site's connection isn't active"));
+  if (method === "wordpress") {
+    const answer = await wordpressRedirects(full, rows.map((r) => ({ from: from(r.fromSlug).livePath, to: from(r.toSlug).livePath })));
+    if (!answer.ok) return rows.map((r) => ({ id: r.id, delivery: "not_delivered" as const, note: answer.reason }));
+    return rows.map((r) => answer.added.has(wordpressRedirectKey(from(r.fromSlug).livePath))
+      ? { id: r.id, delivery: "platform" as const, mechanism: "redirect" as const }
+      : byHand(r, "WordPress turned the redirect away (the old article isn't one Pentra published there, or the kept one isn't published)"));
+  }
+  if (method === "webhook") {
+    if (!full.webhookUrl || !full.webhookSecret) return rows.map((r) => byHand(r, "The webhook isn't set up"));
+    const secret = full.webhookSecret;
+    const event = webhookRedirectEvent(rows.map((r) => ({ source: from(r.fromSlug).livePath, destination: from(r.toSlug).livePath })), host(site.domain),
+      Math.floor(Date.now() / 1000), (input) => createHmac("sha256", secret).update(input).digest("hex"));
+    const endpoint = await validatePublicHttpsUrl(full.webhookUrl);
+    const response = await safeRequestPublicHttps(endpoint.href, { method: "POST", expectedHost: endpoint.hostname, headers: event.headers, body: event.body,
+      allowedContentTypes: [/^application\/json(?:;|$)/i, /^text\/plain(?:;|$)/i, /^$/] });
+    if (response.status < 200 || response.status >= 300) return rows.map((r) => byHand(r, `Your webhook answered HTTP ${response.status} to the redirect event (pentra.redirect.create.v1)`));
+    return rows.map((r) => ({ id: r.id, delivery: "platform" as const, mechanism: "redirect" as const }));
+  }
+  const active: Array<{ fromSlug: string }> = await ctx.runQuery(internal.siteRedirects.activeInternal, { siteId: site.siteId });
+  const mergedPaths = new Set(active.map((r) => bare(from(r.fromSlug).livePath)));
+  const outcomes = await redirectOnCms(full as unknown as CmsSite, rows.map((r) => ({ source: from(r.fromSlug).livePath, destination: from(r.toSlug).livePath,
+    destinationUrl: from(r.toSlug).url })), mergedPaths, cmsRequest);
+  return rows.map((r) => {
+    const outcome = outcomes.find((o) => o.source === from(r.fromSlug).livePath);
+    if (!outcome) return byHand(r, "The platform gave no answer for this address");
+    return outcome.ok ? { id: r.id, delivery: "platform" as const, mechanism: outcome.mechanism, ...(outcome.note ? { note: outcome.note } : {}) }
+      : { id: r.id, delivery: "not_delivered" as const, note: outcome.reason };
+  });
+}
+
+/** A GitHub site: the redirects go in the file its host reads, found by loading the site: vercel.json on Vercel,
+ * netlify.toml on Netlify (forced, so it wins over the old article's page), _redirects in the static folder on Cloudflare
+ * Pages (its rules apply even where a page exists). GitHub Pages can't send redirects at all. */
+async function deliverToRepository(ctx: ActionCtx, site: Context, rows: Row[]): Promise<Mark[]> {
+  const from = (slug: string) => addressOf(site, slug);
+  const byHand = (r: Row, why: string): Mark => ({ id: r.id, delivery: "not_delivered",
+    note: `${why}: add a permanent redirect from ${from(r.fromSlug).path} to ${from(r.toSlug).path}` });
+  const probe = await safePublicRedirectStatus(from(rows[0].fromSlug).url).catch(() => null);
+  if (!probe) return rows.map((r) => ({ id: r.id, delivery: "not_delivered" as const, note: "The site didn't answer; Pentra tries again next week" }));
+  const entries: RedirectEntry[] = rows.map((r) => ({ source: from(r.fromSlug).path, destination: from(r.toSlug).path }));
+  const file = probe.host === "vercel" ? { candidates: ["vercel.json"], edit: (current: string | null) => editVercelRedirects(current, entries) }
+    : probe.host === "netlify" ? { candidates: ["netlify.toml"], edit: (current: string | null) => ({ ok: true as const, ...editNetlifyToml(current, entries) }) }
+    : probe.host === "cloudflare" ? { candidates: ["public/_redirects", "static/_redirects", "_redirects"], staticFolder: true,
+      edit: (current: string | null) => ({ ok: true as const, ...editRedirectsFile(current, entries) }) }
+    : null;
+  if (!file) return rows.map((r) => byHand(r, probe.host === "github_pages" ? "GitHub Pages can't send permanent redirects; add it where your domain is served"
+    : "The site's host isn't one whose redirect file Pentra writes (Vercel, Netlify, Cloudflare Pages)"));
+  const commit = await commitRedirectFile(ctx, site.siteId, file, entries);
+  if (!commit.ok) return rows.map((r) => byHand(r, commit.reason));
+  return rows.map((r) => ({ id: r.id, delivery: "repository" as const, mechanism: "redirect" as const, ...(commit.sha ? { commitSha: commit.sha } : {}) }));
+}
+
+type FileEditResult = { ok: false; reason: string } | { ok: true; changed: boolean; text?: string; skipped: string[] };
+
+/** One commit of the redirect file with Pentra's entries added (convex/lib/vercelRedirects.ts, platformRedirects.ts). The
+ * file is read at the branch head and written with its sha, so a change made meanwhile is never overwritten; a write whose
+ * outcome is unknown is reconciled next time by reading the file again (entries already there are not written twice). A
+ * new _redirects file goes in the site's static folder (public/ or static/), which every build copies to the output. */
+async function commitRedirectFile(ctx: ActionCtx, siteId: Id<"sites">, file: { candidates: string[]; staticFolder?: boolean;
+  edit: (current: string | null) => FileEditResult }, entries: RedirectEntry[]): Promise<{ ok: true; sha: string | null; path: string } | { ok: false; reason: string }> {
   const site = await ctx.runQuery(internal.sites.getFull, { siteId });
   if (!site?.githubToken || !site.repoOwner || !site.repoName) return { ok: false, reason: "GitHub isn't connected" };
   const branch = site.repoDefaultBranch || "main";
-  const api = `https://api.github.com/repos/${encodeURIComponent(site.repoOwner)}/${encodeURIComponent(site.repoName)}/contents/vercel.json`;
+  const api = `https://api.github.com/repos/${encodeURIComponent(site.repoOwner)}/${encodeURIComponent(site.repoName)}/contents/`;
   const headers = { Authorization: `Bearer ${site.githubToken}`, Accept: "application/vnd.github+json", "Content-Type": "application/json",
     "X-GitHub-Api-Version": "2022-11-28" };
-  const read = await fetch(`${api}?ref=${encodeURIComponent(branch)}`, { headers });
-  let current: string | null = null, sha: string | undefined;
-  if (read.status === 200) {
-    const file = await read.json() as { type?: string; content?: string; sha?: string };
-    if (file.type !== "file" || typeof file.content !== "string" || typeof file.sha !== "string") return { ok: false, reason: "vercel.json isn't a file Pentra can read" };
-    current = Buffer.from(file.content, "base64").toString("utf8");
-    sha = file.sha;
-  } else if (read.status !== 404) return { ok: false, reason: `GitHub answered HTTP ${read.status} reading vercel.json` };
-  const edit = editVercelRedirects(current, entries);
+  const read = (path: string) => fetch(`${api}${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(branch)}`, { headers });
+  let path = file.candidates[file.candidates.length - 1], current: string | null = null, sha: string | undefined;
+  for (const candidate of file.candidates) {
+    const response = await read(candidate);
+    if (response.status === 404) continue;
+    if (response.status !== 200) return { ok: false, reason: `GitHub answered HTTP ${response.status} reading ${candidate}` };
+    const found = await response.json() as { type?: string; content?: string; sha?: string };
+    if (found.type !== "file" || typeof found.content !== "string" || typeof found.sha !== "string") return { ok: false, reason: `${candidate} isn't a file Pentra can read` };
+    path = candidate; current = Buffer.from(found.content, "base64").toString("utf8"); sha = found.sha;
+    break;
+  }
+  if (current === null && file.staticFolder) {
+    for (const folder of ["public", "static"]) {
+      const listing = await read(folder);
+      if (listing.status === 200 && Array.isArray(await listing.json())) { path = `${folder}/_redirects`; break; }
+    }
+  }
+  const edit = file.edit(current);
   if (!edit.ok) return { ok: false, reason: edit.reason };
-  if (!edit.changed) return { ok: true, sha: null };
+  if (!edit.changed || edit.text === undefined) return { ok: true, sha: null, path };
   const message = `Pentra: permanent redirects for merged duplicate articles\n\n${entries.map((e) => `${e.source} -> ${e.destination}`).join("\n")}\n`;
-  const write = await fetch(api, { method: "PUT", headers,
+  const write = await fetch(`${api}${path.split("/").map(encodeURIComponent).join("/")}`, { method: "PUT", headers,
     body: JSON.stringify({ message, content: Buffer.from(edit.text, "utf8").toString("base64"), branch, ...(sha ? { sha } : {}) }) });
-  if (!write.ok) return { ok: false, reason: `GitHub refused the vercel.json commit (HTTP ${write.status})` };
+  if (!write.ok) return { ok: false, reason: `GitHub refused the ${path} commit (HTTP ${write.status})` };
   const written = await write.json() as { commit?: { sha?: string } };
-  return { ok: true, sha: written.commit?.sha ?? null };
+  return { ok: true, sha: written.commit?.sha ?? null, path };
 }
 
-/** After the site's build: each delivered redirect not yet seen live is checked by fetching the old address. One retry
- * later if the build was slow; a redirect still not live is recorded, and the weekly run checks it again. */
+/** After the site has taken them: each delivered redirect not yet seen live is checked by loading the old address. One
+ * retry later if a build was slow; one still not live is recorded, and the weekly run checks it again. */
 export const verifyRedirects = internalAction({ args: { siteId: v.id("sites"), attempt: v.number() },
   handler: async (ctx, { siteId, attempt }): Promise<{ checked: number; live: number }> => {
   const site = await loadContext(ctx, siteId);
   if (!site) return { checked: 0, live: 0 };
-  const active: Array<{ id: Id<"site_redirects">; fromSlug: string; toSlug: string; delivery: string; verifiedAt: number | null }> =
+  const active: Array<{ id: Id<"site_redirects">; fromSlug: string; toSlug: string; delivery: string; mechanism: string | null; verifiedAt: number | null }> =
     await ctx.runQuery(internal.siteRedirects.activeInternal, { siteId });
-  const rows = active
-    .filter((r) => (r.delivery === "repository" || r.delivery === "pentra_blog") && !r.verifiedAt);
+  const rows = active.filter((r) => DELIVERED.has(r.delivery) && !r.verifiedAt);
   const marks = [];
-  for (const r of rows) marks.push({ id: r.id, delivery: r.delivery as "repository" | "pentra_blog",
-    verified: await redirectsTo(addressOf(site, r.fromSlug).url, addressOf(site, r.toSlug).path) });
+  for (const r of rows) marks.push({ id: r.id, delivery: r.delivery as "repository" | "pentra_blog" | "platform", verified: await forwards(site, r) });
   if (marks.length) await ctx.runMutation(internal.siteRedirects.markDelivery, { siteId, rows: marks });
   if (marks.some((m) => !m.verified) && attempt < 2) await ctx.scheduler.runAfter(VERIFY_RETRY_MS, internal.actions.siteDiagnosis.verifyRedirects, { siteId, attempt: attempt + 1 });
   return { checked: marks.length, live: marks.filter((m) => m.verified).length };
+} });
+
+/** Read-only check for the operator: loads each redirect's old address now and says whether it forwards as delivered.
+ * Nothing is written. */
+export const recheckRedirects = internalAction({ args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<Array<{ from: string; to: string; delivery: string; forwards: boolean }>> => {
+  const site = await loadContext(ctx, siteId);
+  if (!site) return [];
+  const active: Array<{ fromSlug: string; toSlug: string; delivery: string; mechanism: string | null }> =
+    await ctx.runQuery(internal.siteRedirects.activeInternal, { siteId });
+  const checks = [];
+  for (const r of active.slice(0, 20)) checks.push({ from: addressOf(site, r.fromSlug).url, to: addressOf(site, r.toSlug).livePath, delivery: r.delivery, forwards: await forwards(site, r) });
+  return checks;
 } });

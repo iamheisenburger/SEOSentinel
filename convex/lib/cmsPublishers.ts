@@ -27,6 +27,7 @@ import {
   type PublicationReceipt,
   validatePublicationReceipt,
 } from "./publicationReceipts.ts";
+import { forwardHead } from "./platformRedirects.ts";
 
 export const SHOPIFY_ADMIN_API_VERSION = "2026-07";
 export const GHOST_ACCEPT_VERSION = "v5.0";
@@ -367,7 +368,7 @@ export function webflowFieldMap(fields: unknown[]): WebflowFieldMap {
     ...(seoTitle ? { seoTitle: slugOf(seoTitle) } : {}), ...(summaryMax ? { summaryMax } : {}), ...(seoTitleMax ? { seoTitleMax } : {}) };
 }
 
-async function webflowContext(site: CmsSite, request: CmsRequest) {
+async function webflowSiteId(site: CmsSite, request: CmsRequest): Promise<string> {
   const expected = pentraSiteHost(site.domain);
   const sites = ((await webflowGet(site, "/sites", request)).sites as unknown[] | undefined ?? []).map(record)
     .filter(Boolean) as Record<string, unknown>[];
@@ -376,6 +377,12 @@ async function webflowContext(site: CmsSite, request: CmsRequest) {
     const seen = sites.flatMap(webflowSiteHosts).slice(0, 4).join(", ") || "none";
     throw new Error(`Webflow token can't reach a site published on ${expected} (it reaches: ${seen})`);
   }
+  return match.id;
+}
+
+async function webflowContext(site: CmsSite, request: CmsRequest) {
+  const expected = pentraSiteHost(site.domain);
+  const match = { id: await webflowSiteId(site, request) };
   const slug = cmsCollection(site)!;
   const collections = ((await webflowGet(site, `/sites/${encodeURIComponent(match.id)}/collections`, request)).collections as unknown[] | undefined ?? [])
     .map(record).filter(Boolean) as Record<string, unknown>[];
@@ -680,6 +687,230 @@ export async function updateHostedPost(site: CmsSite, request: CmsRequest, args:
   const item = json(response.text, "Webflow");
   if (item.id !== args.id || typeof item.lastUpdated !== "string") throw new Error("Webflow did not confirm the exact updated item");
   return { revision: item.lastUpdated };
+}
+
+// ── Redirects for merged articles (Nov 2026) ────────────
+//
+// When Pentra merges a duplicate article into the stronger one (convex/lib/duplicatePages.ts), the old address must
+// lead to the kept article. Only Pentra's own published articles are ever changed, and an owner's own redirect rule is
+// never overwritten (Pentra re-points only a rule whose target it merged away). Every outcome is per address.
+
+export type CmsRedirectEntry = { source: string; destination: string; destinationUrl: string };
+export type CmsRedirectOutcome = { source: string; ok: true; mechanism: "redirect" | "page_refresh"; note?: string }
+  | { source: string; ok: false; reason: string };
+
+const barePath = (path: string) => path.replace(/\/+$/, "") || "/";
+const lastSegment = (path: string) => barePath(path).split("/").pop() ?? "";
+const PENTRA_DELIVERY = /^pentra:[a-f0-9]{64}$/;
+
+const SHOPIFY_REDIRECTS_QUERY = `query PentraRedirects($query: String!) {
+  urlRedirects(first: 10, query: $query) { nodes { id path target } }
+}`;
+const SHOPIFY_REDIRECT_CREATE = `mutation PentraRedirectCreate($urlRedirect: UrlRedirectInput!) {
+  urlRedirectCreate(urlRedirect: $urlRedirect) { urlRedirect { id path target } userErrors { code field message } }
+}`;
+const SHOPIFY_REDIRECT_UPDATE = `mutation PentraRedirectUpdate($id: ID!, $urlRedirect: UrlRedirectInput!) {
+  urlRedirectUpdate(id: $id, urlRedirect: $urlRedirect) { urlRedirect { id path target } userErrors { code field message } }
+}`;
+const SHOPIFY_HIDE_MUTATION = `mutation PentraHideArticle($id: ID!, $article: ArticleUpdateInput!) {
+  articleUpdate(id: $id, article: $article) { article { id isPublished } userErrors { code field message } }
+}`;
+
+/** A GraphQL call for the redirect work: a missing permission is an answer here, not a failure. */
+async function shopifyRedirectGraphql(site: CmsSite, token: string, query: string, variables: Record<string, unknown>,
+  request: CmsRequest): Promise<{ denied: true } | { denied: false; data: Record<string, unknown> }> {
+  const response = await request(`${cmsEndpoint(site)}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`, {
+    method: "POST", headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token }, body: JSON.stringify({ query, variables }) });
+  if (response.status === 401 || response.status === 403) return { denied: true };
+  if (response.status < 200 || response.status >= 300) throw new Error(`Shopify API error (${response.status})`);
+  const body = json(response.text, "Shopify");
+  const errors = (Array.isArray(body.errors) ? body.errors : []).map(record);
+  if (errors.some((error) => record(error?.extensions)?.code === "ACCESS_DENIED" || /access denied|scope/i.test(String(error?.message ?? "")))) return { denied: true };
+  if (errors.length) throw new Error(`Shopify API error: ${errors.map((error) => String(error?.message ?? "error")).join("; ").slice(0, 200)}`);
+  const data = record(body.data);
+  if (!data) throw new Error("Shopify returned no data");
+  return { denied: false, data };
+}
+
+function userErrorText(result: Record<string, unknown> | null): string {
+  return ((result?.userErrors as unknown[] | undefined) ?? []).map((error) => String(record(error)?.message ?? "error")).join("; ").slice(0, 200);
+}
+
+/** The redirect itself: Shopify's GraphQL API (needs the write_online_store_navigation permission), else its REST API,
+ * which accepts the write_content permission every Pentra connection has. */
+async function shopifyRedirect(site: CmsSite, token: string, entry: CmsRedirectEntry, mergedPaths: ReadonlySet<string>,
+  request: CmsRequest): Promise<{ ok: true; note?: string } | { ok: false; reason: string }> {
+  const { source, destination } = entry;
+  const kept = (target: unknown) => typeof target === "string" && barePath(target) === barePath(destination);
+  const ours = (target: unknown) => typeof target === "string" && mergedPaths.has(barePath(target));
+  const owners = { ok: true as const, note: `your own Shopify redirect for ${source} stays as you set it` };
+  const found = await shopifyRedirectGraphql(site, token, SHOPIFY_REDIRECTS_QUERY, { query: `path:${source}` }, request);
+  if (!found.denied) {
+    const existing = (((record(found.data.urlRedirects)?.nodes as unknown[] | undefined) ?? []).map(record))
+      .find((node) => typeof node?.path === "string" && barePath(node.path) === barePath(source));
+    if (existing && kept(existing.target)) return { ok: true };
+    if (existing && !ours(existing.target)) return owners;
+    const written = existing
+      ? await shopifyRedirectGraphql(site, token, SHOPIFY_REDIRECT_UPDATE, { id: existing.id, urlRedirect: { path: source, target: destination } }, request)
+      : await shopifyRedirectGraphql(site, token, SHOPIFY_REDIRECT_CREATE, { urlRedirect: { path: source, target: destination } }, request);
+    if (!written.denied) {
+      const result = record(written.data[existing ? "urlRedirectUpdate" : "urlRedirectCreate"]);
+      const errors = userErrorText(result);
+      if (errors) return { ok: false, reason: `Shopify rejected the redirect: ${errors}` };
+      if (!kept(record(result?.urlRedirect)?.target)) return { ok: false, reason: "Shopify did not confirm the redirect" };
+      return { ok: true };
+    }
+  }
+  const base = `${cmsEndpoint(site)}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/redirects`;
+  const headers = { "Content-Type": "application/json", "X-Shopify-Access-Token": token };
+  const denied = { ok: false as const, reason: "The Pentra app on Shopify can't add redirects: give it the write_online_store_navigation permission" };
+  const list = await request(`${base}.json?path=${encodeURIComponent(source)}&limit=10`, { method: "GET", headers });
+  if ([401, 403, 404, 406].includes(list.status)) return denied;
+  if (list.status < 200 || list.status >= 300) throw new Error(`Shopify API error (${list.status})`);
+  const existing = (((json(list.text, "Shopify").redirects as unknown[] | undefined) ?? []).map(record))
+    .find((node) => typeof node?.path === "string" && barePath(node.path) === barePath(source));
+  if (existing && kept(existing.target)) return { ok: true };
+  if (existing && !ours(existing.target)) return owners;
+  const id = existing ? Number(existing.id) : 0;
+  if (existing && !Number.isSafeInteger(id)) return { ok: false, reason: "Shopify returned an unreadable redirect" };
+  const written = existing
+    ? await request(`${base}/${id}.json`, { method: "PUT", headers, body: JSON.stringify({ redirect: { id, target: destination } }) })
+    : await request(`${base}.json`, { method: "POST", headers, body: JSON.stringify({ redirect: { path: source, target: destination } }) });
+  if ([401, 403, 404, 406].includes(written.status)) return denied;
+  if (written.status < 200 || written.status >= 300) return { ok: false, reason: `Shopify rejected the redirect (${written.status}): ${written.text.slice(0, 160)}` };
+  if (!kept(record(json(written.text, "Shopify").redirect)?.target)) return { ok: false, reason: "Shopify did not confirm the redirect" };
+  return { ok: true };
+}
+
+/** Shopify follows a redirect only from an address that no longer shows a page, so the merged article is hidden
+ * (unpublished, never deleted) once its redirect exists. Only an article Pentra delivered is hidden. */
+async function shopifyRedirects(site: CmsSite, entries: readonly CmsRedirectEntry[], mergedPaths: ReadonlySet<string>,
+  request: CmsRequest): Promise<CmsRedirectOutcome[]> {
+  const token = await shopifyAccessToken(site, request);
+  const context = await shopifyContext(site, token, request);
+  assertPublicHost("shopify", context.publicHost, site.domain, "primary domain");
+  const prefix = `/blogs/${cmsCollection(site)}/`;
+  const outcomes: CmsRedirectOutcome[] = [];
+  for (const entry of entries) {
+    const { source } = entry, handle = lastSegment(source);
+    if (!source.startsWith(prefix) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(handle)) {
+      outcomes.push({ source, ok: false, reason: `${source} isn't an article address on this Shopify blog` });
+      continue;
+    }
+    const lookup = await shopifyGraphql(site, token, SHOPIFY_LOOKUP_QUERY, { query: `handle:${handle}` }, request, "read");
+    const article = (((record(lookup.articles)?.nodes as unknown[] | undefined) ?? []).map(record))
+      .find((node) => node?.handle === handle && record(node?.blog)?.id === context.blogId);
+    if (article && !PENTRA_DELIVERY.test(String(record(article.metafield)?.value ?? ""))) {
+      outcomes.push({ source, ok: false, reason: `The article at ${source} wasn't published by Pentra, so Pentra leaves it` });
+      continue;
+    }
+    const redirect = await shopifyRedirect(site, token, entry, mergedPaths, request);
+    if (!redirect.ok) { outcomes.push({ source, ok: false, reason: redirect.reason }); continue; }
+    if (article?.isPublished === true) {
+      const hidden = await shopifyGraphql(site, token, SHOPIFY_HIDE_MUTATION, { id: article.id, article: { isPublished: false } }, request, "write");
+      const result = record(hidden.articleUpdate);
+      const errors = userErrorText(result);
+      if (errors || record(result?.article)?.isPublished !== false) {
+        outcomes.push({ source, ok: false, reason: `The redirect exists, but Shopify didn't hide the old article${errors ? `: ${errors}` : ""}` });
+        continue;
+      }
+    }
+    outcomes.push({ source, ok: true, mechanism: "redirect", ...(redirect.note ? { note: redirect.note } : {}) });
+  }
+  return outcomes;
+}
+
+const webflowByHand = (entry: CmsRedirectEntry) =>
+  `In Webflow, open Site settings → Publishing → 301 redirects, add ${entry.source} → ${entry.destination} and publish (Webflow's redirect API is for Enterprise plans only)`;
+
+/** Webflow's redirect API (Enterprise plans, a token with Sites write access). Elsewhere the owner adds the redirect in
+ * Webflow's settings: the note says exactly which, and the weekly check sees it once it's live. */
+async function webflowRedirects(site: CmsSite, entries: readonly CmsRedirectEntry[], mergedPaths: ReadonlySet<string>,
+  request: CmsRequest): Promise<CmsRedirectOutcome[]> {
+  const siteId = await webflowSiteId(site, request);
+  const api = `${WEBFLOW_API}/sites/${encodeURIComponent(siteId)}/redirects`;
+  const list = await request(api, { method: "GET", headers: webflowHeaders(site) });
+  if ([401, 403, 404].includes(list.status)) return entries.map((entry) => ({ source: entry.source, ok: false, reason: webflowByHand(entry) }));
+  if (list.status < 200 || list.status >= 300) throw readFailure("webflow", list.status);
+  const listed = json(list.text, "Webflow");
+  const existing = (((listed.redirects ?? listed.items ?? listed.data) as unknown[] | undefined) ?? []).map(record).filter(Boolean) as Record<string, unknown>[];
+  const outcomes: CmsRedirectOutcome[] = [];
+  for (const entry of entries) {
+    const { source, destination } = entry;
+    const found = existing.find((rule) => typeof rule.fromUrl === "string" && barePath(rule.fromUrl) === barePath(source));
+    if (found && typeof found.toUrl === "string" && barePath(found.toUrl) === barePath(destination)) {
+      outcomes.push({ source, ok: true, mechanism: "redirect" });
+      continue;
+    }
+    if (found && !(typeof found.toUrl === "string" && mergedPaths.has(barePath(found.toUrl)))) {
+      outcomes.push({ source, ok: true, mechanism: "redirect", note: `your own Webflow redirect for ${source} stays as you set it` });
+      continue;
+    }
+    const written = found && typeof found.id === "string"
+      ? await request(`${api}/${encodeURIComponent(found.id)}`, { method: "PATCH", headers: { ...webflowHeaders(site), "Content-Type": "application/json" },
+        body: JSON.stringify({ fromUrl: source, toUrl: destination }) })
+      : await request(api, { method: "POST", headers: { ...webflowHeaders(site), "Content-Type": "application/json" },
+        body: JSON.stringify({ fromUrl: source, toUrl: destination }) });
+    if ([401, 403, 404].includes(written.status)) { outcomes.push({ source, ok: false, reason: webflowByHand(entry) }); continue; }
+    if (written.status < 200 || written.status >= 300) {
+      outcomes.push({ source, ok: false, reason: `Webflow rejected the redirect (${written.status}): ${written.text.slice(0, 160)}` });
+      continue;
+    }
+    outcomes.push({ source, ok: true, mechanism: "redirect" });
+  }
+  return outcomes;
+}
+
+/** Ghost's redirect file can't be changed with an integration key, so the merged post forwards on load: an instant
+ * refresh to the kept article in its head code (Google treats it as a permanent redirect) and the kept article as its
+ * canonical page. Only a post Pentra delivered is changed, and only if nobody edited it meanwhile (Ghost refuses a stale
+ * updated_at); the owner's own head code stays. */
+async function ghostForwards(site: CmsSite, entries: readonly CmsRedirectEntry[], request: CmsRequest): Promise<CmsRedirectOutcome[]> {
+  const context = await ghostContext(site, request);
+  assertPublicHost("ghost", context.publicHost, site.domain, "site address");
+  const outcomes: CmsRedirectOutcome[] = [];
+  for (const entry of entries) {
+    const { source, destinationUrl } = entry, slug = lastSegment(source);
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || !barePath(source).startsWith(`${context.publicPath}/`)) {
+      outcomes.push({ source, ok: false, reason: `${source} isn't a post address on this Ghost site` });
+      continue;
+    }
+    const found = await ghostGet(site, `/posts/slug/${encodeURIComponent(slug)}/?include=tags&fields=id,slug,status,updated_at,canonical_url,codeinjection_head`, request, true);
+    const post = found ? record(((found.posts as unknown[] | undefined) ?? [])[0]) : null;
+    const tags = ((post?.tags as unknown[] | undefined) ?? []).map((tag) => String(record(tag)?.name ?? ""));
+    if (!post || typeof post.id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(post.id) || typeof post.updated_at !== "string") {
+      outcomes.push({ source, ok: false, reason: `Ghost has no post at ${source}` });
+      continue;
+    }
+    if (!tags.some((name) => /^#pentra-[a-f0-9]{64}$/.test(name))) {
+      outcomes.push({ source, ok: false, reason: `The post at ${source} wasn't published by Pentra, so Pentra leaves it` });
+      continue;
+    }
+    if (post.status !== "published") { outcomes.push({ source, ok: false, reason: `The post at ${source} is no longer published on Ghost` }); continue; }
+    const head = forwardHead(typeof post.codeinjection_head === "string" ? post.codeinjection_head : null, destinationUrl);
+    if (head === post.codeinjection_head && post.canonical_url === destinationUrl) { outcomes.push({ source, ok: true, mechanism: "page_refresh" }); continue; }
+    const response = await request(`${cmsEndpoint(site)}/ghost/api/admin/posts/${post.id}/`, {
+      method: "PUT", headers: { ...ghostHeaders(site), "Content-Type": "application/json" },
+      body: JSON.stringify({ posts: [{ updated_at: post.updated_at, canonical_url: destinationUrl, codeinjection_head: head }] }) });
+    if (response.status === 409) { outcomes.push({ source, ok: false, reason: "The Ghost post changed meanwhile; Pentra tries again next week" }); continue; }
+    if (response.status < 200 || response.status >= 300) {
+      outcomes.push({ source, ok: false, reason: `Ghost rejected the change (${response.status}): ${response.text.slice(0, 160)}` });
+      continue;
+    }
+    const saved = record(((json(response.text, "Ghost").posts as unknown[] | undefined) ?? [])[0]);
+    if (saved?.id !== post.id || saved.canonical_url !== destinationUrl) { outcomes.push({ source, ok: false, reason: "Ghost did not confirm the change" }); continue; }
+    outcomes.push({ source, ok: true, mechanism: "page_refresh" });
+  }
+  return outcomes;
+}
+
+export async function redirectOnCms(site: CmsSite, entries: readonly CmsRedirectEntry[], mergedPaths: ReadonlySet<string>,
+  request: CmsRequest): Promise<CmsRedirectOutcome[]> {
+  const method = site.publishMethod;
+  if (method === "shopify") return shopifyRedirects(site, entries, mergedPaths, request);
+  if (method === "webflow") return webflowRedirects(site, entries, mergedPaths, request);
+  if (method === "ghost") return ghostForwards(site, entries, request);
+  throw new Error("Not a hosted-platform publishing destination");
 }
 
 // ── Shared entry points ─────────────────────────────────

@@ -46,9 +46,17 @@ export function SiteDiagnosisCard({ siteId }: { siteId: Id<"sites"> }) {
       <p className="text-[12px] font-semibold uppercase tracking-[0.08em] text-[#62666D]">What Pentra fixed</p>
       <ul className="space-y-1.5 text-[14px]">{redirects.slice(0, 6).map((r) => <li key={r.fromSlug} className="text-[#F7F8F8]">
         Merged duplicate <span className="font-mono text-[13px]">/{r.fromSlug}</span> into <span className="font-mono text-[13px]">/{r.toSlug}</span>
-        <span className="text-[#8A8F98]"> · {r.verifiedAt ? "permanent redirect, checked live" : r.delivery === "not_delivered" ? r.deliveryNote ?? "needs a redirect on your platform" : "redirect going live"}</span>
+        <span className="text-[#8A8F98]"> · {redirectStatus(r)}</span>
       </li>)}</ul>
     </div>}
     {next && <p className={BODY}><span className="text-[#F7F8F8]">What Pentra does next: </span>{next}</p>}
   </section>;
+}
+
+/** How a merged page's old address reaches readers, in the owner's words. */
+function redirectStatus(r: { verifiedAt: number | null; delivery: string; mechanism?: string | null; deliveryNote: string | null }): string {
+  if (r.delivery === "not_delivered") return r.deliveryNote ?? "needs a redirect on your platform";
+  if (!r.verifiedAt) return "redirect going live";
+  if (r.delivery === "owner") return "your redirect, checked live";
+  return r.mechanism === "page_refresh" ? "forwards to the kept article on load, checked live" : "permanent redirect, checked live";
 }

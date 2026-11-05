@@ -252,12 +252,12 @@ test("a published address never changes: the URL structure is fixed once an arti
   assert.match(settings, /\.\.\.\(publishedCount > 0 \? \{\} : \{ urlStructure: urlStructure \|\| undefined \}\)/);
 });
 
-test("delivery: Pentra's own blog first (its repository is never written), Vercel repositories next, anything else is the owner's action", () => {
+test("delivery: Pentra's own blog first (its repository is never written), then the site's own platform (P356: every platform)", () => {
   const action = readFileSync("convex/actions/siteDiagnosis.ts", "utf8");
   const hosted = action.indexOf("if (HOSTED_BLOG_DOMAINS.includes(host(site.domain)))");
-  const repository = action.indexOf('if (site.publishMethod === "github" && site.repository)');
+  const repository = action.indexOf('if (method === "github") return site.repository ? deliverToRepository(ctx, site, rows)');
   assert.ok(hosted > 0 && repository > hosted, "a blog Pentra renders is handled before any repository write");
-  assert.match(action, /if \(!probe\.vercel\)/, "vercel.json is written only where Vercel serves the site");
+  assert.match(action, /probe\.host === "vercel" \? \{ candidates: \["vercel\.json"\]/, "vercel.json is written only where Vercel serves the site");
   assert.match(action, /ownerReview/, "owner review keeps merges waiting");
   assert.match(readFileSync("convex/crons.ts", "utf8"), /crons\.weekly\("site-diagnosis"/);
   assert.match(readFileSync("convex/siteDiagnosis.ts", "utf8"), /if \(!DIAGNOSIS_ROLLOUT_DOMAINS\.includes\(bareDomain\(site\.domain\)\)\) continue;/,

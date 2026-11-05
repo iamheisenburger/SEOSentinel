@@ -1389,6 +1389,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
                     <label className="text-[12px] font-medium text-[#8A8F98]">Signing secret (32+ characters)</label>
                     <input type="password" value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} placeholder={site.webhookSecretConfigured ? "Leave blank to keep current secret" : "your-webhook-secret"} className={inputCls} />
                   </div>
+                  <p className="text-[11px] text-[#62666D]">Pentra sends signed JSON events (X-Pentra-Signature-256 is the HMAC-SHA256 of &quot;timestamp.body&quot; with your secret): pentra.article.publish.v1 for each article, and pentra.redirect.create.v1 when it merges two of your articles. For that one, add a permanent (301) redirect from each &quot;from&quot; path to its &quot;to&quot; path.</p>
                 </>
               )}
               <div className="flex items-center gap-2 mt-1">

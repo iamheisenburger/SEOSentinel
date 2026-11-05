@@ -32,13 +32,19 @@ if ($request['operation'] === 'setup') {
 }
 $owner = get_user_by('login', 'fixture-owner'); wp_set_current_user($owner->ID);
 if ($request['operation'] === 'create') {
-    $id = wp_insert_post(['post_type'=>$request['type'] ?? 'post', 'post_status'=>'publish',
+    // "author": "other" writes as the fixture's second editor (a post the connection's user didn't write).
+    $author = ($request['author'] ?? '') === 'other' ? get_user_by('login', 'fixture-other-owner')->ID : $owner->ID;
+    $id = wp_insert_post(['post_type'=>$request['type'] ?? 'post', 'post_status'=>$request['status'] ?? 'publish',
         'post_name'=>$request['slug'], 'post_title'=>$request['title'] ?? 'Supported local article',
-        'post_content'=>$request['content'] ?? '<p>Original confirmed facts remain unchanged.</p>', 'post_author'=>$owner->ID]);
+        'post_content'=>$request['content'] ?? '<p>Original confirmed facts remain unchanged.</p>', 'post_author'=>$author]);
     echo wp_json_encode(['id'=>$id, 'url'=>get_permalink($id)]);
 } elseif ($request['operation'] === 'edit') {
     // This is the ordinary WordPress edit API, not the connector's SQL.
     wp_update_post(['ID'=>$request['id'], 'post_content'=>$request['content']]);
+    echo wp_json_encode(['ok'=>true]);
+} elseif ($request['operation'] === 'public') {
+    // Core sitemaps exist only on a site open to search engines.
+    update_option('blog_public', $request['value'] === '1' ? '1' : '0');
     echo wp_json_encode(['ok'=>true]);
 } elseif ($request['operation'] === 'protect') {
     update_post_meta($request['id'], '_pentra_protected', 1);
