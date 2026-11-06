@@ -2508,7 +2508,9 @@ async function publishContentImprovement(ctx: ActionCtx, siteId: Id<"sites">, jo
     if (!e.resourceKey || site.publishMethod !== e.kind) throw new Error("Hosted improvement source contract changed");
     const { correction: c, editTarget: t } = claimed.jobContentWork;
     const after = c?.sourceAfter ?? renderSafePublicationHtml(added);
-    sourceContent = rollback ? rollback.selectedSource.sourceContent : c ? exactReplacement(e.sourceContent, c.sourceBefore, after)
+    // Phase 3: a search title change sends the post's exact HTML back with its new title and description fields.
+    sourceContent = rollback ? rollback.selectedSource.sourceContent : c?.kind === "search_snippet" ? e.sourceContent
+      : c ? exactReplacement(e.sourceContent, c.sourceBefore, after)
       : t ? exactReplacement(e.sourceContent, t.sourceBefore, after) : e.sourceContent + "\n" + after;
     const current = await hostedPostState(site as CmsSite, e.resourceKey, cmsRequest);
     if (current.revision === e.sourceRevision) {

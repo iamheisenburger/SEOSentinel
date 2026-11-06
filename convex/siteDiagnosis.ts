@@ -13,6 +13,7 @@ import { releaseSharedProviderReservation, reserveSharedProviderBudget, settleSh
 import { siteDiagnosisRecord } from "./lib/siteDiagnosisSchema";
 import { retiredArticle, servedOnItsOwnUrl } from "./lib/pentraConsolidation";
 import { mergedSlugs } from "./siteRedirects";
+import { PROVEN_POSITION, searchConsolePosition } from "./lib/topicVerdict";
 
 /** A site is diagnosed at most once in this long, unless forced. */
 export const DIAGNOSIS_INTERVAL_MS = 6 * 24 * 3600 * 1000;
@@ -25,6 +26,8 @@ export const DIAGNOSIS_GSC_ROWS = 12_000;
  * yes (money rule, Nov 2026): Pentra's own two sites. The engine is the same for every site; widening this list is the
  * rollout. */
 export const DIAGNOSIS_ROLLOUT_DOMAINS: readonly string[] = ["pentra.dev", "leadpilot.chat"];
+/** Phase 2 (P359) began choosing only winnable searches on Nov 5 2026. */
+const PHASE_TWO_SINCE = Date.UTC(2026, 10, 5);
 const bareDomain = (domain: string) => domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
 
 const pageUrl = (site: Doc<"sites">, slug: string) => { try { return publishedArticlePageUrl(site.domain, site.urlStructure, slug); } catch { return null; } };
@@ -36,10 +39,21 @@ export const context = internalQuery({ args: { siteId: v.id("sites") }, handler:
   const merged = await mergedSlugs(ctx, siteId);
   const summaries = (await ctx.db.query("article_summaries").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "published"))
     .order("desc").take(300)).filter((row) => row.publishedAt && articleMatchesCurrentDomain(site, row));
+  // P367: which articles Pentra wrote for a search Phase 2 found winnable (a fold target for a never-shown sibling). Only
+  // articles published since Phase 2 began can be such, so only their topics are read.
+  const winnableTopic = new Map<string, boolean>();
+  if (DIAGNOSIS_ROLLOUT_DOMAINS.includes(bareDomain(site.domain))) {
+    for (const row of summaries) {
+      if (!row.topicId || (row.publishedAt ?? 0) < PHASE_TWO_SINCE || winnableTopic.has(row.topicId)) continue;
+      const topic = await ctx.db.get(row.topicId), position = topic ? searchConsolePosition(topic) : null;
+      winnableTopic.set(row.topicId, Boolean(topic && (topic.pageOne?.rankable === true || (position !== null && position <= PROVEN_POSITION))));
+    }
+  }
   const addressed = summaries.flatMap((row) => {
     const url = row.publicUrl?.startsWith("https://") ? row.publicUrl : pageUrl(site, row.slug);
     return url ? [{ url, slug: row.slug, title: row.title, publishedAt: row.publishedAt ?? null, indexVerdict: row.gscIndexVerdict ?? null,
-      coverageState: row.gscCoverageState ?? null, retired: retiredArticle(site.domain, row.slug), moved: !servedOnItsOwnUrl(site.domain, row.slug, merged) }] : [];
+      coverageState: row.gscCoverageState ?? null, retired: retiredArticle(site.domain, row.slug), moved: !servedOnItsOwnUrl(site.domain, row.slug, merged),
+      winnable: row.topicId ? winnableTopic.get(row.topicId) === true : false }] : [];
   });
   // An article taken down on purpose (retired) is not a live article: its address answering "not found" is intended.
   const published = addressed.filter((row) => !row.retired);

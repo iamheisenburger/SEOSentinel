@@ -35,7 +35,8 @@ test("P250 the stock disclaimer clause leaves a live page; the advice around it 
 test("P250 the repair chain offers it when a page's links need nothing, under a new rule version", () => {
   const improvements = readFileSync("convex/contentImprovements.ts", "utf8");
   assert.match(improvements, /const stock = related \? null : stockDisclaimerRepairProposal\(e\.markdown\);/);
-  assert.match(improvements, /const kind = related \? "related_reading_titles" as const : stock \? "reader_text_repair" as const : "image_addition" as const;/);
+  // P367: an image, then a search title test, wait behind it.
+  assert.match(improvements, /const kind = related \? "related_reading_titles" as const : stock \? "reader_text_repair" as const : image \? "image_addition" as const : "search_snippet" as const;/);
   assert.ok(RELATED_REPAIR_VERSION >= 4, "a fresh pass re-checks every page (P272: 5, its variants)");
 });
 

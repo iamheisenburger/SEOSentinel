@@ -4,9 +4,10 @@ import { readerVisibleDefects } from "./articleQuality.ts";
 import { renderSafePublicationHtml } from "./safeMarkdownHtml.ts";
 import { isApiCmsMethod } from "./cmsDestinations.ts";
 import { canonicalBlogHref, consolidates } from "./pentraConsolidation.ts";
+import { decodeSnippet, encodeSnippet, frontmatterWithSnippet } from "./searchSnippet.ts";
 
 export type CorrectiveInput = {
-  kind: "factual_correction" | "technical_repair" | "reader_text_repair" | "related_reading_titles" | "image_addition";
+  kind: "factual_correction" | "technical_repair" | "reader_text_repair" | "related_reading_titles" | "image_addition" | "search_snippet";
   before: string; reason: string; field?: "siteSummary" | "productUsage";
   targetUrl?: string;
   /** reader_text_repair: the exact paragraph written in place of the process
@@ -235,9 +236,37 @@ export function stockDisclaimerRepairProposal(markdown: string): { before: strin
 const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const plain = (s: string) => !/[\n\[\]`#*<>|{}]|https?:/i.test(s);
 
+/** Phase 3 (Nov 2026): a page's search title and description change, and nothing else. `before` and `replacement` are
+ * the old and new snippets (encodeSnippet); `before` must be exactly what the page carries now. A GitHub page's
+ * frontmatter carries them (its two lines are rewritten, the rest of the file stays byte for byte); a Ghost, Shopify or
+ * Webflow post carries them as the post's own fields (its HTML stays as it is). WordPress needs the plugin's metadata
+ * write first, so it is refused here, and the test waits. */
+function planSnippetChange(page: Doc<"pages">, input: CorrectiveInput): CorrectivePatch {
+  const e = page.editable!;
+  if (input.field || input.targetUrl || input.replacement === undefined) throw new Error("A search title change takes only the old and new title and description");
+  const old = decodeSnippet(input.before), next = decodeSnippet(input.replacement);
+  if (old.metaTitle !== e.metaTitle || old.description !== e.description) throw new Error("The page's search title changed since the test was written");
+  if (encodeSnippet(old) !== input.before || encodeSnippet(next) !== input.replacement || input.before === input.replacement) throw new Error("A search title change must change the title or description");
+  if (input.reason.trim().length < 12 || input.reason.length > 400) throw new Error("A search title change needs its measured reason");
+  if (e.kind === "github") {
+    if (!e.header || !e.sourceContent.startsWith(e.header)) throw new Error("A search title change needs the page's exact frontmatter");
+    return { kind: "search_snippet", before: input.before, reason: input.reason, after: input.replacement,
+      sourceBefore: e.header, sourceAfter: frontmatterWithSnippet(e.header, next) };
+  }
+  if (isApiCmsMethod(e.kind)) {
+    // The post's HTML is unchanged; the publisher sends the new title and description as the post's own fields.
+    return { kind: "search_snippet", before: input.before, reason: input.reason, after: input.replacement, sourceBefore: "", sourceAfter: "" };
+  }
+  throw new Error("WordPress search titles need the plugin's metadata write");
+}
+
 /** Deterministic owner corrections only. No model decides facts, paid audit
  * scores are not fabricated, and the rest of the retained page is immutable. */
 export function planCorrectiveChange(site: Doc<"sites">, page: Doc<"pages">, input: CorrectiveInput): CorrectivePatch {
+  if (input.kind === "search_snippet") {
+    if (!page.editable?.active) throw new Error("Correction requires an active enrolled page");
+    return planSnippetChange(page, input);
+  }
   const e = page.editable, { before } = input;
   if (!e?.active || before !== before.trim() || contentWords(before) > 100 || before.length < 15 ||
     !e.markdown.split(/\n\s*\n/).some(p => p.trim() === before) || input.reason.trim().length < 12 || input.reason.length > 400) {
@@ -321,7 +350,10 @@ export function relatedRepairAllowed(site: Doc<"sites">, now: number): boolean {
 export function verifyCorrectivePatch(site: Doc<"sites">, page: Doc<"pages">, patch: CorrectivePatch) {
   const expected = planCorrectiveChange(site, page, { kind: patch.kind, before: patch.before, reason: patch.reason,
     ...(patch.field ? { field: patch.field } : {}), ...(patch.targetUrl ? { targetUrl: patch.targetUrl } : {}),
-    ...(patch.kind === "reader_text_repair" || patch.kind === "related_reading_titles" || patch.kind === "image_addition" ? { replacement: patch.after } : {}) });
+    ...(patch.kind === "reader_text_repair" || patch.kind === "related_reading_titles" || patch.kind === "image_addition" || patch.kind === "search_snippet"
+      ? { replacement: patch.after } : {}) });
   for (const key of ["after", "sourceBefore", "sourceAfter", "brokenUrl"] as const) if (expected[key] !== patch[key]) throw new Error("Correction lost its exact owner/source evidence");
+  // A search title change leaves the article's text exactly as it is.
+  if (patch.kind === "search_snippet") return page.editable!.markdown;
   return exactReplacement(page.editable!.markdown, patch.before, patch.after);
 }

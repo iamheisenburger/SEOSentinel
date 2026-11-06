@@ -36,6 +36,8 @@ import { redirectOnCms, type CmsRequest, type CmsSite } from "../lib/cmsPublishe
 import { wordpressRedirectKey, wordpressRedirects } from "../lib/wordpressConditional";
 import { editNetlifyToml, editRedirectsFile, pageForwardsTo, webhookRedirectEvent } from "../lib/platformRedirects";
 import { HOSTED_BLOG_DOMAINS } from "../lib/blogListing";
+import { checkSnippet, snippetCandidates, snippetRequest, snippetUrlKey, snippetVerdict, SNIPPET_MAX_TOKENS, SNIPPET_MODEL, SNIPPET_TESTS_PER_RUN, SNIPPET_TOOL,
+  type Snippet, type SnippetMeasure } from "../lib/searchSnippet";
 import { publishedArticleInternalHref } from "../lib/internalLinks";
 import { editVercelRedirects, type RedirectEntry } from "../lib/vercelRedirects";
 
@@ -124,7 +126,8 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
   const measurePart = async () => {
     const out = { intents: [] as QueryIntent[], pageOne: [] as PageOneCheck[], authority: site.authority ? { domainRank: site.authority.domainRank,
       referringDomains: site.authority.referringDomains } : null as { domainRank: number; referringDomains?: number } | null,
-      speed: [] as SpeedCheck[], links: [] as LinkOpportunity[], microUsd: 0, uncertain: false, notes: [] as string[] };
+      speed: [] as SpeedCheck[], links: [] as LinkOpportunity[], snippets: [] as SnippetProposal[], snippetDecisions: [] as SnippetDecision[],
+      microUsd: 0, uncertain: false, notes: [] as string[] };
     if (!paid) return out;
     const readers = async () => {
       // Who types the top searches, judged against what the business sells.
@@ -175,6 +178,13 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
       } catch (error) { out.notes.push(`Page one not measured: ${String(error).slice(0, 120)}`); }
     };
     await Promise.all([readers(), pageOneAndSpeed()]);
+    // Phase 3: a new search title for buyer pages Google shows on page one but few click, and the verdicts on earlier ones.
+    if (topicChoiceRollout(site.domain) && gsc.length && out.intents.length) {
+      try {
+        const tested = await titleTests(ctx, site, gsc, out.intents);
+        out.snippets = tested.proposals; out.snippetDecisions = tested.decisions; out.microUsd += tested.costMicroUsd; out.notes.push(...tested.notes);
+      } catch (error) { out.notes.push(`Search titles not tested: ${String(error).slice(0, 120)}`); }
+    }
     // Phase 4: the sites linking to the page-one competitors but not to this site, only when the owner turned it on.
     if (site.linkOutreach && out.pageOne.length) {
       try {
@@ -235,6 +245,19 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
       notes.push(`Link opportunities: ${measured.links.length} sites link to its page-one competitors but not to it (${recorded.added} new)`); }
     catch (error) { notes.push(`Link opportunities not recorded: ${String(error).slice(0, 120)}`); }
   }
+  // Phase 3: the week's verdicts on earlier title tests, then the new tests (Autopilot's repair round places them).
+  if (measured.snippetDecisions.length || measured.snippets.length) {
+    try {
+      if (measured.snippetDecisions.length) {
+        const decided = await ctx.runMutation(internal.searchSnippets.decide, { siteId, decisions: measured.snippetDecisions });
+        if (decided.restores) notes.push(`Search titles: ${decided.restores} restored after clicks fell`);
+      }
+      if (measured.snippets.length) {
+        const proposed = await ctx.runMutation(internal.searchSnippets.propose, { siteId, proposals: measured.snippets });
+        notes.push(`Search titles: ${proposed.added} new ${proposed.added === 1 ? "test" : "tests"} for pages buyers see on page one but rarely click`);
+      }
+    } catch (error) { notes.push(`Search titles not recorded: ${String(error).slice(0, 120)}`); }
+  }
   // Phase 5: the week's buyer questions become topics to check (Phase 2 decides whether each is written).
   if (aiQuestions.length && !repairsOnly) {
     try { await ctx.runMutation(internal.contentWork.addAiQuestionTopics, { siteId, questions: aiQuestions }); }
@@ -292,6 +315,62 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
 }
 
 const r1 = (n: number) => Math.round(n * 10) / 10;
+
+type SnippetProposal = { pageId: Id<"pages">; url: string; query: string; before: Snippet; after: Snippet; baseline: SnippetMeasure; costMicroUsd: number };
+type SnippetDecision = { id: Id<"search_snippets">; outcome: "keep" | "restore" | "failed" | "restored_live"; liveAt?: number; after?: SnippetMeasure;
+  ratioBefore?: number; ratioAfter?: number };
+/** A title call whose answer was lost is charged at this bound (a Haiku call with a short page opening costs about $0.001). */
+const SNIPPET_CALL_MAX_MICRO_USD = 5_000;
+
+/** Phase 3 (Nov 2026): the week's search title work for one site, from its Search Console rows and the readers' labels.
+ * Tests placed earlier are judged by their clicks (or set aside when they never went live); then up to
+ * SNIPPET_TESTS_PER_RUN pages Google shows on page one to buyers who rarely click get a new title and description,
+ * written by one cheap model call each and used only when it passes the objective checks (checkSnippet). */
+async function titleTests(ctx: ActionCtx, site: Context, gsc: readonly GscRow[], intents: readonly QueryIntent[]) {
+  const out = { proposals: [] as SnippetProposal[], decisions: [] as SnippetDecision[], costMicroUsd: 0, notes: [] as string[] };
+  const tests = await ctx.runQuery(internal.searchSnippets.context, { siteId: site.siteId });
+  if (!tests) return out;
+  const labels = new Map(intents.map((i) => [i.query.trim().toLowerCase(), String(i.label)]));
+  const now = Date.now();
+  for (const t of tests.placed) {
+    if (t.failed) { out.decisions.push({ id: t.id, outcome: "failed" }); continue; }
+    if (t.liveAt === null) continue;
+    if (t.restore) { out.decisions.push({ id: t.id, outcome: "restored_live", liveAt: t.liveAt }); continue; }
+    const verdict = snippetVerdict(gsc, { url: t.url, liveAt: t.liveAt, baseline: t.baseline }, { domain: site.domain, labels, now });
+    if (verdict.outcome === "wait") continue;
+    out.decisions.push({ id: t.id, outcome: verdict.outcome, liveAt: t.liveAt, after: verdict.after, ratioBefore: verdict.ratioBefore, ratioAfter: verdict.ratioAfter });
+  }
+  const pageIdOf = new Map(tests.eligible.map((p) => [snippetUrlKey(p.url), p.pageId]));
+  const candidates = snippetCandidates(gsc, { domain: site.domain, labels, eligible: new Set(pageIdOf.keys()) }).slice(0, SNIPPET_TESTS_PER_RUN);
+  if (!candidates.length || !process.env.ANTHROPIC_API_KEY) return out;
+  const details = await ctx.runQuery(internal.searchSnippets.pageDetails, { siteId: site.siteId,
+    pageIds: candidates.flatMap((c) => pageIdOf.get(snippetUrlKey(c.url)) ?? []) });
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 60_000, fetch });
+  for (const c of candidates) {
+    const page = details.find((d) => snippetUrlKey(d.url) === snippetUrlKey(c.url));
+    if (!page) continue;
+    const request = snippetRequest({ business: { name: site.business.name, domain: site.domain }, query: c.query, queries: c.queries,
+      title: page.title, metaTitle: page.metaTitle, description: page.description, opening: page.markdown.slice(0, 1800), position: c.position });
+    let input: unknown = null, cost = SNIPPET_CALL_MAX_MICRO_USD;
+    try {
+      const response = await anthropic.messages.create({ model: SNIPPET_MODEL, max_tokens: SNIPPET_MAX_TOKENS, system: request.system,
+        messages: [{ role: "user", content: request.userMessage }],
+        tools: [{ name: SNIPPET_TOOL, description: "Record the page's new search title and description.", input_schema: request.inputSchema, strict: true }],
+        tool_choice: structuredToolChoice(SNIPPET_MODEL, SNIPPET_TOOL) });
+      cost = buyerFitCostMicroUsd(response.usage);
+      const tool = response.content.find((b) => b.type === "tool_use" && b.name === SNIPPET_TOOL);
+      input = tool && tool.type === "tool_use" ? tool.input : null;
+    } catch (error) { out.notes.push(`Search title for ${c.url} not written: ${String(error).slice(0, 100)}`); }
+    out.costMicroUsd += cost;
+    if (input === null) continue;
+    const checked = checkSnippet(input, page, c.query);
+    if (!checked.ok) { out.notes.push(`Search title for ${c.url} not used: ${checked.reason}`); continue; }
+    out.proposals.push({ pageId: page.pageId, url: page.url, query: c.query, before: { metaTitle: page.metaTitle, description: page.description },
+      after: checked.snippet, baseline: { clicks: c.clicks, impressions: c.impressions, expectedClicks: c.expectedClicks, position: c.position, days: c.days },
+      costMicroUsd: cost });
+  }
+  return out;
+}
 
 /** Every buyer question to every assistant through treg, six at a time, inside a time limit for the whole set (a question
  * still waiting at the limit is recorded as unasked, never guessed). Charged at treg's reported cost; a call whose answer
@@ -356,13 +435,15 @@ async function recordUnshownMerges(ctx: ActionCtx, site: Context, pages: readonl
   const crawledAt = new Map(pages.map((p) => [normalize(p.url), p]));
   const mayFold = (url: string) => { const p = crawledAt.get(normalize(url)); return Boolean(p?.article && p.status === 200 && !p.noindex); };
   const taken = new Set(merged.flatMap((m) => [addressOf(site, m.fromSlug).url, addressOf(site, m.toSlug).url]));
-  const plan = planUnshownMerges({ articles: site.published.filter((p) => !p.moved && !p.retired).map((p) => ({ url: p.url, title: p.title, publishedAt: p.publishedAt })),
-    gsc, now: Date.now(), mayMerge: mayFold, taken });
+  const plan = planUnshownMerges({ articles: site.published.filter((p) => !p.moved && !p.retired).map((p) => ({ url: p.url, title: p.title, publishedAt: p.publishedAt,
+    winnable: p.winnable })), gsc, now: Date.now(), mayMerge: mayFold, taken });
   const slugOf = new Map(site.published.map((p) => [normalize(p.url), slugKey(p.slug)]));
   const rows = plan.flatMap((m) => {
     const fromSlug = slugOf.get(normalize(m.from)), toSlug = slugOf.get(normalize(m.to));
     return fromSlug && toSlug ? [{ fromSlug, toSlug, reason: "merged_unshown" as const, foldQuestions: [m.fromTitle.slice(0, 120)],
-      evidence: `Google showed it to nobody in 28 days (live ${m.ageDays} days); "${m.toTitle.slice(0, 120)}" on the same subject was shown ${m.toImpressions} times` }] : [];
+      evidence: m.toWinnable
+        ? `Google showed it to nobody in 28 days (live ${m.ageDays} days); "${m.toTitle.slice(0, 120)}" on the same subject was written for a search the site can win`
+        : `Google showed it to nobody in 28 days (live ${m.ageDays} days); "${m.toTitle.slice(0, 120)}" on the same subject was shown ${m.toImpressions} times` }] : [];
   });
   return rows.length ? await ctx.runMutation(internal.siteRedirects.recordMerges, { siteId: site.siteId, merges: rows }) : [];
 }

@@ -234,9 +234,9 @@ test("an image goes above an article's first paragraph through the exact correct
   refuse({ replacement }, { ...page, editable: { ...page.editable, markdown: `![old](https://x.example/a.png)\n\n${markdown}` } });
   refuse({ replacement }, { ...page, editable: { ...page.editable, kind: "wordpress" } });
   const repair = readFileSync("convex/contentImprovements.ts", "utf8");
-  assert.match(repair, /const proposal = related \?\? stock \?\? image;/, "an image waits behind the page's other repairs, one commit at a time");
+  assert.match(repair, /const proposal = related \?\? stock \?\? image \?\? titled;/, "an image waits behind the page's other repairs, one commit at a time (P367: a title test after it)");
   assert.match(repair, /if \(prepared && kind === "image_addition"\) await ctx\.db\.patch\(prepared\._id, \{ status: "queued", jobId \}\);/);
-  assert.match(repair, /throw new Error\("Related reading title repairs and image additions are Autopilot's own"\)/);
+  assert.match(repair, /throw new Error\("Related reading title repairs, image additions and search title tests are Autopilot's own"\)/);
   assert.match(readFileSync("convex/lib/contentCorrection.ts", "utf8"), /export const RELATED_REPAIR_VERSION = 8;/, "every page is visited once more for its image");
 });
 

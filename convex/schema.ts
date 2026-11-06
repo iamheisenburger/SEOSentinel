@@ -1372,9 +1372,9 @@ export default defineSchema({
       validationAuthorizationId: v.optional(v.id("provider_budget_authorizations")),
       intent: v.union(v.literal("create"), v.literal("improve")),
       operation: v.optional(v.union(v.literal("rollback"), v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"),
-        v.literal("related_reading_titles"), v.literal("image_addition"))), rollbackOfRevisionId: v.optional(v.id("published_article_revisions")),
+        v.literal("related_reading_titles"), v.literal("image_addition"), v.literal("search_snippet"))), rollbackOfRevisionId: v.optional(v.id("published_article_revisions")),
       correction: v.optional(v.object({ key: v.string(), kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"),
-        v.literal("related_reading_titles"), v.literal("image_addition")),
+        v.literal("related_reading_titles"), v.literal("image_addition"), v.literal("search_snippet")),
         before: v.string(), after: v.string(), sourceBefore: v.string(), sourceAfter: v.string(), reason: v.string(),
         field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))),
         targetPageId: v.optional(v.id("pages")), targetUrl: v.optional(v.string()), brokenUrl: v.optional(v.string()), observedAt: v.number() })),
@@ -1814,11 +1814,30 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_site_page", ["siteId", "pageId"]),
 
-  // Permanent redirects Pentra made (Nov 2026): a duplicate article merged into the stronger page on its searches
-  // (convex/lib/duplicatePages.ts). Both articles stay published in Pentra; only the weaker address now redirects.
-  // Pentra's own blog serves the redirect itself; a GitHub site gets it in the redirect file its host reads ("repository");
-  // WordPress, Shopify, Webflow, Ghost and webhook sites through their own connection ("platform"); one the owner added
-  // by hand is "owner"; anything Pentra can't deliver is an action for the owner. A reverted row is kept as history.
+  // Phase 3 (Nov 2026): a new search title and description for a page Google shows on page one to buyers who rarely
+  // click it (convex/lib/searchSnippet.ts). Written by the weekly diagnosis, placed by Autopilot's repair round, and
+  // judged by clicks four weeks after it went live: kept, or the old title restored (a restore is a row of its own,
+  // `restoreOf`). Rows are history; nothing is deleted.
+  search_snippets: defineTable({
+    siteId: v.id("sites"),
+    pageId: v.id("pages"),
+    url: v.string(),
+    query: v.string(),
+    status: v.union(v.literal("ready"), v.literal("queued"), v.literal("kept"), v.literal("restored"), v.literal("skipped")),
+    before: v.object({ metaTitle: v.string(), description: v.string() }),
+    after: v.object({ metaTitle: v.string(), description: v.string() }),
+    baseline: v.object({ clicks: v.number(), impressions: v.number(), expectedClicks: v.number(), position: v.number(), days: v.number() }),
+    restoreOf: v.optional(v.id("search_snippets")),
+    jobId: v.optional(v.id("jobs")),
+    liveAt: v.optional(v.number()),
+    verdict: v.optional(v.object({ decidedAt: v.number(), outcome: v.union(v.literal("kept"), v.literal("restored")),
+      clicks: v.number(), impressions: v.number(), expectedClicks: v.number(), ratioBefore: v.number(), ratioAfter: v.number() })),
+    note: v.optional(v.string()),
+    costMicroUsd: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_site_page", ["siteId", "pageId"]).index("by_site_status", ["siteId", "status"]),
+
   // Phase 4 (Nov 2026): sites that link to a site's page-one competitors but not to it (DataForSEO domain intersection), found
   // weekly when the owner turned link finding on. The owner (or, with their yes, Pentra) approaches them; nothing is deleted.
   link_opportunities: defineTable({
@@ -1831,6 +1850,11 @@ export default defineSchema({
     seenAt: v.number(),
   }).index("by_site_domain", ["siteId", "domain"]),
 
+  // Permanent redirects Pentra made (Nov 2026): a duplicate article merged into the stronger page on its searches
+  // (convex/lib/duplicatePages.ts). Both articles stay published in Pentra; only the weaker address now redirects.
+  // Pentra's own blog serves the redirect itself; a GitHub site gets it in the redirect file its host reads ("repository");
+  // WordPress, Shopify, Webflow, Ghost and webhook sites through their own connection ("platform"); one the owner added
+  // by hand is "owner"; anything Pentra can't deliver is an action for the owner. A reverted row is kept as history.
   site_redirects: defineTable({
     siteId: v.id("sites"),
     fromSlug: v.string(),

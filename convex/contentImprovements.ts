@@ -18,6 +18,7 @@ import { canonicalBlogHref, consolidates, servedOnItsOwnUrl } from "./lib/pentra
 import { mergedSlugs } from "./siteRedirects";
 import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { closeVerifiedContentWake } from "./jobs";
+import { decodeSnippet, encodeSnippet } from "./lib/searchSnippet";
 
 /** `operator`: the deploy key acting on the owner's instruction (internal
  * callers only; limited to wording repairs by requestCorrection). */
@@ -62,7 +63,7 @@ export const correctionContext = internalQuery({ args: { siteId: v.id("sites"), 
   } });
 export const priorCorrection = internalQuery({ args: { siteId: v.id("sites"), pageId: v.id("pages"), baseRevision: v.string(),
   kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"), v.literal("related_reading_titles"),
-    v.literal("image_addition")),
+    v.literal("image_addition"), v.literal("search_snippet")),
   before: v.string(), reason: v.string(),
   field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))), targetPageId: v.optional(v.id("pages")),
   replacement: v.optional(v.string()) },
@@ -72,10 +73,10 @@ export const priorCorrection = internalQuery({ args: { siteId: v.id("sites"), pa
     return jobs.find(j => { const cw = j.contentWork, c = cw?.correction; return cw?.targetPageId === args.pageId &&
       cw.baseRevision === args.baseRevision && c?.kind === args.kind && c.before === args.before && c.reason === args.reason &&
       c.field === args.field && c.targetPageId === args.targetPageId &&
-      (!["reader_text_repair", "related_reading_titles", "image_addition"].includes(args.kind) || c.after === args.replacement); })?._id ?? null;
+      (!["reader_text_repair", "related_reading_titles", "image_addition", "search_snippet"].includes(args.kind) || c.after === args.replacement); })?._id ?? null;
   } });
 const correctivePatch = v.object({ kind: v.union(v.literal("factual_correction"), v.literal("technical_repair"), v.literal("reader_text_repair"),
-  v.literal("related_reading_titles"), v.literal("image_addition")),
+  v.literal("related_reading_titles"), v.literal("image_addition"), v.literal("search_snippet")),
   before: v.string(), after: v.string(), sourceBefore: v.string(), sourceAfter: v.string(), reason: v.string(),
   field: v.optional(v.union(v.literal("siteSummary"), v.literal("productUsage"))),
   targetUrl: v.optional(v.string()), brokenUrl: v.optional(v.string()) });
@@ -84,7 +85,9 @@ export const requestCorrection = internalMutation({ args: { siteId: v.id("sites"
   operator: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<Id<"jobs">> => {
     if (args.operator && args.patch.kind !== "reader_text_repair") throw new Error("The operator path only repairs pipeline wording");
-    if (args.patch.kind === "related_reading_titles" || args.patch.kind === "image_addition") throw new Error("Related reading title repairs and image additions are Autopilot's own");
+    if (args.patch.kind === "related_reading_titles" || args.patch.kind === "image_addition" || args.patch.kind === "search_snippet") {
+      throw new Error("Related reading title repairs, image additions and search title tests are Autopilot's own");
+    }
     const site = await correctionOwner(ctx, args.siteId, args.operator === true);
     return insertCorrectionJob(ctx, site, args, { opportunity: "Owner-confirmed exact correction; not scheduled SEO delivery or growth",
       wake: "owner_confirmed_correction" });
@@ -110,7 +113,9 @@ async function insertCorrectionJob(ctx: MutationCtx, site: Doc<"sites">, args: {
       if (target.url !== args.patch.targetUrl) throw new Error("Broken-link destination changed");
     } else if (args.targetPageId) throw new Error("Factual corrections cannot add destinations");
     const markdown = verifyCorrectivePatch(site, page, args.patch);
-    const artifact = { title: e.title, slug: page.slug, markdown, metaTitle: e.metaTitle, metaDescription: e.description,
+    // Phase 3: a search title change carries the new title and description; every other correction keeps them.
+    const snippet = args.patch.kind === "search_snippet" ? decodeSnippet(args.patch.after) : null;
+    const artifact = { title: e.title, slug: page.slug, markdown, metaTitle: snippet?.metaTitle ?? e.metaTitle, metaDescription: snippet?.description ?? e.description,
       publicationConfigHash: publicationDeliveryConfigHash(publicationDeliveryConfig(site)) };
     const approvedArtifactHash = publicationArtifactHash(artifact);
     const articleId = await ctx.db.insert("articles", { ...artifact, siteId: site._id, status: "revision",
@@ -151,6 +156,10 @@ const RELATED_REPAIR_SCAN = 20;
 const RELATED_REPAIR_REASON = "Autopilot completes Related reading link titles it cut at its old 8-word limit, and points links to consolidated pages at the page they now lead to.";
 const STOCK_DISCLAIMER_REASON = "Autopilot removes the stock clause its writer added before P248 (\"a recommendation, not an industry standard\").";
 const IMAGE_ADDITION_REASON = "Autopilot adds the image it made and checked for its own article, published without one between Aug 27 and Nov 5 2026.";
+/** Phase 3: why a page gets a new search title, in measured numbers (or, for a restore, why the old one comes back). */
+const snippetReason = (test: Doc<"search_snippets">) => (test.restoreOf
+  ? `Autopilot restores the search title it replaced: clicks for the page's positions fell with the new one (${test.note ?? "measured over four weeks"}).`
+  : `Autopilot tests a new search title: ${test.baseline.clicks} clicks from ${test.baseline.impressions} page-one impressions for buyers' searches in 28 days, about ${Math.round(test.baseline.expectedClicks)} expected at its positions.`).slice(0, 400);
 /** The titles of the published articles a Related reading list links, by href. */
 async function relatedReadingTitles(ctx: MutationCtx, site: Doc<"sites">, hrefs: string[]) {
   const titles = new Map<string, string>();
@@ -195,25 +204,33 @@ export const requestRelatedReadingRepair = internalMutation({ args: { siteId: v.
     const prepared = related || stock ? null : await ctx.db.query("article_images").withIndex("by_site_page", q => q.eq("siteId", siteId).eq("pageId", page._id)).first();
     const opening = prepared?.status === "ready" ? firstPlainParagraph(e.markdown) : null;
     const image = prepared && opening ? { before: opening, replacement: imageAdditionReplacement(opening, prepared) } : null;
-    const proposal = related ?? stock ?? image;
+    // Phase 3: a new search title the weekly diagnosis wrote for this page (convex/searchSnippets.ts), tested by clicks.
+    const test = related || stock || image ? null : (await ctx.db.query("search_snippets").withIndex("by_site_page", q => q.eq("siteId", siteId).eq("pageId", page._id))
+      .order("desc").take(5)).find(row => row.status === "ready") ?? null;
+    const titled = test ? { before: encodeSnippet(test.before), replacement: encodeSnippet(test.after) } : null;
+    const proposal = related ?? stock ?? image ?? titled;
     if (!proposal) continue;
     // A page whose own work is unfinished (a refresh waiting for its slot) keeps
     // its source: the repair would make that work's exact base stale.
     const last = e.lastWorkJobId ? await ctx.db.get(e.lastWorkJobId) : null;
     if (last && !["verified", "failed"].includes(last.contentWork?.stage ?? "")) { retryAt ??= now + RELATED_REPAIR_RETRY_MS; continue; }
     let jobId: Id<"jobs">;
-    const kind = related ? "related_reading_titles" as const : stock ? "reader_text_repair" as const : "image_addition" as const;
+    const kind = related ? "related_reading_titles" as const : stock ? "reader_text_repair" as const : image ? "image_addition" as const : "search_snippet" as const;
     try {
       const patch = planCorrectiveChange(site, page, { kind, before: proposal.before, replacement: proposal.replacement,
-        reason: kind === "reader_text_repair" ? STOCK_DISCLAIMER_REASON : kind === "image_addition" ? IMAGE_ADDITION_REASON : RELATED_REPAIR_REASON });
+        reason: kind === "reader_text_repair" ? STOCK_DISCLAIMER_REASON : kind === "image_addition" ? IMAGE_ADDITION_REASON
+          : kind === "search_snippet" ? snippetReason(test!) : RELATED_REPAIR_REASON });
       jobId = await insertCorrectionJob(ctx, site, { pageId: page._id, baseRevision: e.sourceRevision, permissionVersion: e.version, patch, observedAt: now },
         { opportunity: kind === "reader_text_repair" ? "Autopilot removes its own stock disclaimer from a live page; not scheduled SEO delivery or growth"
           : kind === "image_addition" ? "Autopilot adds the image it made for its own article; not scheduled SEO delivery or growth"
+          : kind === "search_snippet" ? "Autopilot tests a new search title on its own article; clicks decide after four weeks"
           : "Autopilot completes its own cut Related reading titles; not scheduled SEO delivery or growth", wake: "related_reading_repair" });
       if (prepared && kind === "image_addition") await ctx.db.patch(prepared._id, { status: "queued", jobId });
-    } catch {
+      if (test && kind === "search_snippet") await ctx.db.patch(test._id, { status: "queued", jobId, updatedAt: now });
+    } catch (error) {
       // A layout the exact path cannot map: the page keeps its titles (and an image that can't be placed is set aside).
       if (prepared && kind === "image_addition") await ctx.db.patch(prepared._id, { status: "skipped" });
+      if (test && kind === "search_snippet") await ctx.db.patch(test._id, { status: "skipped", note: String(error instanceof Error ? error.message : error).slice(0, 200), updatedAt: now });
       continue;
     }
     await ctx.db.patch(siteId, { contentSchedule: { ...schedule, relatedRepairCursor: page._creationTime, relatedRepairAt: now,
@@ -309,7 +326,7 @@ export const claim = internalMutation({ args: claimArgs, handler: async (ctx, ar
     const id = await ctx.db.insert("published_article_revisions", {
       siteId: site._id, articleId: article._id, contentWorkJobId: job._id, selectedPageId: page._id,
       ...(page.editable.managedArticleId ? { servedArticleId: page.editable.managedArticleId } : {}),
-      selectedSource: page.editable, actionFingerprint: cw.opportunity ?? "selected_page_improvement", kind: rollback ? "rollback" : correction?.kind === "factual_correction" || correction?.kind === "reader_text_repair" || correction?.kind === "related_reading_titles" || correction?.kind === "image_addition" ? "editorial_correction" : correction ? "renderer_repair" : "content_improvement",
+      selectedSource: page.editable, actionFingerprint: cw.opportunity ?? "selected_page_improvement", kind: rollback ? "rollback" : correction?.kind === "search_snippet" ? "improve_snippet" : correction?.kind === "factual_correction" || correction?.kind === "reader_text_repair" || correction?.kind === "related_reading_titles" || correction?.kind === "image_addition" ? "editorial_correction" : correction ? "renderer_repair" : "content_improvement",
       ...(rollback ? { rollbackOfRevisionId: rollback._id } : {}),
       revisionKey, status: "prepared", rolloutEpoch: site.autopilotRolloutEpoch ?? 0,
       publicationConfigHash: article.publicationConfigHash!, publicationDate: 0, expectedPublicUrl: page.url,

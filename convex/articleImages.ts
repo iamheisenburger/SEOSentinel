@@ -79,7 +79,7 @@ export const record = internalMutation({ args: { siteId: v.id("sites"), pageId: 
 /** P358 (Nov 5 2026): a prepared image brings the live-page repair round forward. The round that visits every page had
  * finished, clean, before any image existed, so the next one was a week away and no image reached its page. The
  * round's own rules still hold (one page every two hours, never close to a publishing slot). */
-async function bringRepairForward(ctx: MutationCtx, siteId: Id<"sites">) {
+export async function bringRepairForward(ctx: MutationCtx, siteId: Id<"sites">) {
   const site = await ctx.db.get(siteId), schedule = site?.contentSchedule, now = Date.now();
   // During a round, this carries to its end and starts the next one, so a page the round already passed gets its image too.
   if (!schedule || (schedule.relatedRepairRetryAt !== undefined && schedule.relatedRepairRetryAt <= now)) return;

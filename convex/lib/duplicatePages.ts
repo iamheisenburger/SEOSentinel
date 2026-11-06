@@ -143,19 +143,26 @@ export function foldQuestionsFor(gsc: readonly GscRow[], from: string, to: strin
 // Google has shown to nobody for two months adds nothing on its own and splits the site's subject across thin pages;
 // folded into the sibling Google does show (a permanent redirect, and its subject becomes a section of that page through
 // the fold), the subject has one stronger page. Only Pentra's own articles, only with Search Console's evidence, at most
-// MAX_UNSHOWN_MERGES_PER_RUN a week, never one without a shown sibling on its subject (it waits for a rewrite instead).
+// MAX_UNSHOWN_MERGES_PER_RUN a week, never one without a sibling on its subject: one Google shows or (P367) one Pentra wrote
+// for a search Phase 2 found winnable, live WINNER_MIN_AGE_DAYS.
 
 /** An article this old that Google still shows to nobody, while a sibling on its subject is shown, adds nothing on its own. */
 export const UNSHOWN_MIN_AGE_DAYS = 60;
 /** The sibling it joins must itself be shown: this many impressions in the same 28 days. */
 export const UNSHOWN_SIBLING_MIN_IMPRESSIONS = 20;
 export const MAX_UNSHOWN_MERGES_PER_RUN = 3;
-export type UnshownMerge = { from: string; to: string; fromTitle: string; toTitle: string; toImpressions: number; ageDays: number };
+/** P367: an article Pentra wrote for a search Phase 2 found winnable (its page-one check, or Search Console position 20
+ * or better) is a fold target too once it has been live this long: Google has had time to index it, and the never-shown
+ * article's subject strengthens the page written to win it. */
+export const WINNER_MIN_AGE_DAYS = 14;
+export type UnshownMerge = { from: string; to: string; fromTitle: string; toTitle: string; toImpressions: number; ageDays: number;
+  /** The kept article was chosen because it was written for a winnable search, not because Google shows it. */
+  toWinnable?: boolean };
 
 const urlKey = (url: string) => url.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[?#].*$/, "").replace(/\/+$/, "");
 
 export function planUnshownMerges(args: {
-  articles: ReadonlyArray<{ url: string; title: string; publishedAt: number | null }>;
+  articles: ReadonlyArray<{ url: string; title: string; publishedAt: number | null; winnable?: boolean }>;
   gsc: ReadonlyArray<{ page?: string; impressions: number; clicks: number }>;
   now: number;
   /** Live, Pentra's own article, indexable, still on its own address. */
@@ -179,13 +186,18 @@ export function planUnshownMerges(args: {
     .sort((a, b) => (a.publishedAt ?? 0) - (b.publishedAt ?? 0) || a.url.localeCompare(b.url));
   const leaving = new Set(unshown.map((a) => urlKey(a.url)));
   const siblings = live.filter((a) => impressionsOf(a.url) >= UNSHOWN_SIBLING_MIN_IMPRESSIONS && !leaving.has(urlKey(a.url)));
+  // P367: with no shown sibling, an article written for a winnable search on the same subject (live long enough to be indexed).
+  const winners = live.filter((a) => a.winnable === true && ageDays(a) >= WINNER_MIN_AGE_DAYS && !leaving.has(urlKey(a.url)));
   const merges: UnshownMerge[] = [];
   for (const article of unshown) {
     if (merges.length >= limit) break;
-    const best = siblings.filter((s) => sameGroup(article.title, s.title))
+    const shownBest = siblings.filter((s) => sameGroup(article.title, s.title))
       .sort((x, y) => (shown.get(urlKey(y.url))!.clicks - shown.get(urlKey(x.url))!.clicks) || impressionsOf(y.url) - impressionsOf(x.url) || x.url.localeCompare(y.url))[0];
+    const best = shownBest ?? winners.filter((w) => sameGroup(article.title, w.title))
+      .sort((x, y) => impressionsOf(y.url) - impressionsOf(x.url) || (y.publishedAt ?? 0) - (x.publishedAt ?? 0) || x.url.localeCompare(y.url))[0];
     if (!best) continue;
-    merges.push({ from: article.url, to: best.url, fromTitle: article.title, toTitle: best.title, toImpressions: impressionsOf(best.url), ageDays: ageDays(article) });
+    merges.push({ from: article.url, to: best.url, fromTitle: article.title, toTitle: best.title, toImpressions: impressionsOf(best.url), ageDays: ageDays(article),
+      ...(shownBest ? {} : { toWinnable: true }) });
   }
   return merges;
 }

@@ -4115,6 +4115,8 @@ const SITE_DELETION_STAGES = [
   "site_diagnoses",
   "site_redirects",
   "article_images",
+  "search_snippets",
+  "link_opportunities",
   "pasted_publications",
   "autopilot_alerts",
   "autopilot_health",
@@ -4833,6 +4835,10 @@ async function deletionRowsForStage(
       return ctx.db.query("site_redirects").withIndex("by_site_from", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "article_images":
       return ctx.db.query("article_images").withIndex("by_site_page", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "search_snippets":
+      return ctx.db.query("search_snippets").withIndex("by_site_page", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
+    case "link_opportunities":
+      return ctx.db.query("link_opportunities").withIndex("by_site_domain", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "pasted_publications":
       return ctx.db.query("pasted_publications").withIndex("by_site_status", (q) => q.eq("siteId", siteId)).take(SITE_DELETION_BATCH);
     case "autopilot_alerts":
