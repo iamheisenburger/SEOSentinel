@@ -19,7 +19,7 @@ import { contactDiscoveryUrls, extractContactCandidates, selectBestContact } fro
 import { requestsOutreachOptOut } from "../lib/outreachInbound";
 import { decryptOutreachCredentials, outreachCredentialKeyConfig, type EncryptedOutreachCredentials } from "../lib/outreachCredentialEncryption";
 import { classifySmtpFailure, smtpTransportOptions } from "../lib/outreachSmtp";
-import { aiCitedPages, checkPitch, emailFooter, followUpEmail, linkToSite, nextSendAt, pageIntersectionRequest, parsePageIntersection, pitchRequest, pitchTarget,
+import { aiCitedPages, euAddressIn, recipientCountryAllowed, checkPitch, emailFooter, followUpEmail, linkToSite, nextSendAt, pageIntersectionRequest, parsePageIntersection, pitchRequest, pitchTarget,
   readListingPage, PITCH_MAX_TOKENS, PITCH_TOOL, type ListingPage } from "../lib/linkOutreach";
 import { linkCompetitors } from "../lib/linkOpportunities";
 import { meterDataForSeoCost, pageIntersection } from "./seoData";
@@ -70,6 +70,10 @@ export const prepare = internalAction({ args: { siteId: v.id("sites") }, handler
         try { const page = await fetchPage(url); contact = selectBestContact(extractContactCandidates({ html: page.text, siteDomain: o.domain })); } catch { /* next */ }
       }
       if (!contact) { results.push({ id: o.id, status: "no_contact" as const, title: read.title, kind: read.kind, note: "No published email address on the site" }); continue; }
+      // P371: US and UK sites only: never one whose contact address or contact/about page is in the EU/EEA.
+      if (!recipientCountryAllowed(contact.email) || await showsEuAddress(o.url, o.domain, fetched.text)) {
+        results.push({ id: o.id, status: "skipped" as const, title: read.title, note: "The site shows an EU/EEA address: Pentra writes only to US and UK sites" }); continue;
+      }
       if (suppressed.has(contact.email)) { results.push({ id: o.id, status: "skipped" as const, title: read.title, note: "That address asked not to be emailed" }); continue; }
       const target = pitchTarget({ kind: read.kind, title: read.title }, { name: site.name, homeUrl: site.homeUrl, articles: site.articles });
       if (!anthropic) { results.push({ id: o.id, status: "no_contact" as const, title: read.title, kind: read.kind, contact: { email: contact.email, source: contact.discoveryMethod },
@@ -126,6 +130,15 @@ export const findNow = internalAction({ args: { siteId: v.id("sites") }, handler
   await ctx.scheduler.runAfter(0, internal.actions.linkOutreach.prepare, { siteId });
   return { found: all.length };
 } });
+
+/** P371: whether the site's contact or about page (or the page already read) shows an EU/EEA postal address. */
+async function showsEuAddress(pageUrl: string, domain: string, pageText?: string): Promise<boolean> {
+  if (pageText && euAddressIn(pageText)) return true;
+  for (const url of contactDiscoveryUrls({ sourceUrl: pageUrl, siteDomain: domain, limit: 4 }).slice(1, 4)) {
+    try { if (euAddressIn((await fetchPage(url)).text)) return true; } catch { /* not there */ }
+  }
+  return false;
+}
 
 type Mailbox = { id: Id<"link_mailboxes">; email: string; senderName: string; postalAddress: string; smtp: { host: string; port: number };
   imap: { host: string; port: number }; credentials: EncryptedOutreachCredentials };
@@ -207,7 +220,10 @@ export const sendNext = internalAction({ args: { siteId: v.id("sites") }, handle
       const domain = turn.mailbox.email.split("@")[1];
       const messageId = `<pentra-link-${randomUUID()}@${domain}>`;
       // The send is recorded as attempted before it goes out: an attempt with no receipt is never sent again.
-      const claim = await ctx.runMutation(internal.linkOpportunities.claimSend, { siteId, id: next.id, kind: next.kind, messageId });
+      // P371: checked again just before a first email: a site showing an EU/EEA address is set aside, never written to.
+      const euSite = next.kind === "first" && await showsEuAddress(next.url, next.domain);
+      if (euSite) await ctx.runMutation(internal.linkOpportunities.setAsideForCountry, { siteId, id: next.id });
+      const claim = euSite ? { ok: false } : await ctx.runMutation(internal.linkOpportunities.claimSend, { siteId, id: next.id, kind: next.kind, messageId });
       if (claim.ok) {
         const body = next.kind === "follow_up" ? followUpEmail({ theirTitle: next.theirTitle, ourTitle: next.ourTitle, firstName: turn.mailbox.senderName.split(" ")[0] }).body : next.body;
         const transport = transportFor(turn.mailbox, secrets.smtpPassword);

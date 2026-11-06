@@ -12,7 +12,8 @@ import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { publishedArticlePageUrl } from "./lib/searchPerformance";
 import { encryptOutreachCredentials, outreachCredentialKeyConfig } from "./lib/outreachCredentialEncryption";
 import { imapPresetForSmtpHost, SMTP_PRESETS } from "./lib/outreachSmtp";
-import { consentFirst, followUpDue, LINK_FOLLOW_UP_DAYS, LINK_PAGES_PER_WEEK } from "./lib/linkOutreach";
+import { followUpDue, LINK_FOLLOW_UP_DAYS, LINK_PAGES_PER_WEEK, recipientCountryAllowed } from "./lib/linkOutreach";
+import { ConvexError } from "convex/values";
 import { DIAGNOSIS_ROLLOUT_DOMAINS } from "./siteDiagnosis";
 
 const DAY = 86_400_000;
@@ -69,7 +70,7 @@ export const prepareContext = internalQuery({ args: { siteId: v.id("sites") }, h
     homeUrl: `https://${domain}/`, articles, senderName: mailbox?.senderName ?? site.siteName ?? domain, userId: site.userId,
     suppressed: [...new Set(all.filter((o) => o.optedOutAt || o.bouncedAt).flatMap((o) => o.contact ? [o.contact.email] : []))],
     // The pages AI assistants cite come first (being listed there also gets the site named in those answers), then by strength.
-    fresh: all.filter((o) => o.status === "new" && o.url && !consentFirst(o.domain))
+    fresh: all.filter((o) => o.status === "new" && o.url && recipientCountryAllowed(o.domain))
       .sort((a, b) => Number(b.source === "ai_answer") - Number(a.source === "ai_answer") || b.rank - a.rank).slice(0, LINK_PAGES_PER_WEEK)
       .map((o) => ({ id: o._id, url: o.url!, domain: o.domain, title: o.title ?? "", linksTo: o.linksTo })),
     toCheck: all.filter((o) => ["sent", "replied", "won"].includes(o.status) && o.url && now - (o.checkedAt ?? 0) >= 6 * DAY)
@@ -125,10 +126,10 @@ export const MODES = ["off", "find", "draft", "send"] as const;
 export const setMode = mutation({ args: { siteId: v.id("sites"), mode: v.union(v.literal("off"), v.literal("find"), v.literal("draft"), v.literal("send")) },
   handler: async (ctx, { siteId, mode }) => {
     const site = await ownedSite(ctx, siteId);
-    if (!site) throw new Error("Not your site");
+    if (!site) throw new ConvexError("Not your site");
     if (mode === "send") {
       const mailbox = await mailboxOf(ctx, siteId);
-      if (mailbox?.status !== "ready") throw new Error("Connect your mailbox first: Pentra sends from it");
+      if (mailbox?.status !== "ready") throw new ConvexError("Connect your mailbox first: Pentra sends from it");
     }
     const wasOff = !site.linkOutreach;
     await ctx.db.patch(siteId, { linkOutreach: mode === "off" ? undefined : mode, updatedAt: Date.now() });
@@ -145,19 +146,19 @@ export const connectMailbox = mutation({ args: { siteId: v.id("sites"), provider
   smtpHost: v.optional(v.string()), smtpPort: v.optional(v.number()), imapHost: v.optional(v.string()), imapPort: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const site = await ownedSite(ctx, args.siteId);
-    if (!site) throw new Error("Not your site");
+    if (!site) throw new ConvexError("Not your site");
     const email = args.email.trim().toLowerCase(), senderName = args.senderName.replace(/\s+/g, " ").trim(), postalAddress = args.postalAddress.replace(/\s+/g, " ").trim();
-    if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(email)) throw new Error("Enter the mailbox's full email address");
-    if (senderName.length < 2 || senderName.length > 60) throw new Error("Enter the name your emails are signed with");
-    if (postalAddress.length < 10 || postalAddress.length > 200) throw new Error("Enter a postal address: US anti-spam law asks every business email to carry one");
-    if (args.password.length < 6 || args.password.length > 200) throw new Error("Enter the mailbox's password (for Gmail, an app password)");
+    if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(email)) throw new ConvexError("Enter the mailbox's full email address");
+    if (senderName.length < 2 || senderName.length > 60) throw new ConvexError("Enter the name your emails are signed with");
+    if (postalAddress.length < 10 || postalAddress.length > 200) throw new ConvexError("Enter a postal address: US anti-spam law asks every business email to carry one");
+    if (args.password.length < 6 || args.password.length > 200) throw new ConvexError("Enter the mailbox's password (for Gmail, an app password)");
     const preset = SMTP_PRESETS.find((p) => p.id === args.provider);
     const host = (value: string | undefined) => (value ?? "").trim().toLowerCase();
     const smtpHost = preset?.host ?? host(args.smtpHost), smtpPort = preset?.port ?? args.smtpPort ?? 465;
     const imapPreset = preset ? { host: preset.imapHost, port: preset.imapPort } : imapPresetForSmtpHost(smtpHost);
     const imapHost = imapPreset?.host ?? host(args.imapHost), imapPort = imapPreset?.port ?? args.imapPort ?? 993;
     if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(smtpHost) || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(imapHost) || ![465, 587].includes(smtpPort) || imapPort !== 993) {
-      throw new Error("Enter your mailbox's sending (SMTP, port 465 or 587) and receiving (IMAP, port 993) servers");
+      throw new ConvexError("Enter your mailbox's sending (SMTP, port 465 or 587) and receiving (IMAP, port 993) servers");
     }
     const credentials = await encryptOutreachCredentials({ secrets: { smtpPassword: args.password, imapPassword: args.password },
       binding: mailboxBinding(args.siteId, email), key: outreachCredentialKeyConfig(process.env) });
@@ -201,15 +202,15 @@ export const listForSite = query({ args: { siteId: v.id("sites") }, handler: asy
 /** Draft mode: the owner sends one prepared email (it goes out at the next allowed moment, from their mailbox). */
 export const approve = mutation({ args: { siteId: v.id("sites"), id: v.id("link_opportunities") }, handler: async (ctx, { siteId, id }) => {
   const site = await ownedSite(ctx, siteId), o = await ctx.db.get(id);
-  if (!site || !o || o.siteId !== siteId || o.status !== "ready") throw new Error("This email can't be sent");
-  if ((await mailboxOf(ctx, siteId))?.status !== "ready") throw new Error("Connect your mailbox first: Pentra sends from it");
+  if (!site || !o || o.siteId !== siteId || o.status !== "ready") throw new ConvexError("This email can't be sent");
+  if ((await mailboxOf(ctx, siteId))?.status !== "ready") throw new ConvexError("Connect your mailbox first: Pentra sends from it");
   await ctx.db.patch(id, { approvedAt: Date.now() });
   await wakeSender(ctx, siteId, Date.now());
 } });
 
 export const dismiss = mutation({ args: { siteId: v.id("sites"), id: v.id("link_opportunities") }, handler: async (ctx, { siteId, id }) => {
   const site = await ownedSite(ctx, siteId), o = await ctx.db.get(id);
-  if (!site || !o || o.siteId !== siteId || !["new", "ready", "no_contact", "skipped"].includes(o.status)) throw new Error("This page can't be set aside");
+  if (!site || !o || o.siteId !== siteId || !["new", "ready", "no_contact", "skipped"].includes(o.status)) throw new ConvexError("This page can't be set aside");
   await ctx.db.patch(id, { status: "dismissed" });
 } });
 
@@ -233,8 +234,10 @@ export const sendContext = internalQuery({ args: { siteId: v.id("sites") }, hand
   const sentAt = all.flatMap((o) => (o.sends ?? []).map((s) => s.at)).filter((t) => now - t < 8 * DAY);
   const suppressed = new Set(all.filter((o) => o.optedOutAt || o.bouncedAt).flatMap((o) => o.contact ? [o.contact.email] : []));
   // An attempt with no receipt (pendingSend) is never sent again: the owner sees it as uncertain.
-  const followUp = all.find((o) => o.status === "sent" && !o.pendingSend && followUpDue(o, now) && o.contact && !suppressed.has(o.contact.email));
-  const first = all.filter((o) => o.status === "ready" && !o.pendingSend && o.contact && o.pitch && !suppressed.has(o.contact.email) &&
+  // P371: US and UK sites only, by the site's domain and the contact's address, checked again at every send.
+  const allowed = (o: (typeof all)[number]) => recipientCountryAllowed(o.domain) && (!o.contact || recipientCountryAllowed(o.contact.email));
+  const followUp = all.find((o) => o.status === "sent" && !o.pendingSend && followUpDue(o, now) && o.contact && !suppressed.has(o.contact.email) && allowed(o));
+  const first = all.filter((o) => o.status === "ready" && !o.pendingSend && o.contact && o.pitch && !suppressed.has(o.contact.email) && allowed(o) &&
     (site.linkOutreach === "send" || o.approvedAt))
     .sort((a, b) => (a.approvedAt ? 0 : 1) - (b.approvedAt ? 0 : 1) || b.rank - a.rank)[0];
   const next = followUp ?? first;
@@ -243,7 +246,7 @@ export const sendContext = internalQuery({ args: { siteId: v.id("sites") }, hand
     .map((o) => o.sends![0].at + LINK_FOLLOW_UP_DAYS * DAY);
   return { mailbox: { id: m._id, email: m.email, senderName: m.senderName, postalAddress: m.postalAddress, smtp: m.smtp, imap: m.imap, credentials: m.credentials },
     site: { name: site.siteName ?? site.domain, domain: site.domain }, sentAt,
-    next: next ? { id: next._id, kind: followUp ? "follow_up" as const : "first" as const, to: next.contact!.email, subject: next.pitch!.subject, body: next.pitch!.body,
+    next: next ? { id: next._id, url: next.url ?? `https://${next.domain}/`, domain: next.domain, kind: followUp ? "follow_up" as const : "first" as const, to: next.contact!.email, subject: next.pitch!.subject, body: next.pitch!.body,
       theirTitle: next.title ?? next.domain, ourTitle: next.target?.title ?? site.siteName ?? site.domain, inReplyTo: next.sends?.[0]?.messageId ?? null } : null,
     nextFollowUpAt: waiting.length ? Math.min(...waiting) : null,
     contacted: all.filter((o) => o.status === "sent" && o.contact && o.sends?.length).map((o) => ({ id: o._id, email: o.contact!.email, since: o.sends![0].at })) };
@@ -275,6 +278,13 @@ export const releaseSend = internalMutation({ args: { siteId: v.id("sites"), id:
     if (!o || o.siteId !== siteId || o.pendingSend?.messageId !== messageId) return;
     await ctx.db.patch(id, { pendingSend: undefined, note: note.slice(0, 200) });
   } });
+
+/** P371: a page whose site shows an EU/EEA address is set aside, never written to. */
+export const setAsideForCountry = internalMutation({ args: { siteId: v.id("sites"), id: v.id("link_opportunities") }, handler: async (ctx, { siteId, id }) => {
+  const o = await ctx.db.get(id);
+  if (!o || o.siteId !== siteId || o.pendingSend || !["new", "ready", "no_contact"].includes(o.status)) return;
+  await ctx.db.patch(id, { status: "skipped", note: "The site shows an EU/EEA address: Pentra writes only to US and UK sites" });
+} });
 
 /** The mailbox to check (its encrypted credentials stay server side). */
 export const mailboxForCheck = internalQuery({ args: { siteId: v.id("sites"), mailboxId: v.id("link_mailboxes") }, handler: async (ctx, { siteId, mailboxId }) => {

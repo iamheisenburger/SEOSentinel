@@ -118,7 +118,7 @@ test("sending is paced: weekdays 13:00-21:00 UTC, 50 minutes apart, 3 a day and 
 
 test("it is wired end to end and stays off until the owner chooses: nothing sent without 'send' or a pressed Send, never twice", () => {
   const records = readFileSync("convex/linkOpportunities.ts", "utf8");
-  assert.match(records, /if \(mailbox\?\.status !== "ready"\) throw new Error\("Connect your mailbox first: Pentra sends from it"\);/);
+  assert.match(records, /if \(mailbox\?\.status !== "ready"\) throw new ConvexError\("Connect your mailbox first: Pentra sends from it"\);/);
   assert.match(records, /\(site\.linkOutreach === "send" \|\| o\.approvedAt\)/, "draft mode sends only what the owner pressed Send on");
   assert.match(records, /if \(!o \|\| !site \|\| o\.siteId !== siteId \|\| o\.pendingSend \|\| site\.deletionStatus/, "an attempt with no receipt is never sent again");
   assert.match(records, /const suppressed = new Set\(all\.filter\(\(o\) => o\.optedOutAt \|\| o\.bouncedAt\)/, "an opt-out or bounce holds the address");
@@ -145,4 +145,23 @@ test("the weekly email says what the title tests and the link work did, in plain
   assert.doesNotMatch(weeklyReportEmail(base).text, /Search titles|Links from other sites/);
   assert.doesNotMatch(email.text, /\b(?:slot|gate|deploy|ship|pipeline|SERP|KD)\b/i, "no internal words");
   assert.match(readFileSync("convex/customerEmails.ts", "utf8"), /const links = site\.linkOutreach \? await linkWeek\(ctx, site\._id, weekAgo\) : undefined;/);
+});
+
+test("P371: link emails go only to US and UK sites: never an EU/EEA (or Swiss) domain, contact address or postal address", async () => {
+  const { recipientCountryAllowed, euAddressIn } = await import("../convex/lib/linkOutreach.ts");
+  for (const ok of ["saasreviews.com", "blog.example.co.uk", "tools.io", "growth.ai", "site.us", "editor@b2bweekly.com", "x@shop.co.uk"]) assert.equal(recipientCountryAllowed(ok), true, ok);
+  for (const no of ["marketing.de", "agency.fr", "blog.nl", "x.ie", "y.eu", "z.ch", "a.at", "b.no", "c.is", "d.li", "editor@site.es", "e.ca", "f.com.au", "g.in"])
+    assert.equal(recipientCountryAllowed(no), false, no);
+  assert.equal(euAddressIn("<p>Acme GmbH, Hauptstraße 1, 10115 Berlin, Germany</p>"), true);
+  assert.equal(euAddressIn("Keizersgracht 1, 1015 CN Amsterdam, The Netherlands"), true);
+  assert.equal(euAddressIn("Rue de Rivoli 5, 75001 Paris, France"), true);
+  assert.equal(euAddressIn("123 Main Street, Austin, TX 78701, United States"), false);
+  assert.equal(euAddressIn("10 Downing St, London SW1A 2AA, United Kingdom"), false);
+  const action = readFileSync("convex/actions/linkOutreach.ts", "utf8");
+  assert.match(action, /if \(!recipientCountryAllowed\(contact\.email\) \|\| await showsEuAddress\(o\.url, o\.domain, fetched\.text\)\) \{/, "checked when the email is written");
+  assert.match(action, /const euSite = next\.kind === "first" && await showsEuAddress\(next\.url, next\.domain\);/, "and again just before it is sent");
+  const records = readFileSync("convex/linkOpportunities.ts", "utf8");
+  assert.match(records, /const allowed = \(o: \(typeof all\)\[number\]\) => recipientCountryAllowed\(o\.domain\) && \(!o\.contact \|\| recipientCountryAllowed\(o\.contact\.email\)\);/);
+  assert.match(records, /throw new ConvexError\("Enter a postal address/, "the owner sees the message, not 'Server Error'");
+  assert.doesNotMatch(records.slice(records.indexOf("the owner's controls")), /throw new Error\(/);
 });

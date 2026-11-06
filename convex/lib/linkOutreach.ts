@@ -234,6 +234,24 @@ export const SEND_FROM_HOUR = 13, SEND_UNTIL_HOUR = 21;
 export const CONSENT_FIRST_TLDS = ["de", "at", "ch"];
 export const consentFirst = (domain: string) => CONSENT_FIRST_TLDS.includes(host(domain).split(".").pop() ?? "");
 
+/** P371 (Nov 6 2026, Arshad): link emails go only to US and UK sites. Never to the EU/EEA (and never DE/AT/CH): a site on an
+ * EU/EEA country domain, any other country domain but .us and .uk (country domains used as generic ones, like .io and .ai,
+ * excepted), or a site whose contact or about page shows an EU/EEA address. */
+export const EU_EEA_TLDS = ["at", "be", "bg", "hr", "cy", "cz", "dk", "ee", "fi", "fr", "de", "gr", "hu", "ie", "it", "lv", "lt", "lu", "mt", "nl", "pl", "pt",
+  "ro", "sk", "si", "es", "se", "is", "li", "no", "eu", "ch"];
+const GENERIC_COUNTRY_TLDS = ["io", "ai", "co", "me", "tv", "gg", "ly", "so", "to", "fm", "cc", "sh", "app", "dev"];
+export function recipientCountryAllowed(domainOrEmail: string): boolean {
+  const tld = host(domainOrEmail.includes("@") ? domainOrEmail.split("@").pop()! : domainOrEmail).split(".").pop() ?? "";
+  if (EU_EEA_TLDS.includes(tld) || CONSENT_FIRST_TLDS.includes(tld)) return false;
+  return tld.length !== 2 || ["us", "uk"].includes(tld) || GENERIC_COUNTRY_TLDS.includes(tld);
+}
+const EU_EEA_COUNTRIES = String.raw`Austria|Österreich|Belgium|Belgique|België|Bulgaria|Croatia|Hrvatska|Cyprus|Czech Republic|Czechia|Denmark|Danmark|Estonia|Finland|Suomi|France|Germany|Deutschland|Greece|Hungary|Magyarország|Ireland|Éire|Italy|Italia|Latvia|Lithuania|Luxembourg|Malta|Netherlands|Nederland|The Netherlands|Poland|Polska|Portugal|Romania|România|Slovakia|Slovenia|Spain|España|Sweden|Sverige|Iceland|Ísland|Liechtenstein|Norway|Norge|Switzerland|Schweiz|Suisse|Svizzera`;
+/** An EU/EEA postal address on a contact or about page: a country's name within a short distance of a postal code. */
+export function euAddressIn(text: string): boolean {
+  return new RegExp(String.raw`\b\d{4,5}\b[^\n]{0,80}\b(?:${EU_EEA_COUNTRIES})\b|\b(?:${EU_EEA_COUNTRIES})\b[^\n]{0,20}\b\d{4,5}\b`, "i")
+    .test(text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "));
+}
+
 export const inSendWindow = (t: number) => { const d = new Date(t), day = d.getUTCDay(), h = d.getUTCHours();
   return day >= 1 && day <= 5 && h >= SEND_FROM_HOUR && h < SEND_UNTIL_HOUR; };
 const STEP = 15 * 60_000;
