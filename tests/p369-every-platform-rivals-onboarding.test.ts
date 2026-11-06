@@ -59,5 +59,5 @@ test("Phase 4: switching link building on finds pages at once from the latest di
   assert.match(records, /if \(wasOff && mode !== "off" && !\(await rows\(ctx, siteId\)\)\.some\(\(o\) => o\.url\)\) await ctx\.scheduler\.runAfter\(0, internal\.actions\.linkOutreach\.findNow, \{ siteId \}\);/);
   const action = readFileSync("convex/actions/linkOutreach.ts", "utf8");
   assert.match(action, /reservedMicroUsd: FIND_HOLD_MICRO_USD/);
-  assert.match(action, /meterDataForSeoCost\(\(\) => pageIntersection\(pageIntersectionRequest\(competitors, site\.domain\)\)\)/);
+  assert.match(action, /meterDataForSeoCost\(\(\) => pageIntersection\(pageIntersectionRequest\(pair, siteDomain\)\)\)/);
 });

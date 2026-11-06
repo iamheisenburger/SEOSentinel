@@ -70,6 +70,7 @@ import {
   removeUncitedQuantifiedSentences,
   removeUnsupportedClaimSentences,
   deleteUnsupportedClaimSentences,
+  renumberOrderedLists,
   pruneUnsupportedEvidenceSentences,
   pruneMismatchedCitedSentences,
   stripLeakedToolFieldTrailer,
@@ -7971,6 +7972,9 @@ async function reviewPlannedArticle(ctx: ActionCtx, args: { siteId: Id<"sites">;
       fields = { ...fields, markdown: cleaned.markdown };
       fixNotes.push(removedByCodeNote(cleaned.removed));
     }
+    // P375: a numbered list that skips a number is renumbered here, at no cost, instead of holding the article back.
+    const renumbered = renumberOrderedLists(fields.markdown);
+    if (renumbered !== fields.markdown) { fields = { ...fields, markdown: renumbered }; fixNotes.push("A numbered list that skipped a number was renumbered by code."); }
     // The one targeted fix: only what deletion can't do (a missing section or format element, a step without code, too few
     // options, a sentence that could not be deleted cleanly), nothing else rewritten.
     const before = candidateFor(fields);

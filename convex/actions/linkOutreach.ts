@@ -21,7 +21,7 @@ import { decryptOutreachCredentials, outreachCredentialKeyConfig, type Encrypted
 import { classifySmtpFailure, smtpTransportOptions } from "../lib/outreachSmtp";
 import { aiCitedPages, euAddressIn, recipientCountryAllowed, checkPitch, emailFooter, followUpEmail, linkToSite, nextSendAt, pageIntersectionRequest, parsePageIntersection, pitchRequest, pitchTarget,
   readListingPage, PITCH_MAX_TOKENS, PITCH_TOOL, type ListingPage } from "../lib/linkOutreach";
-import { linkCompetitors } from "../lib/linkOpportunities";
+import { competitorPairs, linkCompetitors } from "../lib/linkOpportunities";
 import { meterDataForSeoCost, pageIntersection } from "./seoData";
 import { BUYER_FIT_MODEL, buyerFitCostMicroUsd } from "../lib/topicFit";
 import { structuredToolChoice } from "../lib/toolChoice";
@@ -107,22 +107,37 @@ export const prepare = internalAction({ args: { siteId: v.id("sites") }, handler
 
 /** P369: switching link building on finds the pages at once (one DataForSEO request under a $0.05 hold, from the latest
  * diagnosis's page one), records them and starts the preparation; the weekly diagnosis does the same from then on. */
-const FIND_HOLD_MICRO_USD = 50_000;
+const FIND_HOLD_MICRO_USD = 100_000;
+
+/** P374: the pages linking to each pair of competitors (up to three DataForSEO requests, about $0.02 each), merged: one
+ * page per referring site, the strongest kept. */
+export async function findListingPages(competitors: readonly string[], siteDomain: string): Promise<{ pages: ListingPage[]; usd: number; uncertain: boolean }> {
+  const best = new Map<string, ListingPage>();
+  let usd = 0, uncertain = false;
+  for (const pair of competitorPairs(competitors)) {
+    try {
+      const metered = await meterDataForSeoCost(() => pageIntersection(pageIntersectionRequest(pair, siteDomain)));
+      usd += metered.usd; uncertain = uncertain || metered.uncertain;
+      for (const page of parsePageIntersection(metered.result, pair, siteDomain)) {
+        const known = best.get(page.domain);
+        if (!known || page.rank > known.rank) best.set(page.domain, page);
+      }
+    } catch { /* that pair stays unread this time */ }
+  }
+  return { pages: [...best.values()].sort((a, b) => b.rank - a.rank || a.url.localeCompare(b.url)), usd, uncertain };
+}
 export const findNow = internalAction({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }): Promise<{ found: number; note?: string }> => {
   const site = await ctx.runQuery(internal.linkOpportunities.findContext, { siteId });
   if (!site) return { found: 0, note: "link building is off" };
-  const competitors = linkCompetitors(site.pageOne, site.domain);
+  const competitors = linkCompetitors(site.pageOne, site.domain, undefined, site.profileCompetitors);
   let pages: ListingPage[] = [];
   if (competitors.length >= 2) {
     const hold = await ctx.runMutation(internal.siteDiagnosis.reserve, { siteId, trigger: `link_find:${Date.now()}`, reservedMicroUsd: FIND_HOLD_MICRO_USD });
     if (hold.ok) {
-      let spent = 0, uncertain = false;
-      try {
-        const metered = await meterDataForSeoCost(() => pageIntersection(pageIntersectionRequest(competitors, site.domain)));
-        spent = Math.ceil(metered.usd * 1e6); uncertain = metered.uncertain;
-        pages = parsePageIntersection(metered.result, competitors, site.domain);
-      } catch { /* nothing found this time: the weekly run tries again */ }
-      if (!uncertain) await ctx.runMutation(internal.siteDiagnosis.close, { siteId, reservationId: hold.reservationId, sent: spent > 0, actualMicroUsd: spent });
+      const found = await findListingPages(competitors, site.domain);
+      pages = found.pages;
+      const spent = Math.ceil(found.usd * 1e6);
+      if (!found.uncertain) await ctx.runMutation(internal.siteDiagnosis.close, { siteId, reservationId: hold.reservationId, sent: spent > 0, actualMicroUsd: spent });
     }
   }
   const all = [...pages, ...aiCitedPages(site.aiPages, site.domain, competitors)];

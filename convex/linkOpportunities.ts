@@ -323,7 +323,7 @@ export const findContext = internalQuery({ args: { siteId: v.id("sites") }, hand
   const site = await ctx.db.get(siteId);
   if (!site || site.deletionStatus || !site.linkOutreach) return null;
   const latest = await ctx.db.query("site_diagnoses").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).order("desc").first();
-  return { domain: site.domain, pageOne: latest?.pageOne ?? [], aiPages: (latest?.aiAnswers?.checks ?? []).flatMap((c) => c.pages ?? []) };
+  return { domain: site.domain, profileCompetitors: site.competitors ?? [], pageOne: latest?.pageOne ?? [], aiPages: (latest?.aiAnswers?.checks ?? []).flatMap((c) => c.pages ?? []) };
 } });
 
 /** For the weekly email: what the week's link work did. */

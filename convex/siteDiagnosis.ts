@@ -76,6 +76,7 @@ export const context = internalQuery({ args: { siteId: v.id("sites") }, handler:
     published, removed, lastRunAt: latest?.createdAt ?? null, aiQuestions: latest?.aiAnswers?.questions ?? [],
     // Phase 5 (P369): the rivals to look for in the AI answers: the confirmed profile's competitors and last week's page one.
     rivals: [...(site.competitors ?? []), ...linkCompetitors(latest?.pageOne ?? [], site.domain, 5)],
+    profileCompetitors: site.competitors ?? [],
   };
 } });
 

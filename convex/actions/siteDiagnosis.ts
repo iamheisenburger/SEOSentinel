@@ -17,9 +17,10 @@ import { internal } from "../_generated/api";
 import { v } from "convex/values";
 import type { Id } from "../_generated/dataModel";
 import type { FunctionReturnType } from "convex/server";
-import { getDomainAuthorities, lighthouseMobile, meterDataForSeoCost, pageIntersection, pageOneDomains } from "./seoData";
+import { getDomainAuthorities, lighthouseMobile, meterDataForSeoCost, pageOneDomains } from "./seoData";
 import { linkCompetitors } from "../lib/linkOpportunities";
-import { aiCitedPages, pageIntersectionRequest, parsePageIntersection, type ListingPage } from "../lib/linkOutreach";
+import { aiCitedPages, type ListingPage } from "../lib/linkOutreach";
+import { findListingPages } from "./linkOutreach";
 import { dataForSeoLocationCode } from "../lib/dataForSeoLocale";
 import { crawlPages, pageSpeedCheck, parsePageSpeed, readSitemap } from "../lib/pageCrawl";
 import { diagnoseSite, normalize, type CrawledPage, type GscRow, type PageOneCheck, type QueryIntent, type SpeedCheck } from "../lib/siteDiagnosis";
@@ -190,12 +191,12 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
     // Phase 4: the pages linking to the page-one competitors but not to this site, only when the owner turned it on.
     if (site.linkOutreach && out.pageOne.length) {
       try {
-        const competitors = linkCompetitors(out.pageOne, site.domain);
+        const competitors = linkCompetitors(out.pageOne, site.domain, undefined, site.profileCompetitors);
         out.competitors = competitors;
         if (competitors.length >= 2) {
-          const metered = await meterDataForSeoCost(() => pageIntersection(pageIntersectionRequest(competitors, site.domain)));
-          out.microUsd += Math.ceil(metered.usd * 1e6); out.uncertain = out.uncertain || metered.uncertain;
-          out.links = parsePageIntersection(metered.result, competitors, site.domain);
+          const found = await findListingPages(competitors, site.domain);
+          out.microUsd += Math.ceil(found.usd * 1e6); out.uncertain = out.uncertain || found.uncertain;
+          out.links = found.pages;
         }
       } catch (error) { out.notes.push(`Link opportunities not found: ${String(error).slice(0, 120)}`); }
     }

@@ -2188,6 +2188,32 @@ function listAfter(lines: string[], start: number): { count: number; numbers: nu
   return { count, numbers };
 }
 
+/** P375 (Nov 6 2026): a numbered list that skips a number ("4." then "6.") is renumbered to count up by one from its first
+ * number, top-level items only; nothing else changes. It is the exact repair of the "numbered list jumps" defect, at no
+ * cost (a LeadPilot article was held back for it after its fix pass had reached its cost cap). */
+export function renumberOrderedLists(markdown: string): string {
+  const lines = markdown.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const item = LIST_ITEM.exec(lines[i]);
+    if (!item || item[2] === undefined) continue;
+    const previous = i > 0 ? lines.slice(0, i).reverse().find((value) => value.trim()) : undefined;
+    if (previous && LIST_ITEM.exec(previous)) continue;
+    const indent = item[1].length, members: number[] = [];
+    for (let j = i; j < lines.length; j++) {
+      const line = lines[j];
+      if (!line.trim()) continue;
+      const m = LIST_ITEM.exec(line), lineIndent = line.length - line.trimStart().length;
+      if (m && m[1].length === indent) { if (m[2] !== undefined) members.push(j); continue; }
+      if (lineIndent > indent) continue;
+      break;
+    }
+    const numbers = members.map((j) => Number(LIST_ITEM.exec(lines[j])![2]));
+    if (numbers.length < 2 || numbers.every((n) => n === numbers[0]) || numbers.every((n, k) => k === 0 || n === numbers[k - 1] + 1)) continue;
+    members.forEach((j, k) => { lines[j] = lines[j].replace(/^(\s*)\d+([.)])/, `$1${numbers[0] + k}$2`); });
+  }
+  return lines.join("\n");
+}
+
 /** P255 (Oct 30 2026): a test article's generateMetadata example showed only its imports and its Props type (the
  * documentation excerpt it was built from stopped before the function). A TypeScript or JavaScript example that imports
  * and then declares nothing but types shows none of the code it introduces. A type-only snippet with no imports is fine. */

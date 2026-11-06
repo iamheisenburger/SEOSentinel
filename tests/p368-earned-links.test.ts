@@ -172,3 +172,13 @@ test("P373: the watchdog's read shows counts, reasons and the mailbox state, nev
   assert.match(block, /export const opsSummary = internalQuery/);
   assert.doesNotMatch(block, /contact\.email|credentials|pitch|body/);
 });
+
+test("P374: the search asks about pairs of competitors (pages linking to three at once are rare), and merges them", async () => {
+  const { competitorPairs } = await import("../convex/lib/linkOpportunities.ts");
+  assert.deepEqual(competitorPairs(["a.com", "b.com", "c.com"]), [["a.com", "b.com"], ["a.com", "c.com"], ["b.com", "c.com"]]);
+  assert.deepEqual(competitorPairs(["a.com", "b.com"]), [["a.com", "b.com"]]);
+  assert.deepEqual(competitorPairs(["a.com"]), []);
+  const action = readFileSync("convex/actions/linkOutreach.ts", "utf8");
+  assert.match(action, /for \(const pair of competitorPairs\(competitors\)\) \{/);
+  assert.match(action, /linkCompetitors\(site\.pageOne, site\.domain, undefined, site\.profileCompetitors\)/, "the confirmed competitors first");
+});
