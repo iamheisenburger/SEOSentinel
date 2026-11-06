@@ -1491,8 +1491,9 @@ export async function pageOneDomains(keyword: string, locationCode: number = 284
 
 /** Phase 4 (Nov 2026): DataForSEO's domain intersection (live): the referring domains linking to every target and not to the
  * excluded one (convex/lib/linkOpportunities.ts builds the request and reads the answer). Metered like every request. */
-export async function domainIntersection(body: unknown[]): Promise<unknown> {
-  return dataForSEORequest("backlinks/domain_intersection/live", body, 45_000);
+/** Phase 4 (P368): the exact pages that link to every given competitor and not to the site (most are "best X" lists). */
+export async function pageIntersection(body: unknown[]): Promise<unknown> {
+  return dataForSEORequest("backlinks/page_intersection/live", body, 45_000);
 }
 
 /** Phase 2 (Nov 2026): page one for a search, as result addresses in page order, for the topic check (convex/lib/pageOne.ts).

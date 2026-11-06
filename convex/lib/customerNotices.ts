@@ -262,6 +262,10 @@ export type WeeklyReportInput = {
   citedSites?: ReadonlyArray<{ site: string; answers: number }>;
   /** Phase 2: searches checked against Google's real page one this week, and how many the site can win. */
   checkedSearches?: { checked: number; winnable: number; examples: string[] };
+  /** Phase 3 (P367): search title tests: placed live this week, and verdicts reached this week. */
+  titleTests?: { live: number; kept: number; restored: number };
+  /** Phase 4 (P368): this week's link work (only when the owner turned link building on), and the links live in all. */
+  links?: { found: number; emailed: number; replied: number; won: number; wonTotal: number };
   next: string | null;
 };
 
@@ -308,6 +312,18 @@ export function weeklyReportEmail(input: WeeklyReportInput): { subject: string; 
     lines.push(`Searches checked against Google's first page this week: ${c.checked}. Your site can win ${c.winnable} of them${c.winnable ? "; Pentra writes those next" : "; Pentra writes nothing it can't win"}.`);
     for (const example of c.examples.slice(0, 3)) lines.push(`- "${example}"`);
     lines.push("");
+  }
+  if (input.titleTests && (input.titleTests.live || input.titleTests.kept || input.titleTests.restored)) {
+    const t = input.titleTests, parts = [
+      t.live ? `${t.live} page${t.live === 1 ? "" : "s"} got a new search title to win more clicks (judged by clicks in four weeks)` : "",
+      t.kept ? `${t.kept} new title${t.kept === 1 ? "" : "s"} kept: clicks held or rose` : "",
+      t.restored ? `${t.restored} old title${t.restored === 1 ? "" : "s"} restored: clicks fell` : ""].filter(Boolean);
+    lines.push(`Search titles: ${parts.join("; ")}.`, "");
+  }
+  if (input.links) {
+    const l = input.links;
+    lines.push(`Links from other sites: ${count(l.found)} pages found that link to your competitors but not to you, ${count(l.emailed)} emailed, ` +
+      `${count(l.replied)} replied${l.replied ? " (answer them in your inbox)" : ""}, ${count(l.won)} now linking to you (${count(l.wonTotal)} in all).`, "");
   }
   lines.push(input.published.length ? `Published: ${input.published.length} new article${input.published.length === 1 ? "" : "s"}` : "Published: no new articles this week");
   for (const a of input.published.slice(0, 5)) lines.push(`- "${a.title}" ${a.url}`);

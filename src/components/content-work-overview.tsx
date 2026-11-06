@@ -12,6 +12,7 @@ import { topicTitle } from "@/lib/topic-title";
 import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 import { SearchConsolePrompt } from "./search-console-prompt";
 import { SiteDiagnosisCard } from "./site-diagnosis-card";
+import { LinkBuildingCard } from "./link-building-card";
 import { compareTopics, withinReach, type TopicOrderSite } from "../../convex/lib/topicOrder";
 import { topicWritable } from "../../convex/lib/topicVerdict";
 export const money = (value: number | null) => value === null ? "Unknown" : `$${(value / 1_000_000).toFixed(4)}`;
@@ -119,6 +120,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
     {/* Results first: the clicks trend sits directly under the headline numbers. */}
     {plain && <OrganicOutcome key={`${siteId}-top`} siteId={siteId} simple />}
     <SiteDiagnosisCard siteId={siteId} />
+    <LinkBuildingCard siteId={siteId} />
     <div className="grid gap-4 md:grid-cols-2 md:items-start">
       <div className="space-y-4">
       <section className={CARD}><h2 className={H2}>Upcoming work</h2>

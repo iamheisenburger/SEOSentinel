@@ -1840,15 +1840,55 @@ export default defineSchema({
 
   // Phase 4 (Nov 2026): sites that link to a site's page-one competitors but not to it (DataForSEO domain intersection), found
   // weekly when the owner turned link finding on. The owner (or, with their yes, Pentra) approaches them; nothing is deleted.
+  // P368: the exact page (most are "best X" lists), who runs it, the email Pentra wrote, what was sent (an attempt is recorded
+  // before it goes out and never repeated), and the outcome: a reply, bounce or opt-out (never written to again), or the
+  // link live on their page (checked weekly).
   link_opportunities: defineTable({
     siteId: v.id("sites"),
     domain: v.string(),
     rank: v.number(),
     linksTo: v.array(v.string()),
-    status: v.union(v.literal("new"), v.literal("dismissed"), v.literal("won")),
+    status: v.union(v.literal("new"), v.literal("dismissed"), v.literal("won"), v.literal("ready"), v.literal("sent"), v.literal("replied"),
+      v.literal("skipped"), v.literal("no_contact"), v.literal("lost"), v.literal("opted_out"), v.literal("bounced")),
     foundAt: v.number(),
     seenAt: v.number(),
+    url: v.optional(v.string()),
+    title: v.optional(v.string()),
+    source: v.optional(v.union(v.literal("competitor_links"), v.literal("ai_answer"))),
+    kind: v.optional(v.union(v.literal("list"), v.literal("resource"))),
+    contact: v.optional(v.object({ email: v.string(), source: v.string() })),
+    target: v.optional(v.object({ url: v.string(), title: v.string(), as: v.union(v.literal("product"), v.literal("article")) })),
+    pitch: v.optional(v.object({ subject: v.string(), body: v.string(), writtenAt: v.number(), costMicroUsd: v.number() })),
+    approvedAt: v.optional(v.number()),
+    pendingSend: v.optional(v.object({ kind: v.union(v.literal("first"), v.literal("follow_up")), messageId: v.string(), at: v.number() })),
+    sends: v.optional(v.array(v.object({ at: v.number(), kind: v.union(v.literal("first"), v.literal("follow_up")), messageId: v.string() }))),
+    repliedAt: v.optional(v.number()),
+    optedOutAt: v.optional(v.number()),
+    bouncedAt: v.optional(v.number()),
+    wonAt: v.optional(v.number()),
+    won: v.optional(v.object({ href: v.string(), followed: v.boolean() })),
+    lostAt: v.optional(v.number()),
+    checkedAt: v.optional(v.number()),
+    note: v.optional(v.string()),
   }).index("by_site_domain", ["siteId", "domain"]),
+
+  // P368: the owner's mailbox for link emails (SMTP to send, IMAP to see replies), its password encrypted with the outreach
+  // credential key; checked by logging in, never by sending.
+  link_mailboxes: defineTable({
+    siteId: v.id("sites"),
+    email: v.string(),
+    senderName: v.string(),
+    postalAddress: v.string(),
+    smtp: v.object({ host: v.string(), port: v.number() }),
+    imap: v.object({ host: v.string(), port: v.number() }),
+    credentials: v.object({ credentialCiphertext: v.string(), credentialKeyId: v.string(), credentialEncryptionVersion: v.number(), credentialBindingHash: v.string() }),
+    status: v.union(v.literal("checking"), v.literal("ready"), v.literal("failed")),
+    note: v.optional(v.string()),
+    checkedAt: v.optional(v.number()),
+    nextRunAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_site", ["siteId"]),
 
   // Permanent redirects Pentra made (Nov 2026): a duplicate article merged into the stronger page on its searches
   // (convex/lib/duplicatePages.ts). Both articles stay published in Pentra; only the weaker address now redirects.

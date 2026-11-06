@@ -20,7 +20,7 @@ export const siteDiagnosisRecord = {
   /** The buyer questions put to the AI assistants (kept and reused, so weeks compare) and each answer's verdict. */
   aiAnswers: v.optional(v.object({ questions: v.array(v.string()), checks: v.array(v.object({ question: v.string(),
     assistant: v.union(v.literal("chatgpt"), v.literal("gemini"), v.literal("google_ai_mode")), answered: v.boolean(), named: v.boolean(), cited: v.boolean(),
-    sources: v.optional(v.array(v.string())), error: v.optional(v.string()) })) })),
+    sources: v.optional(v.array(v.string())), pages: v.optional(v.array(v.string())), error: v.optional(v.string()) })) })),
   /** Phase 3 (Nov 2026): who types the top searches (convex/lib/searchIntent.ts labels), for choosing the pages to improve. */
   intents: v.optional(v.array(v.object({ query: v.string(), label: v.string() }))),
   /** Google's mobile speed test for a few pages. */

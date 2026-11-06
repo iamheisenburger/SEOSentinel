@@ -45,6 +45,8 @@ test("the buyer questions become topics to check on the rollout sites, never a r
     "no page-one verdict is invented: the check still decides");
   const action = readFileSync("convex/actions/siteDiagnosis.ts", "utf8");
   assert.match(action, /if \(aiQuestions\.length && !repairsOnly\) \{\n    try \{ await ctx\.runMutation\(internal\.contentWork\.addAiQuestionTopics/);
-  assert.match(action, /sources: citedHosts\(got\.answer\.sources, business\) \}/);
-  assert.match(readFileSync("convex/lib/siteDiagnosisSchema.ts", "utf8"), /sources: v\.optional\(v\.array\(v\.string\(\)\)\), error: v\.optional\(v\.string\(\)\)/);
+  assert.match(action, /sources: citedHosts\(got\.answer\.sources, business\),/);
+  // P368: the cited pages too (the ones listing the competitors become link targets).
+  assert.match(action, /pages: got\.answer\.sources\.filter\(\(u\) => \/\^https:\\\/\\\/\/i\.test\(u\)\)\.slice\(0, 8\)/);
+  assert.match(readFileSync("convex/lib/siteDiagnosisSchema.ts", "utf8"), /sources: v\.optional\(v\.array\(v\.string\(\)\)\), pages: v\.optional\(v\.array\(v\.string\(\)\)\), error: v\.optional\(v\.string\(\)\)/);
 });

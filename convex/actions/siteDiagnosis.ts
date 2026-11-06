@@ -17,8 +17,9 @@ import { internal } from "../_generated/api";
 import { v } from "convex/values";
 import type { Id } from "../_generated/dataModel";
 import type { FunctionReturnType } from "convex/server";
-import { domainIntersection, getDomainAuthorities, lighthouseMobile, meterDataForSeoCost, pageOneDomains } from "./seoData";
-import { domainIntersectionRequest, linkCompetitors, parseDomainIntersection, type LinkOpportunity } from "../lib/linkOpportunities";
+import { getDomainAuthorities, lighthouseMobile, meterDataForSeoCost, pageIntersection, pageOneDomains } from "./seoData";
+import { linkCompetitors } from "../lib/linkOpportunities";
+import { aiCitedPages, pageIntersectionRequest, parsePageIntersection, type ListingPage } from "../lib/linkOutreach";
 import { dataForSeoLocationCode } from "../lib/dataForSeoLocale";
 import { crawlPages, pageSpeedCheck, parsePageSpeed, readSitemap } from "../lib/pageCrawl";
 import { diagnoseSite, normalize, type CrawledPage, type GscRow, type PageOneCheck, type QueryIntent, type SpeedCheck } from "../lib/siteDiagnosis";
@@ -126,7 +127,7 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
   const measurePart = async () => {
     const out = { intents: [] as QueryIntent[], pageOne: [] as PageOneCheck[], authority: site.authority ? { domainRank: site.authority.domainRank,
       referringDomains: site.authority.referringDomains } : null as { domainRank: number; referringDomains?: number } | null,
-      speed: [] as SpeedCheck[], links: [] as LinkOpportunity[], snippets: [] as SnippetProposal[], snippetDecisions: [] as SnippetDecision[],
+      speed: [] as SpeedCheck[], links: [] as ListingPage[], competitors: [] as string[], snippets: [] as SnippetProposal[], snippetDecisions: [] as SnippetDecision[],
       microUsd: 0, uncertain: false, notes: [] as string[] };
     if (!paid) return out;
     const readers = async () => {
@@ -185,14 +186,15 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
         out.snippets = tested.proposals; out.snippetDecisions = tested.decisions; out.microUsd += tested.costMicroUsd; out.notes.push(...tested.notes);
       } catch (error) { out.notes.push(`Search titles not tested: ${String(error).slice(0, 120)}`); }
     }
-    // Phase 4: the sites linking to the page-one competitors but not to this site, only when the owner turned it on.
+    // Phase 4: the pages linking to the page-one competitors but not to this site, only when the owner turned it on.
     if (site.linkOutreach && out.pageOne.length) {
       try {
         const competitors = linkCompetitors(out.pageOne, site.domain);
+        out.competitors = competitors;
         if (competitors.length >= 2) {
-          const metered = await meterDataForSeoCost(() => domainIntersection(domainIntersectionRequest(competitors, site.domain)));
+          const metered = await meterDataForSeoCost(() => pageIntersection(pageIntersectionRequest(competitors, site.domain)));
           out.microUsd += Math.ceil(metered.usd * 1e6); out.uncertain = out.uncertain || metered.uncertain;
-          out.links = parseDomainIntersection(metered.result, competitors, site.domain);
+          out.links = parsePageIntersection(metered.result, competitors, site.domain);
         }
       } catch (error) { out.notes.push(`Link opportunities not found: ${String(error).slice(0, 120)}`); }
     }
@@ -240,11 +242,15 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
   });
   const crawlComplete = site.published.length < 300 && site.published.every((p) => crawled.has(normalize(p.url)));
 
-  if (measured.links.length) {
-    try { const recorded = await ctx.runMutation(internal.linkOpportunities.record, { siteId, opportunities: measured.links });
-      notes.push(`Link opportunities: ${measured.links.length} sites link to its page-one competitors but not to it (${recorded.added} new)`); }
+  // Phase 4: the pages to approach (those linking to the competitors, and the pages AI assistants cite for the buyer
+  // questions), then the week's preparation: each page read, its contact found and its email written (and won links checked).
+  const aiPages = site.linkOutreach && measured.competitors.length ? aiCitedPages(aiChecks.flatMap((c) => c.pages ?? []), site.domain, measured.competitors) : [];
+  if (measured.links.length || aiPages.length) {
+    try { const recorded = await ctx.runMutation(internal.linkOpportunities.record, { siteId, pages: [...measured.links, ...aiPages] });
+      notes.push(`Link opportunities: ${measured.links.length} pages link to its page-one competitors but not to it, ${aiPages.length} cited by AI assistants (${recorded.added} new)`); }
     catch (error) { notes.push(`Link opportunities not recorded: ${String(error).slice(0, 120)}`); }
   }
+  if (site.linkOutreach && !repairsOnly) await ctx.scheduler.runAfter(0, internal.actions.linkOutreach.prepare, { siteId });
   // Phase 3: the week's verdicts on earlier title tests, then the new tests (Autopilot's repair round places them).
   if (measured.snippetDecisions.length || measured.snippets.length) {
     try {
@@ -403,7 +409,8 @@ async function askAssistants(siteId: Id<"sites">, questions: readonly string[], 
   const ask = async (question: string, assistant: AiAssistant) => {
     let got = await call(question, assistant);
     if (!got.answer && got.error !== "timeout" && Date.now() < deadline) got = await call(question, assistant);
-    checks.push(got.answer ? { question, assistant, answered: true, ...judgeAnswer(got.answer, business), sources: citedHosts(got.answer.sources, business) }
+    checks.push(got.answer ? { question, assistant, answered: true, ...judgeAnswer(got.answer, business), sources: citedHosts(got.answer.sources, business),
+      pages: got.answer.sources.filter((u) => /^https:\/\//i.test(u)).slice(0, 8).map((u) => u.slice(0, 500)) }
       : { question, assistant, answered: false, named: false, cited: false, error: got.error ?? "no answer" });
   };
   await Promise.all(Array.from({ length: 6 }, async () => {

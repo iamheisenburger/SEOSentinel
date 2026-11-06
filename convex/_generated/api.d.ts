@@ -21,6 +21,7 @@ import type * as actions_expectedClickMigration from "../actions/expectedClickMi
 import type * as actions_freeCheck from "../actions/freeCheck.js";
 import type * as actions_growthTopics from "../actions/growthTopics.js";
 import type * as actions_gscSync from "../actions/gscSync.js";
+import type * as actions_linkOutreach from "../actions/linkOutreach.js";
 import type * as actions_managedOutreachMailbox from "../actions/managedOutreachMailbox.js";
 import type * as actions_onboardingPrefill from "../actions/onboardingPrefill.js";
 import type * as actions_outcomeCredentials from "../actions/outcomeCredentials.js";
@@ -127,6 +128,7 @@ import type * as lib_internalLinks from "../lib/internalLinks.js";
 import type * as lib_jobRollout from "../lib/jobRollout.js";
 import type * as lib_keywordDiscoveryFilters from "../lib/keywordDiscoveryFilters.js";
 import type * as lib_linkOpportunities from "../lib/linkOpportunities.js";
+import type * as lib_linkOutreach from "../lib/linkOutreach.js";
 import type * as lib_linkReceipts from "../lib/linkReceipts.js";
 import type * as lib_linkRelevance from "../lib/linkRelevance.js";
 import type * as lib_managedOutreachMailbox from "../lib/managedOutreachMailbox.js";
@@ -282,6 +284,7 @@ declare const fullApi: ApiFromModules<{
   "actions/freeCheck": typeof actions_freeCheck;
   "actions/growthTopics": typeof actions_growthTopics;
   "actions/gscSync": typeof actions_gscSync;
+  "actions/linkOutreach": typeof actions_linkOutreach;
   "actions/managedOutreachMailbox": typeof actions_managedOutreachMailbox;
   "actions/onboardingPrefill": typeof actions_onboardingPrefill;
   "actions/outcomeCredentials": typeof actions_outcomeCredentials;
@@ -388,6 +391,7 @@ declare const fullApi: ApiFromModules<{
   "lib/jobRollout": typeof lib_jobRollout;
   "lib/keywordDiscoveryFilters": typeof lib_keywordDiscoveryFilters;
   "lib/linkOpportunities": typeof lib_linkOpportunities;
+  "lib/linkOutreach": typeof lib_linkOutreach;
   "lib/linkReceipts": typeof lib_linkReceipts;
   "lib/linkRelevance": typeof lib_linkRelevance;
   "lib/managedOutreachMailbox": typeof lib_managedOutreachMailbox;

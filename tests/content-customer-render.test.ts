@@ -43,6 +43,8 @@ function render(component: string, queryState: unknown = state, outcome: unknown
         if (fn === "siteHealth:latest") return null;
         if (fn === "siteDiagnosis:latest") return null;
         if (fn === "siteRedirects:listForSite") return [];
+        // P368: the links panel (Phase 4) shows nothing for a site outside the rollout.
+        if (fn === "linkOpportunities:listForSite" || fn === "linkOpportunities:mailbox") return null;
         if (fn === "topics:listBySite" && topicRows) return topicRows;
         if (fn === "topics:listBySite") return [
           { _id: "t1", label: "Irrigation valve inspection checklist", primaryKeyword: "irrigation valve inspection", status: "planned", priority: 90 },
@@ -211,7 +213,9 @@ test("SLC29 synthetic overview separates upcoming, verified, organic and issues 
   const { html, calls } = render("content-work-overview");
   for (const heading of ["Upcoming work", "Verified changes", "Organic clicks", "Needs attention"]) assert.match(html, new RegExp(heading));
   assert.match(html, /Overdue/); assert.match(html, /Loading measurements/); assert.doesNotMatch(html, /0 clicks/);
-  assert.deepEqual(calls, ["contentWork:readiness", "siteDiagnosis:latest", "siteRedirects:listForSite", "siteHealth:latest"]);
+  // P368: the links panel's two small reads (nothing for a site outside the rollout).
+  assert.deepEqual(calls, ["contentWork:readiness", "siteDiagnosis:latest", "siteRedirects:listForSite", "linkOpportunities:listForSite", "linkOpportunities:mailbox",
+    "siteHealth:latest"]);
   assert.match(html, /Refresh measurements/);
 });
 

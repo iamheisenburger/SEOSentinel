@@ -30,6 +30,8 @@ export type Business = { name: string; domain: string; summary?: string; audienc
 export type AiAnswerCheck = { question: string; assistant: AiAssistant; answered: boolean; named: boolean; cited: boolean;
   /** Phase 5 (Nov 2026): the sites the answer cited (hosts, without "www."), so Pentra knows where buyers' answers come from. */
   sources?: string[];
+  /** Phase 4 (P368): the pages it cited (at most 8), so the ones that list the site's competitors can be approached. */
+  pages?: string[];
   /** Why no answer came back (an HTTP status, "timeout", "no answer"), when none did. */
   error?: string };
 

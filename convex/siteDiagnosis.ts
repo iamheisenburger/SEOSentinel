@@ -83,11 +83,15 @@ export const gscRows = internalQuery({ args: { siteId: v.id("sites") }, handler:
     capped: exhausted };
 } });
 
-export const reserve = internalMutation({ args: { siteId: v.id("sites"), trigger: v.string() }, handler: async (ctx, { siteId, trigger }) => {
+/** `reservedMicroUsd`: a smaller hold for a part of the weekly work run on its own (Phase 4's email writing), never more
+ * than a diagnosis's. */
+export const reserve = internalMutation({ args: { siteId: v.id("sites"), trigger: v.string(), reservedMicroUsd: v.optional(v.number()) },
+  handler: async (ctx, { siteId, trigger, reservedMicroUsd }) => {
   const site = await ctx.db.get(siteId);
   if (!site?.userId) return { ok: false as const, reason: "no_owner" };
+  const amount = Math.min(DIAGNOSIS_RESERVATION_MICRO_USD, Math.max(1, Math.round(reservedMicroUsd ?? DIAGNOSIS_RESERVATION_MICRO_USD)));
   const reserved = await reserveSharedProviderBudget(ctx, { siteId, userId: site.userId, purpose: "site_diagnosis", trigger,
-    reservedMicroUsd: DIAGNOSIS_RESERVATION_MICRO_USD, timestamp: Date.now() });
+    reservedMicroUsd: amount, timestamp: Date.now() });
   return reserved.ok ? { ok: true as const, reservationId: reserved.reservationId } : { ok: false as const, reason: String(reserved.reason) };
 } });
 

@@ -16,6 +16,7 @@ import { publishedArticlePageUrl } from "./lib/searchPerformance";
 import { isCompleteGscDateRange } from "./lib/gscSearchAnalytics";
 import { takeCurrentGscPageRows } from "./lib/currentGscRows";
 import { accountDeletionKey } from "./lib/accountDeletion";
+import { linkWeek } from "./linkOpportunities";
 
 /** D4 (P125, Oct 20 2026): service emails to a site's owner about their own
  * site, from hello@pentra.dev. The address is Clerk's verified primary email,
@@ -358,7 +359,16 @@ async function weeklyReport(ctx: QueryCtx, site: Doc<"sites">, domain: string) {
   const topics = await ctx.db.query("topic_clusters").withIndex("by_site", q => q.eq("siteId", site._id)).take(1000);
   const checkedThisWeek = topics.filter(t => t.pageOne && t.pageOne.checkedAt >= weekAgo);
   const winnable = checkedThisWeek.filter(t => t.pageOne!.rankable);
-  return weeklyReportEmail({ domain, search, factors: diagnosis.factors, fixed, published, improved,
+  // Phase 3 (P367): the week's search title tests; Phase 4 (P368): the week's link work, when the owner turned it on.
+  const tests = (await ctx.db.query("search_snippets").withIndex("by_site_status", q => q.eq("siteId", site._id)).take(500));
+  const titleTests = { live: 0, kept: tests.filter(t => t.status === "kept" && !t.restoreOf && (t.verdict?.decidedAt ?? 0) >= weekAgo).length,
+    restored: tests.filter(t => t.status === "restored" && (t.verdict?.decidedAt ?? 0) >= weekAgo).length };
+  for (const t of tests.filter(t => t.jobId && !t.restoreOf)) {
+    const job = await ctx.db.get(t.jobId!);
+    if (job?.contentWork?.stage === "verified" && (job.contentWork.verifiedAt ?? 0) >= weekAgo) titleTests.live++;
+  }
+  const links = site.linkOutreach ? await linkWeek(ctx, site._id, weekAgo) : undefined;
+  return weeklyReportEmail({ domain, search, factors: diagnosis.factors, fixed, published, improved, titleTests, ...(links ? { links } : {}),
     problems: diagnosis.findings.filter(f => f.severity !== "low").slice(0, 3).map(f => `${f.problem}: ${f.evidence}`),
     aiNamed: answered.length ? { named: answered.filter(c => c.named).length, asked: answered.length } : null,
     citedSites: topCitedSites(answered.map(c => ({ ...c, sources: c.sources ?? [] }))),
