@@ -26,7 +26,7 @@ test("the diagnosis keeps its reader labels, and the improvement choice reads th
   assert.match(readFileSync("convex/actions/siteDiagnosis.ts", "utf8"),
     /\.\.\.\(intents\.length \? \{ intents: intents\.slice\(0, 80\)\.map\(\(i\) => \(\{ query: i\.query\.trim\(\)\.toLowerCase\(\)\.slice\(0, 200\), label: i\.label \}\)\) \} : \{\}\),/);
   const pages = readFileSync("convex/selectedPages.ts", "utf8");
-  assert.match(pages, /const labels = topicChoiceRollout\(site\.domain\) \? await readerLabels\(ctx, site\._id\) : new Map<string, string>\(\);/);
+  assert.match(pages, /const labels = topicChoiceRollout\(site\.domain, site\.newSystemAt\) \? await readerLabels\(ctx, site\._id\) : new Map<string, string>\(\);/);
   assert.match(pages, /if \(mostlyNonBuyerReaders\(page\.url, measurements\.rows, labels\)\) continue;/);
   assert.match(pages, /\(labels\.get\(o\.query\.trim\(\)\.toLowerCase\(\)\) \?\? "buyer"\) === "buyer"\);/, "a refresh answers a buyer's search, or an unlabeled one");
   assert.match(readFileSync("convex/lib/siteDiagnosisSchema.ts", "utf8"), /intents: v\.optional\(v\.array\(v\.object\(\{ query: v\.string\(\), label: v\.string\(\) \}\)\)\),/);

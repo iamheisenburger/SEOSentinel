@@ -1069,8 +1069,8 @@ export const selectServiceMode = mutation({
         await ctx.scheduler.runAfter(0, internal.actions.growthTopics.sweepBuyerFit, { siteId: site._id });
       }
     }
-    // Phase 6 (P369): the first diagnosis at onboarding (rollout sites; once).
-    if (args.mode === "growth_first") { const chosen = await ctx.db.get(site._id); if (chosen?.contentSchedule?.autopilotSelectedAt) await scheduleFirstDiagnosis(ctx, chosen); }
+    // Phase 6 (P369): the first diagnosis at onboarding (sites on the new system; once). P372: Review first too.
+    if (args.mode === "growth_first") { const chosen = await ctx.db.get(site._id); if (chosen) await scheduleFirstDiagnosis(ctx, chosen); }
     if (!args.ownerReviewedOnly) await wake(ctx, site._id);
     // P229: Review first writes the first article at once; the owner reads it before anything goes live.
     else await ctx.scheduler.runAfter(0, internal.contentWork.startFirstDraft, { siteId: site._id });
@@ -1286,7 +1286,7 @@ export const readiness = query({
       plan: await accountPlan(ctx, site),
       // P212: the inputs of the order Autopilot writes topics in, for the dashboard's "Coming up next".
       topicOrder: { difficultyCeiling: siteDifficultyCeiling(site), authority: storedTenantAuthority(site) ?? null,
-        phaseTwo: topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain) },
+        phaseTwo: topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain, site.newSystemAt) },
       autopilot: { selectable: Boolean(site.contentSetupRequestedAt), on: Boolean(s && !s.ownerReviewedOnly && site.autopilotEnabled && !site.approvalRequired),
         reviewAvailable: ["github", "wordpress"].includes(site.publishMethod ?? "") || isApiCmsMethod(site.publishMethod) || pasteDestination(site),
         autopilotAvailable: !pasteDestination(site),
@@ -1496,7 +1496,7 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
   // better), and that isn't in a group of the site's articles Google shows to nobody (convex/lib/pageOne.ts). An owner's
   // own search is written whatever these checks say.
   // Built for every site; runs on the rollout sites first (convex/lib/pageOne.ts topicChoiceRollout).
-  const now = Date.now(), phaseTwo = topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain);
+  const now = Date.now(), phaseTwo = topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain, site.newSystemAt);
   const planned = phaseTwo ? candidates.filter(t => ownerChosen(t) || topicWritable(t, now)) : [...candidates];
   // Keywords people measurably search for come first; within each group the
   // stored priority orders the work. Absence remains absent in storage.
@@ -1569,7 +1569,7 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
   if (preferredId) return candidates.find(t => t._id === preferredId) ?? null;
   if (options.demandOnly) return planned.find(t => ownerChosen(t) || searched(t)) ?? null;
   if (planned[0]) return planned[0];
-  if (options.autopilot && topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain)) {
+  if (options.autopilot && topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain, site.newSystemAt)) {
     await queueFallbackTopicsForChecks(ctx, site, inventory, excludedIntents);
     return null;
   }
@@ -2019,7 +2019,7 @@ export const growthTopicContext = internalQuery({ args: { siteId: v.id("sites") 
     existing: existing.slice(0, 150), ownPages: ownPageTitles(site, pages.slice(0, LIMIT)),
     signals, searchConsole: searchConsoleTopicCandidatesFrom(site, searches),
     tenantAuthority: storedTenantAuthority(site) ?? null,
-    canonicalDomain: siteCanonicalDomain(site) ?? site.domain, domainRevision: siteCanonicalDomainRevision(site),
+    canonicalDomain: siteCanonicalDomain(site) ?? site.domain, domainRevision: siteCanonicalDomainRevision(site), newSystemAt: site.newSystemAt ?? null,
     business: buyerFitBusiness(site), maximumDifficulty: siteDifficultyCeiling(site) };
 } });
 
@@ -2088,7 +2088,7 @@ const AI_QUESTION_TOPIC_NOTES = "A buyer question Pentra asks ChatGPT, Gemini an
 export const addAiQuestionTopics = internalMutation({ args: { siteId: v.id("sites"), questions: v.array(v.string()) }, handler: async (ctx, { siteId, questions }) => {
   const site = await ctx.db.get(siteId);
   if (!site || site.deletionStatus || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt ||
-    !topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain)) return { added: 0 };
+    !topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain, site.newSystemAt)) return { added: 0 };
   let inventory: Awaited<ReturnType<typeof eligiblePlannedTopics>>;
   try { inventory = await eligiblePlannedTopics(ctx, site); } catch { return { added: 0 }; }
   const taken: { primaryKeyword: string }[] = [...inventory.topics, ...inventory.pageCoverage];
@@ -2114,7 +2114,7 @@ export const addAiQuestionTopics = internalMutation({ args: { siteId: v.id("site
 const PAGE_ONE_RECHECK_GAP_MS = 12 * 3_600_000;
 async function requestPageOneChecks(ctx: MutationCtx, site: Doc<"sites">, schedule: NonNullable<Doc<"sites">["contentSchedule"]>) {
   const now = Date.now();
-  if (!topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain) || now - (schedule.pageOneCheckRequestedAt ?? 0) < PAGE_ONE_RECHECK_GAP_MS) return;
+  if (!topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain, site.newSystemAt) || now - (schedule.pageOneCheckRequestedAt ?? 0) < PAGE_ONE_RECHECK_GAP_MS) return;
   schedule.pageOneCheckRequestedAt = now;
   await ctx.db.patch(site._id, { contentSchedule: { ...schedule }, updatedAt: now });
   await ctx.scheduler.runAfter(0, internal.actions.growthTopics.checkPlannedPageOne, { siteId: site._id });
@@ -2133,7 +2133,7 @@ const KNOWN_AUTHORITY_MS = 30 * 86_400_000;
 export const pageOneCheckContext = internalQuery({ args: { siteId: v.id("sites"), limit: v.optional(v.number()) }, handler: async (ctx, { siteId, limit }) => {
   const site = await ctx.db.get(siteId);
   if (!site || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt || site.deletionStatus ||
-    !topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain)) return null;
+    !topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain, site.newSystemAt)) return null;
   let inventory: Awaited<ReturnType<typeof eligiblePlannedTopics>>;
   try { inventory = await eligiblePlannedTopics(ctx, site); } catch { return null; }
   const now = Date.now();
@@ -2187,7 +2187,7 @@ export const recordPageOneChecks = internalMutation({ args: { siteId: v.id("site
 export const applyGroupBrakes = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await ctx.db.get(siteId);
   if (!site || site.serviceMode !== "growth_first" || site.deletionStatus || !(site.gscDateEpochs ?? []).length ||
-    !topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain)) return { checked: 0, braked: 0 };
+    !topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain, site.newSystemAt)) return { checked: 0, braked: 0 };
   const now = Date.now();
   const windowStart = new Date(now - 28 * 86_400_000).toISOString().slice(0, 10);
   let rows: Array<{ page?: string; impressions: number }>;

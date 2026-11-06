@@ -82,6 +82,8 @@ export default defineSchema({
     // the site's page-one competitors but not to it (convex/lib/linkOpportunities.ts); contacting anyone needs the owner's
     // yes (Arshad's rule) and a later step.
     linkOutreach: v.optional(v.union(v.literal("find"), v.literal("draft"), v.literal("send"))),
+    // P372: set when a site is added after the new system opened to every new customer (convex/lib/topicVerdict.ts).
+    newSystemAt: v.optional(v.number()),
     repoOwner: v.optional(v.string()),
     repoName: v.optional(v.string()),
     repoDefaultBranch: v.optional(v.string()),

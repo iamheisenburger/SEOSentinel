@@ -31,6 +31,8 @@ export const TOPIC_RUNWAY_ALERT_MS = 3 * 86_400_000;
 export type SiteHealth = {
   siteId: Id<"sites">;
   domain: string;
+  /** P372: the site runs the new system (added after it opened to every new customer). */
+  newSystemAt?: number | null;
   status: "ok" | "attention";
   problems: string[];
   lastPublishedAt: number | null;
@@ -164,7 +166,7 @@ async function siteHealthFor(ctx: QueryCtx, site: Doc<"sites">, now: number, top
     failedAtSlot: failedAtSlot && !covered ? contentIssue(failedAtSlot.contentWork!.failure) ?? failedAtSlot.contentWork!.failure ?? "failed" : null,
     unresolvedFailures: [...new Set(unresolved)], destinationVerified, topicsLeft, plannedTopics, researchDueAt,
   });
-  return { siteId: site._id, domain: site.canonicalDomain ?? site.domain, ...verdict, lastPublishedAt, nextDeadlineAt, intervalMs: schedule.intervalMs,
+  return { siteId: site._id, domain: site.canonicalDomain ?? site.domain, newSystemAt: site.newSystemAt ?? null, ...verdict, lastPublishedAt, nextDeadlineAt, intervalMs: schedule.intervalMs,
     failure: failedAtSlot && !covered ? failedAtSlot.contentWork!.failure ?? "failed" : null, paused: Boolean(schedule.paused),
     reviewFirst: Boolean(site.approvalRequired || schedule.ownerReviewedOnly),
     readyForNextSlots, strandedReady, destinationVerified, topicsLeft, plannedTopics,
@@ -309,7 +311,7 @@ export const runContentHealth = internalAction({
       try {
         await ctx.runMutation(internal.customerEmails.noteMissedSlot, { siteId: site.siteId, deadlineAt: site.nextDeadlineAt,
           cause: missedSlotCause({ destinationVerified: site.destinationVerified, plannedTopics: site.plannedTopics, failure: site.failure ?? null,
-            phaseTwo: topicChoiceRollout(site.domain) }) });
+            phaseTwo: topicChoiceRollout(site.domain, site.newSystemAt) }) });
       } catch (error) { console.warn(`Late-article email not decided for ${site.siteId}: ${error instanceof Error ? error.message : "unknown"}`); }
     }
     const attention = all.filter(s => s.status === "attention").length;

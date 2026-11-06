@@ -37,7 +37,7 @@ function testable(site: Doc<"sites">, page: Doc<"pages">, merged: ReadonlySet<st
  * the tests placed earlier with whether they went live (their job verified) or failed. */
 export const context = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await ctx.db.get(siteId);
-  if (!site || !siteExecutionActive(site) || site.deletionStatus || !topicChoiceRollout(site.domain)) return null;
+  if (!site || !siteExecutionActive(site) || site.deletionStatus || !topicChoiceRollout(site.domain, site.newSystemAt)) return null;
   const [pages, tests, merged] = await Promise.all([
     ctx.db.query("pages").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(501),
     ctx.db.query("search_snippets").withIndex("by_site_page", (q) => q.eq("siteId", siteId)).take(2000),
@@ -71,7 +71,7 @@ export const propose = internalMutation({ args: { siteId: v.id("sites"), proposa
   before: snippet, after: snippet, baseline: measure, costMicroUsd: v.number() })) },
   handler: async (ctx, { siteId, proposals }) => {
     const site = await ctx.db.get(siteId);
-    if (!site || site.deletionStatus || !topicChoiceRollout(site.domain)) return { added: 0 };
+    if (!site || site.deletionStatus || !topicChoiceRollout(site.domain, site.newSystemAt)) return { added: 0 };
     const now = Date.now();
     let added = 0;
     for (const p of proposals.slice(0, 5)) {

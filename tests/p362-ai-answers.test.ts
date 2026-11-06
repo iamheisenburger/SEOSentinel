@@ -39,7 +39,7 @@ test("the finding names where to be listed, and the weekly email says it", () =>
 test("the buyer questions become topics to check on the rollout sites, never a repeat, never past Phase 2's check", () => {
   const work = readFileSync("convex/contentWork.ts", "utf8");
   assert.match(work, /export const addAiQuestionTopics = internalMutation/);
-  assert.match(work, /!topicChoiceRollout\(siteCanonicalDomain\(site\) \?\? site\.domain\)\) return \{ added: 0 \};/);
+  assert.match(work, /!topicChoiceRollout\(siteCanonicalDomain\(site\) \?\? site\.domain, site\.newSystemAt\)\) return \{ added: 0 \};/);
   assert.match(work, /if \(namesCompetitor\(label, competitors\) \|\| taken\.some\(t => contentIntentConflicts\(proposal, t\)\)\) continue;/);
   assert.doesNotMatch(work.slice(work.indexOf("export const addAiQuestionTopics"), work.indexOf("/** Phase 2: a page-one check as stored on a topic")), /pageOne:/,
     "no page-one verdict is invented: the check still decides");

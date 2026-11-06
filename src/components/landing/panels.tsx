@@ -164,3 +164,29 @@ export function ControlPanel() {
     </div>
   );
 }
+
+const LINK_ROWS = [
+  { page: "The 12 best lead tools for small teams", site: "saasreviews.example", status: "Links to you", tone: "bg-[#4CB782]/15 text-[#4CB782]" },
+  { page: "Our sales stack, tool by tool", site: "b2bweekly.example", status: "Replied", tone: "bg-[#F2994A]/15 text-[#F2994A]" },
+  { page: "Lead scoring resources", site: "growthnotes.example", status: "Emailed", tone: "bg-[#0EA5E9]/15 text-[#0EA5E9]" },
+];
+/** Phase 4 (P372): links from other sites, as the owner's dashboard shows them (example content). */
+export function LinksPanel() {
+  return (
+    <div className={PANEL}>
+      <div className={HEAD}><span>Links from other sites</span><span>Example · this week</span></div>
+      <div className="p-5">
+        <p className="text-[12px] text-[#8A8F98]">Pages that link to your competitors but not to you, emailed from your own mailbox</p>
+        <ul className="mt-4 divide-y divide-white/[0.06]">
+          {LINK_ROWS.map(row => (
+            <li key={row.page} className="flex items-center justify-between gap-3 py-2.5">
+              <span className="min-w-0"><span className="block truncate text-[13px] text-[#F7F8F8]">{row.page}</span><span className="text-[11px] text-[#62666D]">{row.site}</span></span>
+              <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${row.tone}`}>{row.status}</span>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-3 text-[11px] text-[#62666D]">Up to 10 a week · one follow-up · stops when they reply</p>
+      </div>
+    </div>
+  );
+}

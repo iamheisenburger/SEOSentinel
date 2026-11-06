@@ -188,6 +188,7 @@ import {
   PUBLISHER_AUTOPUBLISH_CONSENT_VERSION,
   PUBLISHER_DESTINATION_RECEIPT_VERSION,
 } from "./lib/publisherProvisioning.ts";
+import { NEW_SYSTEM_START } from "./lib/topicVerdict";
 
 function inboundRelayRuntimeConfig() {
   return {
@@ -3864,6 +3865,9 @@ export const upsert = mutation({
     const siteId = await ctx.db.insert("sites", {
       ...data,
       userId,
+      // P372: a site added from now on runs the whole new system (weekly check-up, winnable searches, title tests,
+      // links, AI answers, weekly email).
+      ...(now() >= NEW_SYSTEM_START ? { newSystemAt: now() } : {}),
       ...(args.contentSetup === true ? { contentSetupRequestedAt: now() } : {}),
       planFeatures,
       language: args.language ?? "en",

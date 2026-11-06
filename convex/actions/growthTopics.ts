@@ -22,7 +22,7 @@ import { auditPlannedWork, groupSearches, parseResearchGroups, RESEARCH_GROUPS_M
 type ResearchContext = { domain: string; language: string; targetCountry: string | null; seeds: string[]; known: string[];
   coverage: string[]; dropped: string[]; existing: string[]; ownPages?: string[]; signals: { coreBusinessSignals: string[]; productAnchorSignals: string[]; businessModelSignals: string[] };
   searchConsole: Array<{ keyword: string; impressions: number; position: number }>; tenantAuthority: number | null;
-  canonicalDomain: string; domainRevision: number; business: BuyerFitBusiness; maximumDifficulty?: number };
+  canonicalDomain: string; domainRevision: number; newSystemAt?: number | null; business: BuyerFitBusiness; maximumDifficulty?: number };
 
 /** P171: the free check's seed call (convex/lib/missedSearches.ts), read from
  * the business profile the owner confirmed. Throws when no usable answer came
@@ -292,7 +292,7 @@ export const replenish = internalAction({ args: { siteId: v.id("sites"), reserva
     let due: { topics: Array<{ topicId: Id<"topic_clusters">; keyword: string }>; knownAuthorities: Array<{ domain: string; rank: number }> } | null = null;
     try { due = await ctx.runQuery(internal.contentWork.pageOneCheckContext, { siteId }); } catch { /* the sweep checks them */ }
     let pageOne = { usd: 0, uncertain: false, checks: new Map<string, PageOneCheck>() };
-    if (topicChoiceRollout(context.canonicalDomain) && tenantAuthority !== null && (toCheck.length > 0 || (due?.topics.length ?? 0) > 0)) {
+    if (topicChoiceRollout(context.canonicalDomain, context.newSystemAt) && tenantAuthority !== null && (toCheck.length > 0 || (due?.topics.length ?? 0) > 0)) {
       const site = { domain: context.domain, language: context.language, targetCountry: context.targetCountry, tenantAuthority,
         knownAuthorities: due?.knownAuthorities ?? [] };
       const checked = await meterDataForSeoCost(() => checkPageOne(site, [...toCheck.map((k) => k.keyword), ...(due?.topics ?? []).map((t) => t.keyword)]));

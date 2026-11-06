@@ -71,7 +71,7 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
   const repairsOnly = Boolean(options.repairsOnly);
   const site = await loadContext(ctx, siteId);
   if (!site) return { skipped: "site not active" };
-  if (repairsOnly && !topicChoiceRollout(site.domain)) return { skipped: "not a rollout site" };
+  if (repairsOnly && !topicChoiceRollout(site.domain, site.newSystemAt)) return { skipped: "not a rollout site" };
   if (!force && site.lastRunAt && Date.now() - site.lastRunAt < 6 * 24 * 3600 * 1000) return { skipped: "diagnosed this week" };
   const notes: string[] = [];
 
@@ -181,7 +181,7 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
     };
     await Promise.all([readers(), pageOneAndSpeed()]);
     // Phase 3: a new search title for buyer pages Google shows on page one but few click, and the verdicts on earlier ones.
-    if (topicChoiceRollout(site.domain) && gsc.length && out.intents.length) {
+    if (topicChoiceRollout(site.domain, site.newSystemAt) && gsc.length && out.intents.length) {
       try {
         const tested = await titleTests(ctx, site, gsc, out.intents);
         out.snippets = tested.proposals; out.snippetDecisions = tested.decisions; out.microUsd += tested.costMicroUsd; out.notes.push(...tested.notes);

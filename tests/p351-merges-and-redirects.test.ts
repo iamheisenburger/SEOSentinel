@@ -260,7 +260,7 @@ test("delivery: Pentra's own blog first (its repository is never written), then 
   assert.match(action, /probe\.host === "vercel" \? \{ candidates: \["vercel\.json"\]/, "vercel.json is written only where Vercel serves the site");
   assert.match(action, /ownerReview/, "owner review keeps merges waiting");
   assert.match(readFileSync("convex/crons.ts", "utf8"), /crons\.weekly\("site-diagnosis"/);
-  assert.match(readFileSync("convex/siteDiagnosis.ts", "utf8"), /if \(!DIAGNOSIS_ROLLOUT_DOMAINS\.includes\(bareDomain\(site\.domain\)\)\) continue;/,
+  assert.match(readFileSync("convex/siteDiagnosis.ts", "utf8"), /if \(!onNewSystem\(site\)\) continue;/,
     "the weekly paid run covers only the sites whose cost the owner approved");
   assert.match(readFileSync("convex/lib/providerSpendReservation.ts", "utf8"), /args\.purpose !== "site_diagnosis"/);
 });

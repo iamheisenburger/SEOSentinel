@@ -150,11 +150,11 @@ test("it is wired end to end: written by the weekly run on the rollout sites, pl
   const publisher = readFileSync("convex/publisher.ts", "utf8");
   assert.match(publisher, /c\?\.kind === "search_snippet" \? e\.sourceContent/, "a hosted post's HTML is sent back unchanged");
   const run = readFileSync("convex/actions/siteDiagnosis.ts", "utf8");
-  assert.match(run, /if \(topicChoiceRollout\(site\.domain\) && gsc\.length && out\.intents\.length\) \{/, "rollout sites, with Search Console and reader labels");
+  assert.match(run, /if \(topicChoiceRollout\(site\.domain, site\.newSystemAt\) && gsc\.length && out\.intents\.length\) \{/, "rollout sites, with Search Console and reader labels");
   assert.ok(run.indexOf("internal.searchSnippets.decide") < run.indexOf("internal.searchSnippets.propose"), "verdicts first, then new tests");
   assert.match(run, /const checked = checkSnippet\(input, page, c\.query\);/, "only a title that passes the objective checks is used");
   const snippets = readFileSync("convex/searchSnippets.ts", "utf8");
-  assert.match(snippets, /if \(!site \|\| !siteExecutionActive\(site\) \|\| site\.deletionStatus \|\| !topicChoiceRollout\(site\.domain\)\) return null;/);
+  assert.match(snippets, /if \(!site \|\| !siteExecutionActive\(site\) \|\| site\.deletionStatus \|\| !topicChoiceRollout\(site\.domain, site\.newSystemAt\)\) return null;/);
   assert.match(snippets, /\(e\.managedArticleId \|\| e\.origin === "published_refresh"\)/, "only Pentra's own articles, never a page the owner wrote");
   assert.doesNotMatch(readFileSync("convex/lib/searchSnippet.ts", "utf8"), /anthropic|fetch\(/i, "the checks and verdicts are pure; no model decides");
   assert.match(readFileSync("convex/sites.ts", "utf8"), /case "search_snippets":/, "a deleted site's tests are deleted with it");

@@ -4,7 +4,11 @@
 /** Pentra's rule for every new engine (Arshad, Nov 5 2026): built for any site, run only on pentra.dev and LeadPilot until
  * it gets results there, then on every customer. Other sites keep today's topic choice. */
 export const TOPIC_CHOICE_ROLLOUT_DOMAINS: readonly string[] = ["pentra.dev", "leadpilot.chat"];
-export function topicChoiceRollout(domain: string | undefined): boolean {
+/** P372 (Nov 6 2026, Arshad): every site added from NEW_SYSTEM_START on runs the whole new system too (sites.ts marks it
+ * `newSystemAt` when it is created). Sites added before keep what they signed up for until their owner is asked. */
+export const NEW_SYSTEM_START = Date.UTC(2026, 10, 6, 3);
+export function topicChoiceRollout(domain: string | undefined, newSystemAt?: number | null): boolean {
+  if (typeof newSystemAt === "number") return true;
   const bare = (domain ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[/:].*$/, "");
   return TOPIC_CHOICE_ROLLOUT_DOMAINS.includes(bare);
 }

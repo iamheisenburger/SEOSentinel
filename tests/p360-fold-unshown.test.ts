@@ -59,6 +59,6 @@ test("the repairs can run on their own, free: no paid check, no diagnosis record
   assert.match(action, /export const runRepairs = internalAction\(\{ args: \{ siteId: v\.id\("sites"\) \},\n  handler: async \(ctx, \{ siteId \}\): Promise<RunResult> => runDiagnosis\(ctx, siteId, true, \{ repairsOnly: true \}\) \}\);/);
   assert.match(action, /const wantsPaid = !repairsOnly && \(/, "no spend hold, so no paid part runs");
   assert.match(action, /const freeSpeedTest = Boolean\(process\.env\.PAGESPEED_API_KEY\) && !repairsOnly;/);
-  assert.match(action, /if \(repairsOnly && !topicChoiceRollout\(site\.domain\)\) return \{ skipped: "not a rollout site" \};/);
+  assert.match(action, /if \(repairsOnly && !topicChoiceRollout\(site\.domain, site\.newSystemAt\)\) return \{ skipped: "not a rollout site" \};/);
   assert.ok(action.indexOf("if (repairsOnly) return {") < action.indexOf("await ctx.runMutation(internal.siteDiagnosis.record"), "the weekly record is never replaced by a partial one");
 });

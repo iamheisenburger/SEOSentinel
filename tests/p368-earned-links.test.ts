@@ -129,7 +129,7 @@ test("it is wired end to end and stays off until the owner chooses: nothing sent
   assert.match(action, /text: body \+ emailFooter\(/, "every email carries the footer");
   assert.match(action, /if \(Date\.now\(\) > deadline\) break;/, "the preparation stops in time; the rest wait for the next run");
   assert.match(action, /after\.nextFollowUpAt !== null \? nextSendAt\(Math\.max\(Date\.now\(\), after\.nextFollowUpAt\), after\.sentAt\)/, "the sender wakes for a follow-up");
-  assert.match(records, /DIAGNOSIS_ROLLOUT_DOMAINS\.includes\(domain\) \? site : null;/, "Pentra's own two sites first, like every new engine");
+  assert.match(records, /onNewSystem\(site\) \? site : null;/, "Pentra's own two sites first, like every new engine");
   const run = readFileSync("convex/actions/siteDiagnosis.ts", "utf8");
   assert.match(run, /if \(site\.linkOutreach && out\.pageOne\.length\) \{/);
   assert.match(run, /if \(site\.linkOutreach && !repairsOnly\) await ctx\.scheduler\.runAfter\(0, internal\.actions\.linkOutreach\.prepare, \{ siteId \}\);/);

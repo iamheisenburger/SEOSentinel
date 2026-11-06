@@ -14,7 +14,7 @@ import { encryptOutreachCredentials, outreachCredentialKeyConfig } from "./lib/o
 import { imapPresetForSmtpHost, SMTP_PRESETS } from "./lib/outreachSmtp";
 import { followUpDue, LINK_FOLLOW_UP_DAYS, LINK_PAGES_PER_WEEK, recipientCountryAllowed } from "./lib/linkOutreach";
 import { ConvexError } from "convex/values";
-import { DIAGNOSIS_ROLLOUT_DOMAINS } from "./siteDiagnosis";
+import { onNewSystem } from "./siteDiagnosis";
 
 const DAY = 86_400_000;
 const listing = v.object({ url: v.string(), domain: v.string(), title: v.string(), rank: v.number(), linksTo: v.array(v.string()),
@@ -24,8 +24,7 @@ export const mailboxBinding = (siteId: Id<"sites">, email: string) => `link_mail
 /** The owner's own site, where the weekly diagnosis runs (it finds the pages): Pentra's own two sites until the rollout. */
 async function ownedSite(ctx: QueryCtx | MutationCtx, siteId: Id<"sites">): Promise<Doc<"sites"> | null> {
   const identity = await ctx.auth.getUserIdentity(), site = await ctx.db.get(siteId);
-  const domain = site?.domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "") ?? "";
-  return identity && site && site.userId === identity.subject && !site.deletionStatus && DIAGNOSIS_ROLLOUT_DOMAINS.includes(domain) ? site : null;
+  return identity && site && site.userId === identity.subject && !site.deletionStatus && onNewSystem(site) ? site : null;
 }
 const rows = (ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) => ctx.db.query("link_opportunities").withIndex("by_site_domain", (q) => q.eq("siteId", siteId)).take(1000);
 const mailboxOf = (ctx: QueryCtx | MutationCtx, siteId: Id<"sites">) => ctx.db.query("link_mailboxes").withIndex("by_site", (q) => q.eq("siteId", siteId)).first();

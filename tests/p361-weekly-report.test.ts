@@ -33,7 +33,7 @@ test("the weekly email says what Google showed, what Pentra found and fixed, and
 
 test("it follows the week's diagnosis on the rollout sites, once a week, after the delivered redirects are checked", () => {
   const diagnosis = readFileSync("convex/siteDiagnosis.ts", "utf8");
-  assert.match(diagnosis, /if \(DIAGNOSIS_ROLLOUT_DOMAINS\.includes\(bareDomain\(site\.domain\)\)\) await noteWeeklyReport\(ctx, site\);/);
+  assert.match(diagnosis, /if \(onNewSystem\(site\)\) await noteWeeklyReport\(ctx, site\);/);
   assert.match(diagnosis, /const WEEKLY_REPORT_DELAY_MS = 20 \* 60_000;/);
   assert.match(diagnosis, /eq\("kind", "weekly_report"\)\.eq\("key", week\)\)\.first\(\);\n  if \(logged\) return;/, "one a week, whatever reruns");
   const emails = readFileSync("convex/customerEmails.ts", "utf8");

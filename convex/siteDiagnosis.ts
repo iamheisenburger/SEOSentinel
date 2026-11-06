@@ -27,6 +27,9 @@ export const DIAGNOSIS_GSC_ROWS = 12_000;
  * yes (money rule, Nov 2026): Pentra's own two sites. The engine is the same for every site; widening this list is the
  * rollout. */
 export const DIAGNOSIS_ROLLOUT_DOMAINS: readonly string[] = ["pentra.dev", "leadpilot.chat"];
+/** P372: our two sites, and every site added since the new system opened to new customers (sites.newSystemAt). */
+export const onNewSystem = (site: Pick<Doc<"sites">, "domain" | "newSystemAt">) =>
+  typeof site.newSystemAt === "number" || DIAGNOSIS_ROLLOUT_DOMAINS.includes(bareDomain(site.domain));
 /** Phase 2 (P359) began choosing only winnable searches on Nov 5 2026. */
 const PHASE_TWO_SINCE = Date.UTC(2026, 10, 5);
 const bareDomain = (domain: string) => domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
@@ -43,7 +46,7 @@ export const context = internalQuery({ args: { siteId: v.id("sites") }, handler:
   // P367: which articles Pentra wrote for a search Phase 2 found winnable (a fold target for a never-shown sibling). Only
   // articles published since Phase 2 began can be such, so only their topics are read.
   const winnableTopic = new Map<string, boolean>();
-  if (DIAGNOSIS_ROLLOUT_DOMAINS.includes(bareDomain(site.domain))) {
+  if (onNewSystem(site)) {
     for (const row of summaries) {
       if (!row.topicId || (row.publishedAt ?? 0) < PHASE_TWO_SINCE || winnableTopic.has(row.topicId)) continue;
       const topic = await ctx.db.get(row.topicId), position = topic ? searchConsolePosition(topic) : null;
@@ -60,7 +63,7 @@ export const context = internalQuery({ args: { siteId: v.id("sites") }, handler:
   const published = addressed.filter((row) => !row.retired);
   const removed = addressed.filter((row) => row.retired).map((row) => row.url);
   return {
-    siteId, userId: site.userId, domain: site.domain, targetCountry: site.targetCountry ?? null,
+    siteId, userId: site.userId, domain: site.domain, targetCountry: site.targetCountry ?? null, newSystemAt: site.newSystemAt ?? null,
     urlStructure: site.urlStructure ?? "/blog/[slug]", publishMethod: site.publishMethod ?? "github",
     repository: Boolean(site.repoOwner && site.repoName), ownerReview: Boolean(site.approvalRequired),
     // Phase 4: whether the owner turned link finding on (off unless they did).
@@ -120,7 +123,7 @@ export const record = internalMutation({ args: { siteId: v.id("sites"), diagnosi
   const id = await ctx.db.insert("site_diagnoses", { siteId, createdAt: Date.now(), ...diagnosis });
   // Phase 6 (Nov 2026): the owner's weekly results email follows the week's diagnosis (rollout sites first), once a week,
   // after the redirects it delivered have had time to be checked live.
-  if (DIAGNOSIS_ROLLOUT_DOMAINS.includes(bareDomain(site.domain))) await noteWeeklyReport(ctx, site);
+  if (onNewSystem(site)) await noteWeeklyReport(ctx, site);
   return id;
 } });
 
@@ -128,7 +131,7 @@ export const record = internalMutation({ args: { siteId: v.id("sites"), diagnosi
  * review-first with automatic publishing), not at the next Tuesday run, so the owner sees what Pentra found and what it
  * does next from the first day. Once only: a site with a diagnosis waits for the weekly run. */
 export async function scheduleFirstDiagnosis(ctx: MutationCtx, site: Doc<"sites">) {
-  if (!DIAGNOSIS_ROLLOUT_DOMAINS.includes(bareDomain(site.domain))) return;
+  if (!onNewSystem(site)) return;
   if (await ctx.db.query("site_diagnoses").withIndex("by_site_created", (q) => q.eq("siteId", site._id)).first()) return;
   await ctx.scheduler.runAfter(60_000, internal.actions.siteDiagnosis.runInternal, { siteId: site._id });
 }
@@ -173,7 +176,7 @@ export const scheduleWeekly = internalMutation({ args: {}, handler: async (ctx) 
   let scheduled = 0;
   for (const site of sites) {
     if (!siteExecutionActive(site) || !site.userId || site.deletionStatus || site.serviceMode !== "growth_first" || !site.contentSchedule) continue;
-    if (!DIAGNOSIS_ROLLOUT_DOMAINS.includes(bareDomain(site.domain))) continue;
+    if (!onNewSystem(site)) continue;
     if (!site.contentSchedule.autopilotSelectedAt && !(await ctx.db.query("site_diagnoses").withIndex("by_site_created", (q) => q.eq("siteId", site._id)).first())) continue;
     await ctx.scheduler.runAfter(scheduled * 30_000, internal.actions.siteDiagnosis.runInternal, { siteId: site._id });
     scheduled++;

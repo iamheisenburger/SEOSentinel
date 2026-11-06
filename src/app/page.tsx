@@ -5,7 +5,7 @@ import { LandingNav } from "@/components/layout/landing-nav";
 import { PricingSection } from "@/components/landing/pricing-section";
 import { ProductFrame } from "@/components/landing/product-frame";
 import { RunLog } from "@/components/landing/run-log";
-import { AnswerPanel, ControlPanel, HealthPanel, RankingsPanel, SourcesPanel } from "@/components/landing/panels";
+import { AnswerPanel, ControlPanel, HealthPanel, LinksPanel, RankingsPanel, SourcesPanel } from "@/components/landing/panels";
 import { cachedPublishedListing } from "@/lib/published-listing";
 import { servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
 
@@ -45,9 +45,9 @@ function Hero() {
           More customers from Google.
         </h1>
         <p className="animate-fade-in-up mt-6 max-w-[40rem] text-[17px] leading-relaxed text-[#8A8F98] md:text-[19px] [text-wrap:pretty]" style={{ animationDelay: "0.12s" }}>
-          Pentra learns what you sell, researches what your customers search for, and publishes fact-checked
-          articles to your site on your schedule. Then it fixes the pages closest to page one and shows the results
-          in your own Search Console data.
+          Pentra checks your site every week, writes only for searches your buyers make and your site can actually win,
+          earns links from other sites, and tracks whether ChatGPT and Google&apos;s AI answers name you. Then it emails you
+          what changed, from your own Search Console data.
         </p>
         <div className="animate-fade-in-up mt-9 flex flex-wrap items-center gap-x-6 gap-y-4" style={{ animationDelay: "0.18s" }}>
           <PrimaryCta>Start free</PrimaryCta>
@@ -69,8 +69,8 @@ function Proof() {
     <section className="border-t border-white/[0.06]">
       <div className={`${WRAP} flex flex-col gap-4 py-8 md:flex-row md:items-center md:justify-between`}>
         <p className="text-[15px] text-[#8A8F98]">
-          <span className="text-[#F7F8F8]">We run our own marketing on Pentra.</span> The guides on this site are written,
-          fact-checked and published by Pentra, now on Autopilot.
+          <span className="text-[#F7F8F8]">We run our own marketing on Pentra.</span> This site and our other product are on the
+          same system you get: the weekly check-up, the articles, the link building and the weekly report.
         </p>
         <Link href="/blog" className="shrink-0 text-[14px] font-medium text-[#D0D6E0] transition hover:text-white">Read them <span aria-hidden>→</span></Link>
       </div>
@@ -81,9 +81,9 @@ function Proof() {
 /* ─── Statement + pillars ──────────────────────── */
 
 const PILLARS = [
-  { title: "Fact-checked, never invented", desc: "Every article is written from the business facts you confirmed. Statistics must appear in the source they cite, and prices and plans must match your confirmed facts, or the article isn't published." },
-  { title: "Published, then confirmed live", desc: "Pentra commits each article to your blog's GitHub repository the way your own posts are kept, then opens the real page to confirm it is live." },
-  { title: "Measured in your own data", desc: "Clicks and positions come from your Google Search Console, before and after every article and every improvement." },
+  { title: "Only searches you can win", desc: "Before writing, Pentra looks at Google's real first page for the search. It writes only when buyers make that search and sites as strong as yours already rank there." },
+  { title: "Every lever, not just articles", desc: "Articles, fixes to pages Google already shows, links from other sites and AI answers: the things traffic needs, worked on together every week." },
+  { title: "Measured in your own data", desc: "A weekly email with your clicks, what Pentra fixed, the links it won and whether AI assistants name you, from your own Search Console." },
 ];
 
 function PillarGlyph({ n }: { n: number }) {
@@ -104,7 +104,7 @@ function Statement() {
       <div className={WRAP}>
         <p className="max-w-[52rem] text-[26px] font-medium leading-[1.25] tracking-[-0.02em] md:text-[40px] [text-wrap:pretty]">
           Pentra is the SEO team your website never had.{" "}
-          <span className="text-[#62666D]">It learns what you sell, writes what your customers search for, publishes on your schedule, and keeps fixing what stops you reaching page one.</span>
+          <span className="text-[#62666D]">Every week it finds what holds your site back, writes for searches it can win, fixes the pages Google already shows, earns links and gets you into AI answers.</span>
         </p>
         <div className="mt-16 grid border-t border-white/[0.06] md:mt-24 md:grid-cols-3">
           {PILLARS.map((pillar, n) => (
@@ -123,11 +123,12 @@ function Statement() {
 /* ─── How Autopilot runs ───────────────────────── */
 
 const STEPS = [
-  ["Add your website", "Pentra reads your homepage and suggests your business facts and your booking or signup page. You confirm them."],
-  ["Connect it once", "Your Next.js, Astro, Hugo, Jekyll or Gatsby blog on GitHub, or paste-it-yourself on any other platform. Plus Google Search Console."],
-  ["Choose Autopilot or Review first", "Pick a pace from 1 to 21 articles a week, or approve every article yourself."],
-  ["Pentra does the work", "Research, writing, fact check, publishing and a live-page check, for every article, on schedule."],
-  ["It keeps improving what works", "Pages sitting just off page one are improved first, and a weekly health check catches what stops Google showing you."],
+  ["Add your website", "Pentra reads your site and suggests your business facts and your booking or signup page. You confirm them."],
+  ["Connect it once", "Your blog, plus Google Search Console (optional, strongly recommended). Pentra runs its first check-up straight away: what Google shows, who searches, what is broken, how strong your site is."],
+  ["It writes what you can win", "For each search, Pentra checks Google's first page first. It writes only buyer searches your site can reach, adds something the top results don't have, and never writes two pages for the same search."],
+  ["It fixes what is already there", "Duplicate articles merge into the stronger one, pages Google ignores fold into ones it shows, and pages seen but rarely clicked get a better title, kept only if clicks rise."],
+  ["It earns links and AI answers", "Pentra finds pages that link to your competitors but not to you and emails them from your own mailbox, and checks every week whether ChatGPT, Gemini and Google AI Mode name you."],
+  ["You get the results every week", "One plain email: your clicks, what Pentra fixed and published, the links it won and what it does next."],
 ];
 
 function HowItWorks() {
@@ -136,7 +137,7 @@ function HowItWorks() {
       <div className={WRAP}>
         <p className={EYEBROW}>How Autopilot runs</p>
         <h2 className="mt-4 max-w-[18ch] text-[clamp(2rem,4.2vw,3.25rem)] font-semibold leading-[1.05] tracking-[-0.035em] [text-wrap:balance]">
-          Set it up once. Pentra keeps going.
+          Set it up once. Pentra works on everything, every week.
         </h2>
         <div className="mt-14 grid gap-12 lg:grid-cols-[1fr_1.15fr] lg:gap-16">
           <ol className="border-t border-white/[0.06]">
@@ -165,13 +166,15 @@ function HowItWorks() {
 const ROWS = [
   { label: "01 · Accuracy", title: "No invented facts.", body: "Most AI writers make up statistics. Pentra writes from the business facts you confirm and the searches your customers make. A draft with a statistic its source doesn't contain, or a price or plan you didn't confirm, is never published, and a sentence a source contradicts is rewritten first.",
     points: ["Written only from business facts you confirmed", "Every statistic checked against its source", "Prices and plans only as you confirmed them"], panel: <SourcesPanel /> },
-  { label: "02 · Improve", title: "Pages close to page one come first.", body: "The fastest traffic is on pages Google already shows at positions 4 to 20. Pentra finds them in your Search Console, answers the searches they appear for, and measures what changed.",
-    points: ["Uses your own Search Console data", "Answers the exact searches a page appears for", "Before and after clicks for every change"], panel: <RankingsPanel /> },
-  { label: "03 · Answers", title: "Written for Google and for AI answers.", body: "Each section answers its question in the first line and stands on its own, the way Google and AI assistants quote pages. Every article ends with a short FAQ built from the questions your customers really ask, and one clear next step to your booking or signup page.",
-    points: ["Direct answers, short sections", "A FAQ in your customers' own words", "One natural link to your next-step page"], panel: <AnswerPanel /> },
-  { label: "04 · Health", title: "A weekly health check in plain English.", body: "Every week Pentra checks your important pages the way search engines and AI crawlers see them: can they reach the page, is it fast, does it have titles and structured data, and does it lead visitors to your next step.",
-    points: ["Access, speed, AI answers and next-step checks", "Findings written in plain English", "Score and history on your dashboard"], panel: <HealthPanel /> },
-  { label: "05 · Control", title: "You choose how much control you keep.", body: "Put Pentra on Autopilot and pick a pace, or choose Review first and approve every article. Switch any time. Your plan's monthly allowance always caps the total, so there are no surprise charges.",
+  { label: "02 · Win", title: "Searches you can win, pages that get clicked.", body: "Pentra checks Google's real first page before it writes, so new articles target searches buyers make and your site can reach. Pages Google already shows get improved for the searches buyers make, and a page seen but rarely clicked gets a new title that stays only if clicks rise.",
+    points: ["Checked against Google's first page before writing", "Buyer searches only, one page per search", "Titles tested by your real clicks"], panel: <RankingsPanel /> },
+  { label: "03 · Links", title: "Links from other sites, on autopilot.", body: "Google trusts a site more when relevant sites link to it. Each week Pentra finds the pages that link to your competitors but not to you, writes one short, personal email per page and sends it from your own mailbox, with your OK. It follows up once, stops when someone replies, and checks whether the link went live.",
+    points: ["Pages that already link to sites like yours", "Sent from your mailbox, up to 10 a week", "Every link checked live, every week"], panel: <LinksPanel /> },
+  { label: "04 · AI answers", title: "Named by ChatGPT and Google's AI answers.", body: "Every week Pentra asks ChatGPT, Gemini and Google AI Mode the questions your buyers ask, and tracks whether they name you, who they name instead and which pages they quote. The questions become articles, and the pages they quote become link targets. Every article answers each question in its first line, the way AI assistants quote pages.",
+    points: ["Your buyers' questions, asked every week", "Who gets named instead of you", "Quoted pages become link targets"], panel: <AnswerPanel /> },
+  { label: "05 · Check-up", title: "A weekly check-up, and a report in plain English.", body: "Every week Pentra reads your Search Console, every page on your site, your site's strength and who holds Google's first page for your searches. It repairs what it can, such as duplicate articles and broken addresses, and emails you what it found, what it fixed and what it does next.",
+    points: ["Search Console, pages, strength and competitors", "Repairs done for you, checked live", "One weekly email with your real numbers"], panel: <HealthPanel /> },
+  { label: "06 · Control", title: "You choose how much control you keep.", body: "Put Pentra on Autopilot and pick a pace, or choose Review first and approve every article. Switch any time. Your plan's monthly allowance always caps the total, so there are no surprise charges.",
     points: ["Autopilot or Review first, per website", "Pace from 1 to 21 articles a week", "Pause any time from your dashboard"], panel: <ControlPanel /> },
 ];
 
@@ -230,7 +233,15 @@ function Platforms() {
 const faqs = [
   {
     q: "What does Pentra do after I add my website?",
-    a: "It learns what you sell from the details you confirm, connects to your site and Search Console, and then researches, writes, fact-checks and publishes articles on your schedule. It also improves pages that already appear in Google search, and reports what changed and the clicks that followed.",
+    a: "It learns what you sell from the details you confirm and runs its first check-up. Then, every week, it writes and publishes articles for buyer searches your site can win, fixes and improves the pages Google already shows, finds sites that should link to you and (with your OK) emails them from your mailbox, checks whether AI assistants name you, and emails you the results from your own Search Console.",
+  },
+  {
+    q: "How does Pentra get links to my site?",
+    a: "It finds pages that already link to your competitors but not to you, often lists of the best tools or services in your field. It writes one short, personal email per page and sends it from your own mailbox: up to 10 a week, one follow-up, and never again once someone replies or asks it to stop. Nothing is sent until you connect your mailbox and choose to send. It never buys or swaps links.",
+  },
+  {
+    q: "Does Pentra help with ChatGPT and AI answers?",
+    a: "Yes. Every week it asks ChatGPT, Gemini and Google AI Mode the questions your buyers ask, and tells you whether they name you and who they name instead. Those questions become articles, and the pages the assistants quote become places to be listed.",
   },
   {
     q: "Which websites does Pentra work with?",
@@ -250,7 +261,7 @@ const faqs = [
   },
   {
     q: "Does Pentra guarantee rankings?",
-    a: "No one can honestly guarantee rankings, and search results take weeks to move. Pentra publishes useful, accurate content consistently, improves what is close to page one, and shows you real Search Console data so you can see what is working.",
+    a: "No one can honestly guarantee rankings, and search results take weeks to move. Pentra works only on searches your site can win, earns links, and shows you real Search Console data every week so you can see what is working.",
   },
   {
     q: "How does billing work?",
@@ -315,7 +326,7 @@ function Footer() {
             <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#0EA5E9]/15"><Radar className="h-4 w-4 text-[#0EA5E9]" /></span>
             <span className="text-[16px] font-semibold">Pentra</span>
           </div>
-          <p className="max-w-[18rem] text-[13px] leading-relaxed text-[#62666D]">Autopilot SEO for your website. Planned, fact-checked, published and measured.</p>
+          <p className="max-w-[18rem] text-[13px] leading-relaxed text-[#62666D]">Autopilot SEO and AI answers for your website. Articles, fixes, links and a weekly report.</p>
         </div>
         <div className="grid grid-cols-2 gap-x-16 gap-y-3">
           <div className="flex flex-col gap-3">
@@ -350,14 +361,18 @@ const organizationSchema = {
   applicationCategory: "BusinessApplication",
   operatingSystem: "Web",
   description:
-    "Autopilot SEO: Pentra researches, writes, fact-checks and publishes articles to your Next.js, Astro, Hugo, Jekyll or Gatsby blog on a schedule, improves pages near page one, and reports Search Console results.",
+    "Autopilot SEO and AI answers: a weekly check-up, articles for searches your site can win, fixes to pages Google already shows, links from other sites, AI-answer tracking and a weekly Search Console report.",
   offers: { "@type": "AggregateOffer", lowPrice: "0", highPrice: "199", priceCurrency: "USD", offerCount: "4" },
   featureList: [
     "Articles written only from confirmed business facts",
     "Statistic and price checks before publishing",
     "Autopilot or review-first publishing",
     "Publishing to Next.js, Astro, Hugo, Jekyll and Gatsby blogs on GitHub, with receipts",
-    "Improvement of pages already ranking",
+    "Topic choice checked against Google's first page",
+    "Improvement of pages already ranking and click-tested titles",
+    "Link building from your own mailbox",
+    "ChatGPT, Gemini and Google AI Mode answer tracking",
+    "Weekly results email",
     "Live-page verification",
     "Google Search Console reporting",
     "Weekly site health checks",

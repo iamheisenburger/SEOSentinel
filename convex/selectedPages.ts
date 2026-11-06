@@ -276,7 +276,7 @@ export async function chooseImprovement(ctx: MutationCtx, site: Doc<"sites">, jo
   const exhausted = await exhaustedImprovementPages(ctx, site, now);
   // Phase 3 (Nov 2026, rollout sites first): an improvement goes to a page buyers see. A page whose readers are mostly job
   // seekers or learners (the weekly diagnosis's labels) waits, and a refresh answers a buyer's search before anyone else's.
-  const labels = topicChoiceRollout(site.domain) ? await readerLabels(ctx, site._id) : new Map<string, string>();
+  const labels = topicChoiceRollout(site.domain, site.newSystemAt) ? await readerLabels(ctx, site._id) : new Map<string, string>();
   let measurements: Awaited<ReturnType<typeof takeCurrentGscQueryRows>>;
   // The newest 28 days of Search Console data, not the oldest rows first.
   const windowStart = refreshWindowStart((site.gscDateEpochs ?? []).map(receipt => receipt.date));

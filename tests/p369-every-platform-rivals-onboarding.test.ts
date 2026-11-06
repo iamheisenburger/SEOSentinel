@@ -48,7 +48,7 @@ test("Phase 5: the rivals an answer names, by address or as a name (capitalised)
 
 test("Phase 6: a rollout site's first diagnosis runs a minute after it chooses Autopilot, once; others wait for their rollout", () => {
   const diagnosis = readFileSync("convex/siteDiagnosis.ts", "utf8");
-  assert.match(diagnosis, /export async function scheduleFirstDiagnosis\(ctx: MutationCtx, site: Doc<"sites">\) \{\n  if \(!DIAGNOSIS_ROLLOUT_DOMAINS\.includes\(bareDomain\(site\.domain\)\)\) return;/);
+  assert.match(diagnosis, /export async function scheduleFirstDiagnosis\(ctx: MutationCtx, site: Doc<"sites">\) \{\n  if \(!onNewSystem\(site\)\) return;/);
   assert.match(diagnosis, /if \(await ctx\.db\.query\("site_diagnoses"\)\.withIndex\("by_site_created", \(q\) => q\.eq\("siteId", site\._id\)\)\.first\(\)\) return;/);
   const work = readFileSync("convex/contentWork.ts", "utf8");
   assert.equal((work.match(/await scheduleFirstDiagnosis\(ctx, /g) ?? []).length, 3, "the setup choice, adopting Autopilot, and switching to it");

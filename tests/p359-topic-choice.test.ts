@@ -100,7 +100,7 @@ test("Autopilot writes only a topic that passed every check; checks run on every
   assert.match(work, /try \{ planned = \(await eligiblePlannedTopics\(ctx, site\)\)\.candidates; \} catch \{ return null; \}/, "the buyer-fit sweep judges every candidate");
   assert.match(work, /\(await eligiblePlannedTopics\(ctx, site, \[\], undefined, pages\)\)\.candidates\.filter\(t => !ownerChosen\(t\)\)/, "the plan audit reads every candidate");
   assert.match(work, /topic = await chooseTopic\(ctx, site, undefined, \[\], \{ preloaded, autopilot: true \}\);/);
-  assert.match(work, /if \(options\.autopilot && topicChoiceRollout\(siteCanonicalDomain\(site\) \?\? site\.domain\)\) \{\n    await queueFallbackTopicsForChecks\(ctx, site, inventory, excludedIntents\);\n    return null;\n  \}/,
+  assert.match(work, /if \(options\.autopilot && topicChoiceRollout\(siteCanonicalDomain\(site\) \?\? site\.domain, site\.newSystemAt\)\) \{\n    await queueFallbackTopicsForChecks\(ctx, site, inventory, excludedIntents\);\n    return null;\n  \}/,
     "a confirmed customer question becomes a topic to check, never an unchecked article");
   assert.match(work, /if \(preferredId\) return candidates\.find\(t => t\._id === preferredId\) \?\? null;/, "a topic the owner picks is theirs, checked or not");
   const research = readFileSync("convex/actions/growthTopics.ts", "utf8");
@@ -125,7 +125,9 @@ test("the rule a topic must pass, and where it runs first", () => {
   assert.equal(topicWritable({ buyerFit: kept, pageOne: winnable, groupBrake: { braked: true, checkedAt: now - 3_600_000 } }, now), false, "the brake holds");
   assert.equal(topicWritable({ buyerFit: kept, pageOne: winnable, groupBrake: { braked: true, checkedAt: now - 3 * 86_400_000 } }, now), true,
     "a brake the sweep stopped renewing lapses");
-  assert.deepEqual(["pentra.dev", "https://www.leadpilot.chat/", "LeadPilot.chat", "quillpad.example", "notpentra.dev"].map(topicChoiceRollout), [true, true, true, false, false]);
+  assert.deepEqual(["pentra.dev", "https://www.leadpilot.chat/", "LeadPilot.chat", "quillpad.example", "notpentra.dev"].map((d) => topicChoiceRollout(d)), [true, true, true, false, false]);
+  // P372: a site added after the new system opened to new customers runs it too.
+  assert.equal(topicChoiceRollout("quillpad.example", Date.UTC(2026, 10, 7)), true);
 });
 
 test("P364: a rollout site's unwritten slot is explained as no winnable search yet, never 'ran out of topics'", async () => {
@@ -135,5 +137,5 @@ test("P364: a rollout site's unwritten slot is explained as no winnable search y
   assert.equal(missedSlotCause(base), "no_topics", "other sites keep today's wording");
   const email = missedSlotEmail({ domain: "pentra.dev", deadlineAt: 1_793_900_000_000, timeZone: "UTC", cause: "no_winnable" });
   assert.match(email.text, /found no search your customers make that your site can win on Google's first page yet, so it wrote nothing rather than a page nobody would see/);
-  assert.match(readFileSync("convex/contentHealth.ts", "utf8"), /phaseTwo: topicChoiceRollout\(site\.domain\) \}\) \}\);/);
+  assert.match(readFileSync("convex/contentHealth.ts", "utf8"), /phaseTwo: topicChoiceRollout\(site\.domain, site\.newSystemAt\) \}\) \}\);/);
 });
