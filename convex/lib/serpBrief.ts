@@ -60,6 +60,7 @@ export function serpBriefPrompt(brief: SerpBrief): string {
     ...brief.results.map((r, i) => `${i + 1}. ${r.title} (${host(r.url)})${r.description ? `: ${r.description}` : ""}`),
     "- Match the format most of these results share. When they list specific options (templates, tools, products, services or examples), write a vetted list that names each option, says what it is and who it suits, with specifics from its own official page. When they are tutorials, write numbered steps with working code, commands or settings taken from the official documentation. When they compare options, compare them side by side. When they define a term, define it in the first two sentences, then give the specifics.",
     "- Be at least as useful as the first three results: cover what they cover, with more specifics (names, numbers, steps, code) from the verified sources.",
+    "- Then add one useful thing none of these results gives the reader (a checklist, a template, a worked example or a comparison table), built only from the verified sources and the business's confirmed facts: no invented numbers, names or results.",
     brief.questions.length
       ? ["- People who search this also ask (answer the ones the verified sources let you answer, in the article's own sections):",
         ...brief.questions.map((q, i) => `  ${i + 1}. ${q}`)].join("\n")

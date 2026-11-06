@@ -11,6 +11,8 @@ export default defineSchema({
     serviceMode: v.optional(v.union(v.literal("legacy_articles"), v.literal("growth_first"))),
     contentSetupRequestedAt: v.optional(v.number()),
     contentSchedule: v.optional(v.object({
+      // P370: when Autopilot last placed a search title test on a site that doesn't publish through GitHub.
+      snippetPlacedAt: v.optional(v.number()),
       validationAuthorizationId: v.optional(v.id("provider_budget_authorizations")),
       selectedAt: v.number(), profileHash: v.string(), connectionHash: v.string(),
       intervalMs: v.number(), nextDeadlineAt: v.number(), active: v.boolean(),

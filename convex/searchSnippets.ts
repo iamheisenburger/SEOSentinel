@@ -2,7 +2,8 @@
  * articles may get one (`context`) and writes the new titles (`propose`); Autopilot's repair round places each on its page
  * through the exact correction path (contentImprovements.requestRelatedReadingRepair), checked live; four weeks later the
  * diagnosis judges it by clicks (`decide`): kept, or the old title comes back the same way. Rollout sites only. */
-import { internalMutation, internalQuery, query, type QueryCtx } from "./_generated/server";
+import { internalMutation, internalQuery, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { siteExecutionActive } from "./lib/planSiteAllowance";
@@ -14,6 +15,12 @@ import { mergedSlugs } from "./siteRedirects";
 import { bringRepairForward } from "./articleImages";
 
 const DAY = 86_400_000;
+/** A GitHub site's tests go through the repair round (spaced: each change is a deploy); every other platform's are placed by
+ * contentImprovements.requestSnippetTests (P370). */
+async function placeTests(ctx: MutationCtx, site: Doc<"sites">) {
+  if ((site.publishMethod ?? "github") === "github") await bringRepairForward(ctx, site._id);
+  else await ctx.scheduler.runAfter(0, internal.contentImprovements.requestSnippetTests, { siteId: site._id });
+}
 const snippet = v.object({ metaTitle: v.string(), description: v.string() });
 const measure = v.object({ clicks: v.number(), impressions: v.number(), expectedClicks: v.number(), position: v.number(), days: v.number() });
 
@@ -77,7 +84,9 @@ export const propose = internalMutation({ args: { siteId: v.id("sites"), proposa
         before: p.before, after: p.after, baseline: p.baseline, costMicroUsd: Math.max(0, Math.round(p.costMicroUsd)), createdAt: now, updatedAt: now });
       added++;
     }
-    if (added) await bringRepairForward(ctx, siteId);
+    // Tests still waiting (Autopilot was off, or a page was busy) are offered again with the week's new ones.
+    const waiting = added > 0 || (await ctx.db.query("search_snippets").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "ready")).first()) !== null;
+    if (waiting) await placeTests(ctx, site);
     return { added };
   } });
 
@@ -105,7 +114,8 @@ export const decide = internalMutation({ args: { siteId: v.id("sites"), decision
         restores++;
       }
     }
-    if (restores) await bringRepairForward(ctx, siteId);
+    const site = await ctx.db.get(siteId);
+    if (restores && site) await placeTests(ctx, site);
     return { restores };
   } });
 

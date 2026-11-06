@@ -345,6 +345,19 @@ export function relatedRepairAllowed(site: Doc<"sites">, now: number): boolean {
       (s.relatedRepairRetryAt !== undefined && now >= s.relatedRepairRetryAt) || (s.relatedRepairCleanVersion ?? 1) < RELATED_REPAIR_VERSION));
 }
 
+/** P370: when Autopilot may place its next search title test on a site that publishes to WordPress, Ghost, Shopify or
+ * Webflow (a GitHub site's tests go through the repair round, whose spacing protects its deploys): an Autopilot site with
+ * automatic publishing, nothing paused or under owner review, the next slot at least two hours away, and 30 minutes after
+ * the last test it placed. */
+export const SNIPPET_PLACEMENT_SLOT_LEAD_MS = 2 * 3_600_000, SNIPPET_PLACEMENT_SPACING_MS = 30 * 60_000;
+export function snippetPlacementAllowed(site: Doc<"sites">, now: number): boolean {
+  const s = site.contentSchedule;
+  return Boolean(s && site.serviceMode === "growth_first" && site.autopilotEnabled && s.autopilotSelectedAt && s.autopublishConsentAt &&
+    !s.paused && !s.ownerReviewedOnly && !site.approvalRequired && (site.publishMethod === "wordpress" || isApiCmsMethod(site.publishMethod ?? "")) &&
+    !site.deletionStatus && !site.accountDeletionRequestedAt && !site.publicationLeaseOwner && s.nextDeadlineAt - now >= SNIPPET_PLACEMENT_SLOT_LEAD_MS &&
+    (s.snippetPlacedAt === undefined || now - s.snippetPlacedAt >= SNIPPET_PLACEMENT_SPACING_MS));
+}
+
 export function verifyCorrectivePatch(site: Doc<"sites">, page: Doc<"pages">, patch: CorrectivePatch) {
   const expected = planCorrectiveChange(site, page, { kind: patch.kind, before: patch.before, reason: patch.reason,
     ...(patch.field ? { field: patch.field } : {}), ...(patch.targetUrl ? { targetUrl: patch.targetUrl } : {}),

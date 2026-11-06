@@ -12,7 +12,7 @@ import { PUBLICATION_LEASE_MS } from "./lib/publicationLease";
 import { archiveConsumedImprovementArtifact } from "./articles";
 import type { Doc, Id } from "./_generated/dataModel";
 import { siteCanonicalDomain, siteCanonicalDomainRevision } from "./lib/siteDomainBinding";
-import { pagePath, planCorrectiveChange, RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_SPACING_MS, RELATED_REPAIR_VERSION, relatedReadingHrefs, relatedReadingRepairProposal, relatedRepairAllowed, stockDisclaimerRepairProposal, verifyCorrectivePatch, firstPlainParagraph, imageAdditionReplacement } from "./lib/contentCorrection";
+import { snippetPlacementAllowed, SNIPPET_PLACEMENT_SPACING_MS, pagePath, planCorrectiveChange, RELATED_REPAIR_RETRY_MS, RELATED_REPAIR_SPACING_MS, RELATED_REPAIR_VERSION, relatedReadingHrefs, relatedReadingRepairProposal, relatedRepairAllowed, stockDisclaimerRepairProposal, verifyCorrectivePatch, firstPlainParagraph, imageAdditionReplacement } from "./lib/contentCorrection";
 import { publishedArticleInternalHref, relatedReadingTitle } from "./lib/internalLinks";
 import { canonicalBlogHref, consolidates, servedOnItsOwnUrl } from "./lib/pentraConsolidation";
 import { mergedSlugs } from "./siteRedirects";
@@ -245,6 +245,51 @@ export const requestRelatedReadingRepair = internalMutation({ args: { siteId: v.
   // No commit was made, so no spacing is owed: the next window follows at once. P223: a pass that ran under earlier
   // rules is followed at once by one under today's (P220), not at the next scheduler pass (up to 3 hours later).
   if (!passDone || passVersion < RELATED_REPAIR_VERSION) await ctx.scheduler.runAfter(0, internal.contentImprovements.requestRelatedReadingRepair, { siteId });
+  return { requested: false };
+} });
+
+/** P370: places the next ready search title test on a site that publishes to WordPress, Ghost, Shopify or Webflow, through
+ * the same exact correction path (checked live, reversible); one at a time, 30 minutes apart, never close to a slot. A test
+ * whose page can't take it is set aside with the reason. */
+export const requestSnippetTests = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId), now = Date.now(), schedule = site?.contentSchedule;
+  if (!site || !schedule || (site.publishMethod ?? "github") === "github") return { requested: false };
+  const ready = (await ctx.db.query("search_snippets").withIndex("by_site_status", q => q.eq("siteId", siteId).eq("status", "ready")).take(20))
+    .sort((a, b) => a.createdAt - b.createdAt);
+  if (!ready.length) return { requested: false };
+  // Autopilot off, paused or under owner review: the tests wait for the next weekly run, which offers them again.
+  if (!snippetPlacementAllowed({ ...site, publicationLeaseOwner: undefined, contentSchedule: { ...schedule, snippetPlacedAt: undefined, nextDeadlineAt: Infinity } }, now)) {
+    return { requested: false };
+  }
+  // A slot close by, the last test just placed, or work running: tried again after the spacing.
+  if (!snippetPlacementAllowed(site, now) || await siteHasActiveWork(ctx, siteId)) {
+    await ctx.scheduler.runAfter(SNIPPET_PLACEMENT_SPACING_MS, internal.contentImprovements.requestSnippetTests, { siteId });
+    return { requested: false };
+  }
+  for (const test of ready) {
+    const page = await ctx.db.get(test.pageId), e = page?.editable;
+    if (!page || !e?.active || page.siteId !== siteId || e.profileHash !== confirmedContentProfileHash(site) || e.connectionHash !== contentConnectionHash(site) ||
+      schedule.profileHash !== e.profileHash || schedule.connectionHash !== e.connectionHash) {
+      await ctx.db.patch(test._id, { status: "skipped", note: "Its page is no longer Pentra's to change", updatedAt: now });
+      continue;
+    }
+    const last = e.lastWorkJobId ? await ctx.db.get(e.lastWorkJobId) : null;
+    if (last && !["verified", "failed"].includes(last.contentWork?.stage ?? "")) continue;
+    let jobId: Id<"jobs">;
+    try {
+      const patch = planCorrectiveChange(site, page, { kind: "search_snippet", before: encodeSnippet(test.before), replacement: encodeSnippet(test.after),
+        reason: snippetReason(test) });
+      jobId = await insertCorrectionJob(ctx, site, { pageId: page._id, baseRevision: e.sourceRevision, permissionVersion: e.version, patch, observedAt: now },
+        { opportunity: "Autopilot tests a new search title on its own article; clicks decide after four weeks", wake: "search_title_test" });
+      await ctx.db.patch(test._id, { status: "queued", jobId, updatedAt: now });
+    } catch (error) {
+      await ctx.db.patch(test._id, { status: "skipped", note: String(error instanceof Error ? error.message : error).slice(0, 200), updatedAt: now });
+      continue;
+    }
+    await ctx.db.patch(siteId, { contentSchedule: { ...schedule, snippetPlacedAt: now }, updatedAt: now });
+    if (ready.length > 1) await ctx.scheduler.runAfter(SNIPPET_PLACEMENT_SPACING_MS, internal.contentImprovements.requestSnippetTests, { siteId });
+    return { requested: true, jobId };
+  }
   return { requested: false };
 } });
 
