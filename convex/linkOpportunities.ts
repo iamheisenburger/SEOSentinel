@@ -333,3 +333,19 @@ export async function linkWeek(ctx: QueryCtx, siteId: Id<"sites">, since: number
     replied: all.filter((o) => (o.repliedAt ?? 0) >= since).length, won: all.filter((o) => (o.wonAt ?? 0) >= since).length,
     wonTotal: all.filter((o) => o.status === "won").length };
 }
+
+/** Operator read for the watchdog (P373): counts by status, the newest set-aside reasons and the mailbox state. No email
+ * address, page text or credential leaves the server. */
+export const opsSummary = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site) return null;
+  const all = await rows(ctx, siteId), m = await mailboxOf(ctx, siteId);
+  const counts: Record<string, number> = {};
+  for (const o of all) counts[o.status] = (counts[o.status] ?? 0) + 1;
+  const notes: Record<string, number> = {};
+  for (const o of all) if (o.note) notes[o.note.slice(0, 90)] = (notes[o.note.slice(0, 90)] ?? 0) + 1;
+  return { mode: site.linkOutreach ?? "off", found: all.length, withPage: all.filter((o) => o.url).length, counts, notes,
+    sent: all.reduce((n, o) => n + (o.sends?.length ?? 0), 0), uncertain: all.filter((o) => o.pendingSend).length,
+    nonUsUk: all.filter((o) => (o.sends?.length ?? 0) > 0 && !recipientCountryAllowed(o.domain)).length,
+    mailbox: m ? { status: m.status, note: m.note ?? null, nextRunAt: m.nextRunAt ?? null } : null };
+} });

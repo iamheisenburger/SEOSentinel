@@ -165,3 +165,10 @@ test("P371: link emails go only to US and UK sites: never an EU/EEA (or Swiss) d
   assert.match(records, /throw new ConvexError\("Enter a postal address/, "the owner sees the message, not 'Server Error'");
   assert.doesNotMatch(records.slice(records.indexOf("the owner's controls")), /throw new Error\(/);
 });
+
+test("P373: the watchdog's read shows counts, reasons and the mailbox state, never an address, page text or credential", () => {
+  const records = readFileSync("convex/linkOpportunities.ts", "utf8");
+  const block = records.slice(records.indexOf("export const opsSummary"));
+  assert.match(block, /export const opsSummary = internalQuery/);
+  assert.doesNotMatch(block, /contact\.email|credentials|pitch|body/);
+});
