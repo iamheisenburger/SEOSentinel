@@ -3,7 +3,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { plausibleEmail, sendCustomerEmail } from "./lib/customerEmail";
-import { topCitedSites } from "./lib/aiAnswers";
+import { topCitedSites, topRivals } from "./lib/aiAnswers";
 import { addWebsiteEmail, draftReadyEmail, firstArticleEmail, missedSlotEmail, monthlyReportEmail, monthWindow, reportMonth, setupReminderEmail, type MissedSlotCause,
   type MonthlyImprovement, type MonthlySearch, type SetupStep, weeklyReportEmail, type WeeklySearch } from "./lib/customerNotices";
 import { contentConnectionComplete, pasteDestination } from "./lib/contentSelection";
@@ -371,7 +371,7 @@ async function weeklyReport(ctx: QueryCtx, site: Doc<"sites">, domain: string) {
   return weeklyReportEmail({ domain, search, factors: diagnosis.factors, fixed, published, improved, titleTests, ...(links ? { links } : {}),
     problems: diagnosis.findings.filter(f => f.severity !== "low").slice(0, 3).map(f => `${f.problem}: ${f.evidence}`),
     aiNamed: answered.length ? { named: answered.filter(c => c.named).length, asked: answered.length } : null,
-    citedSites: topCitedSites(answered.map(c => ({ ...c, sources: c.sources ?? [] }))),
+    citedSites: topCitedSites(answered.map(c => ({ ...c, sources: c.sources ?? [] }))), namedInstead: topRivals(answered),
     checkedSearches: { checked: checkedThisWeek.length, winnable: winnable.length, examples: winnable.slice(0, 3).map(t => t.primaryKeyword) }, next });
 }
 

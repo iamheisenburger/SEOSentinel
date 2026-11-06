@@ -26,7 +26,8 @@ import { diagnoseSite, normalize, type CrawledPage, type GscRow, type PageOneChe
 import { foldQuestionsFor, planUnshownMerges, slugKey, type Merge } from "../lib/duplicatePages";
 import { topicChoiceRollout } from "../lib/topicVerdict";
 import { AI_ASSISTANT_ENDPOINTS, AI_ASSISTANTS, AI_MIN_ANSWERS, AI_QUESTIONS_MAX_TOKENS, AI_QUESTIONS_MODEL, AI_QUESTIONS_TOOL, aiAnswerTotals, aiQuestionsRequest,
-  citedHosts, countryCode, judgeAnswer, parseAiQuestions, parseAssistantAnswer, type AiAnswerCheck, type AiAssistant, type Business } from "../lib/aiAnswers";
+  citedHosts, countryCode, judgeAnswer, parseAiQuestions, parseAssistantAnswer, rivalMatchers, rivalsNamed, type AiAnswerCheck, type AiAssistant, type Business,
+  type RivalMatcher } from "../lib/aiAnswers";
 import { parseSearchIntents, searchIntentRequest, SEARCH_INTENT_MAX_TOKENS, SEARCH_INTENT_MODEL, SEARCH_INTENT_TOOL } from "../lib/searchIntent";
 import { buyerFitCostMicroUsd } from "../lib/topicFit";
 import { structuredToolChoice } from "../lib/toolChoice";
@@ -217,7 +218,7 @@ async function runDiagnosis(ctx: ActionCtx, siteId: Id<"sites">, force: boolean,
         const tool = response.content.find((b) => b.type === "tool_use" && b.name === AI_QUESTIONS_TOOL);
         out.questions = parseAiQuestions(tool && tool.type === "tool_use" ? tool.input : null, business);
       }
-      const asked = await askAssistants(siteId, out.questions, business, Date.now() + AI_TIME_LIMIT_MS);
+      const asked = await askAssistants(siteId, out.questions, business, Date.now() + AI_TIME_LIMIT_MS, rivalMatchers(site.rivals, business));
       out.checks = asked.checks; out.microUsd += asked.costMicroUsd;
     } catch (error) { out.notes.push(`AI answers not measured: ${String(error).slice(0, 120)}`); }
     return out;
@@ -382,7 +383,8 @@ async function titleTests(ctx: ActionCtx, site: Context, gsc: readonly GscRow[],
  * still waiting at the limit is recorded as unasked, never guessed). Charged at treg's reported cost; a call whose answer
  * was lost is charged at its price bound (never assumed free), and a refused one costs nothing. A call that failed fast is
  * tried once more; one that timed out is not (ChatGPT's slow answers would take the run past its time). */
-async function askAssistants(siteId: Id<"sites">, questions: readonly string[], business: Business, deadline: number): Promise<{ checks: AiAnswerCheck[]; costMicroUsd: number }> {
+async function askAssistants(siteId: Id<"sites">, questions: readonly string[], business: Business, deadline: number, rivals: readonly RivalMatcher[] = []):
+  Promise<{ checks: AiAnswerCheck[]; costMicroUsd: number }> {
   const token = process.env.TREG_TOKEN!;
   const jobs = questions.flatMap((question) => AI_ASSISTANTS.map((assistant) => ({ question, assistant })));
   const checks: AiAnswerCheck[] = [];
@@ -410,7 +412,7 @@ async function askAssistants(siteId: Id<"sites">, questions: readonly string[], 
     let got = await call(question, assistant);
     if (!got.answer && got.error !== "timeout" && Date.now() < deadline) got = await call(question, assistant);
     checks.push(got.answer ? { question, assistant, answered: true, ...judgeAnswer(got.answer, business), sources: citedHosts(got.answer.sources, business),
-      pages: got.answer.sources.filter((u) => /^https:\/\//i.test(u)).slice(0, 8).map((u) => u.slice(0, 500)) }
+      pages: got.answer.sources.filter((u) => /^https:\/\//i.test(u)).slice(0, 8).map((u) => u.slice(0, 500)), rivals: rivalsNamed(got.answer.text, rivals) }
       : { question, assistant, answered: false, named: false, cited: false, error: got.error ?? "no answer" });
   };
   await Promise.all(Array.from({ length: 6 }, async () => {

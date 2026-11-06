@@ -48,5 +48,5 @@ test("the buyer questions become topics to check on the rollout sites, never a r
   assert.match(action, /sources: citedHosts\(got\.answer\.sources, business\),/);
   // P368: the cited pages too (the ones listing the competitors become link targets).
   assert.match(action, /pages: got\.answer\.sources\.filter\(\(u\) => \/\^https:\\\/\\\/\/i\.test\(u\)\)\.slice\(0, 8\)/);
-  assert.match(readFileSync("convex/lib/siteDiagnosisSchema.ts", "utf8"), /sources: v\.optional\(v\.array\(v\.string\(\)\)\), pages: v\.optional\(v\.array\(v\.string\(\)\)\), error: v\.optional\(v\.string\(\)\)/);
+  assert.match(readFileSync("convex/lib/siteDiagnosisSchema.ts", "utf8"), /sources: v\.optional\(v\.array\(v\.string\(\)\)\), pages: v\.optional\(v\.array\(v\.string\(\)\)\), rivals: v\.optional\(v\.array\(v\.string\(\)\)\), error: v\.optional\(v\.string\(\)\)/);
 });

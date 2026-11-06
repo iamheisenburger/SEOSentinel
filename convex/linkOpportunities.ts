@@ -130,8 +130,11 @@ export const setMode = mutation({ args: { siteId: v.id("sites"), mode: v.union(v
       const mailbox = await mailboxOf(ctx, siteId);
       if (mailbox?.status !== "ready") throw new Error("Connect your mailbox first: Pentra sends from it");
     }
+    const wasOff = !site.linkOutreach;
     await ctx.db.patch(siteId, { linkOutreach: mode === "off" ? undefined : mode, updatedAt: Date.now() });
     if (mode === "send") await wakeSender(ctx, siteId, Date.now());
+    // P369: switching link building on looks for pages at once (from the latest diagnosis), not at the next weekly run.
+    if (wasOff && mode !== "off" && !(await rows(ctx, siteId)).some((o) => o.url)) await ctx.scheduler.runAfter(0, internal.actions.linkOutreach.findNow, { siteId });
     return { mode };
   } });
 
@@ -305,6 +308,14 @@ export const sendTurnDone = internalMutation({ args: { siteId: v.id("sites"), ne
     await ctx.db.patch(m._id, { nextRunAt: nextAt ?? undefined, ...(error ? { note: `Last send failed: ${error.slice(0, 160)}` } : {}), updatedAt: Date.now() });
     if (nextAt !== null) await ctx.scheduler.runAt(nextAt, internal.actions.linkOutreach.sendNext, { siteId });
   } });
+
+/** P369: what finding at once needs: the latest diagnosis's page one (the competitors) and the pages the AI answers cited. */
+export const findContext = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site || site.deletionStatus || !site.linkOutreach) return null;
+  const latest = await ctx.db.query("site_diagnoses").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).order("desc").first();
+  return { domain: site.domain, pageOne: latest?.pageOne ?? [], aiPages: (latest?.aiAnswers?.checks ?? []).flatMap((c) => c.pages ?? []) };
+} });
 
 /** For the weekly email: what the week's link work did. */
 export async function linkWeek(ctx: QueryCtx, siteId: Id<"sites">, since: number) {

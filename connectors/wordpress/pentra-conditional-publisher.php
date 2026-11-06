@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Pentra Conditional Publisher
  * Description: Authenticated, revision-bound publishing of explicitly selected classic posts/pages.
- * Version: 1.3.0
+ * Version: 1.4.0
  * Requires PHP: 8.1
  * License: GPL-2.0-or-later
  */
@@ -140,7 +140,7 @@ final class Pentra_Conditional_Publisher {
         global $wpdb;
         self::assert_engine();
         $origin = untrailingslashit(home_url());
-        if ($name === 'connection') { return ['version'=>1, 'atomic'=>true, 'receiptLookup'=>1, 'redirects'=>1, 'site'=>$origin, 'userId'=>get_current_user_id()]; }
+        if ($name === 'connection') { return ['version'=>1, 'atomic'=>true, 'receiptLookup'=>1, 'redirects'=>1, 'metadata'=>1, 'site'=>$origin, 'userId'=>get_current_user_id()]; }
         if ($r['site'] !== $origin) { throw new RuntimeException('binding_changed'); }
         $binding = self::hex($r['binding']);
         if ($name === 'redirects') { return self::add_redirects($r, $binding); }
@@ -210,7 +210,7 @@ final class Pentra_Conditional_Publisher {
         // the same serialized request on retry rather than inventing a new key.
         $hash = hash('sha256', $r->get_body());
         $operation = $body['operation'] ?? '';
-        if (!in_array($operation, ['create','append','replace','rollback'], true)) { throw new RuntimeException('invalid_request'); }
+        if (!in_array($operation, ['create','append','replace','rollback','metadata'], true)) { throw new RuntimeException('invalid_request'); }
         self::sql('START TRANSACTION');
         try {
             $prior = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . self::table() . ' WHERE request_key=%s', $key), ARRAY_A);
@@ -270,6 +270,15 @@ final class Pentra_Conditional_Publisher {
                     if (!$restore['base'] || $restore['revision'] !== self::revision($base)) { throw new RuntimeException('rollback_conflict'); }
                     $content = $restore['base']['post_content'];
                     $metadata = json_decode($restore['baseMetadata'], true);
+                } elseif ($operation === 'metadata') {
+                    // 1.4.0: a search title test changes only the title and description Pentra serves for its own post; the
+                    // post's text stays byte for byte (sent back unchanged), and the same row checks below still apply.
+                    $content = $base['post_content'];
+                    $previous = json_decode($old_meta, true);
+                    if (($body['content'] ?? null) !== $content || !is_array($body['metadata'] ?? null)) { throw new RuntimeException('invalid_request'); }
+                    $metadata = $body['metadata'];
+                    if (is_array($previous) && ($previous['title'] ?? null) === ($metadata['title'] ?? null) &&
+                        ($previous['description'] ?? null) === ($metadata['description'] ?? null)) { throw new RuntimeException('no_change'); }
                 } else {
                     $content = $body['content'] ?? null; self::html($content);
                     if ($operation === 'replace') {

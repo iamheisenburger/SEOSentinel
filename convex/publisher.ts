@@ -2451,6 +2451,10 @@ type PublishArgs = {
 function wordpressImprovementBody(e: NonNullable<Doc<"pages">["editable"]>, article: Doc<"articles">,
   revision: Doc<"published_article_revisions">, cw: NonNullable<Doc<"jobs">["contentWork"]>, rollback?: Doc<"published_article_revisions"> | null) {
   const { correction, editTarget } = cw;
+  // P369: a search title test changes only the title and description the plugin serves (its 1.4.0 metadata write).
+  if (correction?.kind === "search_snippet") return { key: revision.revisionKey, operation: "metadata", id: e.resourceId, permission: e.permission,
+    baseRevision: e.sourceRevision, content: e.sourceContent,
+    metadata: { canonical: revision.expectedPublicUrl, title: article.metaTitle ?? article.title, description: article.metaDescription ?? "" } };
   const added = rollback || correction ? "" : assertSafeImprovement(e, article, editTarget);
   const after = correction?.sourceAfter ?? preserveWordPressReviewedText(renderSafePublicationHtml(added));
   const content = rollback ? rollback.selectedSource.sourceContent : correction ? exactReplacement(e.sourceContent, correction.sourceBefore, after)
@@ -2532,7 +2536,12 @@ async function publishContentImprovement(ctx: ActionCtx, siteId: Id<"sites">, jo
     sourceContent = body.content;
     let delivered;
     if (revision.attemptedAt) delivered = await wordpressConditionalReceipt(site, body);
-    else { await wordpressConditionalRequest(site, "connection"); await beforeExternalMutation(); delivered = await wordpressConditionalRequest(site, "write", body); }
+    else {
+      const connection = await wordpressConditionalRequest(site, "connection") as { metadata?: unknown };
+      // An older plugin can't write a search title alone: refused here, before anything changes on the site.
+      if (correction?.kind === "search_snippet" && connection.metadata !== 1) throw new Error("Search title tests need the Pentra WordPress plugin 1.4.0 or later");
+      await beforeExternalMutation(); delivered = await wordpressConditionalRequest(site, "write", body);
+    }
     if (delivered.key !== revision.revisionKey || delivered.id !== e.resourceId || delivered.content !== sourceContent ||
       delivered.url !== page.url || delivered.title !== article.title || !/^[a-f0-9]{64}$/.test(delivered.revision) ||
       delivered.permission !== e.permission) throw new Error("WordPress improvement receipt mismatch");

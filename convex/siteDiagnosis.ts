@@ -14,6 +14,7 @@ import { siteDiagnosisRecord } from "./lib/siteDiagnosisSchema";
 import { retiredArticle, servedOnItsOwnUrl } from "./lib/pentraConsolidation";
 import { mergedSlugs } from "./siteRedirects";
 import { PROVEN_POSITION, searchConsolePosition } from "./lib/topicVerdict";
+import { linkCompetitors } from "./lib/linkOpportunities";
 
 /** A site is diagnosed at most once in this long, unless forced. */
 export const DIAGNOSIS_INTERVAL_MS = 6 * 24 * 3600 * 1000;
@@ -70,6 +71,8 @@ export const context = internalQuery({ args: { siteId: v.id("sites") }, handler:
       ? { domainRank: site.seoAuthorityDomainRank, referringDomains: site.seoAuthorityReferringDomains, measuredAt: site.seoAuthorityMeasuredAt ?? null } : null,
     searchConsole: Boolean(site.gscProperty && site.gscDateEpochs?.length),
     published, removed, lastRunAt: latest?.createdAt ?? null, aiQuestions: latest?.aiAnswers?.questions ?? [],
+    // Phase 5 (P369): the rivals to look for in the AI answers: the confirmed profile's competitors and last week's page one.
+    rivals: [...(site.competitors ?? []), ...linkCompetitors(latest?.pageOne ?? [], site.domain, 5)],
   };
 } });
 
@@ -120,6 +123,15 @@ export const record = internalMutation({ args: { siteId: v.id("sites"), diagnosi
   if (DIAGNOSIS_ROLLOUT_DOMAINS.includes(bareDomain(site.domain))) await noteWeeklyReport(ctx, site);
   return id;
 } });
+
+/** Phase 6 (P369), onboarding: a site in the rollout gets its first diagnosis a minute after it chooses Autopilot (or
+ * review-first with automatic publishing), not at the next Tuesday run, so the owner sees what Pentra found and what it
+ * does next from the first day. Once only: a site with a diagnosis waits for the weekly run. */
+export async function scheduleFirstDiagnosis(ctx: MutationCtx, site: Doc<"sites">) {
+  if (!DIAGNOSIS_ROLLOUT_DOMAINS.includes(bareDomain(site.domain))) return;
+  if (await ctx.db.query("site_diagnoses").withIndex("by_site_created", (q) => q.eq("siteId", site._id)).first()) return;
+  await ctx.scheduler.runAfter(60_000, internal.actions.siteDiagnosis.runInternal, { siteId: site._id });
+}
 
 const WEEKLY_REPORT_DELAY_MS = 20 * 60_000;
 async function noteWeeklyReport(ctx: MutationCtx, site: Doc<"sites">) {

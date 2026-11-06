@@ -19,7 +19,10 @@ import { contactDiscoveryUrls, extractContactCandidates, selectBestContact } fro
 import { requestsOutreachOptOut } from "../lib/outreachInbound";
 import { decryptOutreachCredentials, outreachCredentialKeyConfig, type EncryptedOutreachCredentials } from "../lib/outreachCredentialEncryption";
 import { classifySmtpFailure, smtpTransportOptions } from "../lib/outreachSmtp";
-import { checkPitch, emailFooter, followUpEmail, linkToSite, nextSendAt, pitchRequest, pitchTarget, readListingPage, PITCH_MAX_TOKENS, PITCH_TOOL } from "../lib/linkOutreach";
+import { aiCitedPages, checkPitch, emailFooter, followUpEmail, linkToSite, nextSendAt, pageIntersectionRequest, parsePageIntersection, pitchRequest, pitchTarget,
+  readListingPage, PITCH_MAX_TOKENS, PITCH_TOOL, type ListingPage } from "../lib/linkOutreach";
+import { linkCompetitors } from "../lib/linkOpportunities";
+import { meterDataForSeoCost, pageIntersection } from "./seoData";
 import { BUYER_FIT_MODEL, buyerFitCostMicroUsd } from "../lib/topicFit";
 import { structuredToolChoice } from "../lib/toolChoice";
 import { mailboxBinding } from "../linkOpportunities";
@@ -96,6 +99,32 @@ export const prepare = internalAction({ args: { siteId: v.id("sites") }, handler
   if (hold.ok) await ctx.runMutation(internal.siteDiagnosis.close, { siteId, reservationId: hold.reservationId, sent: spent > 0, actualMicroUsd: spent });
   const recorded = await ctx.runMutation(internal.linkOpportunities.recordPrepared, { siteId, results });
   return { checked: checks.length, prepared: results.length, ready: recorded.ready, costMicroUsd: spent };
+} });
+
+/** P369: switching link building on finds the pages at once (one DataForSEO request under a $0.05 hold, from the latest
+ * diagnosis's page one), records them and starts the preparation; the weekly diagnosis does the same from then on. */
+const FIND_HOLD_MICRO_USD = 50_000;
+export const findNow = internalAction({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }): Promise<{ found: number; note?: string }> => {
+  const site = await ctx.runQuery(internal.linkOpportunities.findContext, { siteId });
+  if (!site) return { found: 0, note: "link building is off" };
+  const competitors = linkCompetitors(site.pageOne, site.domain);
+  let pages: ListingPage[] = [];
+  if (competitors.length >= 2) {
+    const hold = await ctx.runMutation(internal.siteDiagnosis.reserve, { siteId, trigger: `link_find:${Date.now()}`, reservedMicroUsd: FIND_HOLD_MICRO_USD });
+    if (hold.ok) {
+      let spent = 0, uncertain = false;
+      try {
+        const metered = await meterDataForSeoCost(() => pageIntersection(pageIntersectionRequest(competitors, site.domain)));
+        spent = Math.ceil(metered.usd * 1e6); uncertain = metered.uncertain;
+        pages = parsePageIntersection(metered.result, competitors, site.domain);
+      } catch { /* nothing found this time: the weekly run tries again */ }
+      if (!uncertain) await ctx.runMutation(internal.siteDiagnosis.close, { siteId, reservationId: hold.reservationId, sent: spent > 0, actualMicroUsd: spent });
+    }
+  }
+  const all = [...pages, ...aiCitedPages(site.aiPages, site.domain, competitors)];
+  if (all.length) await ctx.runMutation(internal.linkOpportunities.record, { siteId, pages: all });
+  await ctx.scheduler.runAfter(0, internal.actions.linkOutreach.prepare, { siteId });
+  return { found: all.length };
 } });
 
 type Mailbox = { id: Id<"link_mailboxes">; email: string; senderName: string; postalAddress: string; smtp: { host: string; port: number };

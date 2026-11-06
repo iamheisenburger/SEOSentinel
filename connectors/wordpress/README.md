@@ -17,6 +17,9 @@ enabling the updated publisher. Existing receipt/permission tables are reused;
 no data reset or new authentication credential is needed. Older installations
 fail closed with an update requirement, never silently retry an uncertain write.
 
+Version 1.4.0 lets Pentra test a new search title and description on a post it published, without touching the post's text
+(the title Google shows is kept only when clicks hold or rise, else the old one comes back).
+
 Version 1.3.0 adds forwarding for merged articles. When Pentra finds two of its
 articles shown for the same searches, it merges the weaker into the stronger:
 `POST /wp-json/pentra/v1/redirects` stores a permanent (301) redirect from the

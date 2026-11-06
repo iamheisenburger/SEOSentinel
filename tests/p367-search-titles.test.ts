@@ -131,7 +131,10 @@ test("the change goes through the exact correction path: the article's text stay
   assert.deepEqual([hosted.sourceBefore, hosted.sourceAfter], ["", ""], "a hosted post keeps its HTML; the title goes in its own fields");
   const refuse = (input: Record<string, unknown>, target: unknown = page) => assert.throws(() => correction.planCorrectiveChange({ domain: "quillpad.example" }, target,
     { kind: "search_snippet", before, replacement, reason, ...input }));
-  refuse({}, { ...page, editable: { ...page.editable, kind: "wordpress" } });
+  // P369: WordPress too, through the plugin's 1.4.0 metadata write (the post's text stays; the title goes in its fields).
+  const wordpress = correction.planCorrectiveChange({ domain: "quillpad.example" }, { ...page, editable: { ...page.editable, kind: "wordpress", header: undefined,
+    sourceContent: "<p>Lead scoring software ranks every lead.</p>" } }, { kind: "search_snippet", before, replacement, reason });
+  assert.deepEqual([wordpress.sourceBefore, wordpress.sourceAfter], ["", ""]);
   refuse({ before: encodeSnippet({ metaTitle: "Something the page doesn't carry", description: "Old description." }) });
   refuse({ replacement: before });
   refuse({ targetUrl: `${site}/x` });

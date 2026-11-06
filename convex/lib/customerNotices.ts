@@ -260,6 +260,8 @@ export type WeeklyReportInput = {
   aiNamed: { named: number; asked: number } | null;
   /** Phase 5: the sites the assistants cite most for the buyer questions (where to be listed or mentioned). */
   citedSites?: ReadonlyArray<{ site: string; answers: number }>;
+  /** Phase 5 (P369): the rivals the assistants name instead (two answers or more). */
+  namedInstead?: ReadonlyArray<{ name: string; answers: number }>;
   /** Phase 2: searches checked against Google's real page one this week, and how many the site can win. */
   checkedSearches?: { checked: number; winnable: number; examples: string[] };
   /** Phase 3 (P367): search title tests: placed live this week, and verdicts reached this week. */
@@ -291,6 +293,7 @@ export function weeklyReportEmail(input: WeeklyReportInput): { subject: string; 
     lines.push("The five things that bring traffic, checked this week:");
     for (const [key, words] of factors) lines.push(`- ${words}: ${VERDICT_WORDS[input.factors[key]] ?? input.factors[key]}`);
     if (input.aiNamed) lines.push(`  (ChatGPT, Gemini and Google AI Mode named you in ${input.aiNamed.named} of ${input.aiNamed.asked} answers to buyer questions)`);
+    if (input.namedInstead?.length) lines.push(`  (they name these instead: ${input.namedInstead.slice(0, 4).map((r) => `${r.name} in ${r.answers}`).join(", ")})`);
     if (input.citedSites?.length) lines.push(`  (the sites they cite most for those questions: ${input.citedSites.slice(0, 4).map((s) => s.site).join(", ")})`);
     lines.push("");
   }

@@ -239,8 +239,8 @@ const plain = (s: string) => !/[\n\[\]`#*<>|{}]|https?:/i.test(s);
 /** Phase 3 (Nov 2026): a page's search title and description change, and nothing else. `before` and `replacement` are
  * the old and new snippets (encodeSnippet); `before` must be exactly what the page carries now. A GitHub page's
  * frontmatter carries them (its two lines are rewritten, the rest of the file stays byte for byte); a Ghost, Shopify or
- * Webflow post carries them as the post's own fields (its HTML stays as it is). WordPress needs the plugin's metadata
- * write first, so it is refused here, and the test waits. */
+ * Webflow post carries them as the post's own fields (its HTML stays as it is); so does a WordPress post through the Pentra
+ * plugin's metadata write (1.4.0; an older plugin refuses it before anything changes). */
 function planSnippetChange(page: Doc<"pages">, input: CorrectiveInput): CorrectivePatch {
   const e = page.editable!;
   if (input.field || input.targetUrl || input.replacement === undefined) throw new Error("A search title change takes only the old and new title and description");
@@ -253,11 +253,9 @@ function planSnippetChange(page: Doc<"pages">, input: CorrectiveInput): Correcti
     return { kind: "search_snippet", before: input.before, reason: input.reason, after: input.replacement,
       sourceBefore: e.header, sourceAfter: frontmatterWithSnippet(e.header, next) };
   }
-  if (isApiCmsMethod(e.kind)) {
-    // The post's HTML is unchanged; the publisher sends the new title and description as the post's own fields.
-    return { kind: "search_snippet", before: input.before, reason: input.reason, after: input.replacement, sourceBefore: "", sourceAfter: "" };
-  }
-  throw new Error("WordPress search titles need the plugin's metadata write");
+  // A hosted post's HTML and a WordPress post's text are unchanged: the publisher sends the new title and description as
+  // the post's own fields (WordPress: the Pentra plugin's metadata write, 1.4.0).
+  return { kind: "search_snippet", before: input.before, reason: input.reason, after: input.replacement, sourceBefore: "", sourceAfter: "" };
 }
 
 /** Deterministic owner corrections only. No model decides facts, paid audit

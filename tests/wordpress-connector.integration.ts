@@ -442,6 +442,26 @@ test('real WordPress/core database: authentication, permissions, CAS, replay, ed
     for (const p of [old.url, kept.url]) assert.equal((await go(path(p))).status, 200, p);
     assert.ok((await text('/feed/')).includes(old.url), 'restored to the feed');
   });
+  await t.test('1.4.0 metadata: a search title test changes only the title and description served, never the post', async () => {
+    const p = command({ operation: 'create', slug: 'snippet-' + randomUUID() }); const s = await select(p.id);
+    assert.equal((await request('connection')).data.metadata, 1);
+    const first = await request('write', append(s)); assert.equal(first.status, 200, JSON.stringify(first.data));
+    const meta = { canonical: s.url, title: 'A sharper search title for this local post', description: 'What this post covers and who it is for, in one plain sentence.' };
+    const body: Json = scoped({ key: key(), operation: 'metadata', id: p.id, permission: s.permission, baseRevision: first.data.revision, content: first.data.content, metadata: meta });
+    assert.notEqual((await request('write', { ...body, key: key(), content: first.data.content + '<p>Changed text.</p>' })).status, 200, 'the post text must come back unchanged');
+    assert.notEqual((await request('write', { ...body, key: key(), metadata: metadata(s.url) })).status, 200, 'the same title and description is no change');
+    const written = await request('write', body); assert.equal(written.status, 200, JSON.stringify(written.data));
+    assert.equal(written.data.content, first.data.content, 'the post text is byte for byte the same');
+    assert.equal(written.data.metadata.title, meta.title); assert.equal(written.data.metadata.description, meta.description);
+    assert.equal((await request('write', body)).status, 200, 'a lost acknowledgement replays the same receipt');
+    assert.equal((await source(p.id)).data.content, first.data.content);
+    const html = await (await fetch(root + new URL(s.url).pathname)).text();
+    assert.match(html, /<title>A sharper search title for this local post<\/title>/);
+    assert.match(html, /<meta name="description" content="What this post covers and who it is for, in one plain sentence\." \/>/);
+    const rolled = await request('write', scoped({ key: key(), operation: 'rollback', id: p.id, permission: s.permission, baseRevision: written.data.revision, rollbackKey: body.key }));
+    assert.equal(rolled.status, 200, JSON.stringify(rolled.data));
+    assert.equal(rolled.data.metadata.title, metadata(s.url).title, 'rolling back restores the old title');
+  });
   if (env.database === 'mysql') await t.test('nontransactional receipt table fails closed before creation', async () => {
     assert.equal(command({ operation: 'receipt_engine', transactional: false }).ok, true);
     try { assert.notEqual((await request('connection')).status, 200); }

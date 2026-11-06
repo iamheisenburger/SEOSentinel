@@ -47,6 +47,7 @@ import { servedOnItsOwnUrl } from "./lib/pentraConsolidation";
 import { searchAsksForProducts } from "./lib/sourceQuality";
 import { OWNER_SEARCH_MAX_WAITING, OWNER_SEARCH_MEASURE_MICRO_USD, OWNER_SEARCH_NOTES, OWNER_SEARCH_PRIORITY,
   ownerSearchArticleType, ownerSearchKeyword } from "./lib/ownerSearch";
+import { scheduleFirstDiagnosis } from "./siteDiagnosis";
 export { confirmedContentProfileHash } from "./lib/contentSelection";
 
 export const CONTENT_DELIVERY_WINDOW_MS = 5 * 60_000;
@@ -1068,6 +1069,8 @@ export const selectServiceMode = mutation({
         await ctx.scheduler.runAfter(0, internal.actions.growthTopics.sweepBuyerFit, { siteId: site._id });
       }
     }
+    // Phase 6 (P369): the first diagnosis at onboarding (rollout sites; once).
+    if (args.mode === "growth_first") { const chosen = await ctx.db.get(site._id); if (chosen?.contentSchedule?.autopilotSelectedAt) await scheduleFirstDiagnosis(ctx, chosen); }
     if (!args.ownerReviewedOnly) await wake(ctx, site._id);
     // P229: Review first writes the first article at once; the owner reads it before anything goes live.
     else await ctx.scheduler.runAfter(0, internal.contentWork.startFirstDraft, { siteId: site._id });
@@ -1104,6 +1107,7 @@ export const adoptAutopilot = mutation({ args: { siteId: v.id("sites"), reviewTo
       contentSchedule: { ...forward, autopilotSelectedAt: Date.now(), autopublishConsentAt: Date.now(), active: false, paused: false,
         intervalMs: plan.autopilotIntervalMs, nextDeadlineAt: Date.now() + FIRST_ARTICLE_LEAD_MS,
         profileHash: confirmedContentProfileHash(site), connectionHash: contentConnectionHash(site) }, updatedAt: Date.now() });
+    await scheduleFirstDiagnosis(ctx, site);
     await wake(ctx, site._id);
     return { changed: true };
   } });
@@ -1132,6 +1136,7 @@ export const setAutopilot = mutation({ args: { siteId: v.id("sites"), enabled: v
           intervalMs: unfinished.length ? s.intervalMs : plan.autopilotIntervalMs,
           nextDeadlineAt: unfinished.length ? unfinished[0] : Date.now() + FIRST_ARTICLE_LEAD_MS,
           profileHash: confirmedContentProfileHash(site), connectionHash: contentConnectionHash(site) }, updatedAt: Date.now() });
+      await scheduleFirstDiagnosis(ctx, site);
       await wake(ctx, site._id);
       return { changed: true };
     }

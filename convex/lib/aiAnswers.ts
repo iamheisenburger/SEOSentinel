@@ -32,6 +32,8 @@ export type AiAnswerCheck = { question: string; assistant: AiAssistant; answered
   sources?: string[];
   /** Phase 4 (P368): the pages it cited (at most 8), so the ones that list the site's competitors can be approached. */
   pages?: string[];
+  /** Phase 5 (P369): the rivals the answer names (the business's competitors and the sites on its page one). */
+  rivals?: string[];
   /** Why no answer came back (an HTTP status, "timeout", "no answer"), when none did. */
   error?: string };
 
@@ -136,6 +138,34 @@ export function parseAssistantAnswer(assistant: AiAssistant, payload: unknown): 
 }
 
 /** The diagnosis's AI-answer input from the checks: answers that named the business, of the answers given. */
+/** Phase 5 (P369): who the assistants name instead of the business: its competitors (from its confirmed profile and the
+ * sites on its page one), matched by their address or their name written as a name, capitalised ("Instantly" is a brand,
+ * "instantly" an everyday word). */
+export type RivalMatcher = { name: string; test: (text: string) => boolean };
+export function rivalMatchers(rivals: readonly string[], business: Pick<Business, "domain">): RivalMatcher[] {
+  const own = bareHost(business.domain), out = new Map<string, RivalMatcher>();
+  for (const raw of rivals) {
+    const host = bareHost(raw);
+    if (!host || host === own || host.endsWith(`.${own}`)) continue;
+    const isHost = /\.[a-z]{2,}$/.test(host);
+    const base = (isHost ? host.replace(/\.[a-z.]+$/, "") : host).replace(/[^a-z0-9]+/g, "");
+    if (base.length < 3) continue;
+    const name = isHost ? host : raw.trim().slice(0, 60);
+    // One rival per name: "LeadGenApp" and "leadgenapp.io" are the same company.
+    if (out.has(base)) continue;
+    const word = new RegExp(`\\b${base[0].toUpperCase()}${[...base.slice(1)].map((c) => /[a-z]/.test(c) ? `[${c}${c.toUpperCase()}]` : c).join("")}\\b`);
+    out.set(base, { name, test: (text) => (isHost && text.toLowerCase().includes(host)) || word.test(text) });
+  }
+  return [...out.values()].slice(0, 20);
+}
+export const rivalsNamed = (text: string, matchers: readonly RivalMatcher[]) => matchers.filter((m) => m.test(text)).map((m) => m.name).slice(0, 10);
+/** The rivals named in two answers or more, most first. */
+export function topRivals(checks: readonly AiAnswerCheck[], limit = 5): Array<{ name: string; answers: number }> {
+  const counts = new Map<string, number>();
+  for (const check of checks) if (check.answered) for (const name of new Set(check.rivals ?? [])) counts.set(name, (counts.get(name) ?? 0) + 1);
+  return [...counts].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, limit).map(([name, answers]) => ({ name, answers }));
+}
+
 export function aiAnswerTotals(checks: readonly AiAnswerCheck[]) {
   const answered = checks.filter((c) => c.answered);
   const byAssistant = AI_ASSISTANTS.map((assistant) => {
@@ -143,5 +173,5 @@ export function aiAnswerTotals(checks: readonly AiAnswerCheck[]) {
     return { assistant, asked: mine.length, named: mine.filter((c) => c.named).length };
   }).filter((a) => a.asked > 0);
   return { asked: answered.length, named: answered.filter((c) => c.named).length, cited: answered.filter((c) => c.cited).length, byAssistant,
-    citedSites: topCitedSites(checks) };
+    citedSites: topCitedSites(checks), namedInstead: topRivals(checks) };
 }
