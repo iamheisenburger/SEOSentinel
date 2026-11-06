@@ -20,6 +20,11 @@ export const LINK_PAGES_PER_WEEK = 12;
 
 const host = (value: string) => value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[/:?#].*$/, "");
 /** Forums, social networks, marketplaces and wikis: their links are not given by an editor who answers email. */
+/** P376: blogging platforms whose pages are written by their users, not by an editor who answers email. */
+const PLATFORM_HOSTS = ["dev.to", "hashnode.com", "hashnode.dev", "blogspot.com", "wordpress.com", "tumblr.com", "notion.site", "linktr.ee", "weebly.com",
+  "wixsite.com", "squarespace.com", "beehiiv.com", "ghost.io", "gitbook.io", "hubpages.com", "vocal.media"];
+/** Whether a site's pages are edited by someone Pentra can write to (not a forum, social network, marketplace or platform). */
+export const editorialSite = (domain: string) => { const h = host(domain); return !NOT_EDITORIAL.test(h) && !PLATFORM_HOSTS.some((p) => h === p || h.endsWith(`.${p}`)); };
 const NOT_EDITORIAL = /(^|\.)(reddit|quora|facebook|instagram|linkedin|x|twitter|youtube|tiktok|pinterest|medium|substack|wikipedia|github|stackoverflow|stackexchange|producthunt|g2|capterra|trustpilot|getapp|softwareadvice|amazon|ebay|etsy)\.[a-z.]+$/;
 
 /** One DataForSEO request: the pages that link to every competitor (live, followed links) and not to the site. */
@@ -47,7 +52,7 @@ export function parsePageIntersection(data: unknown, competitors: readonly strin
     const url = typeof first?.url_from === "string" ? first.url_from : "";
     if (!/^https?:\/\//i.test(url)) continue;
     const domain = host(typeof first?.domain_from === "string" ? first.domain_from : url);
-    if (!domain || domain === own || domain.endsWith(`.${own}`) || /^\d+\.\d+\.\d+\.\d+$/.test(domain) || isEntrenchedHost(domain) || NOT_EDITORIAL.test(domain)) continue;
+    if (!domain || domain === own || domain.endsWith(`.${own}`) || /^\d+\.\d+\.\d+\.\d+$/.test(domain) || isEntrenchedHost(domain) || !editorialSite(domain)) continue;
     if (links.some(({ link }) => link.is_lost === true)) continue;
     const rank = Math.max(...links.map(({ link }) => typeof link.domain_from_rank === "number" ? link.domain_from_rank : -1));
     const spam = Math.max(...links.map(({ link }) => typeof link.backlink_spam_score === "number" ? link.backlink_spam_score : 0));
@@ -72,7 +77,7 @@ export function aiCitedPages(urls: readonly string[], siteDomain: string, compet
     try { u = new URL(raw); } catch { continue; }
     const domain = host(u.hostname);
     if (u.protocol !== "https:" || u.pathname.replace(/\/+$/, "") === "" || !domain || domain === own || domain.endsWith(`.${own}`) || isEntrenchedHost(domain) ||
-      NOT_EDITORIAL.test(domain) || competitors.some((c) => domain === host(c) || domain.endsWith(`.${host(c)}`)) || seen.has(domain)) continue;
+      !editorialSite(domain) || competitors.some((c) => domain === host(c) || domain.endsWith(`.${host(c)}`)) || seen.has(domain)) continue;
     seen.set(domain, { url: `${u.origin}${u.pathname}`.slice(0, 500), domain, title: "", rank: 0, linksTo: [...competitors], language: null, source: "ai_answer" });
   }
   return [...seen.values()].slice(0, 10);
@@ -258,8 +263,10 @@ const STEP = 15 * 60_000;
 /** The next moment a send may go out: inside the window, LINK_SEND_SPACING_MS after the last send, and under the day's
  * and week's caps (`sentAt`: every send for this site, first emails and follow-ups alike). Looks up to two weeks ahead. */
 export function nextSendAt(now: number, sentAt: readonly number[]): number {
-  let t = Math.ceil(Math.max(now, (sentAt.length ? Math.max(...sentAt) : 0) + LINK_SEND_SPACING_MS) / STEP) * STEP;
-  for (let i = 0; i < 14 * 96; i++, t += STEP) {
+  // P376: the earliest allowed moment itself comes first. Rounding it up to the next quarter hour made every send turn
+  // book the next quarter instead of sending, for ever (no email went out on Nov 6).
+  let t = Math.max(now, (sentAt.length ? Math.max(...sentAt) : 0) + LINK_SEND_SPACING_MS);
+  for (let i = 0; i < 14 * 96; i++, t = Math.floor(t / STEP) * STEP + STEP) {
     if (!inSendWindow(t)) continue;
     const dayStart = t - (t % DAY);
     if (sentAt.filter((s) => s >= dayStart && s < dayStart + DAY).length >= LINK_EMAILS_PER_DAY) continue;

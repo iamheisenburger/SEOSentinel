@@ -12,7 +12,7 @@ import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { publishedArticlePageUrl } from "./lib/searchPerformance";
 import { encryptOutreachCredentials, outreachCredentialKeyConfig } from "./lib/outreachCredentialEncryption";
 import { imapPresetForSmtpHost, SMTP_PRESETS } from "./lib/outreachSmtp";
-import { followUpDue, LINK_FOLLOW_UP_DAYS, LINK_PAGES_PER_WEEK, recipientCountryAllowed } from "./lib/linkOutreach";
+import { editorialSite, followUpDue, LINK_FOLLOW_UP_DAYS, LINK_PAGES_PER_WEEK, recipientCountryAllowed } from "./lib/linkOutreach";
 import { ConvexError } from "convex/values";
 import { onNewSystem } from "./siteDiagnosis";
 
@@ -69,7 +69,7 @@ export const prepareContext = internalQuery({ args: { siteId: v.id("sites") }, h
     homeUrl: `https://${domain}/`, articles, senderName: mailbox?.senderName ?? site.siteName ?? domain, userId: site.userId,
     suppressed: [...new Set(all.filter((o) => o.optedOutAt || o.bouncedAt).flatMap((o) => o.contact ? [o.contact.email] : []))],
     // The pages AI assistants cite come first (being listed there also gets the site named in those answers), then by strength.
-    fresh: all.filter((o) => o.status === "new" && o.url && recipientCountryAllowed(o.domain))
+    fresh: all.filter((o) => o.status === "new" && o.url && recipientCountryAllowed(o.domain) && editorialSite(o.domain))
       .sort((a, b) => Number(b.source === "ai_answer") - Number(a.source === "ai_answer") || b.rank - a.rank).slice(0, LINK_PAGES_PER_WEEK)
       .map((o) => ({ id: o._id, url: o.url!, domain: o.domain, title: o.title ?? "", linksTo: o.linksTo })),
     toCheck: all.filter((o) => ["sent", "replied", "won"].includes(o.status) && o.url && now - (o.checkedAt ?? 0) >= 6 * DAY)
@@ -234,7 +234,8 @@ export const sendContext = internalQuery({ args: { siteId: v.id("sites") }, hand
   const suppressed = new Set(all.filter((o) => o.optedOutAt || o.bouncedAt).flatMap((o) => o.contact ? [o.contact.email] : []));
   // An attempt with no receipt (pendingSend) is never sent again: the owner sees it as uncertain.
   // P371: US and UK sites only, by the site's domain and the contact's address, checked again at every send.
-  const allowed = (o: (typeof all)[number]) => recipientCountryAllowed(o.domain) && (!o.contact || recipientCountryAllowed(o.contact.email));
+  // P376: never a user-written platform (dev.to and the like), checked again at every send.
+  const allowed = (o: (typeof all)[number]) => recipientCountryAllowed(o.domain) && (!o.contact || recipientCountryAllowed(o.contact.email)) && editorialSite(o.domain);
   const followUp = all.find((o) => o.status === "sent" && !o.pendingSend && followUpDue(o, now) && o.contact && !suppressed.has(o.contact.email) && allowed(o));
   const first = all.filter((o) => o.status === "ready" && !o.pendingSend && o.contact && o.pitch && !suppressed.has(o.contact.email) && allowed(o) &&
     (site.linkOutreach === "send" || o.approvedAt))

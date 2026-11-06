@@ -99,7 +99,9 @@ test("sending is paced: weekdays 13:00-21:00 UTC, 50 minutes apart, 3 a day and 
   assert.equal(inSendWindow(monday), false);
   assert.equal(nextSendAt(monday, []), Date.UTC(2026, 10, 9, 13, 0), "the window opens at 13:00 UTC");
   const first = Date.UTC(2026, 10, 9, 13, 0);
-  assert.equal(nextSendAt(first + 60_000, [first]), first + LINK_SEND_SPACING_MS + 10 * 60_000, "50 minutes later, on the quarter hour");
+  assert.equal(nextSendAt(first + 60_000, [first]), first + LINK_SEND_SPACING_MS, "50 minutes later");
+  // P376: at the moment a send is allowed, the answer is that moment (it used to round up a quarter hour, for ever).
+  assert.equal(nextSendAt(first + 1234, []), first + 1234);
   const three = [first, first + 3_600_000, first + 2 * 3_600_000];
   assert.equal(nextSendAt(first + 3 * 3_600_000, three), Date.UTC(2026, 10, 10, 13, 0), "three a day, then the next day's window");
   const week = Array.from({ length: LINK_EMAILS_PER_WEEK }, (_, i) => Date.UTC(2026, 10, 9 + Math.floor(i / 3), 13 + (i % 3)));
@@ -161,7 +163,7 @@ test("P371: link emails go only to US and UK sites: never an EU/EEA (or Swiss) d
   assert.match(action, /if \(!recipientCountryAllowed\(contact\.email\) \|\| await showsEuAddress\(o\.url, o\.domain, fetched\.text\)\) \{/, "checked when the email is written");
   assert.match(action, /const euSite = next\.kind === "first" && await showsEuAddress\(next\.url, next\.domain\);/, "and again just before it is sent");
   const records = readFileSync("convex/linkOpportunities.ts", "utf8");
-  assert.match(records, /const allowed = \(o: \(typeof all\)\[number\]\) => recipientCountryAllowed\(o\.domain\) && \(!o\.contact \|\| recipientCountryAllowed\(o\.contact\.email\)\);/);
+  assert.match(records, /const allowed = \(o: \(typeof all\)\[number\]\) => recipientCountryAllowed\(o\.domain\) && \(!o\.contact \|\| recipientCountryAllowed\(o\.contact\.email\)\) && editorialSite\(o\.domain\);/);
   assert.match(records, /throw new ConvexError\("Enter a postal address/, "the owner sees the message, not 'Server Error'");
   assert.doesNotMatch(records.slice(records.indexOf("the owner's controls")), /throw new Error\(/);
 });
@@ -181,4 +183,11 @@ test("P374: the search asks about pairs of competitors (pages linking to three a
   const action = readFileSync("convex/actions/linkOutreach.ts", "utf8");
   assert.match(action, /for \(const pair of competitorPairs\(competitors\)\) \{/);
   assert.match(action, /linkCompetitors\(site\.pageOne, site\.domain, undefined, site\.profileCompetitors\)/, "the confirmed competitors first");
+});
+
+test("P376: user-written platforms (dev.to and the like) are never emailed, at the search and at every send", async () => {
+  const { editorialSite } = await import("../convex/lib/linkOutreach.ts");
+  for (const no of ["dev.to", "someone.hashnode.dev", "x.blogspot.com", "y.wordpress.com", "reddit.com", "medium.com"]) assert.equal(editorialSite(no), false, no);
+  for (const ok of ["saasreviews.com", "devtools.example", "b2bweekly.co.uk"]) assert.equal(editorialSite(ok), true, ok);
+  assert.match(readFileSync("convex/linkOpportunities.ts", "utf8"), /&& editorialSite\(o\.domain\);/);
 });
