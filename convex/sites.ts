@@ -951,6 +951,8 @@ function clearStaleGitHubBranch(
     // verifying the new repository reads it afresh.
     patch.githubLayout = undefined;
     patch.githubLayoutFailure = undefined;
+    // P377: so is the blog Pentra added to the previous repository.
+    patch.githubBlogKit = undefined;
   }
 }
 

@@ -52,6 +52,7 @@ import { SetupReadiness } from "@/components/onboarding/setup-readiness";
 import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 import { userErrorMessage } from "@/lib/user-error";
 import { githubContentFolder } from "@/lib/content-setup";
+import { BlogKitCard } from "@/components/blog-kit-card";
 
 type Tab = "overview" | "articles" | "settings";
 type SiteView = NonNullable<FunctionReturnType<typeof api.sites.get>>;
@@ -1254,7 +1255,14 @@ function ConnectionSection({ site }: { site: SiteView }) {
                   <p className="text-[12px] text-[#62666D] font-mono">{site.repoOwner}/{site.repoName}</p>
                   {/* P257 (Oct 30 2026): the folder Pentra found in this repository, why it can't publish there, or that it
                       hasn't checked yet; never content/blog for a repository it never read. */}
-                  {site.githubBlog?.state === "failed"
+                  {/* P377 (Nov 6 2026): a Next.js site with no blog is offered one, then sees it added and live. */}
+                  {site.githubBlog?.state === "failed" && site.githubBlog.reason === "no_blog"
+                    ? <div className="mt-2"><BlogKitCard siteId={site._id} domain={site.domain} repository={`${site.repoOwner}/${site.repoName}`}
+                        offer={site.githubBlog.detail} kit={site.githubBlog.kit ?? null} /></div>
+                    : site.githubBlog?.state === "kit"
+                    ? <div className="mt-2"><BlogKitCard siteId={site._id} domain={site.domain} repository={`${site.repoOwner}/${site.repoName}`}
+                        offer={null} kit={site.githubBlog.kit} /></div>
+                    : site.githubBlog?.state === "failed"
                     ? <p role="status" className="text-[11px] text-[#F59E0B]">{site.githubBlog.detail} Choose another repository with Edit, or switch to Copy &amp; Paste.</p>
                     : site.githubBlog?.state === "unchecked"
                       ? <p className="text-[11px] text-[#62666D]">{connectionVerified ? "Pentra is checking where this repository's blog keeps its posts…" : "Pentra checks where this repository's blog keeps its posts when you press Verify repository."}</p>

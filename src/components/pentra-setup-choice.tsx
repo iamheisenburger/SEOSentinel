@@ -10,13 +10,14 @@ import { Button } from "@/components/ui/button";
 import { PUBLISHER_AUTOPUBLISH_CONSENT_TEXT } from "../../convex/lib/publisherProvisioning";
 import { isApiCmsMethod } from "../../convex/lib/cmsDestinations";
 import { pacesFor } from "@/lib/content-setup";
+import { BlogKitCard, type BlogKitView } from "@/components/blog-kit-card";
 
 type SetupState = {
   siteId: Id<"sites">;
   reviewToken: string;
   entitlement: boolean;
   destination: { kind: string; domain: string; verified: boolean; layout?: { framework: string; postsDir: string } | null;
-    layoutFailure?: { reason: string; detail: string } | null };
+    layoutFailure?: { reason: string; detail: string } | null; repository?: string | null; kit?: BlogKitView | null };
   plan: { tier: string; articlesPerMonth: number; autopilotIntervalMs: number };
 };
 
@@ -47,6 +48,8 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
   const missing = !state.destination.verified ? "Connect your website, or choose to paste articles yourself, to start."
     : !state.entitlement ? "Check your plan in Billing to start."
     // P257 (Oct 30 2026): Start was disabled with no word when Pentra found no blog it can publish to in the repository.
+    // P377 (Nov 6 2026): a Next.js site with no blog is offered one instead of a dead end.
+    : noBlog?.reason === "no_blog" ? "Add a blog to your site (above), or choose Review and paste instead."
     : noBlog ? "Pentra can't publish to this repository's blog (see above). Choose Review and paste instead, or try another repository." : null;
   const usePaste = async () => {
     setBusy(true); setError("");
@@ -79,7 +82,9 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
     </div>
     <ul className="space-y-1 text-sm">
       {step(true, "Business profile saved")}
-      {step(state.destination.verified && !noBlog, paste ? "Website: you paste each approved article into your site" : state.destination.layout
+      {step(state.destination.verified && !noBlog, paste ? "Website: you paste each approved article into your site" : state.destination.kit?.segment
+        ? `Website connected and verified: articles go to Pentra's blog at ${state.destination.domain.replace(/^https?:\/\//i, "").replace(/\/+$/, "")}/${state.destination.kit.segment}`
+        : state.destination.layout
         ? `Website connected and verified: articles go to ${state.destination.layout.postsDir}, the way your ${state.destination.layout.framework === "nextjs" ? "Next.js" : state.destination.layout.framework.charAt(0).toUpperCase() + state.destination.layout.framework.slice(1)} blog keeps its posts`
         : "Website connected and verified",
         <Link className="ml-1 underline" href={`/sites/${state.siteId}?tab=settings`}>Connect your website</Link>)}
@@ -87,7 +92,14 @@ export function PentraSetupChoice({ state }: { state: SetupState }) {
         <button type="button" className="underline disabled:opacity-50" disabled={busy} onClick={usePaste}>Paste the articles yourself</button>:
         {" "}Pentra writes your first article as soon as you press Start, and you paste it into your site (Review first). Connect your website later to publish automatically.</li>}
       {step(state.entitlement, "Plan active", <Link className="ml-1 underline" href="/settings/billing">Check billing</Link>)}
-      {noBlog && <li role="status" className="space-y-2 rounded-lg border border-[#F59E0B]/30 bg-[#F59E0B]/[0.06] p-3 text-[#F7F8F8]">
+      {!paste && state.destination.kit && !noBlog && <li className="pl-5">
+        <BlogKitCard siteId={state.siteId} domain={state.destination.domain} repository={state.destination.repository ?? null} offer={null} kit={state.destination.kit} />
+      </li>}
+      {noBlog?.reason === "no_blog" && <li className="space-y-2 rounded-lg border border-[#0EA5E9]/30 bg-[#0EA5E9]/[0.06] p-3">
+        <BlogKitCard siteId={state.siteId} domain={state.destination.domain} repository={state.destination.repository ?? null} offer={noBlog.detail} kit={state.destination.kit ?? null} />
+        <p className="text-sm text-[#8A8F98]">Or <button type="button" className="underline disabled:opacity-50" disabled={busy} onClick={usePaste}>review and paste instead</button>.</p>
+      </li>}
+      {noBlog && noBlog.reason !== "no_blog" && <li role="status" className="space-y-2 rounded-lg border border-[#F59E0B]/30 bg-[#F59E0B]/[0.06] p-3 text-[#F7F8F8]">
         <p>{noBlog.reason === "headless_cms" ? noBlog.detail : <>We couldn&apos;t find a Markdown blog in your repository that Pentra can publish to automatically.{noBlog.reason === "no_posts" ? " Your site doesn't show Markdown posts yet." : ""} {noBlog.detail}</>}</p>
         <p className="text-[#8A8F98]">Pentra can write each article for you to review and paste into your site, and publish automatically once your blog is set up.</p>
         <p className="flex flex-wrap gap-3"><button type="button" className="underline disabled:opacity-50" disabled={busy} onClick={usePaste}>Review and paste instead</button>

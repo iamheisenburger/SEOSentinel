@@ -92,6 +92,12 @@ export default defineSchema({
     // or why it could not be (the setup screen offers review and paste instead).
     githubLayout: v.optional(v.any()),
     githubLayoutFailure: v.optional(v.object({ reason: v.string(), detail: v.string(), at: v.number(), repo: v.optional(v.string()) })),
+    // P377: the blog Pentra added to a Next.js site that had none (convex/githubBlogKit.ts).
+    githubBlogKit: v.optional(v.object({ version: v.number(), repo: v.string(),
+      state: v.union(v.literal("installing"), v.literal("deploying"), v.literal("live"), v.literal("not_live"), v.literal("failed")),
+      requestedAt: v.number(), segment: v.optional(v.string()), router: v.optional(v.union(v.literal("app"), v.literal("pages"))),
+      sitemapPath: v.optional(v.string()), commitSha: v.optional(v.string()), installedAt: v.optional(v.number()),
+      liveAt: v.optional(v.number()), checkedAt: v.optional(v.number()), detail: v.optional(v.string()) })),
 
     // ── Publishing platform ──
     publishMethod: v.optional(v.string()), // "github" | "wordpress" | "webhook" | "shopify" | "webflow" | "ghost" | "manual"

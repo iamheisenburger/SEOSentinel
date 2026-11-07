@@ -326,7 +326,11 @@ async function submitAutopilotSitemapIfNeeded(
   const newArticles = signals.newestPublishedAt !== null && signals.newestPublishedAt > lastSent && lastSent <= Date.now() - NEW_ARTICLES_SITEMAP_RESUBMIT_MS;
   if (!undiscovered && !newArticles) return null;
   const binding = currentGscBinding(site);
-  const sitemapUrl = await discoverSitemapUrl(site.domain);
+  // P377: a site whose blog Pentra added gets the blog's own sitemap submitted (the site's main one doesn't list it).
+  const kit = site.githubBlogKit;
+  const kitSitemap = kit?.state === "live" && kit.sitemapPath && site.publishMethod === "github" && kit.repo === `${site.repoOwner}/${site.repoName}`
+    ? new URL(kit.sitemapPath, new URL(sitemapUrlForDomain(site.domain)).origin).href : null;
+  const sitemapUrl = kitSitemap ?? await discoverSitemapUrl(site.domain);
   let status = "failed";
   try {
     const result = await submitAndVerifySitemap(accessToken, gscProperty, sitemapUrl, () => assertCurrentGscConnection(ctx, site));

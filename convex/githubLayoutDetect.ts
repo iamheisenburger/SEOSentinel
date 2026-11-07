@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { detectGithubLayout, layoutConfigPaths, layoutSamplePaths, urlStructureCandidates, type GithubLayout } from "./lib/githubLayout";
+import { blogKitConfigPaths, installedBlogKit, planBlogKit } from "./lib/blogKit.ts";
 
 /** P243 (Oct 30 2026): after a site's GitHub repository is verified, read the repository once and record where its own
  * blog keeps posts (convex/lib/githubLayout.ts), so articles land where the site shows them. A site that has published
@@ -66,6 +67,12 @@ export const detectSiteGithubLayout = internalAction({ args: { siteId: v.id("sit
     await fail("unreadable", "Pentra could not read the repository's files.");
     return { detected: false };
   }
+  // P377: Pentra's own blog, added to a site that had none, is where articles go (its posts arrive with the first article).
+  const kit = installedBlogKit(paths);
+  if (kit) {
+    await ctx.runMutation(internal.githubBlogKit.notePresent, { siteId, repo: context.repo, segment: kit.segment, router: kit.router });
+    return { detected: false, reason: "pentra_blog" };
+  }
   const files: Record<string, string> = {};
   // P248: package.json names a headless CMS when the blog's posts live there instead of in the repository. P252: in a
   // monorepo, the configs and posts are read in the site's own folder (apps/web, www, ...).
@@ -76,6 +83,18 @@ export const detectSiteGithubLayout = internalAction({ args: { siteId: v.id("sit
     try { files[post] = await githubText(token, owner, repo, post, context.branch); } catch { /* skipped */ }
   }
   const detection = detectGithubLayout({ paths, files });
+  // P377: a Next.js site with no blog is offered one ("Add a blog to my site") instead of a dead end.
+  if (!detection.ok && (detection.reason === "no_posts" || detection.reason === "unsupported")) {
+    for (const config of blogKitConfigPaths(paths)) {
+      if (files[config] === undefined) { try { files[config] = await githubText(token, owner, repo, config, context.branch); } catch { /* optional */ } }
+    }
+    const plan = planBlogKit(paths, files);
+    if (plan.ok) {
+      const host = context.domain.replace(/^https?:\/\//i, "").replace(/[/?#].*$/, "").toLowerCase();
+      await fail("no_blog", `Your site doesn't have a blog yet. Pentra can add one at ${host}/${plan.plan.segments[0]}.`);
+      return { detected: false, reason: "no_blog" };
+    }
+  }
   if (!detection.ok) {
     await fail(detection.reason, detection.detail);
     return { detected: false, reason: detection.reason };

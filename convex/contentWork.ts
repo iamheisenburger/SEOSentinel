@@ -1274,7 +1274,9 @@ export const readiness = query({
         branch: site.repoDefaultBranch ?? null, contentDirectory: directory, verified,
         // P243: the site's own blog layout read from the repository, or why it could not be (plain words for the setup screen).
         // P257: only what was read from the current repository (lib/githubBlogState).
-        layout: currentGithubBlog(site).layout, layoutFailure: currentGithubBlog(site).failure },
+        layout: currentGithubBlog(site).layout, layoutFailure: currentGithubBlog(site).failure,
+        // P377: the blog Pentra adds to a Next.js site that has none.
+        kit: currentGithubBlog(site).kit ?? null },
       // The dashboard asks owners to connect it: improvements and results need it.
       searchConsole: { connected: gscConnectionMatchesCurrentDomain(site) },
       entitlement: await contentEntitlementAuthorized(ctx, site), enabled: Boolean(site.autopilotEnabled), approvalRequired: Boolean(site.approvalRequired),
