@@ -92,7 +92,7 @@ test("the brake: no new article on a subject while three settled articles on it 
 
 test("Autopilot writes only a topic that passed every check; checks run on every topic still in the running", () => {
   const work = readFileSync("convex/contentWork.ts", "utf8");
-  assert.match(work, /const planned = phaseTwo \? candidates\.filter\(t => ownerChosen\(t\) \|\| topicWritable\(t, now\)\) : \[\.\.\.candidates\];/,
+  assert.match(work, /const planned = phaseTwo \? writableTopics\(candidates, now, ownerChosen\) : \[\.\.\.candidates\];/,
     "built for every site, run on the rollout sites first");
   const lib = readFileSync("convex/lib/topicVerdict.ts", "utf8");
   assert.match(lib, /return t\.buyerFit\?\.eligible === true && winnableStatus\(pageOneStatus\(t, now\)\) && !\(t\.groupBrake\?\.braked === true/,

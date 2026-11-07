@@ -12,7 +12,7 @@ import { siteCanonicalDomain, siteCanonicalDomainRevision, takeCurrentDomainTopi
 import { takeCurrentGscQueryRows } from "./lib/currentGscRows";
 import { preSerpReachCeiling } from "./lib/winnableDiscovery";
 import { compareTopics, searchedWithin } from "./lib/topicOrder";
-import { groupBrake, PAGE_ONE_CHECKS_PER_RUN, pageOneStatus, topicChoiceRollout, topicWritable, type BrakeArticle } from "./lib/pageOne";
+import { AI_QUESTION_TOPIC_NOTES, groupBrake, PAGE_ONE_CHECKS_PER_RUN, pageOneStatus, topicChoiceRollout, writableTopics, type BrakeArticle } from "./lib/pageOne";
 import { measuredAuthorityIsFresh, tenantAuthorityFromStoredEvidence } from "./lib/expectedClickPortfolio";
 import { addSearchConsoleDays, isBrandedSearchQuery, publishedArticlePageUrl } from "./lib/searchPerformance";
 import { siteExecutionAuthorized } from "./lib/planSiteAllowance";
@@ -1499,7 +1499,8 @@ export async function eligiblePlannedTopics(ctx: QueryCtx | MutationCtx, site: D
   // own search is written whatever these checks say.
   // Built for every site; runs on the rollout sites first (convex/lib/pageOne.ts topicChoiceRollout).
   const now = Date.now(), phaseTwo = topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain, site.newSystemAt);
-  const planned = phaseTwo ? candidates.filter(t => ownerChosen(t) || topicWritable(t, now)) : [...candidates];
+  // P380: with nothing winnable yet (a new site), the AI-assistant buyer questions (convex/lib/topicVerdict.ts).
+  const planned = phaseTwo ? writableTopics(candidates, now, ownerChosen) : [...candidates];
   // Keywords people measurably search for come first; within each group the
   // stored priority orders the work. Absence remains absent in storage.
   const searched = (t: Doc<"topic_clusters">) => searchedWithin(t, difficultyCeiling);
@@ -2092,9 +2093,8 @@ export const recordBuyerFit = internalMutation({ args: { siteId: v.id("sites"), 
 
 /** Phase 5 (Nov 2026): the buyer questions Pentra puts to ChatGPT, Gemini and Google AI Mode every week (written from the
  * confirmed profile) join the plan as topics, so the site gets a page that answers each one directly: the assistants
- * answer from pages like it. Each is a buyer's question by construction; Phase 2's page-one check still decides whether
- * it is written. Rollout sites only; never a repeat of a topic or page the site has. */
-const AI_QUESTION_TOPIC_NOTES = "A buyer question Pentra asks ChatGPT, Gemini and Google AI Mode about this business every week. Answer it directly and honestly from supported business facts; name the business only where it truly fits.";
+ * answer from pages like it. Each is a buyer's question by construction; a site's winnable searches come first, and these are
+ * written when it has none (P380, convex/lib/topicVerdict.ts writableTopics). Rollout sites only; never a repeat of a topic or page the site has. */
 export const addAiQuestionTopics = internalMutation({ args: { siteId: v.id("sites"), questions: v.array(v.string()) }, handler: async (ctx, { siteId, questions }) => {
   const site = await ctx.db.get(siteId);
   if (!site || site.deletionStatus || site.serviceMode !== "growth_first" || !site.contentSchedule?.autopilotSelectedAt ||

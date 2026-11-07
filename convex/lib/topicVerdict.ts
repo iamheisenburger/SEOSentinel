@@ -57,3 +57,17 @@ export function topicWritable(t: WritableTopic, now: number): boolean {
   return t.buyerFit?.eligible === true && winnableStatus(pageOneStatus(t, now)) && !(t.groupBrake?.braked === true && now - t.groupBrake.checkedAt <= GROUP_BRAKE_FRESH_MS);
 }
 
+/** Phase 5's topics: the buyer questions Pentra asks ChatGPT, Gemini and Google AI Mode about the business each week. */
+export const AI_QUESTION_TOPIC_NOTES = "A buyer question Pentra asks ChatGPT, Gemini and Google AI Mode about this business every week. Answer it directly and honestly from supported business facts; name the business only where it truly fits.";
+
+/** P380 (Nov 7 2026): what Autopilot may write now. First the topics that pass every check (topicWritable). When none
+ * does, the AI-assistant buyer questions: their goal is the assistants' answers, which Google's page-one authorities don't
+ * decide. dawnlist.io, a new domain (authority 0), missed its first slot with 12 topics planned: page one needs results
+ * within 10 points of the site's authority, so a new site wins almost no search and Autopilot wrote nothing. */
+export function writableTopics<T extends WritableTopic & { notes?: string }>(topics: readonly T[], now: number, ownerChosen: (t: T) => boolean): T[] {
+  const winnable = topics.filter((t) => ownerChosen(t) || topicWritable(t, now));
+  if (winnable.length) return winnable;
+  return topics.filter((t) => t.notes === AI_QUESTION_TOPIC_NOTES && t.buyerFit?.eligible === true &&
+    !(t.groupBrake?.braked === true && now - t.groupBrake.checkedAt <= GROUP_BRAKE_FRESH_MS));
+}
+

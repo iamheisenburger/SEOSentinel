@@ -14,7 +14,7 @@ import { SearchConsolePrompt } from "./search-console-prompt";
 import { SiteDiagnosisCard } from "./site-diagnosis-card";
 import { LinkBuildingCard } from "./link-building-card";
 import { compareTopics, withinReach, type TopicOrderSite } from "../../convex/lib/topicOrder";
-import { topicWritable } from "../../convex/lib/topicVerdict";
+import { writableTopics } from "../../convex/lib/topicVerdict";
 export const money = (value: number | null) => value === null ? "Unknown" : `$${(value / 1_000_000).toFixed(4)}`;
 export const shownTime = (value: number, zone = "UTC") => new Intl.DateTimeFormat("en", { timeZone: zone, dateStyle: "medium", timeStyle: "long" }).format(value);
 export const fundingCopy = { available: "Internal capacity currently available; every paid admission rechecks it.", blocked: "Admission blocked by the existing spending or entitlement guards.", unknown: "Funding readiness unknown. No extra spending is authorized.", unconfigured: "Provider pricing is not configured. Preparation is not funded." };
@@ -330,8 +330,9 @@ function UpcomingTopics({ siteId, autopilot, order }: { siteId: Id<"sites">; aut
   // Phase 2: a rollout site shows only what Autopilot may write (a buyer search its page one says it can win). The time
   // is read once when the card opens (verdicts last 45 days, so a page left open never shows a stale one for long).
   const [now] = useState(() => Date.now());
-  const next = (topics ?? []).filter(t => writableTopic(t) && (!order || withinReach(t, order.difficultyCeiling)) &&
-    (!order?.phaseTwo || t.ownerChosenAt !== undefined || topicWritable(t, now)))
+  const shown = (topics ?? []).filter(t => writableTopic(t) && (!order || withinReach(t, order.difficultyCeiling)));
+  // P380: the same choice Autopilot makes (with nothing winnable yet, the AI-assistant buyer questions).
+  const next = (order?.phaseTwo ? writableTopics(shown, now, t => t.ownerChosenAt !== undefined) : shown)
     .sort(order ? compareTopics(order) : (a, b) => Number(b.ownerChosenAt !== undefined) - Number(a.ownerChosenAt !== undefined) ||
       (a.ownerChosenAt ?? 0) - (b.ownerChosenAt ?? 0) || (b.priority ?? 0) - (a.priority ?? 0)).slice(0, 3);
   return <section className={CARD} aria-labelledby="upcoming-topics-heading">
