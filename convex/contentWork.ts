@@ -37,7 +37,7 @@ import { authorizedWorkPage, chooseImprovement, contentWorkConnection, enrollVer
 import { noteDraftReady, noteFirstArticleLive } from "./customerEmails";
 import { publisherDestinationReceiptVerified } from "./lib/publisherProvisioning";
 import { archiveRetiredContentArtifact, quarantineUnpublishedArticle, createOwnerEditedCheckpoint, sealAcceptedReviewNotes, syncSummary } from "./articles";
-import { AUTOPILOT_ACCEPTANCE, CONTENT_CHECKS_VERSION, evaluatePublicationQuality, issuesBlockingPreLinkReview, ownerWaivableIssue, readerVisibleIssues, withoutUnsupportedMetaYears } from "./lib/articleQuality";
+import { AUTOPILOT_ACCEPTANCE, CONTENT_CHECKS_VERSION, evaluatePublicationQuality, issuesBlockingPreLinkReview, ownerWaivableIssue, readerVisibleIssues, renumberOrderedLists, withoutUnsupportedMetaYears } from "./lib/articleQuality";
 import { closeRetiredContentAccounting, closeVerifiedContentWake } from "./jobs";
 import { auditResultHash, clarifiableContentAudit, inconsistentAuditFeedback, internalContentProcessingError, retainedContradictoryContentAudit, semanticAuditCeiling, SEMANTIC_AUDIT_SUFFIX } from "./lib/contentAudit";
 import { contentJobUsesAllowance } from "./lib/contentUsage";
@@ -1900,8 +1900,11 @@ async function reusableHeldDraft(ctx: MutationCtx, site: Doc<"sites">, preferJob
     // Used once: a later job carries this draft (delivered, or held again under today's checks).
     if ((await ctx.db.query("jobs").withIndex("by_site_article", q => q.eq("siteId", site._id).eq("articleId", article._id)).take(3))
       .some(j => j._id !== job._id)) continue;
+    // P378: the repairs code makes before today's checks (P375: a numbered list that skips a number) are made here too: a
+    // draft reused at its review never passes through the fix that makes them.
+    const markdown = renumberOrderedLists(article.markdown ?? "");
     // Today's checks, as the review that seals it computes them (that review repeats them before anything is published).
-    const candidate: Doc<"articles"> = { ...article, claimEvidence: [], claimEvidenceStatus: "not_applicable", factCheckScore: undefined,
+    const candidate: Doc<"articles"> = { ...article, markdown, claimEvidence: [], claimEvidenceStatus: "not_applicable", factCheckScore: undefined,
       editorialQualityScore: undefined, metaTitle: withoutUnsupportedMetaYears(article.metaTitle, article.title) };
     if (issuesBlockingPreLinkReview([...evaluatePublicationQuality(candidate, "strict").issues, ...readerVisibleIssues(candidate)]).length) {
       // Held under today's checks too: the verdict is current, so it is not looked at again.
@@ -1913,7 +1916,12 @@ async function reusableHeldDraft(ctx: MutationCtx, site: Doc<"sites">, preferJob
     live ??= (await ctx.db.query("article_summaries").withIndex("by_site_status_created", q => q.eq("siteId", site._id).eq("status", "published")).take(500))
       .flatMap(page => [page.title, ...(page.metaKeywords ?? []).slice(0, 1)]).filter(Boolean).map(primaryKeyword => ({ primaryKeyword }));
     if (live.some(page => contentIntentConflicts({ primaryKeyword: topic.primaryKeyword }, page))) continue;
-    return { job, article, topic };
+    // The repaired text is the draft the review seals: an unsealed draft, so no reviewed or published hash changes.
+    if (markdown !== article.markdown) {
+      await ctx.db.patch(article._id, { markdown, updatedAt: Date.now() });
+      await syncSummary(ctx, article._id);
+    }
+    return { job, article: { ...article, markdown }, topic };
   }
   return null;
 }

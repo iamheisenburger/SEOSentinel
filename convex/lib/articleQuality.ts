@@ -102,7 +102,10 @@ export const AUTOPILOT_ACCEPTANCE = "pentra-autopilot";
 // Nov 2 drafts failed on them, and with a third failure replacements would stop and the site would miss more days.
 // 3: P287 (Nov 3 2026): a hyphenated last word ("no-shows") is no unfinished search description, and a year the title
 // doesn't give leaves the search title in code; a draft held for either is judged again.
-export const CONTENT_CHECKS_VERSION = 3;
+// 4: P378 (Nov 7 2026): a held draft is judged again with the repairs code now makes first (P375's renumbering of a list
+// that skips a number). LeadPilot's Nov 7 article was held for a list jumping from 4 to 6 the day before P375, and with
+// no new topic for its slot, the slot would have been missed.
+export const CONTENT_CHECKS_VERSION = 4;
 export const UNCITED_QUANTITY_ISSUE = /^\d+ quantified outcome or operational claim\(s\) lack an inline citation\.$/;
 export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number; claimEvidenceStatus?: string; markdown?: string } &
   Partial<Pick<PublicationArticle, "claimEvidence" | "productEvidenceSnapshot" | "productEvidenceHash">>): boolean {
