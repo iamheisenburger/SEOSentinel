@@ -100,7 +100,7 @@ test("Autopilot writes only a topic that passed every check; checks run on every
   assert.match(work, /try \{ planned = \(await eligiblePlannedTopics\(ctx, site\)\)\.candidates; \} catch \{ return null; \}/, "the buyer-fit sweep judges every candidate");
   assert.match(work, /\(await eligiblePlannedTopics\(ctx, site, \[\], undefined, pages\)\)\.candidates\.filter\(t => !ownerChosen\(t\)\)/, "the plan audit reads every candidate");
   assert.match(work, /topic = await chooseTopic\(ctx, site, undefined, \[\], \{ preloaded, autopilot: true \}\);/);
-  assert.match(work, /if \(options\.autopilot && topicChoiceRollout\(siteCanonicalDomain\(site\) \?\? site\.domain, site\.newSystemAt\)\) \{\n    await queueFallbackTopicsForChecks\(ctx, site, inventory, excludedIntents\);\n    return null;\n  \}/,
+  assert.match(work, /if \(options\.autopilot && topicChoiceRollout\(siteCanonicalDomain\(site\) \?\? site\.domain, site\.newSystemAt\)\) \{\n[\s\S]{0,900}?\n    await queueFallbackTopicsForChecks\(ctx, site, inventory, excludedIntents\);\n    return null;\n  \}/,
     "a confirmed customer question becomes a topic to check, never an unchecked article");
   assert.match(work, /if \(preferredId\) return candidates\.find\(t => t\._id === preferredId\) \?\? null;/, "a topic the owner picks is theirs, checked or not");
   const research = readFileSync("convex/actions/growthTopics.ts", "utf8");

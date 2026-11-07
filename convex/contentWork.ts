@@ -1573,6 +1573,14 @@ async function chooseTopic(ctx: MutationCtx, site: Doc<"sites">, preferredId?: I
   if (options.demandOnly) return planned.find(t => ownerChosen(t) || searched(t)) ?? null;
   if (planned[0]) return planned[0];
   if (options.autopilot && topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain, site.newSystemAt)) {
+    // P381 (Nov 7 2026): the week's AI-assistant buyer questions join the plan here too, then are written (P380). They were
+    // added only by the weekly diagnosis, and pentra.dev's and LeadPilot's Nov 5 runs finished before that step shipped:
+    // pentra.dev, with nothing else it could win, missed its slots for two days with five questions stored.
+    const stored = (await ctx.db.query("site_diagnoses").withIndex("by_site_created", q => q.eq("siteId", site._id)).order("desc").first())?.aiAnswers?.questions ?? [];
+    if (stored.length && await insertAiQuestionTopics(ctx, site, inventory, stored) > 0) {
+      const next = (await eligiblePlannedTopics(ctx, site, excludedIntents)).planned[0];
+      if (next) return next;
+    }
     await queueFallbackTopicsForChecks(ctx, site, inventory, excludedIntents);
     return null;
   }
@@ -2101,6 +2109,12 @@ export const addAiQuestionTopics = internalMutation({ args: { siteId: v.id("site
     !topicChoiceRollout(siteCanonicalDomain(site) ?? site.domain, site.newSystemAt)) return { added: 0 };
   let inventory: Awaited<ReturnType<typeof eligiblePlannedTopics>>;
   try { inventory = await eligiblePlannedTopics(ctx, site); } catch { return { added: 0 }; }
+  return { added: await insertAiQuestionTopics(ctx, site, inventory, questions) };
+} });
+
+/** Adds a site's AI-assistant buyer questions to its plan (at most five), never a repeat of a topic or page it has. */
+async function insertAiQuestionTopics(ctx: MutationCtx, site: Doc<"sites">, inventory: Awaited<ReturnType<typeof eligiblePlannedTopics>>, questions: readonly string[]) {
+  const siteId = site._id;
   const taken: { primaryKeyword: string }[] = [...inventory.topics, ...inventory.pageCoverage];
   const now = Date.now(), profileHash = confirmedContentProfileHash(site), competitors = competitorNamesFor(site);
   let added = 0;
@@ -2115,8 +2129,8 @@ export const addAiQuestionTopics = internalMutation({ args: { siteId: v.id("site
         checkedAt: now, profileHash }, createdAt: now, updatedAt: now });
     taken.push(proposal); added++;
   }
-  return { added };
-} });
+  return added;
+}
 
 /** Phase 2 (P364): a rollout site with nothing it may write asks for its waiting topics' page-one checks now (the nightly
  * sweep would reach them hours later), at most every PAGE_ONE_RECHECK_GAP_MS; the check holds its own small budget and does
