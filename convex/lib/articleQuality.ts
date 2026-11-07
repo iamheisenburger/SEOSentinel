@@ -102,10 +102,12 @@ export const AUTOPILOT_ACCEPTANCE = "pentra-autopilot";
 // Nov 2 drafts failed on them, and with a third failure replacements would stop and the site would miss more days.
 // 3: P287 (Nov 3 2026): a hyphenated last word ("no-shows") is no unfinished search description, and a year the title
 // doesn't give leaves the search title in code; a draft held for either is judged again.
+// 5: P379 (Nov 7 2026): a numbered list restarts where its delimiter changes ("4." then "6)"), as Markdown reads it: the
+// Sources list keeps each cited source's number that way, and was held as "a numbered list jumps from 4 to 6".
 // 4: P378 (Nov 7 2026): a held draft is judged again with the repairs code now makes first (P375's renumbering of a list
 // that skips a number). LeadPilot's Nov 7 article was held for a list jumping from 4 to 6 the day before P375, and with
 // no new topic for its slot, the slot would have been missed.
-export const CONTENT_CHECKS_VERSION = 4;
+export const CONTENT_CHECKS_VERSION = 5;
 export const UNCITED_QUANTITY_ISSUE = /^\d+ quantified outcome or operational claim\(s\) lack an inline citation\.$/;
 export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number; claimEvidenceStatus?: string; markdown?: string } &
   Partial<Pick<PublicationArticle, "claimEvidence" | "productEvidenceSnapshot" | "productEvidenceHash">>): boolean {
@@ -2165,6 +2167,38 @@ const READER_VISIBLE_PIPELINE_TEXT: RegExp[] = [
 ];
 const COUNT_WORD_VALUES: Record<string, number> = { two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 const LIST_ITEM = /^(\s*)(?:[-*+]|(\d+)[.)])\s+\S/;
+/** P379: an ordered item with its delimiter: Markdown starts a new list where the delimiter changes ("4." then "6)"). */
+const ORDERED_ITEM = /^(\s*)(\d+)([.)])\s+\S/;
+/** Whether the ordered item on line `i` starts a list: the line before it (blank lines aside) is no list item, or is an
+ * ordered item at its indent with the other delimiter. */
+function startsOrderedList(lines: string[], i: number): boolean {
+  const item = ORDERED_ITEM.exec(lines[i]);
+  if (!item) return false;
+  const previous = i > 0 ? lines.slice(0, i).reverse().find((value) => value.trim()) : undefined;
+  if (!previous || !LIST_ITEM.exec(previous)) return true;
+  const before = ORDERED_ITEM.exec(previous);
+  return Boolean(before && before[1].length === item[1].length && before[3] !== item[3]);
+}
+/** The lines of the ordered list starting on line `start`: its items at its indent with its delimiter. */
+function orderedListLines(lines: string[], start: number): number[] {
+  const first = ORDERED_ITEM.exec(lines[start]);
+  if (!first) return [];
+  const indent = first[1].length, members: number[] = [];
+  for (let j = start; j < lines.length; j++) {
+    const line = lines[j];
+    if (!line.trim()) continue;
+    const item = LIST_ITEM.exec(line), lineIndent = line.length - line.trimStart().length;
+    if (item && item[1].length === indent) {
+      const ordered = ORDERED_ITEM.exec(line);
+      if (!ordered || ordered[3] !== first[3]) break;
+      members.push(j);
+      continue;
+    }
+    if (lineIndent > indent) continue;
+    break;
+  }
+  return members;
+}
 
 /** Top-level items of the list that starts after line `start` (blank lines and
  * deeper-indented continuation lines belong to it). */
@@ -2197,20 +2231,10 @@ function listAfter(lines: string[], start: number): { count: number; numbers: nu
 export function renumberOrderedLists(markdown: string): string {
   const lines = markdown.split("\n");
   for (let i = 0; i < lines.length; i++) {
-    const item = LIST_ITEM.exec(lines[i]);
-    if (!item || item[2] === undefined) continue;
-    const previous = i > 0 ? lines.slice(0, i).reverse().find((value) => value.trim()) : undefined;
-    if (previous && LIST_ITEM.exec(previous)) continue;
-    const indent = item[1].length, members: number[] = [];
-    for (let j = i; j < lines.length; j++) {
-      const line = lines[j];
-      if (!line.trim()) continue;
-      const m = LIST_ITEM.exec(line), lineIndent = line.length - line.trimStart().length;
-      if (m && m[1].length === indent) { if (m[2] !== undefined) members.push(j); continue; }
-      if (lineIndent > indent) continue;
-      break;
-    }
-    const numbers = members.map((j) => Number(LIST_ITEM.exec(lines[j])![2]));
+    // P379: a list ends where its delimiter changes; the next one is renumbered on its own.
+    if (!startsOrderedList(lines, i)) continue;
+    const members = orderedListLines(lines, i);
+    const numbers = members.map((j) => Number(ORDERED_ITEM.exec(lines[j])![2]));
     if (numbers.length < 2 || numbers.every((n) => n === numbers[0]) || numbers.every((n, k) => k === 0 || n === numbers[k - 1] + 1)) continue;
     members.forEach((j, k) => { lines[j] = lines[j].replace(/^(\s*)\d+([.)])/, `$1${numbers[0] + k}$2`); });
   }
@@ -2308,11 +2332,9 @@ export function readerVisibleDefects(markdown: string): string[] {
   }
   // Numbered lists: "1. 1. 1." renders as 1, 2, 3; anything else must count up by one.
   for (let i = 0; i < lines.length; i++) {
-    const item = LIST_ITEM.exec(lines[i]);
-    if (!item || item[2] === undefined) continue;
-    const previous = i > 0 ? lines.slice(0, i).reverse().find((value) => value.trim()) : undefined;
-    if (previous && LIST_ITEM.exec(previous)) continue;
-    const { numbers } = listAfter(lines, i - 1);
+    // P379: a change of delimiter starts a new list (the Sources list restarts at a gap so each source keeps its number).
+    if (!startsOrderedList(lines, i)) continue;
+    const numbers = orderedListLines(lines, i).map((j) => Number(ORDERED_ITEM.exec(lines[j])![2]));
     const allSame = numbers.every((value) => value === numbers[0]);
     const gap = numbers.findIndex((value, index) => index > 0 && value !== numbers[index - 1] + 1);
     if (numbers.length > 1 && !allSame && gap > 0) {

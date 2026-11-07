@@ -77,7 +77,8 @@ test("P301 A4: citation numbers stay stable and the Sources list is rebuilt cano
   assert.match(out, /Pino logs at level 30 \[1\]/);
   assert.match(out, /urllib3 retries with backoff \[4\]/, "body numbers never shift");
   assert.doesNotMatch(out, /- \[1\]/, "the writer's gapped tail is replaced");
-  assert.match(out, /## Sources\n\n1\. \[Pino docs\]\(https:\/\/getpino\.io\)\n4\. \[urllib3 retry module\]\(https:\/\/urllib3\.readthedocs\.io\/retry\.html\)\n$/,
+  // P379: after a gap the list restarts with the other delimiter ("4)"), so Markdown shows 4, not 2.
+  assert.match(out, /## Sources\n\n1\. \[Pino docs\]\(https:\/\/getpino\.io\)\n4\) \[urllib3 retry module\]\(https:\/\/urllib3\.readthedocs\.io\/retry\.html\)\n$/,
     "P335: cited entries keep their numbers; never-cited entries are omitted from the tail");
   assert.equal(rebuildSourcesSection("No citations here.", sources), "No citations here.", "nothing cited: unchanged");
 });

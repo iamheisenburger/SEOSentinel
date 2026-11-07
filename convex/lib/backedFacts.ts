@@ -356,7 +356,19 @@ export function rebuildSourcesSection(markdown: string, sources: readonly { url:
     if (title) return title;
     try { return new URL(source.url).hostname.replace(/^www\./, ""); } catch { return source.url; }
   };
-  const tail = `## Sources\n\n${original.map((source, index) => cited.has(index + 1) ? `${index + 1}. [${name(source)}](${source.url})` : null).filter(Boolean).join("\n")}`;
+  // P379 (Nov 7 2026): Markdown numbers a list from its first item, so "4." then "6." showed source 6 as "5" beside a
+  // body citing [6], and the reader check held the article (LeadPilot's Nov 7 article, and every article citing a source
+  // after one it doesn't cite). After a gap the list restarts with the other delimiter ("6)"), a new list that starts at 6.
+  const entries: string[] = [];
+  let delimiter = ".", last = 0;
+  original.forEach((source, index) => {
+    const number = index + 1;
+    if (!cited.has(number)) return;
+    if (entries.length && number !== last + 1) delimiter = delimiter === "." ? ")" : ".";
+    entries.push(`${number}${delimiter} [${name(source)}](${source.url})`);
+    last = number;
+  });
+  const tail = `## Sources\n\n${entries.join("\n")}`;
   return `${body}\n\n${tail}\n`;
 }
 /** P295 (Cowork's batch 4, fix 2): a heading that promises a figure (costs, prices, fees, rebates, lifespan, timeline,

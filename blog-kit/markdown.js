@@ -154,7 +154,10 @@ export function renderMarkdown(markdown, origin = "") {
     const base = first[1].length;
     const ordered = /\d/.test(first[2]);
     const item = (line) => { const m = ITEM.exec(line); return m && !HR.test(line) ? m : null; };
-    const sameType = (m) => /\d/.test(m[2]) === ordered;
+    // As in Markdown, a list ends where its marker changes ("4." then "6)", or "-" then "*"): the next starts afresh, from
+    // its own first number (Pentra's Sources list restarts that way so each source keeps its number).
+    const marker = (m) => (/\d/.test(m[2]) ? m[2].slice(-1) : m[2]);
+    const sameType = (m) => /\d/.test(m[2]) === ordered && marker(m) === marker(first);
     // A line belongs to the current item when it is indented to the item's text (a nested list or paragraph), or when it
     // is a list of the other kind indented under the item ("1. Step" then "  - detail"): writers mean it nested.
     const inside = (line, contentIndent) => {
