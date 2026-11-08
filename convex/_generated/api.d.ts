@@ -8,6 +8,11 @@
  * @module
  */
 
+import type * as actions_answerEmail from "../actions/answerEmail.js";
+import type * as actions_answerPages from "../actions/answerPages.js";
+import type * as actions_answerPublish from "../actions/answerPublish.js";
+import type * as actions_answers from "../actions/answers.js";
+import type * as actions_answersSetup from "../actions/answersSetup.js";
 import type * as actions_articleImages from "../actions/articleImages.js";
 import type * as actions_backlinks from "../actions/backlinks.js";
 import type * as actions_cadenceMicroSeed from "../actions/cadenceMicroSeed.js";
@@ -39,6 +44,10 @@ import type * as actions_siteHealth from "../actions/siteHealth.js";
 import type * as actions_smartlead from "../actions/smartlead.js";
 import type * as actions_syndication from "../actions/syndication.js";
 import type * as actions_underfilledPlanRecovery from "../actions/underfilledPlanRecovery.js";
+import type * as answerPages from "../answerPages.js";
+import type * as answerPublish from "../answerPublish.js";
+import type * as answers from "../answers.js";
+import type * as answersDispatch from "../answersDispatch.js";
 import type * as articleImages from "../articleImages.js";
 import type * as articles from "../articles.js";
 import type * as autopilot from "../autopilot.js";
@@ -60,6 +69,14 @@ import type * as http from "../http.js";
 import type * as jobs from "../jobs.js";
 import type * as lib_accountDeletion from "../lib/accountDeletion.js";
 import type * as lib_aiAnswers from "../lib/aiAnswers.js";
+import type * as lib_answerEngine from "../lib/answerEngine.js";
+import type * as lib_answerPages from "../lib/answerPages.js";
+import type * as lib_answerPublishing from "../lib/answerPublishing.js";
+import type * as lib_answerQuestions from "../lib/answerQuestions.js";
+import type * as lib_answersAccess from "../lib/answersAccess.js";
+import type * as lib_answersSchema from "../lib/answersSchema.js";
+import type * as lib_answersSetup from "../lib/answersSetup.js";
+import type * as lib_answersWeekly from "../lib/answersWeekly.js";
 import type * as lib_anthropicText from "../lib/anthropicText.js";
 import type * as lib_articleAssembly from "../lib/articleAssembly.js";
 import type * as lib_articleExecutionBudget from "../lib/articleExecutionBudget.js";
@@ -274,6 +291,11 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "actions/answerEmail": typeof actions_answerEmail;
+  "actions/answerPages": typeof actions_answerPages;
+  "actions/answerPublish": typeof actions_answerPublish;
+  "actions/answers": typeof actions_answers;
+  "actions/answersSetup": typeof actions_answersSetup;
   "actions/articleImages": typeof actions_articleImages;
   "actions/backlinks": typeof actions_backlinks;
   "actions/cadenceMicroSeed": typeof actions_cadenceMicroSeed;
@@ -305,6 +327,10 @@ declare const fullApi: ApiFromModules<{
   "actions/smartlead": typeof actions_smartlead;
   "actions/syndication": typeof actions_syndication;
   "actions/underfilledPlanRecovery": typeof actions_underfilledPlanRecovery;
+  answerPages: typeof answerPages;
+  answerPublish: typeof answerPublish;
+  answers: typeof answers;
+  answersDispatch: typeof answersDispatch;
   articleImages: typeof articleImages;
   articles: typeof articles;
   autopilot: typeof autopilot;
@@ -326,6 +352,14 @@ declare const fullApi: ApiFromModules<{
   jobs: typeof jobs;
   "lib/accountDeletion": typeof lib_accountDeletion;
   "lib/aiAnswers": typeof lib_aiAnswers;
+  "lib/answerEngine": typeof lib_answerEngine;
+  "lib/answerPages": typeof lib_answerPages;
+  "lib/answerPublishing": typeof lib_answerPublishing;
+  "lib/answerQuestions": typeof lib_answerQuestions;
+  "lib/answersAccess": typeof lib_answersAccess;
+  "lib/answersSchema": typeof lib_answersSchema;
+  "lib/answersSetup": typeof lib_answersSetup;
+  "lib/answersWeekly": typeof lib_answersWeekly;
   "lib/anthropicText": typeof lib_anthropicText;
   "lib/articleAssembly": typeof lib_articleAssembly;
   "lib/articleExecutionBudget": typeof lib_articleExecutionBudget;

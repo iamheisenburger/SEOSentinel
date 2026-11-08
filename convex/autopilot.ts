@@ -1,5 +1,6 @@
 import { isApiCmsMethod } from "./lib/cmsDestinations";
 import { internal } from "./_generated/api";
+import { answersEnabled } from "./lib/answersAccess";
 import {
   readPublicationBufferSummaries,
   publicationInventoryHealthFields,
@@ -286,6 +287,8 @@ export const dispatchActiveSites = internalMutation({
       .paginate({ cursor: args.cursor ?? null, numItems: 25 });
     const activeSites: typeof page.page = [];
     for (const site of page.page) {
+      // Pentra Answers (Nov 2026): a site running Answers writes answer pages, never Autopilot articles.
+      if (answersEnabled(site)) continue;
       // The index excludes parked sites, but a trusted billing receipt pauses
       // the whole account while its bounded site reconciliation is in flight.
       if (!(await siteExecutionAuthorized(ctx, site))) continue;

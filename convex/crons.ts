@@ -195,4 +195,8 @@ crons.interval("customer-add-website-reminders", { hours: 3 }, internal.customer
 // every crawler's sitemap request (~2 MB of Convex reads each; convex/blog.ts refreshHostedBlogListings).
 crons.interval("hosted-blog-listings", { hours: 3 }, internal.blog.refreshHostedBlogListings, {});
 
+// Pentra Answers (Nov 2026): every hour, each Answers site's next step (first hour, weekly run, daily rechecks of new
+// pages, hosted-address checks); stalled runs resume. Provider spend is held per call and capped (convex/lib/answersAccess.ts).
+crons.interval("answers-dispatch", { minutes: 60 }, internal.answersDispatch.dispatch, {});
+
 export default crons;

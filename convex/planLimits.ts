@@ -282,4 +282,6 @@ export const ALL_FEATURE_KEYS = [
   ...Object.keys(ARTICLE_TIER_CEILINGS),
   "seo_authority_discovery",
   "authority_discovery",
+  // Pentra Answers (Nov 2026): the single paid plan ("Pentra", $249/month or $2,490/year).
+  "pentra_answers",
 ];

@@ -1,4 +1,5 @@
 import { isApiCmsMethod } from "./lib/cmsDestinations";
+import { answersEnabled } from "./lib/answersAccess";
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -2812,6 +2813,8 @@ export const advance = internalMutation({
   handler: async (ctx, { siteId }): Promise<CadenceScheduleResult> => {
     const site = await ctx.db.get(siteId), schedule = site?.contentSchedule;
     if (!site || site.serviceMode !== "growth_first" || !schedule) return { scheduled: 0, mode: "content_mode_required" };
+    // Pentra Answers (Nov 2026): a site running Answers writes answer pages, never Autopilot articles.
+    if (answersEnabled(site)) return { scheduled: 0, mode: "content_paused" };
     // Pause/entitlement loss stop admissions and unstarted writes, not read-only
     // reconciliation of a write already acknowledged by the destination.
     const verifying = await ctx.db.query("jobs").withIndex("by_site_content_stage", q => q.eq("siteId", siteId).eq("contentWork.stage", "verify")).take(LIMIT + 1);

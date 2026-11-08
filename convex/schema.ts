@@ -5,6 +5,7 @@ import { publicationDeferralBoundaryValidator } from "./lib/publicationDeferral"
 import { publicationInventoryValidator } from "./lib/publicationEligibility";
 import { blogListingRow, blogSitemapRow } from "./lib/blogListing";
 import { serpBriefValidator } from "./lib/serpBrief";
+import { answersSiteSettings, answersTables } from "./lib/answersSchema";
 
 export default defineSchema({
   sites: defineTable({
@@ -275,6 +276,8 @@ export default defineSchema({
 
     // ── Plan features (synced from Clerk) ──
     planFeatures: v.optional(v.array(v.string())), // e.g. ["max_sites_3", "max_articles_25"]
+    // ── Pentra Answers (Nov 2026): AI-assistant recommendations with proof ──
+    answers: v.optional(answersSiteSettings),
 
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -283,7 +286,8 @@ export default defineSchema({
     .index("by_canonical_domain", ["canonicalDomain"])
     .index("by_user", ["userId"])
     .index("by_autopilot", ["autopilotEnabled"])
-    .index("by_rollout", ["autopilotRolloutMode", "autopilotEnabled"]),
+    .index("by_rollout", ["autopilotRolloutMode", "autopilotEnabled"])
+    .index("by_answers_enabled", ["answers.enabled"]),
 
   // Provider-neutral onboarding intent. This table deliberately stores no DNS
   // values, OAuth tokens, mailbox passwords, or reseller identifiers. A
@@ -4264,4 +4268,6 @@ export default defineSchema({
     .index("by_user_type_created", ["userId", "type", "createdAt"])
     .index("by_job", ["jobId"])
     .index("by_state_expires", ["state", "expiresAt"]),
+
+  ...answersTables,
 });

@@ -5,9 +5,12 @@ import {
   type CanonicalPlanTier,
 } from "../../convex/planLimits.ts";
 
+// Features that pass through unchanged beside the canonical volume bundle: the legacy authority aliases, and Pentra
+// Answers' single paid plan ("pentra_answers", Nov 2026), which carries no article volume of its own.
 const AUTHORITY_ALIASES = new Set([
   "seo_authority_discovery",
   "authority_discovery",
+  "pentra_answers",
 ]);
 
 const BILLING_LIFECYCLE_EVENTS = new Set([

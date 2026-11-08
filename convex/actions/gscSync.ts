@@ -1027,3 +1027,23 @@ async function syncSiteGSC(
     ...(sitemap ? { sitemap } : {}),
   };
 }
+
+/** Pentra Answers (Nov 2026): after an answer page goes live, the site's sitemap is submitted to Google through the
+ * owner's own Search Console connection (only when they granted sitemap permission). No connection: nothing is sent. */
+export const submitAnswersSitemap = internalAction({
+  args: { siteId: v.id("sites") },
+  handler: async (ctx, { siteId }): Promise<{ submitted: boolean; reason?: string }> => {
+    const site = await ctx.runQuery(internal.sites.getFull, { siteId });
+    if (!site || !site.gscAccessToken || !site.gscProperty) return { submitted: false, reason: "Search Console isn't connected" };
+    if (!site.gscScopes?.split(/\s+/).includes("https://www.googleapis.com/auth/webmasters")) {
+      return { submitted: false, reason: "Search Console needs sitemap permission" };
+    }
+    try {
+      const accessToken = await refreshedSiteAccessToken(ctx, site);
+      await submitAndVerifySitemap(accessToken, site.gscProperty, sitemapUrlForDomain(site.domain), () => assertCurrentGscConnection(ctx, site));
+      return { submitted: true };
+    } catch (error) {
+      return { submitted: false, reason: String(error instanceof Error ? error.message : error).slice(0, 160) };
+    }
+  },
+});

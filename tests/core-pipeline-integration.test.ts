@@ -11406,8 +11406,10 @@ test("P260 an article's provider spend stops at $0.50: nothing is bought past it
 // choice until the rollout sites show results.
 test("P359 on a rollout site Autopilot writes only a checked, winnable buyer search; other sites keep today's choice", async t => {
   for (const rollout of [true, false]) await t.test(rollout ? "rollout site" : "other site", async () => {
-    const f = setup({ growthFirst: true, businesses: [rollout ? { ...slcBusinesses[0], domain: "leadpilot.chat" } : slcBusinesses[0]] });
+    // Pentra's own sites run Pentra Answers since Nov 8 2026; the article rollout is now tested on a new-system customer site.
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
     const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    if (rollout) saved.newSystemAt = f.now();
     f.setIdentity(saved.userId);
     const r = await f.invoke("contentWork:readiness", { siteId: site.id });
     await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
@@ -11450,8 +11452,10 @@ test("P359 on a rollout site Autopilot writes only a checked, winnable buyer sea
 // site (a buyer's question by construction; Phase 2's page-one check still decides), never a repeat of what the site has.
 test("P362 the week's AI buyer questions join a rollout site's plan as topics to check; other sites are untouched", async t => {
   for (const rollout of [true, false]) await t.test(rollout ? "rollout site" : "other site", async () => {
-    const f = setup({ growthFirst: true, businesses: [rollout ? { ...slcBusinesses[0], domain: "leadpilot.chat" } : slcBusinesses[0]] });
+    // Pentra's own sites run Pentra Answers since Nov 8 2026; the article rollout is now tested on a new-system customer site.
+    const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
     const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+    if (rollout) saved.newSystemAt = f.now();
     f.setIdentity(saved.userId);
     const r = await f.invoke("contentWork:readiness", { siteId: site.id });
     await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });
@@ -11483,8 +11487,10 @@ test("P362 the week's AI buyer questions join a rollout site's plan as topics to
 // Phase 2 (P364): a rollout site with nothing it may write asks for its waiting topics' page-one checks at once, not at the
 // nightly sweep, and at most twice a day.
 test("P364 a rollout site with nothing writable has its waiting topics checked now, at most every 12 hours", async () => {
-  const f = setup({ growthFirst: true, businesses: [{ ...slcBusinesses[0], domain: "leadpilot.chat" }] });
+  // Pentra's own sites run Pentra Answers since Nov 8 2026; the article rollout is now tested on a new-system customer site.
+  const f = setup({ growthFirst: true, businesses: [slcBusinesses[0]] });
   const site = await createEmptyContentSite(f), saved = f.get(site.id)!;
+  saved.newSystemAt = f.now();
   f.setIdentity(saved.userId);
   const r = await f.invoke("contentWork:readiness", { siteId: site.id });
   await f.invoke("contentWork:selectServiceMode", { siteId: site.id, mode: "growth_first", confirmBusinessProfile: true, reviewToken: r.reviewToken, autopilot: true });

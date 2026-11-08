@@ -1,0 +1,197 @@
+// Pentra Answers (Nov 2026), end to end on the real handlers: the owner confirms, Pentra writes the questions, asks the five
+// assistants (each answer stored as proof the moment it arrives), totals the run honestly, picks the winnable questions,
+// writes pages from fetched sources and the business's facts, publishes them to the site's GitHub blog, and checks them
+// live before IndexNow. Providers are synthetic; spend is held and settled at their reported cost.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { corePipelineFixture, type Fields } from "./helpers/core-pipeline-fixture.ts";
+
+const json = (body: unknown, cost?: number, status = 200) => new Response(JSON.stringify(body), { status,
+  headers: { "content-type": "application/json", ...(cost !== undefined ? { "X-Treg-Cost-Micro": String(cost) } : {}) } });
+const html = (text: string) => new Response(`<html><head><title>Page</title></head><body><main>${text}</main></body></html>`,
+  { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+
+const QUESTIONS = ["How do I find local businesses that need a new website?", "What's the best tool to find clients for a web design agency?",
+  "How much does a lead list for agencies cost per month?", "How do I find small businesses with slow websites?", "Which lead tool gives the owner's email address?",
+  "How do I find businesses that need IT support near me?", "What are alternatives to Apollo for local agencies?", "How do SEO agencies find new local clients?",
+  "How do I know a local business needs a new website?", "What's a good way to get clients for an accessibility audit service?",
+  "How can a booking software company find salons without online booking?", "Where can I find restaurants that need a better website?"];
+const PAGE_BODY = ["Acme Leads finds local businesses that show a measured sign they need a new website, so you can contact them with the proof.", "",
+  "## What signs show a business needs a new website?", "", "Slow mobile pages and missing HTTPS are the clearest signs. Cold outreach that cites a specific problem gets more replies; reply rates average 8.4% in 2026 [1].", "",
+  "## How Acme Leads handles this", "", "Acme Leads sends a short list of businesses each weekday with the sign it measured and the owner's contact.", "",
+  ...Array.from({ length: 70 }, (_, i) => `Practical step ${i + 1}: check one more thing before you send the first email.`),
+  "", "## FAQ", "", "### Is it free to try?", "", "Yes, the first list is free."].join("\n");
+
+function network(calls: Array<{ url: string; body?: Fields }>) {
+  return async (url: URL, init: RequestInit) => {
+    const body = typeof init.body === "string" && init.body.startsWith("{") ? JSON.parse(init.body) : undefined;
+    calls.push({ url: url.href, ...(body ? { body } : {}) });
+    if (url.hostname === "treg.to") {
+      const endpoint = url.pathname.replace("/call/", "");
+      if (endpoint === "cloro.ai-search.chatgpt.scrape") return json({ success: true, result: { text: "Agencies often use Apollo to find leads. A lead guide explains more.",
+        sources: [{ label: "Lead guide", url: "https://leads.example/guide?utm_source=chatgpt.com" }] } }, 2800);
+      if (endpoint === "perplexity.web.answer.fast") return json({ output: [{ type: "message", content: [{ type: "output_text",
+        text: "Acme Leads finds local businesses with slow websites [1].", annotations: [{ type: "url_citation", url: "https://acme.example/blog/older-post", title: "Acme" }] }] }] }, 1300);
+      if (endpoint === "cloro.ai-search.gemini.scrape") return json({ success: true, result: { text: "Hunter and Apollo are common choices.",
+        sources: [{ url: "https://leads.example/guide", label: "Lead guide" }] } }, 2400);
+      if (endpoint === "cloro.google.serp.ai_mode") return json({ success: true, result: { text: "Try a lead list built for agencies.", sources: [] } }, 2400);
+      if (endpoint === "cloro.google.serp.organic") return json({ success: true, result: { organicResults: [] } }, 2000);
+      throw new Error(`unexpected treg endpoint ${endpoint}`);
+    }
+    if (url.hostname === "api.anthropic.com") {
+      const tool = body.tools[0].name;
+      if (tool === "submit_business_read") return json({ id: "msg_0", type: "message", role: "assistant", model: body.model, stop_reason: "tool_use", stop_sequence: null,
+        content: [{ type: "tool_use", id: "tool_0", name: tool, input: { name: "Newco", sells: "Daily lists of local businesses that need web design, with proof.",
+          buyers: "Web design agencies", offerings: ["Daily lead lists", "Verified emails"], country: "US", local: false, location: "",
+          competitors: [{ name: "Apollo", domain: "apollo.example" }, { name: "Newco", domain: "newco.example" }] } }], usage: { input_tokens: 3000, output_tokens: 300 } });
+      const input = tool === "submit_buyer_questions"
+        ? { questions: QUESTIONS.map((question) => ({ question, intent: "how_to" })) }
+        : { title: "How do I find local businesses that need a new website?", metaDescription: "Look for measured signs like slow mobile pages.", markdown: PAGE_BODY,
+          facts: [{ text: "Reply rates average 8.4% in 2026", source: "source", sourceNumber: 1 }, { text: "Acme Leads sends a list each weekday", source: "business" }] };
+      return json({ id: "msg_1", type: "message", role: "assistant", model: body.model, stop_reason: "tool_use", stop_sequence: null,
+        content: [{ type: "tool_use", id: "tool_1", name: tool, input }], usage: { input_tokens: 4000, output_tokens: 2000 } });
+    }
+    if (url.hostname === "newco.example") return html("Newco: daily lists of local businesses that need web design, with the proof attached. ".repeat(20));
+    if (url.hostname === "leads.example") return html("Cold outreach that names a specific problem gets more replies. Reply rates average 8.4% in 2026 across agencies. ".repeat(12));
+    if (url.hostname === "acme.example") {
+      if (url.pathname.startsWith("/blog/")) return html("How do I find local businesses that need a new website? Acme Leads finds local businesses.");
+      return html("Acme Leads: daily lists of local businesses that need your service, with the proof. The first list is free. ".repeat(10));
+    }
+    if (url.hostname === "api.github.com") {
+      if (init.method === "GET") return json({ message: "Not Found" }, undefined, 404);
+      return json({ content: {}, commit: { sha: "abc123", html_url: "https://github.com/acme/site/commit/abc123" } }, undefined, 201);
+    }
+    if (url.hostname === "api.indexnow.org") return new Response("", { status: 202 });
+    throw new Error(`unexpected network ${url.href}`);
+  };
+}
+
+async function drain(f: ReturnType<typeof corePipelineFixture>, untilMs = 0) {
+  for (let guard = 0; guard < 400; guard++) {
+    const ran = await f.runNextScheduled();
+    if (ran) continue;
+    const pending = f.tables._scheduled_functions.filter((r) => r.state.kind === "pending").sort((a, b) => a.at - b.at)[0];
+    if (!pending || pending.at > f.now() + untilMs) return;
+    f.setTime(pending.at);
+  }
+  assert.fail("scheduled work never settled");
+}
+
+test("the first hour and the plan, end to end: questions, five assistants, proof, totals, pages, publish, live check", async () => {
+  const calls: Array<{ url: string; body?: Fields }> = [];
+  const f = corePipelineFixture(network(calls), { TREG_TOKEN: "synthetic-only" }, { syntheticHosts: ["api.github.com", "api.indexnow.org"] });
+  const now = f.now();
+  const siteId = f.add("sites", { domain: "acme.example", userId: "user_acme", siteName: "Acme Leads", siteSummary: "Daily lists of local businesses that need your service.",
+    targetAudienceSummary: "Web design agencies", keyFeatures: ["Daily lead lists"], targetCountry: "United States", publishMethod: "github", githubToken: "synthetic-only",
+    repoOwner: "acme", repoName: "site", repoDefaultBranch: "main", urlStructure: "/blog/[slug]", competitors: ["apollo.example"],
+    answers: { enabled: true, enabledAt: now, source: "signup" }, createdAt: now, updatedAt: now });
+  f.add("account_plan_entitlements", { userId: "user_acme", planFeatures: ["pentra_answers"], maxSites: 1, maxArticles: 0, syncVersion: 1, syncStartedAt: now });
+
+  f.setIdentity("user_acme");
+  await f.invoke("answers:confirmSetup", { siteId, competitors: [{ name: "Apollo", domain: "apollo.example" }, { name: "Hunter", domain: "hunter.example" }], country: "US" });
+  f.setIdentity(null);
+  await drain(f, 10 * 60_000);
+
+  const runs = f.tables.answer_runs;
+  assert.equal(runs.length, 1);
+  const run = runs[0];
+  assert.equal(run.kind, "snapshot");
+  assert.equal(run.status, "done");
+  assert.equal(run.done, QUESTIONS.length * 5, "every question to every assistant");
+  assert.equal(run.noAnswer, QUESTIONS.length, "no AI Overview is a no-answer, never 'not named'");
+  assert.equal(run.answered, QUESTIONS.length * 4);
+  assert.equal(run.named, QUESTIONS.length, "Perplexity named Acme Leads (and cited its page) in each answer");
+  assert.equal(run.cited, QUESTIONS.length);
+  assert.deepEqual(run.competitors.slice(0, 2), [{ name: "Apollo", named: QUESTIONS.length * 2 }, { name: "Hunter", named: QUESTIONS.length }]);
+  assert.equal(f.tables.answer_texts.length, QUESTIONS.length * 4, "every answer's full text kept as proof");
+  const chatgptCheck = f.tables.answer_checks.find((c) => c.assistant === "chatgpt")!;
+  assert.deepEqual(chatgptCheck.sources, [{ url: "https://leads.example/guide", title: "Lead guide", domain: "leads.example", own: false }]);
+  assert.deepEqual(chatgptCheck.competitorsNamed, ["Apollo"]);
+  assert.ok(f.tables.answer_questions.every((q) => q.latest && q.opportunity), "each question carries its latest result and opportunity");
+
+  const pages = f.tables.answer_pages;
+  assert.equal(pages.length, 5, "the first hour writes five pages");
+  for (const page of pages) {
+    assert.equal(page.status, "published", page.notWrittenReason ?? page.publishError ?? "");
+    assert.match(page.markdown, /## Sources\n\n1\. \[Lead guide\]\(https:\/\/leads\.example\/guide\)/);
+    assert.ok(page.facts.some((fact: Fields) => fact.url === "https://leads.example/guide"), "facts keep their source address");
+    assert.match(page.publishedUrl, /^https:\/\/acme\.example\/blog\//);
+  }
+  // The first live page places the site's IndexNow key file; every later one is submitted with it.
+  assert.deepEqual(pages.map((p) => p.indexNow?.status).sort(), ["key_committed", "submitted", "submitted", "submitted", "submitted"]);
+  assert.equal(calls.filter((c) => c.url === "https://api.indexnow.org/indexnow").length, 4);
+  const commits = calls.filter((c) => c.url.startsWith("https://api.github.com/repos/acme/site/contents/") && c.body?.content);
+  assert.ok(commits.some((c) => /^content\/blog\/.+\.md$/.test(decodeURIComponent(c.url.split("/contents/")[1]))));
+  const committed = Buffer.from(commits.find((c) => c.url.includes("/content/blog/"))!.body!.content, "base64").toString("utf8");
+  assert.match(committed, /^---\ntitle: "How do I find local businesses that need a new website\?"\ndescription: ".+"\ngenerator: "pentra"/);
+
+  const spend = f.tables.answer_spend;
+  assert.ok(spend.length > 0 && spend.every((r) => r.state === "settled"), "every hold settled");
+  const asked = spend.filter((r) => r.purpose === "ask").reduce((sum, r) => sum + r.actualMicroUsd, 0);
+  assert.equal(asked, QUESTIONS.length * (2800 + 1300 + 2400 + 2400 + 2000), "settled at the providers' reported cost");
+
+  f.setIdentity("user_acme");
+  const overview = await f.invoke("answers:overview", { siteId });
+  assert.equal(overview.access, "paid");
+  assert.equal(overview.runs[0].named, QUESTIONS.length);
+  assert.equal(overview.pages.length, 5);
+  const evidence = await f.invoke("answers:questionEvidence", { questionId: f.tables.answer_questions[0]._id });
+  assert.equal(evidence.checks.length, 5, "every count opens to its answers");
+  const full = await f.invoke("answers:answerText", { checkId: chatgptCheck._id });
+  assert.equal(full.text, "Agencies often use Apollo to find leads. A lead guide explains more.");
+  f.setIdentity("someone_else");
+  assert.equal(await f.invoke("answers:overview", { siteId }), null, "another account sees nothing");
+  f.assertOffline();
+});
+
+test("the free first hour keeps its pages as drafts and never re-asks; the plan is what publishes", async () => {
+  const calls: Array<{ url: string; body?: Fields }> = [];
+  const f = corePipelineFixture(network(calls), { TREG_TOKEN: "synthetic-only" }, { syntheticHosts: ["api.github.com", "api.indexnow.org"] });
+  const now = f.now();
+  const siteId = f.add("sites", { domain: "acme.example", userId: "user_free", siteName: "Acme Leads", siteSummary: "Daily lists of local businesses.",
+    publishMethod: "github", githubToken: "synthetic-only", repoOwner: "acme", repoName: "site", answers: { enabled: true, enabledAt: now, source: "signup" },
+    createdAt: now, updatedAt: now });
+  f.setIdentity("user_free");
+  await f.invoke("answers:confirmSetup", { siteId, competitors: [{ name: "Apollo" }] });
+  f.setIdentity(null);
+  await drain(f, 60_000);
+  assert.equal(f.tables.answer_runs.length, 1);
+  assert.equal(f.tables.answer_pages.length, 5);
+  assert.ok(f.tables.answer_pages.every((p) => p.status === "draft"), "drafts, not published");
+  assert.equal(calls.filter((c) => c.url.includes("api.github.com")).length, 0, "nothing written to the site");
+  f.setIdentity("user_free");
+  await assert.rejects(f.invoke("answers:runNow", { siteId }), /part of the Pentra plan/);
+  await assert.rejects(f.invoke("answerPages:publishDraft", { pageId: f.tables.answer_pages[0]._id }), /part of the Pentra plan/);
+  f.setIdentity(null);
+  await f.invoke("answersDispatch:dispatch", {});
+  await drain(f, 8 * 86_400_000);
+  assert.equal(f.tables.answer_runs.length, 1, "no weekly run on the free snapshot");
+  f.assertOffline();
+});
+
+test("a new account: its website created on Answers, read for the owner to confirm, competitors suggested (never itself)", async () => {
+  const calls: Array<{ url: string; body?: Fields }> = [];
+  const f = corePipelineFixture(network(calls), { TREG_TOKEN: "synthetic-only" }, { syntheticHosts: ["api.github.com", "api.indexnow.org"] });
+  f.setIdentity("user_new");
+  await assert.rejects(f.invoke("answers:createSite", { domain: "not a domain" }), /Enter your website's address/);
+  const { siteId, created } = await f.invoke("answers:createSite", { domain: "https://www.Newco.example/pricing" });
+  assert.equal(created, true);
+  const site = f.get(siteId)!;
+  assert.equal(site.domain, "newco.example");
+  assert.equal(site.answers.enabled, true);
+  assert.equal(site.autopilotEnabled, false, "the article engine is off for Answers sites");
+  f.setIdentity(null);
+  await drain(f, 60_000);
+  f.setIdentity("user_new");
+  const state = await f.invoke("answers:setupState", { siteId });
+  assert.equal(state.name, "Newco");
+  assert.equal(state.sells, "Daily lists of local businesses that need web design, with proof.");
+  assert.deepEqual(state.competitors, [{ name: "Apollo", domain: "apollo.example" }], "the business is never its own competitor");
+  assert.equal(state.country, "US");
+  assert.equal(state.run, null, "nothing is asked before the owner confirms");
+  assert.equal(calls.filter((c) => c.url.includes("treg.to")).length, 0);
+  assert.equal((await f.invoke("answers:createSite", { domain: "newco.example" })).created, false, "the same site again is the same site");
+  await assert.rejects(f.invoke("answers:createSite", { domain: "another.example" }), /One website per account/);
+  assert.deepEqual((await f.invoke("answers:mySites", {})).map((s: Fields) => s.domain), ["newco.example"]);
+  f.assertOffline();
+});
