@@ -2,7 +2,17 @@
 
 ## What Is This
 
-Pentra is an **autonomous AI-powered SEO content engine**. Users connect their website, and Pentra crawls it, generates a keyword-optimized content plan, writes research-backed articles with citations/images/fact-checking, and publishes them — all on autopilot. It is NOT just an "AI writer" — it's a full autonomous content department: research, writing, images, infographics, fact-checking, internal linking, schema markup, and multi-platform publishing.
+**Since Nov 8 2026 Pentra is "Pentra Answers"**: it gets a business recommended by AI assistants (ChatGPT, Perplexity,
+Gemini, Google AI Mode and AI Overviews; never Copilot, which has no provider) and proves it. It asks the assistants the
+questions the business's buyers ask, stores every answer as proof, finds the questions the business can win, writes and
+publishes answer pages for them, gets them indexed, and records every citation. Plan: `ops/PENTRA-ANSWERS-PLAN.md`.
+The engine: `convex/answers.ts`, `answerPages.ts`, `answerPublish.ts`, `answersDispatch.ts`, `convex/actions/answer*.ts`,
+`convex/lib/answer*.ts`; the API the UI uses: `ops/design/answers-api.md`. One plan: $249/month or $2,490/year (Clerk
+feature `pentra_answers`, `convex/lib/answersAccess.ts`); the first hour is free. Existing article customers keep the
+legacy article engine described below until they switch.
+
+The legacy product (article engine, still running for existing customers): an autonomous AI-powered SEO content engine
+that crawls a site, plans topics, writes research-backed articles and publishes them on autopilot.
 
 - **Live at**: https://pentra.dev
 - **Repo name**: SEOSentinel (legacy name, product is Pentra)
@@ -213,15 +223,15 @@ Usage tracked in `usage_log` (immutable — survives deletions). `claimGeneratio
 
 ## Design System
 
-- **Theme**: Dark navy/charcoal
-- **Primary**: `#0EA5E9` (sky blue) — buttons, active nav, links
-- **Accent**: `#22D3EE` (cyan) — highlights
-- **Background**: `#08090E` (near-black)
-- **Surface**: `#0F1117` (dark card)
-- **Text**: `#EDEEF1` (primary), `#8B8FA3` (muted), `#565A6E` (dim)
-- **Status colors**: Success `#22C55E`, Warning `#F59E0B`, Error `#EF4444`
-- All UI components are custom-built (no shadcn/ui)
-- CSS animations: pulse-glow, slide-up, fade-in, fade-in-up, shimmer, gradient-shift, marquee, float
+Redesigned Nov 2026 from Refero research (`ops/design/pentra-redesign-research.md`): Linear's dark "instrument" system.
+- Tokens are CSS variables in `src/app/pentra.css` mapped to Tailwind classes (`bg-surface-1`, `text-text-2`, ...).
+- Canvas `#08090A`, surfaces `#0F1011` / `#161718`, hairline borders `rgba(255,255,255,.08)`; text `#F7F8F8` / `#B4B8C0` / `#8A8F98`.
+- The primary action is a white button (one per view). Signal Blue `#3DA5F5` only means "you" (the customer's own name,
+  series, links, focus). Green / amber / red appear only inside evidence (named you / competitor named / wrong fact).
+- No visibility scores: every count shows its denominator and opens the raw answers (the EvidenceCard and Sheet).
+- Geist Sans + Geist Mono (mono only for recorded data). Hand-built components in `src/components/ui` (no shadcn/ui).
+- Motion: fades and short rises (200-560ms), reduced motion respected. Customer-hosted answer pages
+  (`src/app/hosted-answers`) use a neutral light layout in the customer's name.
 
 ## Environment Variables
 

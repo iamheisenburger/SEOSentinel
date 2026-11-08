@@ -1,0 +1,53 @@
+/* Pentra Answers (Nov 2026): the hosted answers pages a customer serves at answers.<their domain>. They carry the
+   customer's name, not Pentra's look: a light, readable article page that any assistant or buyer can read. */
+.hosted-answers {
+  --ha-bg: #ffffff;
+  --ha-text: #15171a;
+  --ha-text-2: #4a4f57;
+  --ha-text-3: #6b7079;
+  --ha-border: #e6e8eb;
+  --ha-surface: #f6f7f9;
+  --ha-link: #1f6fd1;
+  color-scheme: light;
+  min-height: 100vh;
+  background: var(--ha-bg);
+  color: var(--ha-text);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.hosted-answers a { color: var(--ha-link); text-underline-offset: 3px; }
+.hosted-answers .ha-header { border-bottom: 1px solid var(--ha-border); }
+.hosted-answers .ha-bar { max-width: 760px; margin: 0 auto; padding: 18px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.hosted-answers .ha-brand { color: var(--ha-text); font-weight: 600; font-size: 15px; text-decoration: none; letter-spacing: -0.01em; }
+.hosted-answers .ha-brand span { color: var(--ha-text-3); font-weight: 400; margin-left: 6px; }
+.hosted-answers .ha-cta-link { font-size: 14px; font-weight: 500; text-decoration: none; }
+.hosted-answers main { max-width: 760px; margin: 0 auto; padding: 48px 20px 72px; }
+.hosted-answers h1 { font-size: clamp(30px, 4vw, 40px); line-height: 1.15; letter-spacing: -0.025em; font-weight: 600; margin: 0 0 14px; text-wrap: balance; }
+.hosted-answers .ha-meta { color: var(--ha-text-3); font-size: 14px; margin: 0 0 36px; }
+.hosted-answers .ha-body { font-size: 17px; line-height: 1.7; color: var(--ha-text-2); }
+.hosted-answers .ha-body > p:first-child { font-size: 19px; color: var(--ha-text); }
+.hosted-answers .ha-body h2 { color: var(--ha-text); font-size: 23px; line-height: 1.3; letter-spacing: -0.015em; font-weight: 600; margin: 44px 0 12px; text-wrap: balance; }
+.hosted-answers .ha-body h3 { color: var(--ha-text); font-size: 18px; line-height: 1.4; font-weight: 600; margin: 28px 0 8px; }
+.hosted-answers .ha-body p, .hosted-answers .ha-body ul, .hosted-answers .ha-body ol { margin: 0 0 18px; }
+.hosted-answers .ha-body ul, .hosted-answers .ha-body ol { padding-left: 22px; }
+.hosted-answers .ha-body li { margin: 6px 0; }
+.hosted-answers .ha-body strong { color: var(--ha-text); font-weight: 600; }
+.hosted-answers .ha-body table { width: 100%; border-collapse: collapse; margin: 0 0 22px; font-size: 15px; }
+.hosted-answers .ha-body th, .hosted-answers .ha-body td { border-bottom: 1px solid var(--ha-border); padding: 10px 8px; text-align: left; vertical-align: top; }
+.hosted-answers .ha-body th { color: var(--ha-text); font-weight: 600; }
+.hosted-answers .ha-body blockquote { margin: 0 0 18px; padding: 4px 0 4px 16px; border-left: 3px solid var(--ha-border); color: var(--ha-text-2); }
+.hosted-answers .ha-body code { font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 0.9em; background: var(--ha-surface); padding: 1px 5px; border-radius: 4px; }
+.hosted-answers .ha-cta { margin: 44px 0 0; padding: 22px 24px; border: 1px solid var(--ha-border); border-radius: 12px; background: var(--ha-surface);
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.hosted-answers .ha-cta p { margin: 0; color: var(--ha-text); font-weight: 500; }
+.hosted-answers .ha-button { display: inline-flex; align-items: center; height: 40px; padding: 0 16px; border-radius: 8px; background: var(--ha-text); color: #fff;
+  font-weight: 600; font-size: 14px; text-decoration: none; }
+.hosted-answers .ha-button:hover { background: #000; }
+.hosted-answers .ha-list { list-style: none; padding: 0; margin: 28px 0 0; border-top: 1px solid var(--ha-border); }
+.hosted-answers .ha-list li { border-bottom: 1px solid var(--ha-border); }
+.hosted-answers .ha-list a { display: block; padding: 18px 0; text-decoration: none; }
+.hosted-answers .ha-list strong { display: block; color: var(--ha-text); font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+.hosted-answers .ha-list span { display: block; color: var(--ha-text-2); font-size: 15px; margin-top: 4px; }
+.hosted-answers footer { border-top: 1px solid var(--ha-border); }
+.hosted-answers footer div { max-width: 760px; margin: 0 auto; padding: 22px 20px 36px; color: var(--ha-text-3); font-size: 13px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.hosted-answers footer a { color: var(--ha-text-3); }

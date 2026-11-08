@@ -132,6 +132,10 @@ test("AI answers: buyer questions that never name the business, each assistant's
   assert.deepEqual(ai.judgeAnswer({ text: "Consider Drift or Qualified.", sources: ["https://www.leadpilot.chat/blog/x"] }, business), { named: true, cited: true });
   const chatgpt = ai.parseAssistantAnswer("chatgpt", { rows: [{ answer_text: "I'd start with Crawl4AI.", citations: [{ url: "https://crawl4ai.com" }], sources: [] }] });
   assert.deepEqual(chatgpt, { text: "I'd start with Crawl4AI.", sources: ["https://crawl4ai.com"] });
+  // Nov 8 2026: ChatGPT is asked through cloro (crawl4ai succeeded 3.9% of the time); its shape is read too.
+  assert.equal(ai.AI_ASSISTANT_ENDPOINTS.chatgpt, "cloro.ai-search.chatgpt.scrape");
+  assert.deepEqual(ai.parseAssistantAnswer("chatgpt", { success: true, result: { text: "Try LeadPilot.", sources: [{ url: "https://leadpilot.chat/" }] } }),
+    { text: "Try LeadPilot.", sources: ["https://leadpilot.chat/"] });
   assert.deepEqual(ai.parseAssistantAnswer("gemini", { success: true, result: { text: "A stock split is…", sources: [{ link: "https://example.com/a" }] } }),
     { text: "A stock split is…", sources: ["https://example.com/a"] });
   assert.deepEqual(ai.parseAssistantAnswer("google_ai_mode", { answered: true, answer: { source: "google_ai_mode", text: "Stripe was founded…" } }),

@@ -6,6 +6,7 @@ import {
   postAuthDestination,
   safeAuthDestination,
 } from "../src/lib/auth-redirect.ts";
+import { startAuthHref } from "../src/lib/domain-input.ts";
 
 /**
  * Regression for unbranded authentication.
@@ -56,7 +57,11 @@ test("the branded auth pages exist and carry Pentra context", () => {
     "utf8",
   );
   assert.match(shell, /Pentra/);
-  assert.match(shell, /Autopilot SEO/);
+  // Nov 2026: the shell sells the AI-answer snapshot, from the shared product facts (never a hard-coded list).
+  assert.match(shell, /See what AI assistants say about your business\./);
+  assert.match(shell, /ASSISTANT_NAMES_SENTENCE/);
+  assert.match(shell, /HONESTY_LINE/);
+  assert.doesNotMatch(shell, /Autopilot SEO|More customers from Google/);
   assert.match(shell, /How Pentra works/);
   assert.match(shell, /AuthFormLoading/);
   assert.match(shell, /\/legal\/terms/);
@@ -128,7 +133,21 @@ test("post-auth redirects cannot leave Pentra or loop through auth", () => {
 test("every customer auth entry stays inside branded Pentra UI", () => {
   assert.doesNotMatch(landingNav, /SignInButton|SignUpButton|mode=["']modal/);
   assert.match(landingNav, /href=["']\/sign-in["']/);
-  assert.match(landingNav, /href=["']\/sign-up["']/);
+  // Nov 2026: account creation starts from the free snapshot: the nav's "Check my site" opens /start, and /start
+  // hands over to Pentra's own /sign-up or /sign-in (never Clerk's modal or hosted portal), coming back to /start with
+  // the domain kept, so the site is created and the check continues where it left off.
+  assert.match(landingNav, /href=["']\/start["']/);
+  assert.equal(startAuthHref("/sign-up", "example.com"), "/sign-up?redirect_url=%2Fstart%3Fdomain%3Dexample.com");
+  assert.equal(startAuthHref("/sign-in", "example.com"), "/sign-in?redirect_url=%2Fstart%3Fdomain%3Dexample.com");
+  assert.equal(postAuthDestination({ redirectUrl: "/start?domain=example.com", plan: null, billing: null }), "/start?domain=example.com");
+  assert.equal(authCounterpartUrl("/sign-in", { redirectUrl: "/start?domain=example.com", plan: null, billing: null }),
+    "/sign-in?redirect_url=%2Fstart%3Fdomain%3Dexample.com");
+  const flow = readFileSync(new URL("../src/components/answers/onboarding/start-flow.tsx", import.meta.url), "utf8");
+  assert.match(flow, /startAuthHref\("\/sign-up", domain\)/);
+  assert.match(flow, /startAuthHref\("\/sign-in", domain\)/);
+  for (const path of ["../src/app/start/page.tsx", "../src/app/start/start-gate.tsx", "../src/components/answers/onboarding/start-flow.tsx"]) {
+    assert.doesNotMatch(readFileSync(new URL(path, import.meta.url), "utf8"), /SignUpButton|SignInButton|mode=["']modal/, path);
+  }
   assert.match(landingNav, /userProfileMode=["']modal["']/);
   assert.match(sidebar, /userProfileMode=["']modal["']/);
   assert.match(layout, /afterSignOutUrl=["']\/["']/);

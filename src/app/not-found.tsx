@@ -4,8 +4,8 @@ export default function NotFound() {
   return (
     <BrandedErrorState
       eyebrow="404 · Page not found"
-      title="This page isn’t in the index."
-      description="The link may be outdated or the page may have moved. Return to Pentra and keep your growth loop moving."
+      title="This page isn’t here."
+      description="The link may be old, or the page may have moved. Everything else is where you left it."
     />
   );
 }

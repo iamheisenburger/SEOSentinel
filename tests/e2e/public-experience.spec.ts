@@ -7,7 +7,7 @@ test("a protected product route lands inside Pentra-branded authentication", asy
   await expect(page.getByText("Product home")).toBeVisible();
   await expect(page.getByRole("link", { name: "Terms" })).toBeVisible();
   if ((page.viewportSize()?.width ?? 0) >= 1024) {
-    await expect(page.getByText("Autopilot SEO", { exact: true })).toBeVisible();
+    await expect(page.getByText("Your workspace", { exact: true })).toBeVisible();
     await expect(page.getByText("How Pentra works")).toBeVisible();
   } else {
     await expect(page.getByText("Pentra workspace")).toBeVisible();
@@ -19,25 +19,54 @@ test("sign-up remains inside the same Pentra product shell", async ({ page }) =>
   await expect(page.getByLabel("Pentra home")).toBeVisible();
   await expect(page.getByRole("link", { name: "Privacy Policy" })).toBeVisible();
   if ((page.viewportSize()?.width ?? 0) >= 1024) {
-    await expect(page.getByText("More customers from Google,")).toBeVisible();
+    await expect(page.getByText("See what AI assistants say about your business.")).toBeVisible();
     await expect(page.getByText("How Pentra works")).toBeVisible();
   } else {
     await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
   }
 });
 
-test("the free SEO check is public and turns away an address that isn't a website", async ({ page }) => {
+test("the retired free check sends people to the homepage, whose field turns away an address that isn't a website", async ({ page }) => {
   await page.goto("/check");
-  await expect(page.getByRole("heading", { name: "Which Google searches is your website missing?" })).toBeVisible();
-  await page.getByLabel("Your website address").fill("not a website");
-  await page.getByRole("button", { name: "Check my site" }).click();
-  await expect(page.getByText("Enter your website address, like yourbusiness.com.")).toBeVisible();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: "See what AI assistants say about your business." })).toBeVisible();
+  await page.locator("#hero-domain").fill("not a website");
+  await page.locator("#check").getByRole("button", { name: /Check my site/ }).click();
+  await expect(page.getByText("Enter your website address, like yourbusiness.com.").first()).toBeVisible();
+  await expect(page.locator("#hero-domain")).toHaveAttribute("aria-invalid", "true");
 });
 
-test("a free check's result page is shareable but never indexed", async ({ page }) => {
-  await page.goto("/check/www.GlazeLedger.co");
-  await expect(page).toHaveURL(/\/check\/glazeledger\.co$/);
-  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
+test("a shared free-check result link and the founding beta page redirect home permanently", async ({ request }) => {
+  for (const path of ["/check/www.GlazeLedger.co", "/beta"]) {
+    const response = await request.get(path, { maxRedirects: 0 });
+    expect(response.status(), path).toBe(308);
+    expect(response.headers()["location"], path).toBe("/");
+  }
+});
+
+test("a domain from the hero opens step one of the free snapshot", async ({ page }) => {
+  await page.goto("/");
+  await page.locator("#hero-domain").fill("https://www.Example.com/about");
+  await page.locator("#check").getByRole("button", { name: /Check my site/ }).click();
+  await expect(page).toHaveURL(/\/start\?domain=example\.com$/);
+  await expect(page.getByRole("heading", { name: "Create your account to check example.com" })).toBeVisible();
+  // The domain survives sign-up: Pentra's own /sign-up comes back to /start, which creates the site and reads it.
+  await expect(page.getByRole("link", { name: /Create free account/ })).toHaveAttribute("href", "/sign-up?redirect_url=%2Fstart%3Fdomain%3Dexample.com");
+});
+
+test("pricing shows one plan with a monthly and annual price", async ({ page }) => {
+  await page.goto("/pricing");
+  await expect(page.getByRole("heading", { name: "One plan. Everything included." })).toBeVisible();
+  await expect(page.getByText("$249", { exact: true })).toBeVisible();
+  await page.getByRole("radio", { name: /Annual/ }).click();
+  await expect(page.getByText("$2,490", { exact: true })).toBeVisible();
+  await expect(page.getByText(/We can't make an assistant recommend you/).first()).toBeVisible();
+});
+
+test("the method page explains how answers are collected", async ({ page }) => {
+  await page.goto("/method");
+  await expect(page.getByRole("heading", { name: "How we measure", level: 1 })).toBeVisible();
+  await expect(page.getByText(/fresh session with web search, from your country/).first()).toBeVisible();
 });
 
 test("unsubscribe is branded, confirmation-first, and never cacheable", async ({ page }) => {

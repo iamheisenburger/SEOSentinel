@@ -7,9 +7,17 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { ANSWERS_OWNER_DOMAINS, answersAllows, competitorFromDomain } from "./lib/answersAccess";
 import { countryCode } from "./lib/aiAnswers";
-import { siteAnswersAccess } from "./answers";
+import { ANSWERS_WEEK_MS, siteAnswersAccess } from "./answers";
 
-const WEEK_MS = 7 * 86_400_000, RECHECK_GAP_MS = 22 * 3_600_000, SETUP_RETRY_MS = 6 * 3_600_000;
+const WEEK_MS = ANSWERS_WEEK_MS, RECHECK_GAP_MS = 22 * 3_600_000, SETUP_RETRY_MS = 6 * 3_600_000;
+
+/** Pentra's own sites carry code-made settings; each version applies once.
+ * 2 (Nov 8 2026): competitor names re-derived ("copy.ai" is Copy.ai, never the word "Copy"); dawnlist and LeadPilot publish
+ * automatically now that their first drafts were read; pentra.dev restarts its first hour for the new product (its
+ * questions and drafts were written from the old article product's profile): set aside, re-read, asked again. */
+export const OWNER_SETTINGS_VERSION = 2;
+const OWNER_AUTOPUBLISH = new Set(["dawnlist.io", "leadpilot.chat"]);
+const OWNER_RESTART = new Set(["pentra.dev"]);
 
 export const dispatch = internalMutation({ args: {}, handler: async (ctx) => {
   const now = Date.now();
@@ -24,6 +32,12 @@ export const dispatch = internalMutation({ args: {}, handler: async (ctx) => {
         competitors: (site.competitors ?? []).map(competitorFromDomain).filter((c): c is { name: string; domain: string } => c !== null).slice(0, 8) } });
     }
   }
+  for (const domain of ANSWERS_OWNER_DOMAINS) {
+    for (const site of await ctx.db.query("sites").withIndex("by_domain", (q) => q.eq("domain", domain)).take(5)) {
+      if (site.deletionStatus || !site.answers || (site.answers.ownerVersion ?? 1) >= OWNER_SETTINGS_VERSION) continue;
+      await applyOwnerVersion(ctx, site, domain, now);
+    }
+  }
   const sites = await ctx.db.query("sites").withIndex("by_answers_enabled", (q) => q.eq("answers.enabled", true)).take(1000);
   let scheduled = 0;
   for (const site of sites) {
@@ -32,6 +46,36 @@ export const dispatch = internalMutation({ args: {}, handler: async (ctx) => {
   }
   return { sites: sites.length, scheduled };
 } });
+
+async function applyOwnerVersion(ctx: MutationCtx, site: Doc<"sites">, domain: string, now: number) {
+  const competitors = (site.competitors ?? []).map(competitorFromDomain).filter((c): c is { name: string; domain: string } => c !== null).slice(0, 8);
+  const autopublish = OWNER_AUTOPUBLISH.has(domain);
+  if (OWNER_RESTART.has(domain)) {
+    // Set aside, never deleted: the old questions are removed from tracking and the drafts retired; runs stay as history.
+    for (const q of await ctx.db.query("answer_questions").withIndex("by_site", (x) => x.eq("siteId", site._id)).take(200)) {
+      if (q.status !== "removed") await ctx.db.patch(q._id, { status: "removed", pageId: undefined });
+    }
+    for (const p of await ctx.db.query("answer_pages").withIndex("by_site_status", (x) => x.eq("siteId", site._id).eq("status", "draft")).take(100)) {
+      await ctx.db.patch(p._id, { status: "retired", rewriteReason: "Written for the old product; replaced after the relaunch", updatedAt: now });
+    }
+    const settings = { ...site.answers! };
+    delete settings.lastSnapshotRunId;
+    // pentra.dev's own blog renders from Pentra's database, not from repository files: its answer pages live at
+    // answers.pentra.dev (one DNS record; Pentra attaches the address once it holds a Vercel token).
+    const hostedDomain = `answers.${domain}`;
+    if (!(await ctx.db.query("answer_host_index").withIndex("by_host", (x) => x.eq("host", hostedDomain)).first())) {
+      await ctx.db.insert("answer_host_index", { host: hostedDomain, siteId: site._id, createdAt: now });
+    }
+    await ctx.db.patch(site._id, { answers: { ...settings, competitors, autopublish, ownerVersion: OWNER_SETTINGS_VERSION, snapshotRequestedAt: now + 3_600_000,
+      publishing: { target: "hosted", hostedDomain, hostedStatus: "pending_dns" } } });
+    await ctx.scheduler.runAfter(0, internal.actions.answerPublish.attachHostedDomain, { siteId: site._id });
+    // The relaunched homepage is read once it has deployed, then the first hour runs again from it.
+    await ctx.scheduler.runAfter(30 * 60_000, internal.actions.answersSetup.readSite, { siteId: site._id, force: true, then: "snapshot" });
+    return;
+  }
+  // With publishing on, the hourly rule below publishes their drafts (dispatchSite).
+  await ctx.db.patch(site._id, { answers: { ...site.answers!, competitors, autopublish, ownerVersion: OWNER_SETTINGS_VERSION } });
+}
 
 async function dispatchSite(ctx: MutationCtx, site: Doc<"sites">, now: number): Promise<number> {
   const settings = site.answers!;
@@ -52,6 +96,17 @@ async function dispatchSite(ctx: MutationCtx, site: Doc<"sites">, now: number): 
   if (settings.publishing?.target === "hosted" && settings.publishing.hostedStatus === "pending_dns" &&
     now - (settings.publishing.hostedCheckedAt ?? 0) >= 50 * 60_000) {
     await ctx.scheduler.runAfter(0, internal.actions.answerPublish.checkHostedDomain, { siteId: site._id });
+  }
+  // Drafts publish on the plan with automatic publishing on: the free hour's drafts go out within the hour after upgrading.
+  // A page that failed to publish is tried again once a day (its destination may have been fixed elsewhere).
+  if (allows.publish && settings.autopublish !== false) {
+    const waiting = [
+      ...await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", site._id).eq("status", "draft")).take(20),
+      ...(await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", site._id).eq("status", "publish_failed")).take(20))
+        .filter((p) => now - p.updatedAt >= 24 * 3_600_000),
+    ];
+    let delay = 0;
+    for (const page of waiting) { await ctx.scheduler.runAfter(delay, internal.actions.answerPublish.publishPage, { pageId: page._id }); delay += 15_000; }
   }
   if (!allows.weekly || asking) return 0;
   const lastFull = settings.lastFullRunAt ?? 0;
@@ -108,6 +163,38 @@ export const weeklyContext = internalQuery({ args: { siteId: v.id("sites") }, ha
   };
 } });
 
+/** The first hour's email: its run's counts, the drafts written so far, and the next step for this account. Once per site,
+ * only to an owner who gets Pentra's emails. */
+export const readyContext = internalQuery({ args: { siteId: v.id("sites"), runId: v.id("answer_runs") }, handler: async (ctx, { siteId, runId }) => {
+  const site = await ctx.db.get(siteId);
+  const run = await ctx.db.get(runId);
+  if (!site?.answers || site.deletionStatus || site.answers.snapshotEmailAt || !site.userId || !run || run.siteId !== siteId || run.status !== "done" || !run.answered) return null;
+  const contact = await ctx.db.query("account_contacts").withIndex("by_user", (q) => q.eq("userId", site.userId!)).first();
+  if (!contact?.emailUpdates) return null;
+  const access = await siteAnswersAccess(ctx, site);
+  const allows = answersAllows(access);
+  const drafts = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "draft")).take(10);
+  const writing = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "writing")).take(10);
+  const destination = Boolean(site.answers.publishing?.target) || Boolean(site.publishMethod && site.publishMethod !== "manual");
+  return {
+    to: contact.email,
+    input: {
+      name: site.siteName?.trim() || site.domain, domain: site.domain, questions: new Set(run.jobs.map((j) => j.questionId)).size,
+      answered: run.answered, named: run.named,
+      byAssistant: (run.byAssistant ?? []).map((a) => ({ assistant: a.assistant, answered: a.answered, named: a.named })),
+      competitors: run.competitors ?? [],
+      drafts: drafts.map((p) => ({ title: p.title })), writing: writing.length,
+      next: (!allows.publish ? "free" : !destination ? "connect" : site.answers.autopublish === false ? "review" : "publishing") as "free" | "publishing" | "connect" | "review",
+      dashboardUrl: "https://pentra.dev/dashboard", billingUrl: "https://pentra.dev/dashboard/billing", settingsUrl: "https://pentra.dev/dashboard/settings#publishing",
+    },
+  };
+} });
+
+export const markReadySent = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (site?.answers) await ctx.db.patch(siteId, { answers: { ...site.answers, snapshotEmailAt: Date.now() } });
+} });
+
 export const markWeeklySent = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await ctx.db.get(siteId);
   if (site?.answers) await ctx.db.patch(siteId, { answers: { ...site.answers, lastWeeklyEmailAt: Date.now() } });
@@ -125,6 +212,9 @@ export const ownerView = internalQuery({ args: { domain: v.string() }, handler: 
   const spend = await ctx.db.query("answer_spend").withIndex("by_site_month", (q) => q.eq("siteId", site._id)).take(500);
   return {
     domain, siteId: site._id, settings: { ...site.answers },
+    publishing: { method: site.publishMethod ?? null, repo: site.repoOwner && site.repoName ? `${site.repoOwner}/${site.repoName}` : null,
+      hasGithubToken: Boolean(site.githubToken), layout: site.githubLayout ? (site.githubLayout as { postsDir?: string; urlStructure?: string }) : null,
+      urlStructure: site.urlStructure ?? null },
     runs: runs.map((r) => ({ kind: r.kind, status: r.status, total: r.jobs.length, done: r.done, answered: r.answered, named: r.named, cited: r.cited,
       failed: r.failed, noAnswer: r.noAnswer, byAssistant: r.byAssistant ?? null, competitors: r.competitors ?? null, topSources: r.topSources ?? null,
       costMicroUsd: r.costMicroUsd, error: r.error ?? null, createdAt: r.createdAt, finishedAt: r.finishedAt ?? null })),

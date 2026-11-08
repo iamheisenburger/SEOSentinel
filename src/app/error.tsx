@@ -16,9 +16,9 @@ export default function ErrorPage({
 
   return (
     <BrandedErrorState
-      eyebrow="Pentra encountered an error"
-      title="The loop hit a snag."
-      description="Your work is still safe. Try the page again, or return to Pentra and continue from your workspace."
+      eyebrow="Something went wrong"
+      title="This page didn’t load."
+      description="Your data is safe. Try again, or go back to Pentra and pick up where you were."
       onRetry={reset}
     />
   );

@@ -40,8 +40,9 @@ test("P250 the repair chain offers it when a page's links need nothing, under a 
   assert.ok(RELATED_REPAIR_VERSION >= 4, "a fresh pass re-checks every page (P272: 5, its variants)");
 });
 
-// C3 (Cowork's launch audit): /beta did not say what happens after the 60 days.
-test("P250 the founding beta says what happens when it ends", () => {
-  assert.match(readFileSync("src/app/beta/page.tsx", "utf8"), /after 60 days you keep the free plan \(3 articles a month\) unless you choose a paid one/);
+// C3 (Cowork's launch audit): /beta did not say what happens after the 60 days. Nov 2026: the founding beta ended
+// with the move to one plan, so old /beta links land on the homepage instead of describing an offer that is gone.
+test("P250 the ended founding beta no longer describes an offer: /beta redirects home", () => {
+  assert.match(readFileSync("src/app/beta/page.tsx", "utf8"), /permanentRedirect\("\/"\);/);
 });
 

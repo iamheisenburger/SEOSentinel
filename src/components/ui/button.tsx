@@ -1,89 +1,156 @@
 "use client";
 
-import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
+import Link from "next/link";
+import {
+  forwardRef,
+  type AnchorHTMLAttributes,
+  type ButtonHTMLAttributes,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 
-type Variant = "primary" | "secondary" | "danger" | "ghost";
-type Size = "sm" | "md" | "lg";
+import { buttonStyles, type ButtonSize, type ButtonVariant } from "@/components/ui/button-styles";
+import { cx } from "@/lib/cx";
 
-interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: Variant;
-  size?: Size;
-  loading?: boolean;
-  icon?: ReactNode;
+export { buttonStyles, type ButtonSize, type ButtonVariant };
+
+export function Spinner({ className }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" className={cx("h-3 w-3 animate-spin", className)}>
+      <circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeOpacity="0.25" strokeWidth="1.5" />
+      <path d="M14.25 8A6.25 6.25 0 0 0 8 1.75" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
 }
 
-const variantStyles: Record<Variant, string> = {
-  primary:
-    "bg-[#F7F8F8] text-[#08090A] hover:bg-white active:bg-[#E4E5E7]",
-  secondary:
-    "bg-transparent border border-white/[0.1] text-[#F7F8F8] hover:border-white/[0.18] hover:bg-white/[0.04] active:bg-white/[0.07]",
-  danger:
-    "bg-[#EF4444]/[0.08] border border-[#EF4444]/[0.15] text-[#F87171] hover:bg-[#EF4444]/[0.12] hover:border-[#EF4444]/[0.25] active:bg-[#EF4444]/[0.18]",
-  ghost:
-    "bg-transparent text-[#8A8F98] hover:text-[#F7F8F8] hover:bg-white/[0.04] active:bg-white/[0.06]",
-};
-
-const sizeStyles: Record<Size, string> = {
-  sm: "px-3 py-1.5 text-[12px] gap-1.5 rounded-lg",
-  md: "px-4 py-2 text-[13px] gap-2 rounded-lg",
-  lg: "px-5 py-2.5 text-[14px] gap-2 rounded-lg",
-};
-
-export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  (
-    {
-      variant = "primary",
-      size = "md",
-      loading = false,
-      icon,
-      children,
-      disabled,
-      className = "",
-      ...props
-    },
-    ref,
-  ) => {
+/**
+ * Label and loading label share one grid cell, so the button keeps the width of the wider of the two
+ * and nothing next to it moves when it starts loading.
+ */
+function ButtonContent({
+  loading,
+  loadingLabel,
+  icon,
+  iconRight,
+  children,
+}: {
+  loading?: boolean;
+  loadingLabel?: ReactNode;
+  icon?: ReactNode;
+  iconRight?: ReactNode;
+  children?: ReactNode;
+}) {
+  if (loadingLabel === undefined) {
     return (
-      <button
-        ref={ref}
-        disabled={disabled || loading}
-        className={`
-          inline-flex items-center justify-center font-medium
-          transition-all duration-150 focus-ring
-          disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none
-          ${variantStyles[variant]}
-          ${sizeStyles[size]}
-          ${className}
-        `}
-        {...props}
-      >
-        {loading ? (
-          <svg
-            className="h-3.5 w-3.5 animate-spin"
-            viewBox="0 0 24 24"
-            fill="none"
-          >
-            <circle
-              className="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              strokeWidth="3"
-            />
-            <path
-              className="opacity-75"
-              fill="currentColor"
-              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-            />
-          </svg>
-        ) : icon ? (
-          <span className="shrink-0">{icon}</span>
-        ) : null}
+      <>
+        {loading ? <Spinner /> : icon ? <span className="inline-flex shrink-0">{icon}</span> : null}
         {children}
-      </button>
+        {iconRight ? <span className="inline-flex shrink-0">{iconRight}</span> : null}
+      </>
     );
-  },
-);
+  }
+  return (
+    <span className="grid gap-[inherit]">
+      <span
+        className={cx("col-start-1 row-start-1 inline-flex items-center justify-center gap-[inherit]", loading && "invisible")}
+        aria-hidden={loading || undefined}
+      >
+        {icon ? <span className="inline-flex shrink-0">{icon}</span> : null}
+        {children}
+        {iconRight ? <span className="inline-flex shrink-0">{iconRight}</span> : null}
+      </span>
+      <span
+        className={cx("col-start-1 row-start-1 inline-flex items-center justify-center gap-2", !loading && "invisible")}
+        aria-hidden={!loading || undefined}
+      >
+        <Spinner />
+        {loadingLabel}
+      </span>
+    </span>
+  );
+}
 
-Button.displayName = "Button";
+interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: ButtonVariant;
+  size?: ButtonSize;
+  loading?: boolean;
+  /** Shown with a spinner while loading, e.g. "Checking…". The button keeps its width. */
+  loadingLabel?: ReactNode;
+  icon?: ReactNode;
+  iconRight?: ReactNode;
+}
+
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
+  {
+    variant = "primary",
+    size = "md",
+    loading = false,
+    loadingLabel,
+    icon,
+    iconRight,
+    children,
+    disabled,
+    className,
+    type = "button",
+    ...props
+  },
+  ref,
+) {
+  return (
+    <button
+      ref={ref}
+      type={type}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
+      className={buttonStyles({ variant, size, className })}
+      {...props}
+    >
+      <ButtonContent loading={loading} loadingLabel={loadingLabel} icon={icon} iconRight={iconRight}>
+        {children}
+      </ButtonContent>
+    </button>
+  );
+});
+
+type ButtonLinkProps = Omit<ComponentProps<typeof Link>, "className"> & {
+  variant?: ButtonVariant;
+  size?: ButtonSize;
+  className?: string;
+  icon?: ReactNode;
+  iconRight?: ReactNode;
+};
+
+/** A link that looks like a button (navigation stays a real link: Cmd+click, middle-click and prefetch work). */
+export function ButtonLink({ variant = "primary", size = "md", className, icon, iconRight, children, ...props }: ButtonLinkProps) {
+  return (
+    <Link className={buttonStyles({ variant, size, className })} {...props}>
+      {icon ? <span className="inline-flex shrink-0">{icon}</span> : null}
+      {children}
+      {iconRight ? <span className="inline-flex shrink-0">{iconRight}</span> : null}
+    </Link>
+  );
+}
+
+/** Same as ButtonLink for in-page anchors and external URLs. */
+export function ButtonAnchor({
+  variant = "primary",
+  size = "md",
+  className,
+  icon,
+  iconRight,
+  children,
+  ...props
+}: AnchorHTMLAttributes<HTMLAnchorElement> & {
+  variant?: ButtonVariant;
+  size?: ButtonSize;
+  icon?: ReactNode;
+  iconRight?: ReactNode;
+}) {
+  return (
+    <a className={buttonStyles({ variant, size, className })} {...props}>
+      {icon ? <span className="inline-flex shrink-0">{icon}</span> : null}
+      {children}
+      {iconRight ? <span className="inline-flex shrink-0">{iconRight}</span> : null}
+    </a>
+  );
+}

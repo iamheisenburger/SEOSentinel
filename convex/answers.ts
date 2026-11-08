@@ -4,6 +4,9 @@ import { internalMutation, internalQuery, mutation, query, type MutationCtx, typ
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ConvexError, v } from "convex/values";
+import type { UserIdentity } from "convex/server";
+import { plausibleEmail } from "./lib/customerEmail";
+import { accountDeletionKey } from "./lib/accountDeletion";
 import {
   ANSWER_ASSISTANTS, ANSWER_QUESTION_INTENTS, cleanQuestion, isAnswerAssistant, questionKey, questionOpportunity, runTotals, spendMonth, hostOf,
 } from "./lib/answerEngine";
@@ -18,6 +21,9 @@ export const ANSWERS_MAX_ACTIVE_QUESTIONS = 40;
 /** Jobs (one question to one assistant) a worker claims at a time; its lease covers the slowest assistant twice. */
 export const ANSWERS_BATCH_JOBS = 30;
 export const ANSWERS_BATCH_LEASE_MS = 9 * 60_000;
+export const ANSWERS_WEEK_MS = 7 * 86_400_000;
+/** The first drafts take a few minutes each and are written side by side; the ready email waits for them. */
+export const ANSWERS_READY_EMAIL_DELAY_MS = 12 * 60_000;
 
 // ── Access ──
 
@@ -66,16 +72,16 @@ export const holdSpend = internalMutation({
     const siteRows = await ctx.db.query("answer_spend").withIndex("by_site_month", (q) => q.eq("siteId", args.siteId).eq("month", month)).take(5000);
     const freeRows = access === "free" && site.userId
       ? await ctx.db.query("answer_spend").withIndex("by_user_month", (q) => q.eq("userId", site.userId)).take(5000) : [];
-    const dayStart = now - (now % 86_400_000);
-    const dayRows = await ctx.db.query("answer_spend").withIndex("by_created", (q) => q.gte("createdAt", dayStart)).take(20_000);
+    const dayRow = await ctx.db.query("answer_spend_days").withIndex("by_day", (q) => q.eq("day", spendDay(now))).unique();
     const fits = spendFits({
       access, holdMicroUsd: hold,
       accountFreeSpent: freeRows.filter((r) => r.free).reduce((sum, r) => sum + spendCounted(r), 0),
       siteMonthSpent: siteRows.reduce((sum, r) => sum + spendCounted(r), 0),
-      fleetDaySpent: dayRows.reduce((sum, r) => sum + spendCounted(r), 0),
+      fleetDaySpent: dayRow?.microUsd ?? 0,
       fleetDailyCap: answersFleetDailyCap(process.env.ANSWERS_FLEET_DAILY_MICRO_USD),
     });
     if (!fits.ok) return fits;
+    await addToSpendDay(ctx, now, hold);
     const spendId = await ctx.db.insert("answer_spend", { siteId: args.siteId, ...(site.userId ? { userId: site.userId } : {}),
       ...(args.runId ? { runId: args.runId } : {}), ...(args.pageId ? { pageId: args.pageId } : {}), purpose: args.purpose,
       free: access === "free", month, reservedMicroUsd: hold, state: "held", createdAt: now });
@@ -89,10 +95,26 @@ export const settleSpend = internalMutation({
   handler: async (ctx, { spendId, actualMicroUsd, sent }) => {
     const row = await ctx.db.get(spendId);
     if (!row || row.state !== "held") return;
-    if (!sent) { await ctx.db.patch(spendId, { state: "released", settledAt: Date.now() }); return; }
-    await ctx.db.patch(spendId, { state: "settled", actualMicroUsd: Math.max(0, Math.ceil(actualMicroUsd)), settledAt: Date.now() });
+    if (!sent) {
+      await ctx.db.patch(spendId, { state: "released", settledAt: Date.now() });
+      await addToSpendDay(ctx, row.createdAt, -row.reservedMicroUsd);
+      return;
+    }
+    const actual = Math.max(0, Math.ceil(actualMicroUsd));
+    await ctx.db.patch(spendId, { state: "settled", actualMicroUsd: actual, settledAt: Date.now() });
+    await addToSpendDay(ctx, row.createdAt, actual - row.reservedMicroUsd);
   },
 });
+
+const spendDay = (timestamp: number) => new Date(timestamp).toISOString().slice(0, 10);
+/** The day's running total moves with every hold, settlement and release (a settlement replaces its hold's amount). */
+async function addToSpendDay(ctx: MutationCtx, timestamp: number, deltaMicroUsd: number) {
+  if (!deltaMicroUsd) return;
+  const day = spendDay(timestamp);
+  const row = await ctx.db.query("answer_spend_days").withIndex("by_day", (q) => q.eq("day", day)).unique();
+  if (row) await ctx.db.patch(row._id, { microUsd: Math.max(0, row.microUsd + deltaMicroUsd), updatedAt: Date.now() });
+  else await ctx.db.insert("answer_spend_days", { day, microUsd: Math.max(0, deltaMicroUsd), updatedAt: Date.now() });
+}
 
 // ── Questions ──
 
@@ -148,7 +170,8 @@ async function createRun(ctx: MutationCtx, site: Doc<"sites">, kind: "snapshot" 
   const now = Date.now();
   const runId = await ctx.db.insert("answer_runs", { siteId: site._id, kind, status: "asking", createdAt: now, startedAt: now,
     country: businessOf(site).country, assistants, jobs, nextJob: 0, done: 0, answered: 0, named: 0, cited: 0, failed: 0, noAnswer: 0,
-    costMicroUsd: 0, ...(kind === "snapshot" ? { followUp: "draft_first_pages" } : kind === "weekly" ? { followUp: "weekly_loop" } : {}) });
+    costMicroUsd: 0, progress: assistants.map((assistant) => ({ assistant, done: 0, answered: 0, named: 0 })),
+    ...(kind === "snapshot" ? { followUp: "draft_first_pages" } : kind === "weekly" ? { followUp: "weekly_loop" } : {}) });
   await ctx.scheduler.runAfter(0, internal.actions.answers.askBatch, { runId });
   return { runId, created: true };
 }
@@ -160,7 +183,11 @@ export const startRunInternal = internalMutation({
     if (!site || !answersEnabled(site)) return null;
     const access = await siteAnswersAccess(ctx, site);
     if (kind !== "snapshot" && !answersAllows(access).recheck) return null;
-    if (kind === "snapshot" && access === "free" && site.answers?.lastSnapshotRunId) return null;
+    if (kind === "snapshot" && access === "free" && site.answers?.lastSnapshotRunId) {
+      // The free hour runs once; one that failed before any answer came back (a provider outage) may run again.
+      const last = await ctx.db.get(site.answers.lastSnapshotRunId);
+      if (!last || !(last.status === "failed" && last.answered === 0)) return null;
+    }
     const created = await createRun(ctx, site, kind, questionIds);
     if (created.created && kind === "snapshot") {
       const settings = { ...site.answers! };
@@ -213,7 +240,10 @@ export const recordCheck = internalMutation({ args: { runId: v.id("answer_runs")
       citedPageUrls: check.citedPageUrls.slice(0, 10) });
     if (text && check.status === "answered") await ctx.db.insert("answer_texts", { siteId: run.siteId, checkId, text: text.slice(0, 40_000) });
     const answered = check.status === "answered";
-    await ctx.db.patch(runId, { done: run.done + 1, answered: run.answered + (answered ? 1 : 0), named: run.named + (answered && check.named ? 1 : 0),
+    const progress = (run.progress ?? run.assistants.map((assistant) => ({ assistant, done: 0, answered: 0, named: 0 })))
+      .map((p) => p.assistant === check.assistant ? { assistant: p.assistant, done: p.done + 1, answered: p.answered + (answered ? 1 : 0),
+        named: p.named + (answered && check.named ? 1 : 0) } : p);
+    await ctx.db.patch(runId, { progress, done: run.done + 1, answered: run.answered + (answered ? 1 : 0), named: run.named + (answered && check.named ? 1 : 0),
       cited: run.cited + (answered && check.cited ? 1 : 0), failed: run.failed + (check.status === "error" ? 1 : 0),
       noAnswer: run.noAnswer + (check.status === "no_answer" ? 1 : 0), costMicroUsd: run.costMicroUsd + Math.max(0, check.costMicroUsd) });
     return checkId;
@@ -291,7 +321,11 @@ export const finishRun = internalMutation({ args: { runId: v.id("answer_runs") }
   if (site?.answers) {
     await ctx.db.patch(site._id, { answers: { ...site.answers, ...(run.kind === "recheck" ? { lastRecheckAt: now } : { lastFullRunAt: now }) } });
   }
-  if (run.followUp === "draft_first_pages") await ctx.scheduler.runAfter(0, internal.actions.answerPages.draftTop, { siteId: run.siteId, count: 5 });
+  if (run.followUp === "draft_first_pages") {
+    await ctx.scheduler.runAfter(0, internal.actions.answerPages.draftTop, { siteId: run.siteId, count: 5 });
+    // "Your first hour is ready", for an owner who closed the tab: sent once the first drafts have had time to be written.
+    await ctx.scheduler.runAfter(ANSWERS_READY_EMAIL_DELAY_MS, internal.actions.answerEmail.sendSnapshotReady, { siteId: run.siteId, runId });
+  }
   if (run.followUp === "weekly_loop") await ctx.scheduler.runAfter(0, internal.actions.answerPages.weeklyLoop, { siteId: run.siteId, runId });
   return totals;
 } });
@@ -334,18 +368,22 @@ export const overview = query({ args: { siteId: v.id("sites") }, handler: async 
   const pages = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", siteId)).take(200);
   const citations = await ctx.db.query("answer_citations").withIndex("by_site_at", (q) => q.eq("siteId", siteId)).order("desc").take(20);
   const business = businessOf(site);
+  const allows = answersAllows(access);
+  // The weekly run: due a week after the last full run, started by the hourly dispatcher (so "within the hour" once due).
+  const nextRunAt = allows.weekly && site.answers?.lastFullRunAt && runs[0]?.status !== "asking"
+    ? Math.max(site.answers.lastFullRunAt + ANSWERS_WEEK_MS, Date.now()) : null;
   return {
-    site: { siteId, domain: site.domain, name: business.name, country: business.country, competitors: business.competitors,
+    site: { siteId, domain: site.domain, name: business.name, country: business.country, competitors: business.competitors, nextRunAt,
       confirmedAt: site.answers?.confirmedAt ?? null, setupError: site.answers?.setupError ?? null, publishing: site.answers?.publishing ?? null, autopublish: site.answers?.autopublish !== false,
       weeklyEmail: site.answers?.weeklyEmail !== false },
-    access, allows: answersAllows(access),
+    access, allows,
     runs: runs.map(publicRun),
     trend: runs.filter((r) => r.status === "done" && r.kind !== "recheck").reverse().map((r) => ({ at: r.finishedAt ?? r.createdAt, answered: r.answered, named: r.named,
       cited: r.cited, competitors: r.competitors ?? [] })),
     questions: questions.filter((q) => q.status !== "removed").map((q) => ({ questionId: q._id, question: q.question, intent: q.intent, source: q.source,
       status: q.status, createdAt: q.createdAt, latest: q.latest ?? null, opportunity: q.opportunity ?? null, pageId: q.pageId ?? null })),
     pages: pages.map((p) => ({ pageId: p._id, questionId: p.questionId, question: p.question, status: p.status, title: p.title, slug: p.slug,
-      publishedUrl: p.publishedUrl ?? null, publishedAt: p.publishedAt ?? null, indexNow: p.indexNow ?? null, citations: p.citations,
+      publishedUrl: p.publishedUrl ?? null, publishedAt: p.publishedAt ?? null, liveAt: p.liveAt ?? null, indexNow: p.indexNow ?? null, citations: p.citations,
       lastCitedAt: p.lastCitedAt ?? null, updatedAt: p.updatedAt, issues: p.issues, publishError: p.publishError ?? null,
       words: p.markdown.split(/\s+/).filter(Boolean).length, sources: p.sources.length, facts: p.facts.length })),
     citations: citations.map((c) => ({ citationId: c._id, checkId: c.checkId, questionId: c.questionId, pageId: c.pageId ?? null, assistant: c.assistant,
@@ -358,7 +396,12 @@ export const runProgress = query({ args: { runId: v.id("answer_runs") }, handler
   const run = await ctx.db.get(runId);
   if (!run || !(await ownedAnswersSite(ctx, run.siteId))) return null;
   const latest = await ctx.db.query("answer_checks").withIndex("by_run", (q) => q.eq("runId", runId)).order("desc").take(12);
-  const perAssistant = run.assistants.map((assistant) => ({ assistant, total: run.jobs.filter((j) => j.assistant === assistant).length }));
+  const perAssistant = run.assistants.map((assistant) => {
+    const live = run.progress?.find((p) => p.assistant === assistant);
+    const final = run.byAssistant?.find((b) => b.assistant === assistant);
+    return { assistant, total: run.jobs.filter((j) => j.assistant === assistant).length,
+      done: live?.done ?? final?.asked ?? 0, answered: live?.answered ?? final?.answered ?? 0, named: live?.named ?? final?.named ?? 0 };
+  });
   return { ...publicRun(run), perAssistant, feed: latest.map(publicCheck) };
 } });
 
@@ -407,9 +450,13 @@ export const confirmSetup = mutation({
     await ctx.db.patch(siteId, { ...(name?.trim() ? { siteName: name.trim().slice(0, 80) } : {}),
       answers: { ...site.answers!, competitors: cleaned, ...(country ? { country: countryCode(country) } : {}), confirmedAt: site.answers?.confirmedAt ?? now },
       updatedAt: now });
-    if (!site.answers?.lastSnapshotRunId && !(site.answers?.snapshotRequestedAt && now - site.answers.snapshotRequestedAt < 30 * 60_000)) {
-      const fresh = await ctx.db.get(siteId);
-      await ctx.db.patch(siteId, { answers: { ...fresh!.answers!, snapshotRequestedAt: now } });
+    // After a setup error ("Try again"), the first hour starts again at once; otherwise never twice within 30 minutes.
+    const failedSetup = Boolean(site.answers?.setupError);
+    if (!site.answers?.lastSnapshotRunId && (failedSetup || !(site.answers?.snapshotRequestedAt && now - site.answers.snapshotRequestedAt < 30 * 60_000))) {
+      const fresh = { ...(await ctx.db.get(siteId))!.answers! };
+      delete fresh.setupError;
+      delete fresh.setupErrorAt;
+      await ctx.db.patch(siteId, { answers: { ...fresh, snapshotRequestedAt: now } });
       await ctx.scheduler.runAfter(0, internal.actions.answers.prepareSnapshot, { siteId });
     }
     return { ok: true };
@@ -466,9 +513,10 @@ export const runNow = mutation({ args: { siteId: v.id("sites") }, handler: async
 export const ANSWERS_SITES_PER_ACCOUNT = 1;
 
 /** A new account's website: created on Pentra Answers, then read so the owner can confirm what Pentra understood. */
-export const createSite = mutation({ args: { domain: v.string() }, handler: async (ctx, { domain }) => {
+export const createSite = mutation({ args: { domain: v.string(), email: v.optional(v.string()) }, handler: async (ctx, { domain, email }) => {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) throw new ConvexError("Sign in first.");
+  await recordFirstContact(ctx, identity, email);
   const host = normalizeNewDomain(domain);
   if (!host) throw new ConvexError("Enter your website's address, like yourbusiness.com.");
   const mine = await ctx.db.query("sites").withIndex("by_user", (q) => q.eq("userId", identity.subject)).take(200);
@@ -492,22 +540,39 @@ export const createSite = mutation({ args: { domain: v.string() }, handler: asyn
   return { siteId, created: true };
 } });
 
+/** Where the first-hour email goes: the sign-in's verified address when the token carries one, else the address the
+ * signed-in page passed (Clerk's primary address). Only a first address is recorded here; billing's sync, which reads the
+ * verified address from Clerk on the server, stays the authority and corrects it. A deleted account never gets one again. */
+async function recordFirstContact(ctx: MutationCtx, identity: UserIdentity, passed: string | undefined) {
+  const claimed = typeof identity.email === "string" && identity.emailVerified !== false ? identity.email : null;
+  const email = plausibleEmail(claimed ?? passed ?? "");
+  if (!email) return;
+  if (await ctx.db.query("account_deletion_receipts").withIndex("by_account_key", (q) => q.eq("accountKey", accountDeletionKey(identity.subject))).first()) return;
+  if (await ctx.db.query("account_contacts").withIndex("by_user", (q) => q.eq("userId", identity.subject)).first()) return;
+  await ctx.db.insert("account_contacts", { userId: identity.subject, email, emailUpdates: true, updatedAt: Date.now() });
+}
+
 export const setupSite = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await ctx.db.get(siteId);
   return site && answersEnabled(site) ? { domain: hostOf(site.domain) } : null;
 } });
 
 export const saveSetupRead = internalMutation({
-  args: { siteId: v.id("sites"), error: v.optional(v.string()),
+  args: { siteId: v.id("sites"), error: v.optional(v.string()), force: v.optional(v.boolean()), then: v.optional(v.literal("snapshot")),
     read: v.optional(v.object({ name: v.string(), sells: v.string(), buyers: v.string(), offerings: v.array(v.string()), country: v.string(), local: v.boolean(),
       location: v.string(), competitors: v.array(v.object({ name: v.string(), domain: v.string() })) })) },
-  handler: async (ctx, { siteId, read, error }) => {
+  handler: async (ctx, { siteId, read, error, force, then }) => {
     const site = await ctx.db.get(siteId);
     if (!site?.answers) return;
     const now = Date.now();
-    if (!read) { await ctx.db.patch(siteId, { answers: { ...site.answers, readAt: now, readError: (error ?? "Pentra couldn't read the site.").slice(0, 300) } }); return; }
-    // The owner's own edits are never overwritten by a later read.
-    const confirmed = Boolean(site.answers.confirmedAt);
+    if (!read) {
+      await ctx.db.patch(siteId, { answers: { ...site.answers, readAt: now, readError: (error ?? "Pentra couldn't read the site.").slice(0, 300) } });
+      if (then === "snapshot") await ctx.scheduler.runAfter(0, internal.actions.answers.prepareSnapshot, { siteId });
+      return;
+    }
+    // The owner's own edits are never overwritten by a later read; a forced read (Pentra's own sites, re-read by code
+    // after their relaunch) replaces the profile it made itself.
+    const confirmed = Boolean(site.answers.confirmedAt) && !(force && isAnswersOwnerDomain(site.domain));
     await ctx.db.patch(siteId, {
       ...(!site.siteName && read.name ? { siteName: read.name } : {}),
       ...(!confirmed && read.sells ? { siteSummary: read.sells } : {}),
@@ -519,6 +584,7 @@ export const saveSetupRead = internalMutation({
         ...(!confirmed && !site.answers.competitors?.length ? { competitors: read.competitors } : {}) },
       updatedAt: now,
     });
+    if (then === "snapshot") await ctx.scheduler.runAfter(0, internal.actions.answers.prepareSnapshot, { siteId });
   } });
 
 /** The setup screen's state: what Pentra read (or why it couldn't), the suggested competitors, and the first run once it

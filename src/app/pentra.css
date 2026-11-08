@@ -1,183 +1,756 @@
-/* Global styles. Renamed from globals.css on Sep 24 so Vercel's restored Turbopack build cache
- * cannot keep serving a stale copy of the old file (it did: old Clerk button rules survived edits). */
+/* Pentra design system (Nov 2026 rebuild). Source of truth: ops/design/pentra-redesign-research.md.
+ * Linear's dark instrument canvas; white is the one primary action; Signal Blue (--you) means "you" only;
+ * green/amber/red exist only inside evidence. Depth comes from tone and 1px borders, never glow.
+ * The file keeps the name pentra.css (renamed from globals.css on Sep 24 so Vercel's restored Turbopack
+ * build cache cannot serve a stale copy of the old file). */
 @import "tailwindcss";
 
+/* ─── Tokens ─────────────────────────────────────────────────────────── */
+
 :root {
-  --background: #08090A;
-  --foreground: #F7F8F8;
-  --surface: #0E0F11;
-  --surface-2: #141518;
-  --surface-hover: #1A1B1E;
-  --border: rgba(255, 255, 255, 0.06);
-  --border-hover: rgba(255, 255, 255, 0.1);
-  --primary: #0EA5E9;
-  --primary-hover: #38BDF8;
-  --primary-glow: rgba(14, 165, 233, 0.15);
-  --accent: #22D3EE;
-  --text: #F7F8F8;
-  --text-muted: #8A8F98;
-  --text-dim: #62666D;
-  --success: #22C55E;
-  --warning: #F59E0B;
-  --error: #EF4444;
+  color-scheme: dark;
+
+  /* Canvas & surfaces */
+  --bg: #08090a;
+  --surface-1: #0f1011; /* raised: cards, sidebar */
+  --surface-2: #161718; /* elevated: popovers, hover rows, inputs inside cards */
+  --surface-3: #1d1e20; /* pressed / selected */
+  --overlay-scrim: rgba(4, 5, 6, 0.72);
+
+  /* Borders */
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --border-focus: #3da5f5;
+
+  /* Text ladder */
+  --text: #f7f8f8; /* primary, 18.9:1 */
+  --text-2: #b4b8c0; /* secondary body */
+  --text-3: #8a8f98; /* labels and meta, 13px and up */
+  --text-4: #62666d; /* disabled and decorative only, never information */
+
+  /* Primary action: white */
+  --action: #f7f8f8;
+  --on-action: #08090a;
+  --action-hover: #ffffff;
+  --action-active: #e2e4e7;
+
+  /* Signal Blue = "you": the customer's own name, their series, links, focus */
+  --you: #3da5f5;
+  --you-hover: #64b7f7;
+  --you-tint: rgba(61, 165, 245, 0.14);
+  --you-line: rgba(61, 165, 245, 0.45);
+
+  /* Evidence outcomes (data only) */
+  --named: #3fcf8e;
+  --named-tint: rgba(63, 207, 142, 0.12);
+  --rival: #e8b24a;
+  --rival-tint: rgba(232, 178, 74, 0.12);
+  --wrong: #f27a72;
+  --wrong-tint: rgba(242, 122, 114, 0.12);
+
+  /* Competitor series: a neutral ramp, never hues */
+  --series-c1: #8a8f98;
+  --series-c2: #62666d;
+  --series-c3: #4a4d52;
+
+  /* Elevation: overlays only */
+  --shadow-overlay: 0 0 0 1px var(--border-strong), 0 16px 48px rgba(0, 0, 0, 0.5);
+  --shadow-hero: 0 0 0 1px var(--border), 0 32px 80px -24px rgba(0, 0, 0, 0.7);
+
+  /* Motion */
+  --d-instant: 120ms;
+  --d-state: 200ms;
+  --d-enter: 320ms;
+  --d-exit: 200ms;
+  --d-section: 560ms;
+  --rise: 12px;
+  --shift: 24px; /* sheet travel */
+  --lift: -2px; /* clickable card hover */
+  --scale-from: 0.97;
+
+  /* Layout */
+  --container: 1200px;
+  --container-prose: 680px;
+  --app-sidebar: 232px;
+  --gutter: 16px;
+  --nav-height: 60px;
+}
+
+@media (min-width: 768px) {
+  :root {
+    --gutter: 32px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --d-state: 0ms;
+    --d-enter: 150ms;
+    --d-exit: 120ms;
+    --d-section: 150ms;
+    --rise: 0px;
+    --shift: 0px;
+    --lift: 0px;
+    --scale-from: 1;
+  }
+}
+
+/* Easing curves share Tailwind's names so `ease-out` utilities use the same curve as the tokens. */
+@theme {
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* enters, reveals */
+  --ease-in: cubic-bezier(0.4, 0, 1, 1); /* exits */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); /* state changes, glide */
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: var(--bg);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-scrim: var(--overlay-scrim);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-text-4: var(--text-4);
+  --color-action: var(--action);
+  --color-on-action: var(--on-action);
+  --color-action-hover: var(--action-hover);
+  --color-action-active: var(--action-active);
+  --color-you: var(--you);
+  --color-you-hover: var(--you-hover);
+  --color-you-tint: var(--you-tint);
+  --color-you-line: var(--you-line);
+  --color-named: var(--named);
+  --color-named-tint: var(--named-tint);
+  --color-rival: var(--rival);
+  --color-rival-tint: var(--rival-tint);
+  --color-wrong: var(--wrong);
+  --color-wrong-tint: var(--wrong-tint);
+  --color-series-c1: var(--series-c1);
+  --color-series-c2: var(--series-c2);
+  --color-series-c3: var(--series-c3);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  /* Radii by role (Tailwind's own rounded-* scale is left alone for existing screens) */
+  --radius-tag: 4px;
+  --radius-control: 6px;
+  --radius-card: 10px;
+  --radius-hero: 14px;
+
+  --shadow-overlay: var(--shadow-overlay);
+  --shadow-hero: var(--shadow-hero);
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  /* next/font sets --font-geist-sans on <body>. (`@theme inline` bakes --font-sans into utilities and
-   * never emits it as a variable, so var(--font-sans) here was invalid and the site fell back to
-   * the system font.) */
-  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+/* ─── Base ───────────────────────────────────────────────────────────── */
+
+@layer base {
+  html {
+    background: var(--bg);
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+    /* Anchor links glide; the fixed 60px nav never covers a section heading. Next.js keeps route changes
+     * instant because <html> carries data-scroll-behavior="smooth". */
+    scroll-behavior: smooth;
+    scroll-padding-top: 80px;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    /* next/font sets --font-geist-sans on <body>; `@theme inline` bakes --font-sans into utilities and
+     * never emits it as a variable, so the variable is named directly here. */
+    font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  ::selection {
+    background: rgba(247, 248, 248, 0.18);
+    color: var(--text);
+  }
+
+  a,
+  button,
+  summary,
+  [role="tab"],
+  [role="radio"],
+  [tabindex]:not([tabindex="-1"]) {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  a:focus-visible,
+  button:focus-visible,
+  summary:focus-visible,
+  [role="tab"]:focus-visible,
+  [role="radio"]:focus-visible,
+  [tabindex]:not([tabindex="-1"]):focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 2px;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.1); }
-
-/* Focus ring */
-.focus-ring { outline: none; }
-.focus-ring:focus-visible {
-  box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--primary);
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 }
 
-/* ─── Animations ───────────────────────────────── */
-
-@keyframes pulse-glow {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+/* Scrollbars stay quiet on the dark canvas */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
-.animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
-
-@keyframes slide-up {
-  from { opacity: 0; transform: translateY(16px) scale(0.96); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+::-webkit-scrollbar-track {
+  background: transparent;
 }
-.animate-slide-up { animation: slide-up 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.14);
+}
 
+/* ─── Type scale (seven sizes plus mono) ──────────────────────────────── */
+
+@layer components {
+  .type-display {
+    font-size: 40px;
+    line-height: 44px;
+    font-weight: 500;
+    letter-spacing: -0.035em;
+    text-wrap: balance;
+  }
+  .type-h1 {
+    font-size: 32px;
+    line-height: 36px;
+    font-weight: 500;
+    letter-spacing: -0.03em;
+    text-wrap: balance;
+  }
+  .type-h2 {
+    font-size: 28px;
+    line-height: 34px;
+    font-weight: 500;
+    letter-spacing: -0.022em;
+    text-wrap: balance;
+  }
+  .type-h3 {
+    font-size: 22px;
+    line-height: 28px;
+    font-weight: 500;
+    letter-spacing: -0.012em;
+    text-wrap: balance;
+  }
+  .type-h4 {
+    font-size: 16px;
+    line-height: 22px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+  }
+  .type-lead {
+    font-size: 17px;
+    line-height: 28px;
+    font-weight: 400;
+    color: var(--text-2);
+    text-wrap: pretty;
+  }
+  .type-body {
+    font-size: 16px;
+    line-height: 26px;
+    color: var(--text-2);
+    text-wrap: pretty;
+  }
+  .type-small {
+    font-size: 13px;
+    line-height: 20px;
+    letter-spacing: 0.01em;
+  }
+  .type-number {
+    font-size: 40px;
+    line-height: 44px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Mono = recorded data only: timestamps, counts, URLs, IDs, assistant names in metadata. */
+  .mono-label {
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    font-variant-numeric: tabular-nums;
+  }
+  .mono-caps {
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  @media (min-width: 768px) {
+    .type-display {
+      font-size: 52px;
+      line-height: 56px;
+    }
+    .type-h1 {
+      font-size: 40px;
+      line-height: 44px;
+    }
+    .type-h2 {
+      font-size: 32px;
+      line-height: 38px;
+    }
+    .type-lead {
+      font-size: 19px;
+      line-height: 30px;
+    }
+  }
+
+  @media (min-width: 1280px) {
+    .type-display {
+      font-size: 64px;
+      line-height: 68px;
+    }
+    .type-h1 {
+      font-size: 48px;
+      line-height: 52px;
+    }
+  }
+
+  /* ─── Layout primitives ─── */
+  .container-page {
+    width: 100%;
+    max-width: calc(var(--container) + 2 * var(--gutter));
+    margin-inline: auto;
+    padding-inline: var(--gutter);
+  }
+  .container-prose {
+    width: 100%;
+    max-width: calc(var(--container-prose) + 2 * var(--gutter));
+    margin-inline: auto;
+    padding-inline: var(--gutter);
+  }
+  .section {
+    padding-block: 96px;
+  }
+  @media (min-width: 1024px) {
+    .section {
+      padding-block: 128px;
+    }
+  }
+
+  /* Links inside prose: text-coloured with a Signal Blue underline (links belong to "you"). */
+  .link {
+    color: var(--text);
+    text-decoration: underline;
+    text-decoration-color: var(--you-line);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+    transition: text-decoration-color var(--d-instant) var(--ease-out), color var(--d-instant) var(--ease-out);
+  }
+  .link:hover {
+    text-decoration-color: var(--you);
+  }
+
+  /* Evidence highlights. The business is filled, competitors are underlined: never both filled. */
+  .hl-you {
+    color: var(--text);
+    border-radius: 2px;
+    padding: 0 2px;
+    margin: 0 -2px;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+    background-color: transparent;
+    background-image: linear-gradient(var(--you-tint), var(--you-tint));
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+  }
+  /* The signature moment: the business highlight inks in left to right (300ms), just after the answer
+   * appears, once per card. It runs from CSS, so it also plays on first paint without JavaScript. */
+  .hl-you[data-ink="play"] {
+    animation: ink-in 300ms var(--ease-out) 320ms both;
+  }
+  .hl-rival {
+    color: var(--text);
+    text-decoration: underline dotted var(--rival);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+  .hl-wrong {
+    color: var(--text);
+    text-decoration: underline wavy var(--wrong);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 4px;
+  }
+  .hl-quote {
+    color: var(--text);
+    border-radius: 2px;
+    padding: 0 2px;
+    margin: 0 -2px;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+    background: var(--named-tint);
+  }
+
+  /* Clickable containers rise 2px and their border brightens; nothing else moves on hover. */
+  .lift {
+    transition:
+      transform var(--d-state) var(--ease-out),
+      border-color var(--d-state) var(--ease-out),
+      background-color var(--d-state) var(--ease-out);
+  }
+  .lift:hover {
+    transform: translateY(var(--lift));
+    border-color: var(--border-strong);
+  }
+
+  .focus-ring {
+    outline: none;
+  }
+  .focus-ring:focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 2px;
+  }
+
+  /* Skeletons match the final layout: a 1.4s shimmer from surface-2 to surface-3, static under reduced motion. */
+  .skeleton {
+    background-color: var(--surface-2);
+    background-image: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.4s var(--ease-in-out) infinite;
+  }
+
+  /* Long-form legal text: a readable measure, quiet hierarchy, links underlined in Signal Blue. */
+  .prose-legal {
+    font-size: 16px;
+    line-height: 27px;
+    color: var(--text-2);
+  }
+  .prose-legal > * + * {
+    margin-top: 16px;
+  }
+  .prose-legal h2 {
+    margin-top: 48px;
+    font-size: 22px;
+    line-height: 28px;
+    font-weight: 500;
+    letter-spacing: -0.012em;
+    color: var(--text);
+  }
+  .prose-legal h3 {
+    margin-top: 28px;
+    font-size: 16px;
+    line-height: 24px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .prose-legal h2 + *,
+  .prose-legal h3 + * {
+    margin-top: 10px;
+  }
+  .prose-legal p {
+    text-wrap: pretty;
+  }
+  .prose-legal ul {
+    list-style: disc;
+    padding-left: 20px;
+  }
+  .prose-legal li + li {
+    margin-top: 6px;
+  }
+  .prose-legal li::marker {
+    color: var(--text-4);
+  }
+  .prose-legal strong {
+    font-weight: 600;
+    color: var(--text);
+  }
+  .prose-legal a {
+    color: var(--text);
+    text-decoration: underline;
+    text-decoration-color: var(--you-line);
+    text-underline-offset: 3px;
+  }
+  .prose-legal a:hover {
+    text-decoration-color: var(--you);
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ─── Motion ─────────────────────────────────────────────────────────── */
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--rise));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
 @keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
-.animate-fade-in { animation: fade-in 0.15s ease-out; }
-
-@keyframes fade-in-up {
-  from { opacity: 0; transform: translateY(24px); }
-  to { opacity: 1; transform: translateY(0); }
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
-.animate-fade-in-up { animation: fade-in-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) both; }
-
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(var(--scale-from));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes scale-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: scale(var(--scale-from));
+  }
+}
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateX(var(--shift));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes sheet-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(var(--shift));
+  }
+}
+@keyframes drop-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--rise) * -0.67));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes drop-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(calc(var(--rise) * -0.67));
+  }
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--rise) * 0.67));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
 @keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
 }
-.animate-shimmer {
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.03), transparent);
-  background-size: 200% 100%;
-  animation: shimmer 3s ease-in-out infinite;
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
-
-@keyframes gradient-shift {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
+@keyframes progress-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
 }
-.animate-gradient {
-  background-size: 200% 200%;
-  animation: gradient-shift 8s ease infinite;
-}
-
-@keyframes marquee {
-  0% { transform: translateX(0); }
-  100% { transform: translateX(-50%); }
-}
-.animate-marquee { animation: marquee 30s linear infinite; }
-
-@keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-8px); }
-}
-.animate-float { animation: float 6s ease-in-out infinite; }
-
-@keyframes beam {
-  0% { opacity: 0; transform: translateY(-100%); }
-  50% { opacity: 1; }
-  100% { opacity: 0; transform: translateY(100%); }
+@keyframes ink-in {
+  from {
+    background-size: 0% 100%;
+  }
+  to {
+    background-size: 100% 100%;
+  }
 }
 
-/* ─── Gradient border utility ──────────────────── */
-.gradient-border {
-  position: relative;
+/* Overlays: sheets slide 24px and fade (320ms in, 200ms out); modals fade and scale from .97. */
+.motion-scrim[data-state="open"] {
+  animation: fade-in var(--d-enter) var(--ease-out) both;
 }
-.gradient-border::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(
-    135deg,
-    rgba(14, 165, 233, 0.2),
-    rgba(255, 255, 255, 0.05),
-    rgba(34, 211, 238, 0.15)
-  );
-  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
+.motion-scrim[data-state="closed"] {
+  animation: fade-out var(--d-exit) var(--ease-in) both;
 }
-
-/* ─── Noise texture overlay ────────────────────── */
-.noise-overlay::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  opacity: 0.015;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
-  pointer-events: none;
-  border-radius: inherit;
+.motion-sheet[data-state="open"] {
+  animation: sheet-in var(--d-enter) var(--ease-out) both;
+}
+.motion-sheet[data-state="closed"] {
+  animation: sheet-out var(--d-exit) var(--ease-in) both;
+}
+.motion-modal[data-state="open"] {
+  animation: scale-in var(--d-enter) var(--ease-out) both;
+}
+.motion-modal[data-state="closed"] {
+  animation: scale-out var(--d-exit) var(--ease-in) both;
+}
+.motion-drop[data-state="open"] {
+  animation: drop-in var(--d-enter) var(--ease-out) both;
+}
+.motion-drop[data-state="closed"] {
+  animation: drop-out var(--d-exit) var(--ease-in) both;
+}
+.motion-toast {
+  animation: toast-in var(--d-enter) var(--ease-out) both;
+}
+.motion-toast[data-state="closed"] {
+  animation: fade-out var(--d-exit) var(--ease-in) both;
 }
 
-/* ─── Glow card effect ─────────────────────────── */
-.glow-card {
-  position: relative;
-  overflow: hidden;
+/* Selects: the native control with Pentra's chevron (keyboard and screen readers keep the native behaviour). */
+.select-field {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%238a8f98' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 6.5 8 10l3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 34px !important;
 }
-.glow-card::after {
-  content: "";
-  position: absolute;
-  top: -50%;
-  left: -50%;
-  width: 200%;
-  height: 200%;
-  background: radial-gradient(
-    circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
-    rgba(14, 165, 233, 0.06) 0%,
-    transparent 50%
-  );
-  pointer-events: none;
+
+/* Charts: lines draw in once (500ms) on first view; a new streamed answer fades and rises 8px (240ms). */
+@keyframes draw-line {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.chart-draw {
+  stroke-dasharray: 1;
+  animation: draw-line 500ms var(--ease-out) both;
+}
+@keyframes feed-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.feed-in {
+  animation: feed-in 240ms var(--ease-out) both;
+}
+
+/* Page content enters once per navigation; the nav never animates, so the chrome feels fixed. */
+.page-enter {
+  animation: rise-in var(--d-enter) var(--ease-out) both;
+}
+.pulse-dot {
+  animation: pulse-dot 1.6s var(--ease-in-out) infinite;
+}
+
+/* Section reveals: Reveal hides only sections that start below the fold, then fades them up once. */
+.reveal-pending [data-reveal] {
   opacity: 0;
-  transition: opacity 0.3s;
+  transform: translateY(var(--rise));
 }
-.glow-card:hover::after {
-  opacity: 1;
+.reveal-run [data-reveal] {
+  transition:
+    opacity var(--d-section) var(--ease-out),
+    transform var(--d-section) var(--ease-out);
+  transition-delay: calc(var(--reveal-i, 0) * var(--reveal-stagger, 60ms));
 }
 
-/* ─── Clerk component dark-theme overrides ────── */
-/* Scoped to .cl-* classes only — no broad selectors that bleed into the site */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton,
+  .pulse-dot {
+    animation: none;
+  }
+  .reveal-run [data-reveal] {
+    transition-delay: 0ms;
+  }
+  .hl-you[data-ink] {
+    animation: none;
+  }
+  .chart-draw {
+    animation: none;
+    stroke-dasharray: none;
+  }
+  .feed-in {
+    animation: fade-in 150ms linear both;
+  }
+}
 
-/* ── Backgrounds ── */
+/* ─── Clerk (sign-in, sign-up, profile, billing) on Pentra tokens ────── */
+/* Scoped to .cl-* classes only; no broad selectors bleed into the site. */
+
 .cl-card,
 .cl-modalContent,
 .cl-userButtonPopoverCard,
@@ -187,30 +760,25 @@ body {
 .cl-scrollBox,
 .cl-main,
 .cl-page {
-  background-color: #0E0F11 !important;
-  background: #0E0F11 !important;
+  background-color: var(--surface-1) !important;
+  background: var(--surface-1) !important;
   color-scheme: dark !important;
 }
 
 .cl-menuList,
 .cl-formFieldInput {
-  background-color: #141518 !important;
-  background: #141518 !important;
+  background-color: var(--surface-2) !important;
+  background: var(--surface-2) !important;
 }
 
 .cl-profileSectionContent,
 .cl-profileSection,
-.cl-accordionContent {
-  background-color: transparent !important;
-  background: transparent !important;
-}
-
+.cl-accordionContent,
 .cl-navbarButton {
   background-color: transparent !important;
   background: transparent !important;
 }
 
-/* ── Primary text (bright) ── */
 .cl-headerTitle,
 .cl-profileSectionTitle,
 .cl-profileSectionTitleText,
@@ -218,17 +786,19 @@ body {
 .cl-breadcrumbsItem__currentPage,
 .cl-menuItem,
 .cl-selectOption,
-.cl-formFieldLabel,
 .cl-formFieldInput,
 .cl-accordionTriggerButton,
 .cl-userPreviewMainIdentifier,
 .cl-userPreviewTextContainer,
 .cl-badge,
 .cl-tagInputContainer {
-  color: #F7F8F8 !important;
+  color: var(--text) !important;
 }
 
-/* ── Secondary text (muted) ── */
+.cl-formFieldLabel {
+  color: var(--text-2) !important;
+}
+
 .cl-headerSubtitle,
 .cl-profileSectionSubtitle,
 .cl-breadcrumbsItem,
@@ -237,11 +807,11 @@ body {
 .cl-formFieldInfoText,
 .cl-footerActionText,
 .cl-menuItemDescription,
-.cl-selectOptionDescription {
-  color: #8A8F98 !important;
+.cl-selectOptionDescription,
+.cl-dividerText {
+  color: var(--text-3) !important;
 }
 
-/* ── Borders ── */
 .cl-card,
 .cl-modalContent,
 .cl-userButtonPopoverCard,
@@ -252,99 +822,98 @@ body {
 .cl-menuList,
 .cl-accordionTriggerButton,
 .cl-dividerLine {
-  border-color: rgba(255, 255, 255, 0.08) !important;
+  border-color: var(--border) !important;
 }
 
-/* ── Navbar active state ── */
 .cl-navbarButton[data-active="true"],
 .cl-navbarButton:hover {
-  background-color: rgba(255, 255, 255, 0.06) !important;
-  color: #F7F8F8 !important;
+  background-color: var(--surface-3) !important;
+  color: var(--text) !important;
 }
 
-/* ── Action buttons in UserButton popover ── */
 .cl-userButtonPopoverActionButton,
 .cl-userButtonPopoverActionButtonText,
 .cl-userButtonPopoverActionButtonIcon,
 .cl-footerActionLink,
 .cl-formResendCodeLink {
-  color: #D0D6E0 !important;
+  color: var(--text-2) !important;
+}
+
+.cl-footerActionLink:hover {
+  color: var(--text) !important;
 }
 
 .cl-userButtonPopoverActionButton:hover {
-  background-color: rgba(255, 255, 255, 0.05) !important;
-  color: #F7F8F8 !important;
+  background-color: var(--surface-2) !important;
+  color: var(--text) !important;
 }
 
-/* ── Footer ── */
 .cl-userButtonPopoverFooter,
 .cl-footer {
-  background-color: #0E0F11 !important;
-  border-color: rgba(255, 255, 255, 0.06) !important;
+  background-color: var(--surface-1) !important;
+  border-color: var(--border) !important;
 }
 
 .cl-footerPagesLink {
-  color: #62666D !important;
+  color: var(--text-4) !important;
 }
 
-/* ── Profile sections ── */
 .cl-profileSection + .cl-profileSection {
-  border-top-color: rgba(255, 255, 255, 0.06) !important;
+  border-top-color: var(--border) !important;
 }
 
+/* The one primary action inside Clerk is white, like everywhere else. */
 .cl-profileSectionPrimaryButton,
 .cl-formButtonPrimary {
-  background-color: #F7F8F8 !important;
-  color: #08090A !important;
+  background-color: var(--action) !important;
+  color: var(--on-action) !important;
   box-shadow: none !important;
+  border-radius: 6px !important;
+  font-weight: 600 !important;
 }
 
 .cl-profileSectionPrimaryButton:hover,
 .cl-formButtonPrimary:hover {
-  background-color: #FFFFFF !important;
+  background-color: var(--action-hover) !important;
 }
 
 .cl-formButtonReset {
-  color: #94A3B8 !important;
-  border-color: rgba(255, 255, 255, 0.1) !important;
+  color: var(--text-2) !important;
+  border-color: var(--border-strong) !important;
 }
 
-/* ── Social/OAuth buttons ── */
 .cl-socialButtonsBlockButton,
 .cl-socialButtonsIconButton {
-  background-color: #1E2130 !important;
-  border-color: rgba(255, 255, 255, 0.1) !important;
-  color: #F7F8F8 !important;
+  background-color: transparent !important;
+  border-color: var(--border-strong) !important;
+  color: var(--text) !important;
+  box-shadow: none !important;
 }
 
 .cl-socialButtonsBlockButton:hover,
 .cl-socialButtonsIconButton:hover {
-  background-color: #252838 !important;
+  background-color: var(--surface-2) !important;
 }
 
-/* ── Input focus ── */
 .cl-formFieldInput:focus {
-  background-color: #1E2130 !important;
-  border-color: #0EA5E9 !important;
-  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.15) !important;
+  background-color: var(--surface-2) !important;
+  border-color: var(--border-focus) !important;
+  box-shadow: 0 0 0 3px var(--you-tint) !important;
 }
 
-/* ── Select dropdown ── */
 .cl-selectButton__role,
 .cl-selectButton {
-  background-color: #1E2130 !important;
-  border-color: rgba(255, 255, 255, 0.1) !important;
-  color: #F7F8F8 !important;
+  background-color: var(--surface-2) !important;
+  border-color: var(--border-strong) !important;
+  color: var(--text) !important;
 }
 
-/* ── Alert ── */
 .cl-alert {
-  background-color: #1E2130 !important;
-  border-color: rgba(255, 255, 255, 0.08) !important;
-  color: #F7F8F8 !important;
+  background-color: var(--surface-2) !important;
+  border-color: var(--border) !important;
+  color: var(--text) !important;
 }
 
-/* ── Root color scheme ── */
 .cl-rootBox,
 .cl-signIn-root,
 .cl-signUp-root,

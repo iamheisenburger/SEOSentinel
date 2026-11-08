@@ -56,6 +56,7 @@ export const recordIndexing = internalMutation({ args: { pageId: v.id("answer_pa
     if (!page) return;
     const now = Date.now();
     await ctx.db.patch(pageId, { ...(indexNow ? { indexNow: { at: now, status: indexNow } } : {}), ...(sitemap ? { googleSitemapAt: now } : {}),
+      ...(!liveIssue && !page.liveAt ? { liveAt: now } : {}),
       ...(liveIssue ? { issues: [...new Set([...page.issues.filter((i) => !i.startsWith("Not live yet")), liveIssue])] }
         : { issues: page.issues.filter((i) => !i.startsWith("Not live yet")) }), updatedAt: now });
   } });
@@ -153,11 +154,24 @@ export const pageForIndexing = internalQuery({ args: { pageId: v.id("answer_page
 export const hostedState = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await ctx.db.get(siteId);
   const publishing = site?.answers?.publishing;
-  return site && publishing?.target === "hosted" && publishing.hostedDomain ? { host: publishing.hostedDomain, status: publishing.hostedStatus ?? "pending_dns" } : null;
+  return site && publishing?.target === "hosted" && publishing.hostedDomain
+    ? { host: publishing.hostedDomain, status: publishing.hostedStatus ?? "pending_dns", hasKey: Boolean(site.answers?.indexNowKey) } : null;
 } });
 
 /** The hosted address went live: pages that waited for it publish now. */
 export const retryHostedPublishes = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const failed = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "publish_failed")).take(50);
+  let delay = 0;
+  for (const page of failed) { await ctx.scheduler.runAfter(delay, internal.actions.answerPublish.publishPage, { pageId: page._id }); delay += 1_500; }
+  return { retried: failed.length };
+} });
+
+/** The owner connected a publishing destination (or switched to hosted): pages that failed for lack of one publish now. */
+export const retryFailed = mutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const identity = await ctx.auth.getUserIdentity();
+  const site = await ctx.db.get(siteId);
+  if (!identity || !site || site.userId !== identity.subject || !answersEnabled(site)) throw new ConvexError("Site not found.");
+  if (!answersAllows(await siteAnswersAccess(ctx, site)).publish) return { retried: 0 };
   const failed = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "publish_failed")).take(50);
   let delay = 0;
   for (const page of failed) { await ctx.scheduler.runAfter(delay, internal.actions.answerPublish.publishPage, { pageId: page._id }); delay += 1_500; }
