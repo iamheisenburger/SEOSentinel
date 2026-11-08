@@ -498,16 +498,21 @@ export const setupSite = internalQuery({ args: { siteId: v.id("sites") }, handle
 } });
 
 export const saveSetupRead = internalMutation({
-  args: { siteId: v.id("sites"), error: v.optional(v.string()),
+  args: { siteId: v.id("sites"), error: v.optional(v.string()), force: v.optional(v.boolean()), then: v.optional(v.literal("snapshot")),
     read: v.optional(v.object({ name: v.string(), sells: v.string(), buyers: v.string(), offerings: v.array(v.string()), country: v.string(), local: v.boolean(),
       location: v.string(), competitors: v.array(v.object({ name: v.string(), domain: v.string() })) })) },
-  handler: async (ctx, { siteId, read, error }) => {
+  handler: async (ctx, { siteId, read, error, force, then }) => {
     const site = await ctx.db.get(siteId);
     if (!site?.answers) return;
     const now = Date.now();
-    if (!read) { await ctx.db.patch(siteId, { answers: { ...site.answers, readAt: now, readError: (error ?? "Pentra couldn't read the site.").slice(0, 300) } }); return; }
-    // The owner's own edits are never overwritten by a later read.
-    const confirmed = Boolean(site.answers.confirmedAt);
+    if (!read) {
+      await ctx.db.patch(siteId, { answers: { ...site.answers, readAt: now, readError: (error ?? "Pentra couldn't read the site.").slice(0, 300) } });
+      if (then === "snapshot") await ctx.scheduler.runAfter(0, internal.actions.answers.prepareSnapshot, { siteId });
+      return;
+    }
+    // The owner's own edits are never overwritten by a later read; a forced read (Pentra's own sites, re-read by code
+    // after their relaunch) replaces the profile it made itself.
+    const confirmed = Boolean(site.answers.confirmedAt) && !(force && isAnswersOwnerDomain(site.domain));
     await ctx.db.patch(siteId, {
       ...(!site.siteName && read.name ? { siteName: read.name } : {}),
       ...(!confirmed && read.sells ? { siteSummary: read.sells } : {}),
@@ -519,6 +524,7 @@ export const saveSetupRead = internalMutation({
         ...(!confirmed && !site.answers.competitors?.length ? { competitors: read.competitors } : {}) },
       updatedAt: now,
     });
+    if (then === "snapshot") await ctx.scheduler.runAfter(0, internal.actions.answers.prepareSnapshot, { siteId });
   } });
 
 /** The setup screen's state: what Pentra read (or why it couldn't), the suggested competitors, and the first run once it

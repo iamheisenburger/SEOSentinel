@@ -195,3 +195,40 @@ test("a new account: its website created on Answers, read for the owner to confi
   assert.deepEqual((await f.invoke("answers:mySites", {})).map((s: Fields) => s.domain), ["newco.example"]);
   f.assertOffline();
 });
+
+test("Pentra's own sites: Answers by code with drafts first, then version 2 publishes dawnlist and LeadPilot and restarts pentra.dev", async () => {
+  const calls: Array<{ url: string; body?: Fields }> = [];
+  const f = corePipelineFixture(network(calls), { TREG_TOKEN: "synthetic-only" }, { syntheticHosts: ["api.github.com", "api.indexnow.org"] });
+  const now = f.now();
+  const dawnlist = f.add("sites", { domain: "dawnlist.io", userId: "owner", siteName: "Dawnlist", competitors: ["copy.ai", "apollo.io"], createdAt: now, updatedAt: now });
+  const pentra = f.add("sites", { domain: "pentra.dev", userId: "owner", siteName: "Pentra", competitors: ["copy.ai", "jasper.ai"], createdAt: now, updatedAt: now });
+  // Version 1 state (what P383 created): Answers on, drafts first, a finished first hour.
+  for (const siteId of [dawnlist, pentra]) {
+    f.get(siteId)!.answers = { enabled: true, enabledAt: now, source: "owner", confirmedAt: now, autopublish: false, weeklyEmail: true, country: "US",
+      competitors: [{ name: "Copy", domain: "copy.ai" }], lastSnapshotRunId: "answer_runs:0" };
+    const questionId = f.add("answer_questions", { siteId, question: "How do I find clients?", key: "how do i find clients", intent: "how_to", source: "generated",
+      status: "active", createdAt: now });
+    f.add("answer_pages", { siteId, questionId, question: "How do I find clients?", status: "draft", title: "How do I find clients?", slug: "find-clients",
+      metaDescription: "x", markdown: "x", facts: [], sources: [], issues: [], version: 1, contentHash: "h", writerModel: "m", costMicroUsd: 1, createdAt: now,
+      updatedAt: now, citations: 0 });
+  }
+  await f.invoke("answersDispatch:dispatch", {});
+  const d = f.get(dawnlist)!.answers, p = f.get(pentra)!.answers;
+  assert.equal(d.ownerVersion, 2);
+  assert.equal(d.autopublish, true, "dawnlist publishes now that its drafts were read");
+  assert.deepEqual(d.competitors, [{ name: "Copy.ai", domain: "copy.ai" }, { name: "Apollo", domain: "apollo.io" }]);
+  const scheduled = f.tables._scheduled_functions.map((r) => r.name);
+  assert.ok(scheduled.includes("actions/answerPublish:publishPage"), "its drafts go out");
+  assert.equal(p.autopublish, false, "pentra.dev stays on drafts until its relaunch is read");
+  assert.equal(p.lastSnapshotRunId, undefined, "its first hour runs again");
+  assert.ok(f.tables.answer_questions.filter((q) => q.siteId === pentra).every((q) => q.status === "removed"), "old questions set aside, not deleted");
+  assert.ok(f.tables.answer_pages.filter((q) => q.siteId === pentra).every((q) => q.status === "retired"), "old drafts retired, not deleted");
+  const reread = f.tables._scheduled_functions.find((r) => r.name === "actions/answersSetup:readSite")!;
+  assert.deepEqual(reread.args, { siteId: pentra, force: true, then: "snapshot" });
+  assert.ok(reread.at >= now + 30 * 60_000, "read after the relaunch has deployed");
+  const before = f.tables._scheduled_functions.length;
+  await f.invoke("answersDispatch:dispatch", {});
+  assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answerPublish:publishPage").length,
+    1, "a version applies once");
+  assert.ok(f.tables._scheduled_functions.length >= before);
+});

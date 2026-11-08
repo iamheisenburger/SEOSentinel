@@ -4,6 +4,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { ANNUAL_MONTHS_FREE, ANNUAL_PER_MONTH, ANNUAL_SAVINGS, PENTRA_PLAN, formatUsd, planDisplayName } from "../src/lib/pricing.ts";
 import { ASSISTANTS, HONESTY_LINE, PUBLISH_TARGETS } from "../src/lib/product-facts.ts";
+import { ANSWERS_PLAN, ANSWERS_PLAN_FEATURE } from "../convex/lib/answersAccess.ts";
+import { ALL_FEATURE_KEYS } from "../convex/planLimits.ts";
 
 const read = (path: string) => readFileSync(path, "utf8");
 
@@ -162,9 +164,12 @@ test("the upgrade screen never pretends URL parameters preselect Clerk checkout"
 });
 
 test("one plan, $249/month or $2,490/year, is defined once and used by the landing page, /pricing, /upgrade and the Terms", () => {
-  // TODO(backend): convex/planLimits.ts must add the "pentra" tier ($249/month, $2,490/year) and Clerk Billing needs a
-  // plan with slug "pentra"; then cross-check its limits here against src/lib/pricing.ts the way the old tiers were.
+  // The plan is entitled by the Clerk feature on the Clerk plan "pentra" (convex/lib/answersAccess.ts ANSWERS_PLAN_FEATURE),
+  // not by an article-volume tier: the site's prices and the backend's plan are one definition.
   assert.deepEqual(PENTRA_PLAN, { key: "pentra", name: "Pentra", monthly: 249, annual: 2490 });
+  assert.deepEqual({ key: PENTRA_PLAN.key, name: PENTRA_PLAN.name, monthly: PENTRA_PLAN.monthly, annual: PENTRA_PLAN.annual },
+    { key: ANSWERS_PLAN.slug, name: ANSWERS_PLAN.name, monthly: ANSWERS_PLAN.monthlyUsd, annual: ANSWERS_PLAN.annualUsd });
+  assert.ok(ALL_FEATURE_KEYS.includes(ANSWERS_PLAN_FEATURE), "the plan's feature passes the Convex entitlement filter");
   assert.equal(formatUsd(PENTRA_PLAN.monthly), "$249");
   assert.equal(formatUsd(PENTRA_PLAN.annual), "$2,490");
   assert.equal(formatUsd(ANNUAL_PER_MONTH), "$207.50");

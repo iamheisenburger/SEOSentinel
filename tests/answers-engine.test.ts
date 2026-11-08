@@ -111,6 +111,11 @@ test("access: Pentra's own sites run Answers by code; the plan publishes and re-
   assert.deepEqual(answersAllows("free"), { snapshot: true, drafts: true, publish: false, recheck: false, weekly: false });
   assert.deepEqual(competitorFromDomain("https://www.apollo.io"), { name: "Apollo", domain: "apollo.io" });
   assert.deepEqual(competitorFromDomain("app.hubspot.com"), { name: "Hubspot", domain: "app.hubspot.com" });
+  assert.deepEqual(competitorFromDomain("copy.ai"), { name: "Copy.ai", domain: "copy.ai" }, "a short name keeps its ending: the brand, not the word");
+  assert.deepEqual(competitorFromDomain("jasper.ai"), { name: "Jasper", domain: "jasper.ai" }, "answers write Jasper as Jasper");
+  const copy = judgeAnswer({ text: "Copy the steps below. Tools like Copy.ai and Jasper write drafts.", sources: [] }, business,
+    [competitorFromDomain("copy.ai")!, competitorFromDomain("jasper.ai")!]);
+  assert.deepEqual(copy.competitorsNamed, ["Copy.ai", "Jasper"], "\"Copy the steps\" is not Copy.ai");
 });
 
 test("spend: a free account gets one snapshot's budget, a paid site a month's, the service a daily breaker", () => {

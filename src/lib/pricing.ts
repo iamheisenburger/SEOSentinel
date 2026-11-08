@@ -2,9 +2,9 @@
  * Pentra's one plan, defined once (Nov 2026). Every price on the site (landing, /pricing, /upgrade, the
  * Terms) reads from here; no other file states a price.
  *
- * Billing runs through Clerk Billing. The Clerk plan is matched by slug or name "pentra" (see isPentraPlan).
- * TODO(backend): convex/planLimits.ts still knows only the old tiers (free/starter/pro/scale/enterprise);
- * it must add the "pentra" tier ($249/month, $2,490/year) before this plan can be bought.
+ * Billing runs through Clerk Billing. The Clerk plan is matched by slug or name "pentra" (see isPentraPlan) and carries
+ * the feature "pentra_answers", which the backend reads as the paid plan (convex/lib/answersAccess.ts ANSWERS_PLAN, the
+ * same prices; tests/marketing-truth.test.ts keeps the two equal).
  */
 export const PENTRA_PLAN = {
   key: "pentra",

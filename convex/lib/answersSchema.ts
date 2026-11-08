@@ -36,6 +36,8 @@ export const answersSiteSettings = v.object({
   readAt: v.optional(v.number()),
   readError: v.optional(v.string()),
   local: v.optional(v.boolean()),
+  /** Pentra's own sites: which version of their code-made settings they carry (convex/answersDispatch.ts OWNER_SETTINGS_VERSION). */
+  ownerVersion: v.optional(v.number()),
   location: v.optional(v.string()),
   setupError: v.optional(v.string()),
   setupErrorAt: v.optional(v.number()),

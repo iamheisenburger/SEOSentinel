@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { convexHttp } from "@/lib/convexHttpClient";
+import { isHostedAnswersHost, requestHost } from "@/lib/hosted-answers";
 import { api } from "../../convex/_generated/api";
 import { servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
 import { COMMITTED_BLOG_DOMAIN, listCommittedArticles } from "@/lib/committed-articles";
@@ -13,6 +14,13 @@ const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://pentra.dev";
 const domain = baseUrl.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  // Pentra Answers (Nov 2026): a customer's hosted answers address lists its own published answer pages.
+  const host = await requestHost();
+  if (isHostedAnswersHost(host)) {
+    const index = await convexHttp.query(api.answerPublish.hostedIndex, { host }).catch(() => null);
+    return index ? [{ url: `https://${host}/`, changeFrequency: "weekly", priority: 0.8 },
+      ...index.pages.map((page) => ({ url: `https://${host}/${page.slug}`, lastModified: new Date(page.updatedAt), changeFrequency: "weekly" as const, priority: 0.7 }))] : [];
+  }
   // Static pages carry no lastmod: "now" on every request (as before Oct 21
   // 2026) is a date Google learns to ignore. The blog index takes its newest
   // article's date below.

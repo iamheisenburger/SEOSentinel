@@ -11,7 +11,7 @@ const PUBLIC_EXACT_ROUTES = new Set([
   "/api/outreach/gmail/callback", "/sitemap.xml", "/robots.txt",
 ]);
 const PUBLIC_ROUTE_PREFIXES = [
-  "/legal", "/sign-in", "/sign-up", "/unsubscribe", "/blog", "/check",
+  "/legal", "/sign-in", "/sign-up", "/unsubscribe", "/blog", "/check", "/hosted-answers",
 ];
 
 // Search-engine verification files in public/ (e.g. the IndexNow key) are public by design.
@@ -57,7 +57,7 @@ const clerkAppMiddleware = clerkMiddleware(async (auth, request) => {
   const knownPrefixes = new Set([
     "dashboard", "settings", "articles", "jobs", "sites", "plan", "upgrade",
     "pricing", "contact", "beta", "legal", "sign-in", "sign-up", "api", "_next", "blog",
-    "analytics", "backlinks", "unsubscribe", "e2e-acceptance", "x-reply", "check", "method", "start",
+    "analytics", "backlinks", "unsubscribe", "e2e-acceptance", "x-reply", "check", "method", "start", "hosted-answers",
   ]);
   const pathParts = pathname.split("/").filter(Boolean);
   // Pentra's own site uses /blog/[slug]; an unknown path there is a real 404,
@@ -111,10 +111,25 @@ function publicAcceptanceMiddleware(request: NextRequest) {
   return NextResponse.next();
 }
 
+/** Pentra Answers (Nov 2026): a customer's hosted answers address (always answers.<their domain>) serves its answer pages
+ * from /hosted-answers, before Clerk: these are public pages in the customer's name. */
+function hostedAnswersRewrite(request: NextRequest): NextResponse | null {
+  const host = request.nextUrl.hostname.toLowerCase().replace(/^www\./, "");
+  if (!host.startsWith("answers.") || host.split(".").length < 3 || host.endsWith(".vercel.app")) return null;
+  const parts = request.nextUrl.pathname.split("/").filter(Boolean);
+  if (parts.length === 0) return NextResponse.rewrite(new URL("/hosted-answers", request.url));
+  if (parts.length === 1 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(parts[0])) {
+    return NextResponse.rewrite(new URL(`/hosted-answers/${parts[0]}`, request.url));
+  }
+  return null;
+}
+
 export default function proxy(
   request: NextRequest,
   event: NextFetchEvent,
 ) {
+  const hosted = hostedAnswersRewrite(request);
+  if (hosted) return hosted;
   const isLocalAcceptance =
     request.headers.get("host")?.endsWith(":3100") === true;
   return isLocalAcceptance

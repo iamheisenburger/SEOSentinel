@@ -153,7 +153,8 @@ export const pageForIndexing = internalQuery({ args: { pageId: v.id("answer_page
 export const hostedState = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await ctx.db.get(siteId);
   const publishing = site?.answers?.publishing;
-  return site && publishing?.target === "hosted" && publishing.hostedDomain ? { host: publishing.hostedDomain, status: publishing.hostedStatus ?? "pending_dns" } : null;
+  return site && publishing?.target === "hosted" && publishing.hostedDomain
+    ? { host: publishing.hostedDomain, status: publishing.hostedStatus ?? "pending_dns", hasKey: Boolean(site.answers?.indexNowKey) } : null;
 } });
 
 /** The hosted address went live: pages that waited for it publish now. */

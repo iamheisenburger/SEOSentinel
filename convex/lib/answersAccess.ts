@@ -64,7 +64,12 @@ export const spendCounted = (row: { state: string; reservedMicroUsd: number; act
 export function competitorFromDomain(domain: string): { name: string; domain: string } | null {
   const host = hostOf(domain);
   if (!host || !/\.[a-z]{2,}$/.test(host)) return null;
-  const label = host.split(".").slice(0, -1).filter((p) => p !== "www" && p !== "app" && p !== "get" && p !== "try").pop() ?? host.split(".")[0];
+  const parts = host.split(".");
+  const tld = parts[parts.length - 1];
+  const label = parts.slice(0, -1).filter((p) => p !== "www" && p !== "app" && p !== "get" && p !== "try").pop() ?? parts[0];
   if (!label || label.length < 2) return null;
-  return { name: label[0].toUpperCase() + label.slice(1), domain: host };
+  const name = label[0].toUpperCase() + label.slice(1);
+  // A short name on a startup ending is the brand with its ending ("copy.ai" is Copy.ai): bare, it would match every
+  // sentence that starts with the everyday word.
+  return { name: label.length <= 5 && ["ai", "io", "so", "co", "app", "dev"].includes(tld) ? `${name}.${tld}` : name, domain: host };
 }

@@ -24,7 +24,9 @@ export function PentraSalesAgent() {
   const enabled = isPentraSalesAgentRoute(pathname);
 
   useEffect(() => {
-    if (!enabled) {
+    // Pentra's own site only: never on a customer's hosted answers address or custom-domain blog.
+    const onPentra = /(^|\.)pentra\.dev$/.test(window.location.hostname) || ["localhost", "127.0.0.1"].includes(window.location.hostname);
+    if (!enabled || !onPentra) {
       destroyPentraSalesAgent();
       return;
     }

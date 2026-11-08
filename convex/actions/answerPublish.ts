@@ -196,6 +196,8 @@ async function submitIndexNow(ctx: Pick<ActionCtx, "runMutation">, siteId: Id<"s
 export const attachHostedDomain = internalAction({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const state = await ctx.runQuery(internal.answerPublish.hostedState, { siteId });
   if (!state) return;
+  // The hosted address serves the site's IndexNow key from the start, so its first page is submitted the moment it's live.
+  await ctx.runMutation(internal.answerPublish.setIndexNowKey, { siteId, key: randomBytes(16).toString("hex"), host: state.host });
   const token = process.env.VERCEL_TOKEN, project = process.env.VERCEL_PROJECT_ID, team = process.env.VERCEL_TEAM_ID;
   if (!token || !project) {
     await ctx.runMutation(internal.answerPublish.hostedDomainState, { siteId, status: "pending_dns", error: "Pentra is finishing hosted-address setup on its side." });
@@ -219,6 +221,7 @@ export const checkHostedDomain = internalAction({ args: { siteId: v.id("sites") 
   const qs = team ? `?teamId=${encodeURIComponent(team)}` : "";
   const config = await fetch(`https://api.vercel.com/v6/domains/${encodeURIComponent(state.host)}/config${qs}`, { headers: { Authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(20_000) }).then((r) => r.ok ? r.json() as Promise<{ misconfigured?: boolean }> : null).catch(() => null);
+  // Live: Vercel sees the DNS record, and the address answers over HTTPS through Pentra (any non-server-error reply).
   const live = config !== null && config.misconfigured === false && await isReachable(`https://${state.host}/pentra-indexnow.txt`);
   await ctx.runMutation(internal.answerPublish.hostedDomainState, { siteId, status: live ? "live" : "pending_dns",
     ...(live ? {} : { error: `Add a CNAME record for ${state.host} pointing to cname.vercel-dns.com.` }) });
@@ -226,5 +229,5 @@ export const checkHostedDomain = internalAction({ args: { siteId: v.id("sites") 
 } });
 
 async function isReachable(url: string): Promise<boolean> {
-  try { const r = await fetch(url, { signal: AbortSignal.timeout(15_000) }); return r.status === 200; } catch { return false; }
+  try { const r = await fetch(url, { signal: AbortSignal.timeout(15_000) }); return r.status < 500; } catch { return false; }
 }

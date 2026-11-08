@@ -11,6 +11,14 @@ import { siteAnswersAccess } from "./answers";
 
 const WEEK_MS = 7 * 86_400_000, RECHECK_GAP_MS = 22 * 3_600_000, SETUP_RETRY_MS = 6 * 3_600_000;
 
+/** Pentra's own sites carry code-made settings; each version applies once.
+ * 2 (Nov 8 2026): competitor names re-derived ("copy.ai" is Copy.ai, never the word "Copy"); dawnlist and LeadPilot publish
+ * automatically now that their first drafts were read; pentra.dev restarts its first hour for the new product (its
+ * questions and drafts were written from the old article product's profile): set aside, re-read, asked again. */
+export const OWNER_SETTINGS_VERSION = 2;
+const OWNER_AUTOPUBLISH = new Set(["dawnlist.io", "leadpilot.chat"]);
+const OWNER_RESTART = new Set(["pentra.dev"]);
+
 export const dispatch = internalMutation({ args: {}, handler: async (ctx) => {
   const now = Date.now();
   await ctx.scheduler.runAfter(0, internal.answers.resumeStalledRuns, {});
@@ -24,6 +32,12 @@ export const dispatch = internalMutation({ args: {}, handler: async (ctx) => {
         competitors: (site.competitors ?? []).map(competitorFromDomain).filter((c): c is { name: string; domain: string } => c !== null).slice(0, 8) } });
     }
   }
+  for (const domain of ANSWERS_OWNER_DOMAINS) {
+    for (const site of await ctx.db.query("sites").withIndex("by_domain", (q) => q.eq("domain", domain)).take(5)) {
+      if (site.deletionStatus || !site.answers || (site.answers.ownerVersion ?? 1) >= OWNER_SETTINGS_VERSION) continue;
+      await applyOwnerVersion(ctx, site, domain, now);
+    }
+  }
   const sites = await ctx.db.query("sites").withIndex("by_answers_enabled", (q) => q.eq("answers.enabled", true)).take(1000);
   let scheduled = 0;
   for (const site of sites) {
@@ -32,6 +46,34 @@ export const dispatch = internalMutation({ args: {}, handler: async (ctx) => {
   }
   return { sites: sites.length, scheduled };
 } });
+
+async function applyOwnerVersion(ctx: MutationCtx, site: Doc<"sites">, domain: string, now: number) {
+  const competitors = (site.competitors ?? []).map(competitorFromDomain).filter((c): c is { name: string; domain: string } => c !== null).slice(0, 8);
+  const autopublish = OWNER_AUTOPUBLISH.has(domain);
+  if (OWNER_RESTART.has(domain)) {
+    // Set aside, never deleted: the old questions are removed from tracking and the drafts retired; runs stay as history.
+    for (const q of await ctx.db.query("answer_questions").withIndex("by_site", (x) => x.eq("siteId", site._id)).take(200)) {
+      if (q.status !== "removed") await ctx.db.patch(q._id, { status: "removed", pageId: undefined });
+    }
+    for (const p of await ctx.db.query("answer_pages").withIndex("by_site_status", (x) => x.eq("siteId", site._id).eq("status", "draft")).take(100)) {
+      await ctx.db.patch(p._id, { status: "retired", rewriteReason: "Written for the old product; replaced after the relaunch", updatedAt: now });
+    }
+    const settings = { ...site.answers! };
+    delete settings.lastSnapshotRunId;
+    await ctx.db.patch(site._id, { answers: { ...settings, competitors, autopublish, ownerVersion: OWNER_SETTINGS_VERSION, snapshotRequestedAt: now + 3_600_000 } });
+    // The relaunched homepage is read once it has deployed, then the first hour runs again from it.
+    await ctx.scheduler.runAfter(30 * 60_000, internal.actions.answersSetup.readSite, { siteId: site._id, force: true, then: "snapshot" });
+    return;
+  }
+  await ctx.db.patch(site._id, { answers: { ...site.answers!, competitors, autopublish, ownerVersion: OWNER_SETTINGS_VERSION } });
+  if (autopublish) {
+    let delay = 0;
+    for (const p of await ctx.db.query("answer_pages").withIndex("by_site_status", (x) => x.eq("siteId", site._id).eq("status", "draft")).take(20)) {
+      await ctx.scheduler.runAfter(delay, internal.actions.answerPublish.publishPage, { pageId: p._id });
+      delay += 20_000;
+    }
+  }
+}
 
 async function dispatchSite(ctx: MutationCtx, site: Doc<"sites">, now: number): Promise<number> {
   const settings = site.answers!;
@@ -125,6 +167,9 @@ export const ownerView = internalQuery({ args: { domain: v.string() }, handler: 
   const spend = await ctx.db.query("answer_spend").withIndex("by_site_month", (q) => q.eq("siteId", site._id)).take(500);
   return {
     domain, siteId: site._id, settings: { ...site.answers },
+    publishing: { method: site.publishMethod ?? null, repo: site.repoOwner && site.repoName ? `${site.repoOwner}/${site.repoName}` : null,
+      hasGithubToken: Boolean(site.githubToken), layout: site.githubLayout ? (site.githubLayout as { postsDir?: string; urlStructure?: string }) : null,
+      urlStructure: site.urlStructure ?? null },
     runs: runs.map((r) => ({ kind: r.kind, status: r.status, total: r.jobs.length, done: r.done, answered: r.answered, named: r.named, cited: r.cited,
       failed: r.failed, noAnswer: r.noAnswer, byAssistant: r.byAssistant ?? null, competitors: r.competitors ?? null, topSources: r.topSources ?? null,
       costMicroUsd: r.costMicroUsd, error: r.error ?? null, createdAt: r.createdAt, finishedAt: r.finishedAt ?? null })),
