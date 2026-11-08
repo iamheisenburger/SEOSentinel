@@ -17,6 +17,7 @@ import { canonicalBlogHref, consolidatedTarget, retiredArticle, retiredHref, ser
 import { relatedArticles } from "@/lib/related-articles";
 import { cachedPublishedListing } from "@/lib/published-listing";
 import { publishedOrCommitted } from "@/lib/committed-articles";
+import { isLegacyPentraGuide, LEGACY_GUIDE_NOTICE } from "@/lib/pentra-relaunch";
 
 export const dynamic = "force-dynamic";
 
@@ -399,6 +400,13 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
             </span>
           )}
         </div>
+
+        {isLegacyPentraGuide(domain, article.createdAt) && (
+          <aside className="mt-8 rounded-card border border-border bg-surface-1 px-5 py-4 text-[14px] leading-6 text-text-2" aria-label="About this guide">
+            {LEGACY_GUIDE_NOTICE}{" "}
+            <Link href="/" className="font-medium text-text underline underline-offset-4">See what Pentra does now</Link>
+          </aside>
+        )}
 
         <div className="mt-10">
           <MarkdownRenderer markdown={article.markdown} domain={domain} slug={slug} />

@@ -57,8 +57,8 @@ export default async function BlogIndex() {
       <main id="main" className="page-enter container-page pb-24 pt-[124px] sm:pt-[140px] lg:pb-32 lg:pt-[164px]">
         <h1 className="type-h1 max-w-[16ch] text-text">SEO and content guides</h1>
         <p className="type-lead mt-5 max-w-[38rem]">
-          Practical guides on SEO, content and getting customers from Google. Every article is
-          written, fact-checked and published by Pentra.
+          Practical guides on SEO, content and getting customers from Google, written and fact-checked for
+          Pentra&apos;s earlier article service. <Link href="/" className="text-text underline underline-offset-4">See what Pentra does now</Link>.
         </p>
 
         {articles === null && (
