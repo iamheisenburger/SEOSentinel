@@ -9,6 +9,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { answersEnabled } from "./lib/answersAccess";
 import { ConvexError, v } from "convex/values";
 import { withUserFacingErrors } from "./lib/userError";
 import {
@@ -3477,9 +3478,11 @@ export const upsert = mutation({
       (["wordpress", "webhook"].includes(args.publishMethod) || isApiCmsMethod(args.publishMethod)) &&
       currentSite?.publishMethod !== args.publishMethod &&
       !((args.publishMethod === "wordpress" || isApiCmsMethod(args.publishMethod)) && (currentSite?.contentSetupRequestedAt || currentSite?.serviceMode === "growth_first" || (args.contentSetup === true && args.createOnly === true && !args.id))) &&
+      // Pentra Answers (Nov 2026): every publishing destination is open to Answers sites.
+      !answersEnabled(currentSite) &&
       process.env.PENTRA_FULL_MANAGED_BETA_ENABLED !== "true"
     ) {
-      throw new Error(
+      throw new ConvexError(
         "WordPress and signed-webhook publishing are beta and are not enabled for bootstrap v1",
       );
     }
@@ -3941,9 +3944,11 @@ export const updateSite = mutation({
       ["wordpress", "webhook"].includes(fields.publishMethod) &&
       site.publishMethod !== fields.publishMethod &&
       !(fields.publishMethod === "wordpress" && (site.contentSetupRequestedAt || site.serviceMode === "growth_first")) &&
+      // Pentra Answers (Nov 2026): every publishing destination is open to Answers sites.
+      !answersEnabled(site) &&
       process.env.PENTRA_FULL_MANAGED_BETA_ENABLED !== "true"
     ) {
-      throw new Error(
+      throw new ConvexError(
         "WordPress and signed-webhook publishing are beta and are not enabled for bootstrap v1",
       );
     }

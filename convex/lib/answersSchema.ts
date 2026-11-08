@@ -30,6 +30,8 @@ export const answersSiteSettings = v.object({
   lastFullRunAt: v.optional(v.number()),
   lastRecheckAt: v.optional(v.number()),
   lastWeeklyEmailAt: v.optional(v.number()),
+  /** When the "your first hour is ready" email went out (once per site). */
+  snapshotEmailAt: v.optional(v.number()),
   freeSnapshotAt: v.optional(v.number()),
   snapshotRequestedAt: v.optional(v.number()),
   /** Reading the site for the owner to confirm: when it finished, or why it couldn't. */
@@ -87,6 +89,8 @@ export const answersTables = {
     competitors: v.optional(v.array(v.object({ name: v.string(), named: v.number() }))),
     topSources: v.optional(v.array(v.object({ domain: v.string(), answers: v.number() }))),
     costMicroUsd: v.number(),
+    /** Live counts per assistant while the run asks (the first hour's progress bars). */
+    progress: v.optional(v.array(v.object({ assistant: v.string(), done: v.number(), answered: v.number(), named: v.number() }))),
     leaseUntil: v.optional(v.number()),
     error: v.optional(v.string()),
     /** What follows the asking: drafting the first pages (a snapshot), rewriting uncited pages (weekly). */
@@ -153,6 +157,8 @@ export const answersTables = {
     publishError: v.optional(v.string()),
     publishReceipt: v.optional(v.string()),
     indexNow: v.optional(v.object({ at: v.number(), status: v.string() })),
+    /** When Pentra first loaded the published page at its address and found it live. */
+    liveAt: v.optional(v.number()),
     googleSitemapAt: v.optional(v.number()),
     citations: v.number(),
     lastCitedAt: v.optional(v.number()),

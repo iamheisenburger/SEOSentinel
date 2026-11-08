@@ -137,6 +137,14 @@ test("the first hour and the plan, end to end: questions, five assistants, proof
   assert.equal(overview.access, "paid");
   assert.equal(overview.runs[0].named, QUESTIONS.length);
   assert.equal(overview.pages.length, 5);
+  assert.ok(overview.pages.every((p: Fields) => typeof p.liveAt === "number" && p.liveAt >= p.publishedAt), "each page's live date, from Pentra's own load of it");
+  assert.equal(overview.site.nextRunAt, f.get(siteId)!.answers.lastFullRunAt + 7 * 86_400_000, "the weekly run, a week after the first hour");
+  const progress = await f.invoke("answers:runProgress", { runId: run._id });
+  const per = Object.fromEntries(progress.perAssistant.map((p: Fields) => [p.assistant, p]));
+  assert.deepEqual(per.perplexity, { assistant: "perplexity", total: QUESTIONS.length, done: QUESTIONS.length, answered: QUESTIONS.length, named: QUESTIONS.length });
+  assert.deepEqual(per.chatgpt, { assistant: "chatgpt", total: QUESTIONS.length, done: QUESTIONS.length, answered: QUESTIONS.length, named: 0 });
+  assert.deepEqual(per.google_ai_overview, { assistant: "google_ai_overview", total: QUESTIONS.length, done: QUESTIONS.length, answered: 0, named: 0 },
+    "no AI Overview counts as asked, never as answered");
   const evidence = await f.invoke("answers:questionEvidence", { questionId: f.tables.answer_questions[0]._id });
   assert.equal(evidence.checks.length, 5, "every count opens to its answers");
   const full = await f.invoke("answers:answerText", { checkId: chatgptCheck._id });
@@ -240,4 +248,62 @@ test("Pentra's own sites: Answers by code with drafts first, then version 2 publ
   await f.invoke("answersDispatch:dispatch", {});
   assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answersSetup:readSite").length, 1, "a version applies once");
   assert.equal(f.get(pentra)!.answers.ownerVersion, 2);
+});
+
+test("a new account's first hour: its address kept, a failed setup retried at once, the ready email with counts and drafts", async () => {
+  const calls: Array<{ url: string; body?: Fields }> = [];
+  const emails: Fields[] = [];
+  const base = network(calls);
+  let questionsFail = true;
+  const f = corePipelineFixture(async (url, init) => {
+    if (url.hostname === "api.resend.com") { emails.push(JSON.parse(String(init.body))); return json({ id: "email_1" }); }
+    // A thin third-party source (Acme's short blog post) is tried through the rendering fallback, which finds nothing more.
+    if (url.href === "https://treg.to/call/treg.web.extract") return json({ success: false }, 0, 502);
+    if (questionsFail && url.hostname === "api.anthropic.com" && typeof init.body === "string" && init.body.includes("submit_buyer_questions")) {
+      const body = JSON.parse(init.body);
+      return json({ id: "msg_q", type: "message", role: "assistant", model: body.model, stop_reason: "tool_use", stop_sequence: null,
+        content: [{ type: "tool_use", id: "tool_q", name: "submit_buyer_questions", input: { questions: [] } }], usage: { input_tokens: 3000, output_tokens: 20 } });
+    }
+    const response = await base(url, init);
+    // This account's business is Newco: the synthetic page writer names it.
+    if (url.hostname !== "api.anthropic.com") return response;
+    return new Response((await response.text()).replaceAll("Acme Leads", "Newco"), { status: response.status, headers: response.headers });
+  }, { TREG_TOKEN: "synthetic-only", RESEND_API_KEY: "synthetic-only" }, { syntheticHosts: ["api.github.com", "api.indexnow.org"] });
+  f.setIdentity("user_ready");
+  const { siteId } = await f.invoke("answers:createSite", { domain: "newco.example", email: " Owner@Newco.example " });
+  assert.deepEqual(f.tables.account_contacts.map((c) => [c.userId, c.email, c.emailUpdates]), [["user_ready", "owner@newco.example", true]],
+    "the first-hour email has somewhere to go");
+  f.setIdentity(null);
+  await drain(f, 60_000);
+
+  // The questions can't be written the first time: the owner sees why, and "Try again" restarts at once (not in 30 minutes).
+  f.setIdentity("user_ready");
+  await f.invoke("answers:confirmSetup", { siteId, competitors: [{ name: "Apollo", domain: "apollo.example" }] });
+  f.setIdentity(null);
+  await drain(f, 60_000);
+  assert.match(f.get(siteId)!.answers.setupError, /questions couldn't be written/);
+  assert.equal(f.tables.answer_runs.length, 0);
+  questionsFail = false;
+  f.setIdentity("user_ready");
+  await f.invoke("answers:confirmSetup", { siteId, competitors: [{ name: "Apollo", domain: "apollo.example" }] });
+  assert.equal(f.get(siteId)!.answers.setupError, undefined, "the error clears as the retry starts");
+  f.setIdentity(null);
+  await drain(f, 20 * 60_000);
+  assert.equal(f.tables.answer_runs.length, 1);
+  assert.equal(f.tables.answer_runs[0].status, "done");
+  assert.deepEqual(f.tables.answer_pages.map((p) => p.status), ["draft", "draft", "draft", "draft", "draft"], "the free hour's five drafts");
+
+  assert.equal(emails.length, 1, "one ready email");
+  const email = emails[0];
+  assert.deepEqual(email.to, ["owner@newco.example"]);
+  assert.equal(email.subject, `Your first hour: named in 0 of ${QUESTIONS.length * 4} AI answers · newco.example`, "the assistants name Acme Leads and Apollo, never Newco");
+  assert.match(email.text, new RegExp(`the ${QUESTIONS.length} questions your buyers ask`));
+  assert.match(email.text, new RegExp(`- Perplexity: 0 of ${QUESTIONS.length}`));
+  assert.match(email.text, new RegExp(`- Apollo: ${QUESTIONS.length * 2} of ${QUESTIONS.length * 4}`), "who is named instead, with the denominator");
+  assert.match(email.text, /Answer pages drafted for the questions you can win: 5/);
+  assert.match(email.text, /Pentra plan \(\$249 a month\): https:\/\/pentra\.dev\/dashboard\/billing/);
+  assert.ok(f.get(siteId)!.answers.snapshotEmailAt, "sent once");
+  await f.invoke("actions/answerEmail:sendSnapshotReady", { siteId, runId: f.tables.answer_runs[0]._id });
+  assert.equal(emails.length, 1, "never twice");
+  f.assertOffline();
 });

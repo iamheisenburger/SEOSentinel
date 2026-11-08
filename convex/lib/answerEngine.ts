@@ -151,7 +151,8 @@ export function brandMatcher(brand: Brand, options: { caseSensitiveSingleWord?: 
   const joined = words.join("").toLowerCase();
   let pattern: RegExp | null = null;
   if (joined.length >= 3) {
-    const body = words.map((w) => escapeRegex(w)).join("[\\s.-]?");
+    // Words may be joined by up to three non-letters: "Deck & Fence", "Lowe's", "Lowe’s", "Hub-Spot".
+    const body = words.map((w) => escapeRegex(w)).join("[^A-Za-z0-9]{0,3}");
     const single = words.length === 1 && /^[A-Za-z]+$/.test(words[0]) && words[0] === words[0][0].toUpperCase() + words[0].slice(1).toLowerCase();
     pattern = single && options.caseSensitiveSingleWord
       ? new RegExp(`(?<![A-Za-z0-9])${escapeRegex(words[0][0].toUpperCase())}${escapeRegex(words[0].slice(1))}(?![A-Za-z0-9])`)

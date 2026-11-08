@@ -60,3 +60,45 @@ export function answersWeeklyEmail(input: AnswersWeeklyInput): { subject: string
   const subject = t ? `Named in ${t.named} of ${t.answered} AI answers this week · ${input.domain}` : `Your Pentra week · ${input.domain}`;
   return { subject, text: lines.join("\n") };
 }
+
+export type AnswersReadyInput = {
+  name: string; domain: string; questions: number;
+  answered: number; named: number;
+  byAssistant: ReadonlyArray<{ assistant: string; answered: number; named: number }>;
+  competitors: ReadonlyArray<{ name: string; named: number }>;
+  drafts: ReadonlyArray<{ title: string }>; writing: number;
+  /** free: the plan publishes them; publishing: they go out by themselves; connect: the plan is on, the destination isn't set. */
+  next: "free" | "publishing" | "connect" | "review";
+  dashboardUrl: string; billingUrl: string; settingsUrl: string;
+};
+
+/** "Your first hour is ready": the first run's counts with their denominators, the drafts, and the one next step. Pure. */
+export function answersReadyEmail(input: AnswersReadyInput): { subject: string; text: string } {
+  const lines: string[] = [
+    `Pentra asked ChatGPT, Perplexity, Gemini, Google AI Mode and Google's AI Overviews the ${input.questions} questions your buyers ask.`,
+    "",
+    `${input.name} was named in ${input.named} of ${input.answered} answers.`,
+    "",
+  ];
+  for (const a of input.byAssistant) lines.push(`- ${assistantName(a.assistant)}: ${a.named} of ${a.answered}`);
+  if (input.competitors.length) {
+    lines.push("", "Named instead of you most often:");
+    for (const c of input.competitors.slice(0, 3)) lines.push(`- ${c.name}: ${c.named} of ${input.answered}`);
+  }
+  lines.push("");
+  if (input.drafts.length) {
+    lines.push(`Answer pages drafted for the questions you can win: ${input.drafts.length}`);
+    for (const d of input.drafts.slice(0, 6)) lines.push(`- ${d.title}`);
+    if (input.writing) lines.push(`(${input.writing} more ${input.writing === 1 ? "is" : "are"} still being written.)`);
+  } else if (input.writing) {
+    lines.push(`Pentra is writing ${input.writing} answer ${input.writing === 1 ? "page" : "pages"} for the questions you can win. ${input.writing === 1 ? "It shows" : "They show"} on your dashboard when done.`);
+  }
+  lines.push("");
+  if (input.next === "free") lines.push(`Publishing them on your site, getting them indexed and asking the assistants again every week is the Pentra plan ($249 a month): ${input.billingUrl}`);
+  else if (input.next === "publishing") lines.push("They publish to your site automatically. Pentra then asks the assistants again and records every citation.");
+  else if (input.next === "connect") lines.push(`Choose where they publish, and they go out automatically: ${input.settingsUrl}`);
+  else lines.push(`They wait for your review before publishing: ${input.dashboardUrl}`);
+  lines.push("", `Every answer, exactly as each assistant gave it: ${input.dashboardUrl}`, "",
+    "We can't make an assistant recommend you. We show every answer we collect, so you can see exactly what changes.");
+  return { subject: `Your first hour: named in ${input.named} of ${input.answered} AI answers · ${input.domain}`, text: lines.join("\n") };
+}
