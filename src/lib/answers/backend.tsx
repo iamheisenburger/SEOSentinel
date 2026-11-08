@@ -8,7 +8,7 @@
  */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
-import { anyApi, type FunctionReference } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import { api } from "../../../convex/_generated/api";
 import type {
   AnswerPage, Check, CheckWithText, Competitor, GithubRepository, MySite, Overview, QuestionEvidence, RunProgress, SetupState,
@@ -104,14 +104,13 @@ function useLiveActions(): AnswersActions {
   const publishDraft = useMutation(api.answerPages.publishDraft);
   const setHostedDomain = useMutation(api.answerPublish.setHostedDomain);
   const usePublishingConnection = useMutation(api.answerPublish.usePublishingConnection);
-  // Added by the backend owner alongside this UI (coordinator, Nov 7 2026); referenced untyped until it is generated here.
-  const retryFailed = useMutation(anyApi.answerPublish.retryFailed as FunctionReference<"mutation">);
+  const retryFailed = useMutation(api.answerPublish.retryFailed);
   const updateSite = useMutation(api.sites.updateSite);
   const upsert = useMutation(api.sites.upsert);
   const verify = useAction(api.publisher.verifyPublicationDestination);
   const listRepos = useAction(api.publisher.listGithubRepositories);
   return useMemo<AnswersActions>(() => ({
-    createSite: (args) => createSite(args as any) as Promise<{ siteId: string; created: boolean }>,
+    createSite: (args) => createSite(args) as Promise<{ siteId: string; created: boolean }>,
     updateBusiness: (args) => updateBusiness(args as any),
     confirmSetup: (args) => confirmSetup(args as any),
     addQuestion: (args) => addQuestion(args as any) as Promise<{ questionId: string }>,

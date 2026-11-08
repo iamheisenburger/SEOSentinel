@@ -16,7 +16,9 @@ const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$
 export function brandPattern(name: string): string | null {
   const words = name.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/).filter(Boolean);
   if (words.join("").length < 3) return null;
-  return `(?<![A-Za-z0-9])${words.map(escapeRegex).join("[\\s-]?")}(?![A-Za-z0-9])`;
+  // As the engine joins them (convex/lib/answerEngine.ts brandMatcher): up to three non-letters between words, so
+  // "Deck & Fence", "Lowe's" and "Hub-Spot" match the way they were counted.
+  return `(?<![A-Za-z0-9])${words.map(escapeRegex).join("[^A-Za-z0-9]{0,3}")}(?![A-Za-z0-9])`;
 }
 
 type Mark = { start: number; end: number; kind: "you" | "rival" | "cite"; n?: number };
