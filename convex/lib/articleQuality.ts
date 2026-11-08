@@ -107,7 +107,9 @@ export const AUTOPILOT_ACCEPTANCE = "pentra-autopilot";
 // 4: P378 (Nov 7 2026): a held draft is judged again with the repairs code now makes first (P375's renumbering of a list
 // that skips a number). LeadPilot's Nov 7 article was held for a list jumping from 4 to 6 the day before P375, and with
 // no new topic for its slot, the slot would have been missed.
-export const CONTENT_CHECKS_VERSION = 5;
+// 6: P382 (Nov 8 2026): two cited sites are lookalikes only when their names are one or two letters apart or one adds a
+// shop word; pentra.dev's draft citing Search Engine Journal and Search Engine Watch was held as a "lookalike store".
+export const CONTENT_CHECKS_VERSION = 6;
 export const UNCITED_QUANTITY_ISSUE = /^\d+ quantified outcome or operational claim\(s\) lack an inline citation\.$/;
 export function ownerWaivableIssue(issue: string, article: { factCheckScore?: number; claimEvidenceStatus?: string; markdown?: string } &
   Partial<Pick<PublicationArticle, "claimEvidence" | "productEvidenceSnapshot" | "productEvidenceHash">>): boolean {
@@ -2418,6 +2420,39 @@ export function productNumberMismatches(markdown: string, productEvidence?: stri
     [...readableNumbers(sentence)].some((number) => !profileNumbers.has(number)));
 }
 
+/** Words a store adds to the brand it imitates ("lodgecastironshop", "officiallodgecastiron"). */
+const LOOKALIKE_SHOP_WORDS = ["shop", "store", "outlet", "official", "sale", "deals", "buy", "direct", "discount", "cheap", "mart"];
+
+/** Whether two strings are at most `max` single-letter edits apart. */
+function withinEdits(a: string, b: string, max: number): boolean {
+  if (Math.abs(a.length - b.length) > max) return false;
+  let previous = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) row[j] = Math.min(previous[j] + 1, row[j - 1] + 1, previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    if (Math.min(...row) > max) return false;
+    previous = row;
+  }
+  return previous[b.length] <= max;
+}
+
+/** P382: two cited site names that objectively look alike: one or two letters apart ("lodgecastiron" / "lodgecastlron"),
+ * or one is the other plus a shop word ("lodgecastiron" / "lodgecastironshop"). Names that only share their first letters
+ * ("searchenginejournal" / "searchenginewatch", "salesforce" / "salesloft") are different sites. */
+export function lookalikeSourcePair(labels: readonly string[]): [string, string] | null {
+  const names = [...new Set(labels.map((label) => label.toLowerCase()).filter((label) => label.length >= 6))];
+  for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) {
+    const [short, long] = names[i].length <= names[j].length ? [names[i], names[j]] : [names[j], names[i]];
+    const affix = long.startsWith(short) ? long.slice(short.length) : long.endsWith(short) ? long.slice(0, long.length - short.length) : null;
+    const word = affix?.replace(/-/g, "").replace(/^the/, "") ?? null;
+    if (word !== null && LOOKALIKE_SHOP_WORDS.some((shop) => word === shop || word === `${shop}s`)) return [long, short];
+    // Names that differ only in their digits ("appendix0" / "appendix1") are numbered siblings, not imitations.
+    if (short.replace(/\d/g, "") === long.replace(/\d/g, "")) continue;
+    if (withinEdits(short, long, short.length >= 9 ? 2 : 1)) return [long, short];
+  }
+  return null;
+}
+
 /** Every rule-2a objective issue of an exact draft, as gate messages. */
 export function readerVisibleIssues(article: Pick<PublicationArticle, "markdown" | "sources" | "productEvidenceSnapshot" | "productEvidenceHash">): string[] {
   const issues = readerVisibleDefects(article.markdown);
@@ -2425,17 +2460,14 @@ export function readerVisibleIssues(article: Pick<PublicationArticle, "markdown"
   if (cited.length > 0) {
     issues.push(`Reader-visible defect: ${cited.length} cited sentence(s) state a number their source does not contain, e.g. «${cited[0].slice(0, 200)}».`);
   }
-  // P335 (Cowork b): lookalike brand domains — two cited hosts whose registrable labels share a brand prefix
-  // (lodgescookware.com and lodgecastiron.com) are a store imitating the maker; the longer one is flagged.
+  // P335 (Cowork b): lookalike brand domains, a store imitating a maker cited beside it.
+  // P382 (Nov 8 2026): only an objective lookalike blocks (lookalikeSourcePair). Sharing the first five letters held
+  // pentra.dev's article citing Search Engine Journal and Search Engine Watch, two real publications, on a day its slot
+  // had nothing else to publish.
   {
-    const label = (url: string) => (/https?:\/\/([^\/]+)/.exec(url)?.[1] ?? "").replace(/^www\./, "").split(".")[0] ?? "";
-    const hosts = (article.sources ?? []).map((source) => label(source.url));
-    for (const host of hosts) {
-      if (host.length < 6) continue;
-      const twin = hosts.find((other) => other !== host && other.length < host.length && other.length >= 5
-        && (other.startsWith(host.slice(0, 5)) || host.startsWith(other.slice(0, 5))));
-      if (twin) { issues.push(`Reader-visible defect: two cited sources share a brand-like name ("${host}" / "${twin}") — one is likely a lookalike store.`); break; }
-    }
+    const label = (url: string) => (/https?:\/\/([^\/]+)/.exec(url)?.[1] ?? "").toLowerCase().replace(/^www\./, "").split(".")[0] ?? "";
+    const pair = lookalikeSourcePair((article.sources ?? []).map((source) => label(source.url)));
+    if (pair) issues.push(`Reader-visible defect: two cited sources have lookalike names ("${pair[0]}" / "${pair[1]}") — one likely imitates the other.`);
   }
   const product = productNumberMismatches(article.markdown, article.productEvidenceSnapshot, article.productEvidenceHash);
   if (product.length > 0) {
