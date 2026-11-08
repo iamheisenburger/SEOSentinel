@@ -15,7 +15,7 @@ const WEEK_MS = ANSWERS_WEEK_MS, RECHECK_GAP_MS = 22 * 3_600_000, SETUP_RETRY_MS
  * 2 (Nov 8 2026): competitor names re-derived ("copy.ai" is Copy.ai, never the word "Copy"); dawnlist and LeadPilot publish
  * automatically now that their first drafts were read; pentra.dev restarts its first hour for the new product (its
  * questions and drafts were written from the old article product's profile): set aside, re-read, asked again. */
-export const OWNER_SETTINGS_VERSION = 4;
+export const OWNER_SETTINGS_VERSION = 5;
 const OWNER_AUTOPUBLISH = new Set(["dawnlist.io", "leadpilot.chat"]);
 const OWNER_RESTART = new Set(["pentra.dev"]);
 /** 3 (Nov 8 2026): LeadPilot's published answer files are written again with qualityGateVersion (its blog hides a post
@@ -32,6 +32,10 @@ const OWNER_COMPETITORS: Record<string, ReadonlyArray<{ name: string; domain: st
   "pentra.dev": [{ name: "Profound", domain: "tryprofound.com" }, { name: "Otterly.AI", domain: "otterly.ai" }, { name: "Peec AI", domain: "peec.ai" },
     { name: "AthenaHQ", domain: "athenahq.ai" }, { name: "Semrush", domain: "semrush.com" }, { name: "Ahrefs", domain: "ahrefs.com" }],
 };
+/** 5 (Nov 8 2026): pentra.dev publishes automatically (its five Opus drafts were read: right price, right features, every
+ * outside claim sourced), its pages invite readers to /start (the domain step first), and its hosted address is attached
+ * and checked at once. */
+const OWNER_PUBLISH_NOW: Record<string, { ctaUrl: string }> = { "pentra.dev": { ctaUrl: "https://pentra.dev/start" } };
 const OWNER_PROFILE: Record<string, { painPoints: string[]; productUsage: string; pricingInfo: string }> = {
   "pentra.dev": {
     painPoints: ["How do I get my business recommended by ChatGPT?", "Why do AI assistants recommend my competitors instead of my business?",
@@ -101,6 +105,12 @@ async function applyOwnerVersion(ctx: MutationCtx, site: Doc<"sites">, domain: s
     await ctx.db.patch(site._id, { ...(OWNER_PROFILE[domain] ?? {}), answers: settings, updatedAt: now });
     // Version 2's re-read runs the first hour itself; otherwise it runs again now, from the corrected profile.
     if (from >= 2) await ctx.scheduler.runAfter(0, internal.actions.answers.prepareSnapshot, { siteId: site._id });
+  }
+  const publishNow = from < 5 ? OWNER_PUBLISH_NOW[domain] : undefined;
+  if (publishNow) {
+    const fresh = (await ctx.db.get(site._id))!;
+    await ctx.db.patch(site._id, { ctaUrl: publishNow.ctaUrl, answers: { ...fresh.answers!, autopublish: true }, updatedAt: now });
+    if (fresh.answers?.publishing?.target === "hosted") await ctx.scheduler.runAfter(0, internal.actions.answerPublish.attachHostedDomain, { siteId: site._id });
   }
   const latest = (await ctx.db.get(site._id))!;
   await ctx.db.patch(site._id, { answers: { ...latest.answers!, ownerVersion: OWNER_SETTINGS_VERSION } });

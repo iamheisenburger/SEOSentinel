@@ -243,12 +243,12 @@ test("Pentra's own sites: Answers by code with drafts first, then version 2 publ
   }
   await f.invoke("answersDispatch:dispatch", {});
   const d = f.get(dawnlist)!.answers, p = f.get(pentra)!.answers;
-  assert.equal(d.ownerVersion, 4, "every version applies in one pass");
+  assert.equal(d.ownerVersion, 5, "every version applies in one pass");
   assert.equal(d.autopublish, true, "dawnlist publishes now that its drafts were read");
   assert.deepEqual(d.competitors, [{ name: "Copy.ai", domain: "copy.ai" }, { name: "Apollo", domain: "apollo.io" }]);
   const scheduled = f.tables._scheduled_functions.map((r) => r.name);
   assert.ok(scheduled.includes("actions/answerPublish:publishPage"), "its drafts go out");
-  assert.equal(p.autopublish, false, "pentra.dev stays on drafts until its relaunch is read");
+  assert.equal(p.autopublish, true, "version 5: pentra.dev publishes automatically once its drafts were read");
   assert.equal(p.lastSnapshotRunId, undefined, "its first hour runs again");
   assert.deepEqual(p.publishing, { target: "hosted", hostedDomain: "answers.pentra.dev", hostedStatus: "pending_dns" }, "its pages live at answers.pentra.dev");
   assert.ok(f.tables.answer_host_index.some((r) => r.host === "answers.pentra.dev" && r.siteId === pentra));
@@ -260,7 +260,7 @@ test("Pentra's own sites: Answers by code with drafts first, then version 2 publ
   assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answerPublish:publishPage").length, 1, "dawnlist's one draft, once");
   await f.invoke("answersDispatch:dispatch", {});
   assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answersSetup:readSite").length, 1, "a version applies once");
-  assert.equal(f.get(pentra)!.answers.ownerVersion, 4);
+  assert.equal(f.get(pentra)!.answers.ownerVersion, 5);
   assert.equal(f.get(pentra)!.answers.competitors[0].name, "Profound", "the AI-visibility tools buyers are shown instead");
 });
 
@@ -347,8 +347,8 @@ test("version 3: LeadPilot's published answer files are written again with the f
     publishReceipt: JSON.stringify({ method: "github", deliveryKey: "answer:p1:v1", path: `content/blog/${slug}.md`, sha: "old" }) });
   f.setTime(now + 60_000);
   await f.invoke("answersDispatch:dispatch", {});
-  assert.equal(f.get(leadpilot)!.answers.ownerVersion, 4);
-  assert.equal(f.get(dawnlist)!.answers.ownerVersion, 4);
+  assert.equal(f.get(leadpilot)!.answers.ownerVersion, 5);
+  assert.equal(f.get(dawnlist)!.answers.ownerVersion, 5);
   await drain(f, 10 * 60_000);
   const put = calls.find((c) => c.url.endsWith(`/contents/content/blog/${slug}.md`) && c.body?.content);
   assert.ok(put, "the file is written again at its own path");
@@ -387,7 +387,7 @@ test("version 4: pentra.dev counts the AI-visibility tools, its profile describe
   f.get(runId)!.status = "done";
   await f.invoke("answersDispatch:dispatch", {});
   const settings = f.get(pentra)!.answers;
-  assert.equal(settings.ownerVersion, 4);
+  assert.equal(settings.ownerVersion, 5);
   assert.deepEqual(settings.competitors.map((c: Fields) => c.name), ["Profound", "Otterly.AI", "Peec AI", "AthenaHQ", "Semrush", "Ahrefs"]);
   const site = f.get(pentra)!;
   assert.match(site.pricingInfo, /^One plan: \$249 a month or \$2,490 a year\. The first hour is free/, "never the article product's free tier");
@@ -444,4 +444,27 @@ test("a hosted address is attached by the hourly pass and is live only when it s
   assert.equal(f.get(siteId)!.answers.publishing.hostedStatus, "live", "live once the address serves this site's key through Pentra");
   assert.ok((await f.invoke("answerPublish:hostedIndex", { host: "answers.acme.example" }))?.business, "its pages are served now");
   f.assertOffline();
+});
+
+test("version 5: pentra.dev publishes automatically, invites readers to /start, and its hosted address is checked at once", async () => {
+  const calls: Array<{ url: string; body?: Fields }> = [];
+  const f = corePipelineFixture(network(calls), { TREG_TOKEN: "synthetic-only" }, { syntheticHosts: ["api.github.com", "api.indexnow.org"] });
+  const now = f.now();
+  const pentra = f.add("sites", { domain: "pentra.dev", userId: "owner", siteName: "Pentra", ctaUrl: "https://pentra.dev/sign-up", createdAt: now, updatedAt: now,
+    answers: { enabled: true, enabledAt: now, source: "owner", confirmedAt: now, autopublish: false, weeklyEmail: true, country: "US", ownerVersion: 4,
+      competitors: [{ name: "Profound", domain: "tryprofound.com" }], lastSnapshotRunId: "answer_runs:0", lastFullRunAt: now, lastRecheckAt: now,
+      publishing: { target: "hosted", hostedDomain: "answers.pentra.dev", hostedStatus: "pending_dns", hostedCheckedAt: now } } });
+  const questionId = f.add("answer_questions", { siteId: pentra, question: "Which tool emails a weekly AI visibility report?", key: "weekly ai visibility report",
+    intent: "best", source: "generated", status: "active", createdAt: now });
+  f.add("answer_pages", { siteId: pentra, questionId, question: "Which tool emails a weekly AI visibility report?", status: "draft", title: "Weekly AI visibility reports",
+    slug: "weekly-ai-visibility-report", metaDescription: "x", markdown: "x", facts: [], sources: [], issues: [], version: 1, contentHash: "h", writerModel: "m",
+    costMicroUsd: 1, createdAt: now, updatedAt: now, citations: 0 });
+  await f.invoke("answersDispatch:dispatch", {});
+  const site = f.get(pentra)!;
+  assert.equal(site.answers.ownerVersion, 5);
+  assert.equal(site.answers.autopublish, true);
+  assert.equal(site.ctaUrl, "https://pentra.dev/start", "readers start at the domain step");
+  const scheduled = f.tables._scheduled_functions.map((r) => r.name);
+  assert.ok(scheduled.includes("actions/answerPublish:attachHostedDomain"), "the hosted address is attached and checked at once");
+  assert.ok(scheduled.includes("actions/answerPublish:publishPage"), "its read drafts go out");
 });
