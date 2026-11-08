@@ -672,6 +672,42 @@
   animation: fade-out var(--d-exit) var(--ease-in) both;
 }
 
+/* Selects: the native control with Pentra's chevron (keyboard and screen readers keep the native behaviour). */
+.select-field {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%238a8f98' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 6.5 8 10l3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 34px !important;
+}
+
+/* Charts: lines draw in once (500ms) on first view; a new streamed answer fades and rises 8px (240ms). */
+@keyframes draw-line {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.chart-draw {
+  stroke-dasharray: 1;
+  animation: draw-line 500ms var(--ease-out) both;
+}
+@keyframes feed-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.feed-in {
+  animation: feed-in 240ms var(--ease-out) both;
+}
+
 /* Page content enters once per navigation; the nav never animates, so the chrome feels fixed. */
 .page-enter {
   animation: rise-in var(--d-enter) var(--ease-out) both;
@@ -702,6 +738,13 @@
   }
   .hl-you[data-ink] {
     animation: none;
+  }
+  .chart-draw {
+    animation: none;
+    stroke-dasharray: none;
+  }
+  .feed-in {
+    animation: fade-in 150ms linear both;
   }
 }
 

@@ -4,15 +4,15 @@
  * labelled as an example.
  */
 
-export type AssistantId = "chatgpt" | "perplexity" | "gemini" | "google-ai-mode" | "google-ai-overviews";
+export type AssistantId = "chatgpt" | "perplexity" | "gemini" | "google_ai_mode" | "google_ai_overview";
 
 /** The five assistants Pentra asks. "Google's AI" covers the last two together in running copy. */
 export const ASSISTANTS: readonly { id: AssistantId; name: string; short: string }[] = [
   { id: "chatgpt", name: "ChatGPT", short: "ChatGPT" },
   { id: "perplexity", name: "Perplexity", short: "Perplexity" },
   { id: "gemini", name: "Gemini", short: "Gemini" },
-  { id: "google-ai-mode", name: "Google AI Mode", short: "AI Mode" },
-  { id: "google-ai-overviews", name: "Google AI Overviews", short: "AI Overviews" },
+  { id: "google_ai_mode", name: "Google AI Mode", short: "AI Mode" },
+  { id: "google_ai_overview", name: "Google AI Overviews", short: "AI Overviews" },
 ];
 
 export const ASSISTANT_NAMES_SENTENCE = "ChatGPT, Perplexity, Gemini and Google's AI";
