@@ -82,8 +82,12 @@ test("P193: links inside an article go straight to the consolidated article; any
   assert.match(post, /<MarkdownRenderer markdown=\{article\.markdown\} domain=\{domain\} slug=\{slug\} \/>/);
 });
 
-test("P193: the sitemap lists only pages that answer 200 (/pricing redirects to the home page)", () => {
-  assert.doesNotMatch(readFileSync("src/app/sitemap.ts", "utf8"), /url: `\$\{baseUrl\}\/pricing`/);
+test("P193: the sitemap lists only pages that answer 200 (Nov 2026: /pricing and /method are pages; /check and /beta redirect)", () => {
+  const sitemap = readFileSync("src/app/sitemap.ts", "utf8");
+  assert.match(sitemap, /url: `\$\{baseUrl\}\/pricing`/);
+  assert.match(sitemap, /url: `\$\{baseUrl\}\/method`/);
+  assert.doesNotMatch(sitemap, /url: `\$\{baseUrl\}\/(?:check|beta)`/);
+  assert.doesNotMatch(readFileSync("src/app/pricing/page.tsx", "utf8"), /permanentRedirect/);
 });
 
 test("the IndexNow key file is public and matches its script", () => {

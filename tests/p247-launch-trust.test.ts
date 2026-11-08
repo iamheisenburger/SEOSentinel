@@ -50,14 +50,16 @@ test("P247 no old-engine post is served: each redirects to the newer article on 
   }
 });
 
-test("P247 one platform list: pages name only the GitHub layouts proven live, and the unverified connectors say beta", () => {
-  const marketing = ["src/app/page.tsx", "src/app/layout.tsx", "src/app/beta/page.tsx", "src/app/(dashboard)/upgrade/page.tsx",
-    "src/components/landing/pricing-section.tsx", "src/app/check/page.tsx", "src/components/free-check/check-result.tsx"];
+test("P247 one platform list: the marketing site renders the publish targets from one list; setup still marks unverified connectors beta", () => {
+  // Nov 2026 (coordinator): the publisher supports WordPress, Webflow, Shopify, Ghost, GitHub, a signed webhook and the
+  // hosted subdomain, so the marketing site may name them, but only through PUBLISH_TARGETS, never a hand-typed list.
+  const marketing = ["src/app/page.tsx", "src/app/layout.tsx", "src/app/(dashboard)/upgrade/page.tsx",
+    "src/components/marketing/pricing-plan.tsx", "src/components/marketing/publish-targets.tsx", "src/app/pricing/page.tsx"];
   for (const path of marketing) {
     const text = read(path);
-    assert.doesNotMatch(text, /WordPress, Shopify, Webflow,? (?:or |and )?Ghost(?:,| or| and) (?:your )?GitHub|name: "(?:WordPress|Shopify, Webflow and Ghost)"/, path);
+    assert.doesNotMatch(text, /name: "(?:WordPress|Shopify, Webflow and Ghost)"/, path);
   }
-  assert.match(read("src/app/page.tsx"), /Next\.js, Astro, Hugo, Jekyll and Gatsby blogs with Markdown posts/);
+  assert.match(read("src/components/marketing/publish-targets.tsx"), /PUBLISH_TARGETS\.map\(/);
   const setup = read("src/components/onboarding/content-start.tsx");
   for (const name of ["WordPress", "Shopify", "Webflow", "Ghost"]) assert.match(setup, new RegExp(`>${name} \\(beta\\) · `), name);
   assert.match(read("src/app/(dashboard)/sites/[siteId]/page.tsx"), /\["wordpress", "WordPress \(beta\)"\], \["shopify", "Shopify \(beta\)"\]/);
@@ -67,10 +69,11 @@ test("P247 homepage claims are true as written, the typo is gone, and each publi
   const home = read("src/app/page.tsx");
   assert.doesNotMatch(home, /Google and AI answers\.|Independent fact/);
   assert.doesNotMatch(home, /customers make, A draft/);
-  for (const path of ["src/app/beta/page.tsx", "src/app/(dashboard)/upgrade/page.tsx", "src/components/landing/pricing-section.tsx"])
+  for (const path of ["src/app/(dashboard)/upgrade/page.tsx", "src/components/marketing/pricing-plan.tsx", "src/app/pricing/page.tsx"])
     assert.doesNotMatch(read(path), /[Ii]ndependent fact/, path);
-  for (const [path, url] of [["src/app/blog/page.tsx", "`https://${domain}/blog`"], ["src/app/beta/page.tsx", '"https://pentra.dev/beta"'],
-    ["src/app/check/page.tsx", '"https://pentra.dev/check"'], ["src/app/legal/terms/page.tsx", '"https://pentra.dev/legal/terms"'],
+  // /beta and /check permanently redirect home since Nov 2026, so they no longer carry their own previews.
+  for (const [path, url] of [["src/app/blog/page.tsx", "`https://${domain}/blog`"], ["src/app/pricing/page.tsx", '"https://pentra.dev/pricing"'],
+    ["src/app/method/page.tsx", '"https://pentra.dev/method"'], ["src/app/legal/terms/page.tsx", '"https://pentra.dev/legal/terms"'],
     ["src/app/legal/privacy/page.tsx", '"https://pentra.dev/legal/privacy"']])
     assert.ok(read(path).includes(`...pageSocial(`) && read(path).includes(`, ${url}),`), path);
 });
@@ -97,6 +100,6 @@ test("P248 a post names who published it and claims a source check only when it 
   const page = read("src/app/blog/[slug]/page.tsx");
   assert.doesNotMatch(page, /factCheckScore > 80/);
   assert.match(page, /\{article\.sources && article\.sources\.length > 0 && \(/);
-  assert.match(page, /<span className="text-\[#8A8F98\]">By \{publisherName\}<\/span>/);
+  assert.match(page, /<span className="text-text-2">By \{publisherName\}<\/span>/);
 });
 
