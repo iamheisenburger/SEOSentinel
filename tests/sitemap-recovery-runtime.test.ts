@@ -4,17 +4,21 @@ import test from "node:test";
 import { buildSync } from "esbuild";
 
 const source = buildSync({ entryPoints: ["src/app/sitemap.ts"], bundle: true,
-  platform: "node", format: "cjs", external: ["@/lib/convexHttpClient", "../../convex/_generated/api", "@/lib/committed-articles"],
+  platform: "node", format: "cjs", external: ["@/lib/convexHttpClient", "../../convex/_generated/api", "@/lib/committed-articles", "@/lib/hosted-answers"],
   write: false }).outputFiles[0].text;
 
-function fixture(domain: string) {
+function fixture(domain: string, requestHost = "") {
   let unavailable = true;
   let articles = [{ slug: "fresh-article", updatedAt: 1000 }];
   let queries = 0, committedReads = 0;
   const runtimeModule = { exports: {} as { dynamic: string; default(): Promise<Array<{ url: string }>> } };
   runInNewContext(source, { module: runtimeModule, exports: runtimeModule.exports, process: { env: { NEXT_PUBLIC_SITE_URL: `https://${domain}` } },
     require(name: string) {
-      if (name === "@/lib/convexHttpClient") return { convexHttp: { async query(_ref: unknown, args: { domain: string }) {
+      // Pentra Answers (Nov 2026): a hosted answers address (answers.<customer domain>) lists its own answer pages.
+      if (name === "@/lib/hosted-answers") return { requestHost: async () => requestHost,
+        isHostedAnswersHost: (host: string) => host.startsWith("answers.") };
+      if (name === "@/lib/convexHttpClient") return { convexHttp: { async query(ref: unknown, args: { domain?: string; host?: string }) {
+        if (ref === "hostedIndex") return { pages: [{ slug: "find-web-design-clients", updatedAt: 2000 }], business: { name: "Acme", domain: "acme.example" } };
         assert.equal(args.domain, domain); queries++;
         if (unavailable) throw new Error("Backend unavailable");
         return { articles, urlStructure: "/articles/[slug]" };
@@ -23,7 +27,7 @@ function fixture(domain: string) {
       if (name === "@/lib/committed-articles") return { COMMITTED_BLOG_DOMAIN: "pentra.dev",
         async listCommittedArticles() { committedReads++; return [{ slug: "committed-article", updatedAt: 500 }]; } };
       assert.equal(name, "../../convex/_generated/api");
-      return { api: { blog: { listPublishedSlugs: "slugs" } } };
+      return { api: { blog: { listPublishedSlugs: "slugs" }, answerPublish: { hostedIndex: "hostedIndex" } } };
     },
   });
   return { runtime: runtimeModule.exports, restore() { unavailable = false; }, fail() { unavailable = true; },
@@ -56,4 +60,11 @@ test("P240 pentra.dev's sitemap lists its committed articles while Convex cannot
   assert.equal(after.at(-1)?.url, "https://pentra.dev/articles/fresh-article");
   assert.equal(after.some(row => row.url.includes("committed-article")), false, "a working Convex answer wins");
   assert.deepEqual([f.queryCount(), f.committedReads()], [2, 1]);
+});
+
+test("a hosted answers address's sitemap lists its own answer pages, never Pentra's", async () => {
+  const site = fixture("pentra.dev", "answers.acme.example");
+  const urls = JSON.parse(JSON.stringify((await site.runtime.default()).map((entry) => entry.url)));
+  assert.deepEqual(urls, ["https://answers.acme.example/", "https://answers.acme.example/find-web-design-clients"]);
+  assert.equal(site.queryCount(), 0, "Pentra's own blog list is never read for a customer's address");
 });

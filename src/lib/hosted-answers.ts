@@ -9,7 +9,9 @@ export function isHostedAnswersHost(host: string | null | undefined): boolean {
 
 /** The host the visitor asked for (the proxy's forwarded host first), lowercased, without www or a port. */
 export async function requestHost(): Promise<string> {
-  const requestHeaders = await headers();
+  let requestHeaders: Awaited<ReturnType<typeof headers>>;
+  // Outside a request (a build step, a direct call in tests) there is no host: it is Pentra's own site.
+  try { requestHeaders = await headers(); } catch { return ""; }
   const forwarded = requestHeaders.get("x-forwarded-host")?.split(",", 1)[0]?.trim();
   return (forwarded || requestHeaders.get("host") || "").toLowerCase().replace(/:\d+$/, "").replace(/^www\./, "");
 }
