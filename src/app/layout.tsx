@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { dark } from "@clerk/themes";
@@ -19,29 +19,30 @@ const geistMono = Geist_Mono({
 
 const GA_ID = process.env.NEXT_PUBLIC_GA_ID;
 
+const TITLE = "Pentra: see what AI assistants say about your business";
+const DESCRIPTION =
+  "Pentra asks ChatGPT, Perplexity, Gemini and Google's AI the questions your buyers ask, shows who they name with every answer as proof, and writes the pages that answer them. Start with a free snapshot.";
+
 export const metadata: Metadata = {
   title: {
-    default: "Pentra — Autopilot SEO for your website",
+    default: TITLE,
     template: "%s | Pentra",
   },
-  description:
-    "Add your website and Pentra takes it from there: researched, fact-checked articles published on schedule, pages improved, and results in Search Console.",
+  description: DESCRIPTION,
   metadataBase: new URL("https://pentra.dev"),
   openGraph: {
-    title: "Pentra — Autopilot SEO for your website",
-    description:
-      "Autopilot SEO: researched, fact-checked articles published to your Next.js, Astro, Hugo, Jekyll or Gatsby blog on a schedule, or written for you to paste anywhere else, with Search Console reporting.",
+    title: TITLE,
+    description: DESCRIPTION,
     url: "https://pentra.dev",
     siteName: "Pentra",
     locale: "en_US",
     type: "website",
-    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Pentra: Autopilot SEO for your website" }],
+    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Pentra: see what AI assistants say about your business" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Pentra — Autopilot SEO for your website",
-    description:
-      "Autopilot SEO: researched, fact-checked articles published to your Next.js, Astro, Hugo, Jekyll or Gatsby blog on a schedule, or written for you to paste anywhere else, with Search Console reporting.",
+    title: TITLE,
+    description: DESCRIPTION,
     images: ["/og.png"],
   },
   robots: {
@@ -50,16 +51,20 @@ export const metadata: Metadata = {
   },
 };
 
+export const viewport: Viewport = {
+  themeColor: "#08090a",
+  colorScheme: "dark",
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#08090A] text-[#F7F8F8]`}
-      >
+    // data-scroll-behavior keeps route changes instant while in-page anchor links glide (Next.js 16).
+    <html lang="en" className="dark" data-scroll-behavior="smooth">
+      <body className={`${geistSans.variable} ${geistMono.variable} bg-bg text-text antialiased`}>
         <ClerkProvider
           signInUrl="/sign-in"
           signUpUrl="/sign-up"
@@ -71,12 +76,16 @@ export default function RootLayout({
             variables: {
               colorPrimary: "#F7F8F8",
               colorPrimaryForeground: "#08090A",
-              colorBackground: "#0E0F11",
-              colorInput: "#141518",
+              colorBackground: "#0F1011",
+              colorInput: "#161718",
               colorInputForeground: "#F7F8F8",
               colorForeground: "#F7F8F8",
               colorMutedForeground: "#8A8F98",
-              borderRadius: "0.5rem",
+              colorDanger: "#F27A72",
+              colorSuccess: "#3FCF8E",
+              colorWarning: "#E8B24A",
+              borderRadius: "0.375rem",
+              fontFamily: "var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif",
             },
             elements: {
               rootBox: {
@@ -84,22 +93,25 @@ export default function RootLayout({
               },
               card: {
                 width: "100%",
-                backgroundColor: "#0E0F11",
+                backgroundColor: "#0F1011",
                 border: "1px solid rgba(255,255,255,0.08)",
-                boxShadow: "0 24px 48px -16px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.04)",
+                borderRadius: "10px",
+                boxShadow: "none",
               },
               headerTitle: {
                 color: "#F7F8F8",
+                fontWeight: 500,
+                letterSpacing: "-0.012em",
               },
               headerSubtitle: {
                 color: "#8A8F98",
               },
               formFieldLabel: {
-                color: "#D0D6E0",
+                color: "#B4B8C0",
               },
               formFieldInput: {
-                backgroundColor: "#141518",
-                borderColor: "rgba(255,255,255,0.1)",
+                backgroundColor: "#161718",
+                borderColor: "rgba(255,255,255,0.08)",
                 color: "#F7F8F8",
               },
               footerActionLink: {
@@ -109,17 +121,18 @@ export default function RootLayout({
                 borderColor: "rgba(255,255,255,0.08)",
               },
               dividerText: {
-                color: "#62666D",
+                color: "#8A8F98",
               },
               socialButtonsBlockButton: {
-                backgroundColor: "#141518",
-                borderColor: "rgba(255,255,255,0.1)",
+                backgroundColor: "transparent",
+                borderColor: "rgba(255,255,255,0.14)",
                 color: "#F7F8F8",
               },
               formButtonPrimary: {
                 backgroundColor: "#F7F8F8",
                 color: "#08090A",
                 boxShadow: "none",
+                fontWeight: 600,
               },
             },
           }}

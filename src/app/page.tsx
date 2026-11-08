@@ -1,13 +1,22 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowRight, Check, Radar } from "lucide-react";
-import { LandingNav } from "@/components/layout/landing-nav";
-import { PricingSection } from "@/components/landing/pricing-section";
-import { ProductFrame } from "@/components/landing/product-frame";
-import { RunLog } from "@/components/landing/run-log";
-import { AnswerPanel, ControlPanel, HealthPanel, LinksPanel, RankingsPanel, SourcesPanel } from "@/components/landing/panels";
+import { ArrowRight } from "lucide-react";
+import { MarketingShell } from "@/components/marketing/marketing-shell";
+import { Hero } from "@/components/marketing/hero";
+import { ProblemCount } from "@/components/marketing/problem-count";
+import { FirstHour } from "@/components/marketing/first-hour";
+import { Proof } from "@/components/marketing/proof";
+import { AfterHour } from "@/components/marketing/after-hour";
+import { PublishTargets } from "@/components/marketing/publish-targets";
+import { PricingPlan } from "@/components/marketing/pricing-plan";
+import { Faq } from "@/components/marketing/faq";
+import { LANDING_FAQ } from "@/components/marketing/faq-data";
+import { FinalCta } from "@/components/marketing/final-cta";
+import { Section, SectionHeading } from "@/components/marketing/section";
 import { cachedPublishedListing } from "@/lib/published-listing";
 import { servedOnItsOwnUrl } from "@/lib/pentra-consolidation";
+import { PENTRA_PLAN } from "@/lib/pricing";
+import { ASSISTANTS } from "@/lib/product-facts";
 
 // The latest guides are linked from the homepage so search engines find new articles quickly.
 export const revalidate = 3600;
@@ -15,343 +24,9 @@ export const revalidate = 3600;
 // Declared so Google indexes https://pentra.dev/ rather than choosing the www host.
 export const metadata: Metadata = { alternates: { canonical: "https://pentra.dev/" } };
 
-/* Design: a dark, product-led page. Near-black canvas, precise sans type,
- * hairline structure instead of card grids, the product itself as the imagery.
- * White is the call to action; Pentra blue marks status and links only. */
-
-const WRAP = "mx-auto w-full max-w-[1200px] px-6";
-const EYEBROW = "font-mono text-[12px] uppercase tracking-[0.12em] text-[#62666D]";
-
-function PrimaryCta({ children, href = "/sign-up" }: { children: React.ReactNode; href?: string }) {
-  return (
-    <Link href={href} className="group inline-flex items-center gap-2 rounded-full bg-[#F7F8F8] px-5 py-2.5 text-[15px] font-medium text-[#08090A] transition hover:bg-white">
-      {children}
-      <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-    </Link>
-  );
-}
-
-/* ─── Hero ─────────────────────────────────────── */
-
-function Hero() {
-  return (
-    <section className="relative overflow-hidden pt-32 md:pt-44">
-      <div className={WRAP}>
-        <Link href="/beta" className="animate-fade-in-up inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.02] px-3 py-1 text-[13px] text-[#8A8F98] transition hover:border-white/[0.14] hover:text-white">
-          <span className="h-1.5 w-1.5 rounded-full bg-[#4CB782]" />Founding beta: 10 websites get Starter free for 60 days <span aria-hidden>→</span>
-        </Link>
-        <h1 className="animate-fade-in-up mt-6 max-w-[15ch] text-[clamp(2.6rem,6.4vw,5rem)] font-semibold leading-[1.02] tracking-[-0.04em] [text-wrap:balance]"
-          style={{ animationDelay: "0.05s" }}>
-          More customers from Google.
-        </h1>
-        <p className="animate-fade-in-up mt-6 max-w-[40rem] text-[17px] leading-relaxed text-[#8A8F98] md:text-[19px] [text-wrap:pretty]" style={{ animationDelay: "0.12s" }}>
-          Pentra checks your site every week, writes only for searches your buyers make and your site can actually win,
-          earns links from other sites, and tracks whether ChatGPT and Google&apos;s AI answers name you. Then it emails you
-          what changed, from your own Search Console data.
-        </p>
-        <div className="animate-fade-in-up mt-9 flex flex-wrap items-center gap-x-6 gap-y-4" style={{ animationDelay: "0.18s" }}>
-          <PrimaryCta>Start free</PrimaryCta>
-          <a href="#pipeline" className="text-[15px] font-medium text-[#D0D6E0] transition hover:text-white">See how it works <span aria-hidden>→</span></a>
-          <span className="text-[13px] text-[#62666D]">3 free articles a month · No credit card</span>
-        </div>
-      </div>
-      <div className={`${WRAP} animate-fade-in-up mt-16 md:mt-20`} style={{ animationDelay: "0.25s" }}>
-        <ProductFrame />
-      </div>
-    </section>
-  );
-}
-
-/* ─── Proof ─────────────────────────────────────── */
-
-function Proof() {
-  return (
-    <section className="border-t border-white/[0.06]">
-      <div className={`${WRAP} flex flex-col gap-4 py-8 md:flex-row md:items-center md:justify-between`}>
-        <p className="text-[15px] text-[#8A8F98]">
-          <span className="text-[#F7F8F8]">We run our own marketing on Pentra.</span> This site and our other product are on the
-          same system you get: the weekly check-up, the articles, the link building and the weekly report.
-        </p>
-        <Link href="/blog" className="shrink-0 text-[14px] font-medium text-[#D0D6E0] transition hover:text-white">Read them <span aria-hidden>→</span></Link>
-      </div>
-    </section>
-  );
-}
-
-/* ─── Statement + pillars ──────────────────────── */
-
-const PILLARS = [
-  { title: "Only searches you can win", desc: "Before writing, Pentra looks at Google's real first page for the search. It writes only when buyers make that search and sites as strong as yours already rank there." },
-  { title: "Every lever, not just articles", desc: "Articles, fixes to pages Google already shows, links from other sites and AI answers: the things traffic needs, worked on together every week." },
-  { title: "Measured in your own data", desc: "A weekly email with your clicks, what Pentra fixed, the links it won and whether AI assistants name you, from your own Search Console." },
-];
-
-function PillarGlyph({ n }: { n: number }) {
-  // Thin line drawings: a stacked source ledger, a page with a check, a rising line.
-  const common = { fill: "none", stroke: "rgba(247,248,248,0.55)", strokeWidth: 1 } as const;
-  return (
-    <svg viewBox="0 0 120 72" className="h-16 w-28" aria-hidden>
-      {n === 0 && <>{[0, 8, 16, 24].map(d => <rect key={d} x={20 + d / 2} y={14 + d} width="64" height="22" rx="3" {...common} opacity={1 - d / 40} />)}</>}
-      {n === 1 && <><rect x="30" y="8" width="48" height="58" rx="4" {...common} />{[20, 28, 36].map(y => <line key={y} x1="38" x2="70" y1={y} y2={y} {...common} opacity="0.6" />)}<circle cx="78" cy="54" r="11" {...common} stroke="#4CB782" /><path d="M73 54l3.5 3.5L83 51" {...common} stroke="#4CB782" /></>}
-      {n === 2 && <><line x1="14" x2="106" y1="62" y2="62" {...common} opacity="0.5" /><path d="M14 56 L34 50 L50 52 L66 38 L82 34 L106 14" {...common} stroke="#0EA5E9" /><circle cx="106" cy="14" r="2.5" fill="#0EA5E9" /></>}
-    </svg>
-  );
-}
-
-function Statement() {
-  return (
-    <section id="features" className="scroll-mt-20 border-t border-white/[0.06] py-24 md:py-36">
-      <div className={WRAP}>
-        <p className="max-w-[52rem] text-[26px] font-medium leading-[1.25] tracking-[-0.02em] md:text-[40px] [text-wrap:pretty]">
-          Pentra is the SEO team your website never had.{" "}
-          <span className="text-[#62666D]">Every week it finds what holds your site back, writes for searches it can win, fixes the pages Google already shows, earns links and gets you into AI answers.</span>
-        </p>
-        <div className="mt-16 grid border-t border-white/[0.06] md:mt-24 md:grid-cols-3">
-          {PILLARS.map((pillar, n) => (
-            <div key={pillar.title} className={`py-10 md:px-8 ${n > 0 ? "border-t border-white/[0.06] md:border-l md:border-t-0" : "md:pl-0"}`}>
-              <PillarGlyph n={n} />
-              <h3 className="mt-8 text-[16px] font-medium text-[#F7F8F8]">{pillar.title}</h3>
-              <p className="mt-2 max-w-[22rem] text-[15px] leading-relaxed text-[#8A8F98]">{pillar.desc}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ─── How Autopilot runs ───────────────────────── */
-
-const STEPS = [
-  ["Add your website", "Pentra reads your site and suggests your business facts and your booking or signup page. You confirm them."],
-  ["Connect it once", "Your blog, plus Google Search Console (optional, strongly recommended). Pentra runs its first check-up straight away: what Google shows, who searches, what is broken, how strong your site is."],
-  ["It writes what you can win", "For each search, Pentra checks Google's first page first. It writes only buyer searches your site can reach, adds something the top results don't have, and never writes two pages for the same search."],
-  ["It fixes what is already there", "Duplicate articles merge into the stronger one, pages Google ignores fold into ones it shows, and pages seen but rarely clicked get a better title, kept only if clicks rise."],
-  ["It earns links and AI answers", "Pentra finds pages that link to your competitors but not to you and emails them from your own mailbox, and checks every week whether ChatGPT, Gemini and Google AI Mode name you."],
-  ["You get the results every week", "One plain email: your clicks, what Pentra fixed and published, the links it won and what it does next."],
-];
-
-function HowItWorks() {
-  return (
-    <section id="pipeline" className="scroll-mt-20 border-t border-white/[0.06] py-24 md:py-36">
-      <div className={WRAP}>
-        <p className={EYEBROW}>How Autopilot runs</p>
-        <h2 className="mt-4 max-w-[18ch] text-[clamp(2rem,4.2vw,3.25rem)] font-semibold leading-[1.05] tracking-[-0.035em] [text-wrap:balance]">
-          Set it up once. Pentra works on everything, every week.
-        </h2>
-        <div className="mt-14 grid gap-12 lg:grid-cols-[1fr_1.15fr] lg:gap-16">
-          <ol className="border-t border-white/[0.06]">
-            {STEPS.map(([title, desc], n) => (
-              <li key={title} className="grid grid-cols-[2.5rem_1fr] gap-2 border-b border-white/[0.06] py-5">
-                <span className="font-mono text-[13px] text-[#62666D]">{String(n + 1).padStart(2, "0")}</span>
-                <div>
-                  <h3 className="text-[16px] font-medium text-[#F7F8F8]">{title}</h3>
-                  <p className="mt-1.5 text-[14.5px] leading-relaxed text-[#8A8F98]">{desc}</p>
-                </div>
-              </li>
-            ))}
-          </ol>
-          <div className="lg:sticky lg:top-28 lg:self-start">
-            <RunLog />
-            <p className="mt-3 text-[12px] text-[#62666D]">Example run for an example site. Your log shows your real articles.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ─── Feature rows ─────────────────────────────── */
-
-const ROWS = [
-  { label: "01 · Accuracy", title: "No invented facts.", body: "Most AI writers make up statistics. Pentra writes from the business facts you confirm and the searches your customers make. A draft with a statistic its source doesn't contain, or a price or plan you didn't confirm, is never published, and a sentence a source contradicts is rewritten first.",
-    points: ["Written only from business facts you confirmed", "Every statistic checked against its source", "Prices and plans only as you confirmed them"], panel: <SourcesPanel /> },
-  { label: "02 · Win", title: "Searches you can win, pages that get clicked.", body: "Pentra checks Google's real first page before it writes, so new articles target searches buyers make and your site can reach. Pages Google already shows get improved for the searches buyers make, and a page seen but rarely clicked gets a new title that stays only if clicks rise.",
-    points: ["Checked against Google's first page before writing", "Buyer searches only, one page per search", "Titles tested by your real clicks"], panel: <RankingsPanel /> },
-  { label: "03 · Links", title: "Links from other sites, on autopilot.", body: "Google trusts a site more when relevant sites link to it. Each week Pentra finds the pages that link to your competitors but not to you, writes one short, personal email per page and sends it from your own mailbox, with your OK. It follows up once, stops when someone replies, and checks whether the link went live.",
-    points: ["Pages that already link to sites like yours", "Sent from your mailbox, up to 10 a week", "Every link checked live, every week"], panel: <LinksPanel /> },
-  { label: "04 · AI answers", title: "Named by ChatGPT and Google's AI answers.", body: "Every week Pentra asks ChatGPT, Gemini and Google AI Mode the questions your buyers ask, and tracks whether they name you, who they name instead and which pages they quote. The questions become articles, and the pages they quote become link targets. Every article answers each question in its first line, the way AI assistants quote pages.",
-    points: ["Your buyers' questions, asked every week", "Who gets named instead of you", "Quoted pages become link targets"], panel: <AnswerPanel /> },
-  { label: "05 · Check-up", title: "A weekly check-up, and a report in plain English.", body: "Every week Pentra reads your Search Console, every page on your site, your site's strength and who holds Google's first page for your searches. It repairs what it can, such as duplicate articles and broken addresses, and emails you what it found, what it fixed and what it does next.",
-    points: ["Search Console, pages, strength and competitors", "Repairs done for you, checked live", "One weekly email with your real numbers"], panel: <HealthPanel /> },
-  { label: "06 · Control", title: "You choose how much control you keep.", body: "Put Pentra on Autopilot and pick a pace, or choose Review first and approve every article. Switch any time. Your plan's monthly allowance always caps the total, so there are no surprise charges.",
-    points: ["Autopilot or Review first, per website", "Pace from 1 to 21 articles a week", "Pause any time from your dashboard"], panel: <ControlPanel /> },
-];
-
-function FeatureRows() {
-  return (
-    <section className="border-t border-white/[0.06]">
-      {ROWS.map((row, n) => (
-        <div key={row.title} className={`${n > 0 ? "border-t border-white/[0.06]" : ""} py-20 md:py-28`}>
-          <div className={`${WRAP} grid items-center gap-12 lg:grid-cols-2 lg:gap-20`}>
-            <div className={n % 2 ? "lg:order-2" : ""}>
-              <p className={EYEBROW}>{row.label}</p>
-              <h2 className="mt-4 text-[clamp(1.75rem,3.4vw,2.6rem)] font-semibold leading-[1.08] tracking-[-0.03em] [text-wrap:balance]">{row.title}</h2>
-              <p className="mt-5 max-w-[34rem] text-[16px] leading-relaxed text-[#8A8F98]">{row.body}</p>
-              <ul className="mt-7 space-y-2.5">
-                {row.points.map(point => (
-                  <li key={point} className="flex items-center gap-3 text-[14.5px] text-[#D0D6E0]"><Check className="h-4 w-4 shrink-0 text-[#4CB782]" />{point}</li>
-                ))}
-              </ul>
-            </div>
-            <div className={n % 2 ? "lg:order-1" : ""}>{row.panel}</div>
-          </div>
-        </div>
-      ))}
-    </section>
-  );
-}
-
-/* ─── Where it publishes ───────────────────────── */
-
-const PLATFORMS = [
-  { name: "GitHub blogs", how: "Next.js, Astro, Hugo, Jekyll and Gatsby blogs with Markdown posts. Pentra writes each article the way your blog keeps its posts, commits it and confirms the page is live." },
-  { name: "Any other platform", how: "WordPress, Shopify, Webflow, Wix, Squarespace and others. Pentra writes each article, you paste it, and Pentra checks the page is live." },
-  { name: "Google Search Console", how: "Clicks and positions for every page, so you see what each article and improvement changed." },
-];
-
-function Platforms() {
-  return (
-    <section className="border-t border-white/[0.06] py-24 md:py-32">
-      <div className={WRAP}>
-        <p className={EYEBROW}>Works where your site lives</p>
-        <div className="mt-10 grid gap-px overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.06] sm:grid-cols-2 lg:grid-cols-4">
-          {PLATFORMS.map(platform => (
-            <div key={platform.name} className="bg-[#08090A] p-6 md:p-7">
-              <h3 className="text-[18px] font-semibold tracking-[-0.01em] text-[#F7F8F8]">{platform.name}</h3>
-              <p className="mt-2 text-[14px] leading-relaxed text-[#8A8F98]">{platform.how}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ─── FAQ ──────────────────────────────────────── */
-
-const faqs = [
-  {
-    q: "What does Pentra do after I add my website?",
-    a: "It learns what you sell from the details you confirm and runs its first check-up. Then, every week, it writes and publishes articles for buyer searches your site can win, fixes and improves the pages Google already shows, finds sites that should link to you and (with your OK) emails them from your mailbox, checks whether AI assistants name you, and emails you the results from your own Search Console.",
-  },
-  {
-    q: "How does Pentra get links to my site?",
-    a: "It finds pages that already link to your competitors but not to you, often lists of the best tools or services in your field. It writes one short, personal email per page and sends it from your own mailbox: up to 10 a week, one follow-up, and never again once someone replies or asks it to stop. Nothing is sent until you connect your mailbox and choose to send. It never buys or swaps links.",
-  },
-  {
-    q: "Does Pentra help with ChatGPT and AI answers?",
-    a: "Yes. Every week it asks ChatGPT, Gemini and Google AI Mode the questions your buyers ask, and tells you whether they name you and who they name instead. Those questions become articles, and the pages the assistants quote become places to be listed.",
-  },
-  {
-    q: "Which websites does Pentra work with?",
-    a: "Next.js, Astro, Hugo, Jekyll and Gatsby blogs that keep Markdown posts in a GitHub repository: Pentra publishes there itself. On WordPress, Shopify, Webflow, Wix, Squarespace or any other platform, Pentra researches and writes each article, you paste it into your blog, and Pentra checks it is live (automatic publishing there is coming soon: WordPress, Shopify, Webflow and Ghost are in beta while we test them on live sites).",
-  },
-  {
-    q: "Is Autopilot safe for my brand?",
-    a: "Autopilot only publishes articles that pass its checks: every statistic must appear in the source it cites, and prices, plans and product numbers must match the facts you confirmed. A draft that fails is held back, never published, and the schedule moves on. You can pause Pentra at any time, or choose Review first so nothing publishes without your approval.",
-  },
-  {
-    q: "How many articles will Pentra publish?",
-    a: "You choose a pace from 1 to 21 articles a week for each website. Your plan's monthly article allowance caps the total, so Pentra never publishes more than your plan includes.",
-  },
-  {
-    q: "Will Pentra make things up about my business?",
-    a: "No. Pentra writes from the business facts you confirm. It is instructed never to invent product features, statistics, testimonials or case studies. A draft with a statistic its source doesn't contain, or a product number you didn't confirm, is never published, and a separate fact check reviews every article before it goes live.",
-  },
-  {
-    q: "Does Pentra guarantee rankings?",
-    a: "No one can honestly guarantee rankings, and search results take weeks to move. Pentra works only on searches your site can win, earns links, and shows you real Search Console data every week so you can see what is working.",
-  },
-  {
-    q: "How does billing work?",
-    a: "Each plan is a fixed monthly or annual price with a set number of new articles per month. There are no usage charges. Monthly and annual plans can be canceled anytime from Billing; your plan remains active through the end of the current billing period.",
-  },
-];
-
-function FAQ() {
-  return (
-    <section id="faq" className="scroll-mt-20 border-t border-white/[0.06] py-24 md:py-32">
-      <div className={`${WRAP} grid gap-10 lg:grid-cols-[1fr_1.4fr]`}>
-        <div>
-          <p className={EYEBROW}>Questions</p>
-          <h2 className="mt-4 text-[clamp(1.75rem,3.4vw,2.6rem)] font-semibold leading-[1.08] tracking-[-0.03em]">Before you start</h2>
-          <p className="mt-4 text-[15px] text-[#8A8F98]">Anything else? <Link href="/contact" className="text-[#D0D6E0] underline decoration-white/20 underline-offset-4 hover:text-white">Ask us</Link>.</p>
-        </div>
-        <div className="border-t border-white/[0.06]">
-          {faqs.map(item => (
-            <details key={item.q} className="group border-b border-white/[0.06] py-5">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-6 text-[16px] font-medium text-[#F7F8F8] [&::-webkit-details-marker]:hidden">
-                {item.q}
-                <span aria-hidden className="text-[20px] font-light text-[#62666D] transition-transform group-open:rotate-45">+</span>
-              </summary>
-              <p className="mt-3 max-w-[40rem] text-[15px] leading-relaxed text-[#8A8F98]">{item.a}</p>
-            </details>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ─── Final CTA ────────────────────────────────── */
-
-function FinalCTA() {
-  return (
-    <section className="relative overflow-hidden border-t border-white/[0.06] py-28 md:py-40">
-      <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-80 bg-[radial-gradient(50%_70%_at_50%_100%,rgba(14,165,233,0.12),transparent_70%)]" />
-      <div className={`${WRAP} relative`}>
-        <h2 className="max-w-[16ch] text-[clamp(2.2rem,5vw,4rem)] font-semibold leading-[1.02] tracking-[-0.04em] [text-wrap:balance]">
-          Add your website. Pentra handles the rest.
-        </h2>
-        <p className="mt-6 max-w-[34rem] text-[17px] leading-relaxed text-[#8A8F98]">Setup takes a few minutes. Free includes 3 articles a month, and you can pause or switch to Review first any time.</p>
-        <div className="mt-9 flex flex-wrap items-center gap-6">
-          <PrimaryCta>Get started free</PrimaryCta>
-          <a href="#pricing" className="text-[15px] font-medium text-[#D0D6E0] transition hover:text-white">See pricing <span aria-hidden>→</span></a>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ─── Footer ───────────────────────────────────── */
-
-function Footer() {
-  const link = "text-[14px] text-[#8A8F98] transition hover:text-white";
-  return (
-    <footer className="border-t border-white/[0.06] py-14">
-      <div className={`${WRAP} flex flex-col gap-10 md:flex-row md:items-start md:justify-between`}>
-        <div className="space-y-3">
-          <div className="flex items-center gap-2.5">
-            <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#0EA5E9]/15"><Radar className="h-4 w-4 text-[#0EA5E9]" /></span>
-            <span className="text-[16px] font-semibold">Pentra</span>
-          </div>
-          <p className="max-w-[18rem] text-[13px] leading-relaxed text-[#62666D]">Autopilot SEO and AI answers for your website. Articles, fixes, links and a weekly report.</p>
-        </div>
-        <div className="grid grid-cols-2 gap-x-16 gap-y-3">
-          <div className="flex flex-col gap-3">
-            <span className="text-[12px] font-medium text-[#62666D]">Product</span>
-            <a href="#features" className={link}>Features</a>
-            <a href="#pricing" className={link}>Pricing</a>
-            <a href="#faq" className={link}>FAQ</a>
-            <Link href="/blog" className={link}>Blog</Link>
-          </div>
-          <div className="flex flex-col gap-3">
-            <span className="text-[12px] font-medium text-[#62666D]">Company</span>
-            <Link href="/contact" className={link}>Contact</Link>
-            <Link href="/legal/privacy" className={link}>Privacy</Link>
-            <Link href="/legal/terms" className={link}>Terms</Link>
-          </div>
-        </div>
-      </div>
-      <div className={`${WRAP} mt-12`}>
-        <p className="text-[13px] text-[#62666D]">&copy; {new Date().getFullYear()} Pentra. All rights reserved.</p>
-      </div>
-    </footer>
-  );
-}
-
-/* ─── JSON-LD ──────────────────────────────────── */
+/* Design (ops/design/pentra-redesign-research.md §7a): proof before features. The hero is a real AI answer built
+ * in code; the order is the problem as one count, the free first hour, proof not scores, what the plan does next,
+ * where it publishes, the one plan, questions, and the domain field again. */
 
 const organizationSchema = {
   "@context": "https://schema.org",
@@ -361,28 +36,29 @@ const organizationSchema = {
   applicationCategory: "BusinessApplication",
   operatingSystem: "Web",
   description:
-    "Autopilot SEO and AI answers: a weekly check-up, articles for searches your site can win, fixes to pages Google already shows, links from other sites, AI-answer tracking and a weekly Search Console report.",
-  offers: { "@type": "AggregateOffer", lowPrice: "0", highPrice: "199", priceCurrency: "USD", offerCount: "4" },
+    "Pentra asks AI assistants the questions your buyers ask, shows how often each one names your business against your competitors with every answer as proof, and writes and publishes the pages that answer those questions.",
+  offers: {
+    "@type": "Offer",
+    name: PENTRA_PLAN.name,
+    price: String(PENTRA_PLAN.monthly),
+    priceCurrency: "USD",
+    category: "subscription",
+  },
   featureList: [
-    "Articles written only from confirmed business facts",
-    "Statistic and price checks before publishing",
-    "Autopilot or review-first publishing",
-    "Publishing to Next.js, Astro, Hugo, Jekyll and Gatsby blogs on GitHub, with receipts",
-    "Topic choice checked against Google's first page",
-    "Improvement of pages already ranking and click-tested titles",
-    "Link building from your own mailbox",
-    "ChatGPT, Gemini and Google AI Mode answer tracking",
-    "Weekly results email",
-    "Live-page verification",
-    "Google Search Console reporting",
-    "Weekly site health checks",
+    `Answers from ${ASSISTANTS.map((assistant) => assistant.name).join(", ")}`,
+    "Every count opens to the full recorded answers",
+    "Wrong facts about your business, with the source each assistant used",
+    "Answer pages written from your site's facts, with sources",
+    "Publishing to WordPress, Webflow, Shopify, Ghost, GitHub, a signed webhook, or a hosted subdomain",
+    "Indexing through IndexNow and Google Search Console",
+    "Weekly email with what changed",
   ],
 };
 
 const faqSchema = {
   "@context": "https://schema.org",
   "@type": "FAQPage",
-  mainEntity: faqs.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })),
+  mainEntity: LANDING_FAQ.map((f) => ({ "@type": "Question", name: f.question, acceptedAnswer: { "@type": "Answer", text: f.answer } })),
 };
 
 /* ─── Latest guides (crawlable links to new articles) ───────────── */
@@ -396,21 +72,21 @@ async function LatestGuides() {
   } catch { articles = []; }
   if (articles.length === 0) return null;
   return (
-    <section className="border-t border-white/[0.06] py-20 md:py-24">
-      <div className={WRAP}>
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <p className={EYEBROW}>From the blog</p>
-            <h2 className="mt-4 text-[clamp(1.6rem,3vw,2.2rem)] font-semibold leading-[1.1] tracking-[-0.03em]">Latest guides, published by Pentra</h2>
-          </div>
-          <Link href="/blog" className="text-[15px] font-medium text-[#D0D6E0] transition hover:text-white">All guides <span aria-hidden>→</span></Link>
+    <section aria-labelledby="guides-title" className="border-t border-border py-16 md:py-20">
+      <div className="container-page">
+        <div className="flex flex-wrap items-baseline justify-between gap-4">
+          <h2 id="guides-title" className="type-h3 text-text">From the Pentra blog</h2>
+          <Link href="/blog" className="inline-flex items-center gap-1.5 text-[14px] font-medium text-text-2 transition-colors hover:text-text">
+            All guides
+            <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
+          </Link>
         </div>
-        <ul className="mt-10 grid gap-x-10 border-t border-white/[0.06] md:grid-cols-2">
+        <ul className="mt-8 grid grid-cols-1 gap-x-12 border-t border-border md:grid-cols-2">
           {articles.map(article => (
-            <li key={article._id} className="border-b border-white/[0.06]">
-              <Link href={`/blog/${article.slug}`} className="group flex items-baseline justify-between gap-4 py-4">
-                <span className="text-[15px] leading-snug text-[#D0D6E0] transition group-hover:text-white">{article.title}</span>
-                <span className="shrink-0 font-mono text-[12px] text-[#62666D]">
+            <li key={article._id} className="border-b border-border">
+              <Link href={`/blog/${article.slug}`} className="group flex items-baseline justify-between gap-6 py-4">
+                <span className="text-[15px] leading-6 text-text-2 transition-colors group-hover:text-text">{article.title}</span>
+                <span className="mono-label shrink-0 text-text-3">
                   {new Date(article.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}
                 </span>
               </Link>
@@ -424,21 +100,35 @@ async function LatestGuides() {
 
 export default function LandingPage() {
   return (
-    <main className="relative min-h-screen overflow-x-clip bg-[#08090A] text-[#F7F8F8]">
+    <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationSchema) }} />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }} />
-      <LandingNav />
-      <Hero />
-      <Proof />
-      <Statement />
-      <HowItWorks />
-      <FeatureRows />
-      <Platforms />
-      <PricingSection />
-      <LatestGuides />
-      <FAQ />
-      <FinalCTA />
-      <Footer />
-    </main>
+      <MarketingShell>
+        <Hero />
+        <ProblemCount />
+        <FirstHour />
+        <Proof />
+        <AfterHour />
+        <PublishTargets />
+        <Section id="pricing" labelledBy="pricing-title">
+          <SectionHeading
+            id="pricing-title"
+            align="center"
+            title="One plan. Everything included."
+            lead="Start with a free snapshot of how AI assistants describe your business."
+          />
+          <PricingPlan className="mt-12" />
+          <p className="mt-8 text-center text-[14px] text-text-3">
+            <Link href="/pricing" className="inline-flex items-center gap-1.5 font-medium text-text-2 transition-colors hover:text-text">
+              Pricing details and billing questions
+              <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
+            </Link>
+          </p>
+        </Section>
+        <Faq items={LANDING_FAQ} />
+        <FinalCta />
+        <LatestGuides />
+      </MarketingShell>
+    </>
   );
 }
