@@ -5,7 +5,7 @@ import Link from "next/link";
 import { cache } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Calendar, CheckCircle2, Clock } from "lucide-react";
+import { ArrowLeft, ArrowRight, Calendar, CheckCircle2, Clock } from "lucide-react";
 import { format } from "date-fns";
 import { api } from "../../../../convex/_generated/api";
 import { markdownHasSourcesSection } from "../../../../convex/lib/sourcesHeading";
@@ -189,7 +189,7 @@ function MarkdownRenderer({ markdown, domain, slug }: { markdown: string; domain
               <img
                 src={safeSrc}
                 alt={alt ?? ""}
-                className="my-6 h-auto max-w-full rounded-xl"
+                className="my-6 h-auto max-w-full rounded-card"
               />
             ) : null;
           },
@@ -337,7 +337,7 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
   };
 
   return (
-    <div className="min-h-screen bg-[#08090A]">
+    <div className="min-h-screen bg-bg text-text">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: jsonLd(articleSchema) }}
@@ -354,47 +354,47 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
       )}
       <LandingNav />
 
-      <main className="mx-auto max-w-[46rem] px-6 pt-32 pb-24 md:pt-40">
+      <main id="main" className="page-enter container-prose pb-24 pt-[112px] sm:pt-[128px] lg:pb-32 lg:pt-[148px]">
         <Link
           href="/blog"
-          className="mb-10 inline-flex items-center gap-1.5 text-[13px] font-medium text-[#8A8F98] transition hover:text-white"
+          className="group mb-10 inline-flex items-center gap-1.5 text-[13px] font-medium text-text-3 transition-colors hover:text-text"
         >
-          <ArrowLeft className="h-3.5 w-3.5" />
+          <ArrowLeft className="h-3.5 w-3.5 transition-[translate] duration-[var(--d-state)] group-hover:-translate-x-0.5" strokeWidth={1.75} />
           All guides
         </Link>
 
         {featuredImage && (
-          <div className="overflow-hidden rounded-xl border border-white/[0.06] mb-8">
+          <div className="mb-10 overflow-hidden rounded-card border border-border">
             <img
               src={featuredImage}
               alt={article.title}
-              className="w-full h-auto"
+              className="h-auto w-full"
             />
           </div>
         )}
 
-        <h1 className="text-[clamp(2rem,4.6vw,3rem)] font-semibold leading-[1.08] tracking-[-0.035em] text-[#F7F8F8] [text-wrap:balance]">
+        <h1 className="type-h1 text-text">
           {article.title}
         </h1>
 
-        <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-white/[0.06] pb-8 text-[13px] text-[#62666D]">
+        <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border pb-8 text-[13px] text-text-3">
           {/* P248 (Oct 30 2026): no post named who published it (Cowork's launch audit); the schema already did. */}
-          <span className="text-[#8A8F98]">By {publisherName}</span>
+          <span className="text-text-2">By {publisherName}</span>
           <span className="flex items-center gap-1.5">
-            <Calendar className="h-3.5 w-3.5" />
-            {format(new Date(article.createdAt), "MMMM d, yyyy")}
+            <Calendar className="h-3.5 w-3.5" strokeWidth={1.75} />
+            <span className="mono-label">{format(new Date(article.createdAt), "MMMM d, yyyy")}</span>
           </span>
           {article.readingTime && (
             <span className="flex items-center gap-1.5">
-              <Clock className="h-3.5 w-3.5" />
+              <Clock className="h-3.5 w-3.5" strokeWidth={1.75} />
               {article.readingTime} min read
             </span>
           )}
           {/* P248: "Fact-checked" showed from the model's own score, on posts that cite no source at all. The badge now
               says what Autopilot's publication check establishes: each statistic appears in the source it cites. */}
           {article.sources && article.sources.length > 0 && (
-            <span className="flex items-center gap-1.5 text-[#4CB782]">
-              <CheckCircle2 className="h-3.5 w-3.5" />
+            <span className="flex items-center gap-1.5 text-text-2">
+              <CheckCircle2 className="h-3.5 w-3.5 text-text-3" strokeWidth={1.75} />
               {article.sources.length} {article.sources.length === 1 ? "source" : "sources"} checked
             </span>
           )}
@@ -405,43 +405,45 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
         </div>
 
         {article.sources && article.sources.length > 0 && !markdownHasSourcesSection(article.markdown) && (
-          <div className="mt-12 pt-8 border-t border-white/[0.06]">
-            <h3 className="text-[14px] font-semibold text-[#F7F8F8] mb-4">
+          <div className="mt-14 border-t border-border pt-8">
+            <h3 className="mb-4 text-[14px] font-semibold text-text">
               Sources
             </h3>
-            <ul className="flex flex-col gap-2">
+            <ol className="flex flex-col gap-2.5">
               {article.sources.map((source, index) => {
                 const sourceUrl = safeHttpsUrl(source.url);
                 return sourceUrl ? (
-                  <li key={`${sourceUrl}-${index}`}>
+                  <li key={`${sourceUrl}-${index}`} className="flex gap-3 text-[14px] leading-[22px]">
+                    <span className="mono-label w-5 shrink-0 pt-0.5 text-text-4">{index + 1}</span>
                     <a
                       href={sourceUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-[13px] text-[#0EA5E9] hover:text-[#38BDF8] underline underline-offset-2 transition"
+                      className="link min-w-0 break-words text-text-2"
                     >
                       {source.title || sourceUrl}
                     </a>
                   </li>
                 ) : null;
               })}
-            </ul>
+            </ol>
           </div>
         )}
 
         {related.length > 0 && (
-          <nav aria-labelledby="related-guides-heading" className="mt-12 pt-8 border-t border-white/[0.06]">
-            <h2 id="related-guides-heading" className="text-[14px] font-semibold text-[#F7F8F8] mb-4">
+          <nav aria-labelledby="related-guides-heading" className="mt-14 border-t border-border pt-8">
+            <h2 id="related-guides-heading" className="mb-4 text-[14px] font-semibold text-text">
               Related guides
             </h2>
-            <ul className="flex flex-col gap-2">
+            <ul className="flex flex-col">
               {related.map((item) => (
-                <li key={item.slug}>
+                <li key={item.slug} className="border-b border-border last:border-b-0">
                   <Link
                     href={`/blog/${item.slug}`}
-                    className="text-[14px] text-[#0EA5E9] hover:text-[#38BDF8] underline underline-offset-2 transition"
+                    className="group flex items-center justify-between gap-4 py-3 text-[15px] leading-6 text-text-2 transition-colors hover:text-text"
                   >
                     {item.title}
+                    <ArrowRight className="h-3.5 w-3.5 shrink-0 text-text-4 transition-[translate,color] duration-[var(--d-state)] group-hover:translate-x-0.5 group-hover:text-text" strokeWidth={1.75} />
                   </Link>
                 </li>
               ))}

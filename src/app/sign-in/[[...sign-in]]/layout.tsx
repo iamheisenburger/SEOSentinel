@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "Sign in",
-  description: "Sign in to your Pentra SEO growth workspace.",
+  description: "Sign in to Pentra to see your answers, citations and pages.",
   robots: { index: false, follow: false },
 };
 
