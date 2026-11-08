@@ -5,7 +5,7 @@
  */
 import type { AnswerBlock, EvidenceAnswer, EvidenceOutcome, EvidenceSource, Segment } from "../../components/ui/evidence-card.tsx";
 import type { AssistantId } from "../product-facts.ts";
-import { countryName, isAssistantId, utcStamp } from "./format.ts";
+import { countryName, isAssistantId, ordinal, utcStamp } from "./format.ts";
 import type { Check, CheckWithText } from "./types.ts";
 
 export type Business = { name: string; domain: string };
@@ -119,13 +119,23 @@ function shortList(names: readonly string[]): string {
   return `${names.slice(0, 2).join(", ")} +${names.length - 2} more`;
 }
 
+/**
+ * "Named you · 3rd of 7": the business's place among every business the answer names, in order of first mention
+ * (the engine's position and brandsNamed). Named alone: "the only business named"; named only by a citation: "Named you".
+ */
+export function namedLabel(position: number | null, brandsNamed: number): string {
+  if (!position) return "Named you";
+  const of = Math.max(position, brandsNamed);
+  return of <= 1 ? "Named you · the only business named" : `Named you · ${ordinal(position)} of ${of}`;
+}
+
 /** The outcome strip: what this answer shows about the business, in the engine's own terms. */
 export function checkOutcomes(check: Pick<Check, "status" | "assistant" | "named" | "cited" | "position" | "brandsNamed" | "competitorsNamed" | "citedPageUrls">): EvidenceOutcome[] {
   if (check.status === "error") return [{ kind: "none", label: "No answer recorded" }];
   if (check.status === "no_answer") return [{ kind: "none", label: check.assistant === "google_ai_overview" ? "No AI Overview shown" : "No answer given" }];
   const outcomes: EvidenceOutcome[] = [];
   if (check.named) {
-    outcomes.push({ kind: "named", label: check.position ? `Named you · position ${check.position} of ${Math.max(check.position, check.brandsNamed)}` : "Named you" });
+    outcomes.push({ kind: "named", label: namedLabel(check.position, check.brandsNamed) });
   } else if (check.competitorsNamed.length) {
     outcomes.push({ kind: "rival", label: `Not mentioned · named ${shortList(check.competitorsNamed)}` });
   } else {

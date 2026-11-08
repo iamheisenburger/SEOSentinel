@@ -16,7 +16,7 @@ const platforms = [
     id: "github",
     name: "GitHub (Next.js, Astro, Hugo, Jekyll or Gatsby Markdown blog)",
     icon: GitBranch,
-    color: "#F7F8F8",
+    color: "var(--text-2)",
     steps: [
       "Pentra reads your repository and finds where your blog keeps its Markdown posts",
       "Each article is written there the same way as your own posts (file name and frontmatter)",
@@ -28,7 +28,7 @@ const platforms = [
     id: "wordpress",
     name: "WordPress",
     icon: Globe,
-    color: "#0EA5E9",
+    color: "var(--text-2)",
     steps: [
       "Go to Users → Profile → Application Passwords in your WP admin",
       "Create a new Application Password (give it a name like \"Pentra\")",
@@ -41,7 +41,7 @@ const platforms = [
     id: "webhook",
     name: "Webhook (Custom Integration)",
     icon: Webhook,
-    color: "#22C55E",
+    color: "var(--text-2)",
     steps: [
       "Set up an endpoint on your server that accepts POST requests",
       "Enter the URL in the wizard — optionally add a secret for HMAC verification",
@@ -54,7 +54,7 @@ const platforms = [
     id: "wix",
     name: "Wix",
     icon: Layout,
-    color: "#F59E0B",
+    color: "var(--text-2)",
     steps: [
       "Select \"Copy & Paste\" as your publish method during onboarding",
       "Go to your Wix dashboard → Blog → Create New Post",
@@ -67,7 +67,7 @@ const platforms = [
     id: "squarespace",
     name: "Squarespace",
     icon: Palette,
-    color: "#F7F8F8",
+    color: "var(--text-2)",
     steps: [
       "Select \"Copy & Paste\" as your publish method during onboarding",
       "Go to your Squarespace dashboard → Pages → Blog",
@@ -80,7 +80,7 @@ const platforms = [
     id: "shopify",
     name: "Shopify",
     icon: ShoppingBag,
-    color: "#22C55E",
+    color: "var(--text-2)",
     steps: [
       "Select \"Copy & Paste\" as your publish method during onboarding",
       "Go to Shopify admin → Online Store → Blog Posts → Add blog post",
@@ -93,7 +93,7 @@ const platforms = [
     id: "webflow",
     name: "Webflow",
     icon: FileCode,
-    color: "#0EA5E9",
+    color: "var(--text-2)",
     steps: [
       "Select \"Copy & Paste\" or use the Webhook method for automation",
       "For manual: Copy HTML from the article detail page",
@@ -121,7 +121,7 @@ export function PlatformInstructions({ filter }: { filter?: string }) {
               className="h-4 w-4 shrink-0"
               style={{ color: platform.color }}
             />
-            <span className="text-[13px] font-medium text-[#F7F8F8]">
+            <span className="text-[13px] font-medium text-text">
               {platform.name}
             </span>
           </div>
@@ -129,9 +129,9 @@ export function PlatformInstructions({ filter }: { filter?: string }) {
             {platform.steps.map((step, i) => (
               <li
                 key={i}
-                className="flex items-start gap-2 text-[12px] text-[#8A8F98]"
+                className="flex items-start gap-2 text-[12px] text-text-2"
               >
-                <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-white/[0.04] text-[10px] font-medium text-[#62666D]">
+                <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-white/[0.04] text-[10px] font-medium text-text-3">
                   {i + 1}
                 </span>
                 <span>{step}</span>

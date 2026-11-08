@@ -9,7 +9,6 @@ export const DURATION = {
   enter: 320,
   exit: 200,
   section: 560,
-  countUp: 600,
   crossfade: 400,
   cycle: 6000,
 } as const;

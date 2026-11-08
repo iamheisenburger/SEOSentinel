@@ -16,13 +16,16 @@ test("a new account confirms what Pentra read, watches the first hour and lands 
   await page.goto(`${H}/understood~free~live/start?site=site_kettlewood`);
   await expect(page.getByRole("heading", { name: "Here’s what we understood" })).toBeVisible();
   await page.getByRole("button", { name: "Remove Lone Star Deck & Fence" }).click();
-  await page.getByPlaceholder("Name or website, like cedarrow.com").fill("greenline.com");
-  await page.getByPlaceholder("Name or website, like cedarrow.com").press("Enter");
+  await page.getByPlaceholder("Name or website", { exact: true }).fill("greenline.com");
+  await page.getByPlaceholder("Name or website", { exact: true }).press("Enter");
   await expect(page.getByRole("list", { name: "Competitors" })).toContainText("Greenline");
+  // A local business: the read's city is filled in and can be changed.
+  await expect(page.getByLabel("City or area")).toHaveValue("Austin, TX");
+  await page.getByLabel("City or area").fill("Round Rock, TX");
   await page.getByRole("button", { name: "Looks right. Ask the assistants" }).click();
 
   await expect(page.getByRole("heading", { name: /Asking the assistants about Kettlewood Decks/ })).toBeVisible();
-  await expect(page.getByText("Safe to close this tab. We'll email you when it's ready.")).toBeVisible();
+  await expect(page.getByText("Usually about 15 minutes. Safe to close this tab; we'll email you when it's ready.")).toBeVisible();
   await expect(page.getByText("Answers as they arrive · newest first")).toBeVisible({ timeout: 15_000 });
 
   await expect(page.getByRole("heading", { name: /What AI assistants say about Kettlewood Decks/ })).toBeVisible({ timeout: 30_000 });
@@ -69,10 +72,10 @@ test("the dashboard: questions open their evidence, drafts publish, failures ret
 
   await page.goto(`${H}/dashboard~paid/dashboard/questions`);
   await expect(page.getByRole("heading", { name: "Questions", level: 1 })).toBeVisible();
-  await page.getByPlaceholder(/Add a question your buyers ask/).fill("Is Kettlewood Decks any good?");
+  await page.getByLabel("A question your buyers ask").fill("Is Kettlewood Decks any good?");
   await page.getByRole("button", { name: "Add question" }).click();
   await expect(page.getByText("Write it as one question your buyers would ask, without your business's name.")).toBeVisible();
-  await page.getByPlaceholder(/Add a question your buyers ask/).fill("Do composite decks fade in the Texas sun?");
+  await page.getByLabel("A question your buyers ask").fill("Do composite decks fade in the Texas sun?");
   await page.getByRole("button", { name: "Add question" }).click();
   await expect(page.getByText("Added. Pentra asks it in the next run.")).toBeVisible();
   await page.getByRole("radio", { name: /Winnable/ }).click();

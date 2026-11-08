@@ -7,7 +7,7 @@ import { Input, Textarea, fieldStyles } from "@/components/ui/input";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
-import { InlineError, Notice, Panel, PanelSkeleton, ScreenHeader } from "@/components/answers/ui";
+import { InlineError, Notice, Panel, PanelSkeleton, ScreenHeader, ScrollX } from "@/components/answers/ui";
 import { describeDestination } from "@/components/answers/dashboard/destination";
 import { useAnswersActions, useAnswersBackend, useAnswersQuery, useNow, type AnswersActions, type ConnectionInput } from "@/lib/answers/backend";
 import { hostedStatusLabel, plural, shortStamp, timeAgo } from "@/lib/answers/format";
@@ -489,7 +489,7 @@ function HostedAddress({ overview }: { overview: Overview }) {
       ) : (
         <>
           <p className="text-[13px] leading-5 text-text-2">Add this record where you manage {site.domain}&apos;s DNS. Pentra checks every hour and publishes waiting pages as soon as it works.</p>
-          <div className="overflow-x-auto rounded-control border border-border">
+          <ScrollX className="rounded-control border border-border">
             <table className="w-full min-w-[460px] text-left text-[13px]">
               <thead>
                 <tr className="border-b border-border">{["Type", "Name", "Value", "Status"].map((h) => <th key={h} scope="col" className="mono-caps px-3 py-2 font-normal text-text-3">{h}</th>)}</tr>
@@ -503,7 +503,7 @@ function HostedAddress({ overview }: { overview: Overview }) {
                 </tr>
               </tbody>
             </table>
-          </div>
+          </ScrollX>
           {publishing?.hostedError && <p className="text-[13px] leading-5 text-text-3">Last check: {publishing.hostedError}</p>}
           <p className="text-[12px] leading-[18px] text-text-4">Keep the record once it works: removing it takes the hosted pages offline.</p>
           {publishing?.hostedStatus === "error" && <InlineError title={`${host} needs attention`}>{publishing.hostedError ?? "Pentra couldn't attach the address."} Email us if it doesn&apos;t clear within an hour.</InlineError>}

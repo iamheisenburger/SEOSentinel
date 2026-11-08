@@ -203,7 +203,7 @@ export async function GET(req: NextRequest) {
 }
 
 function page(message: string, success: boolean, status: number, ready = false) {
-  const color = success ? "#22c55e" : "#ef4444";
+  const color = success ? "#3fcf8e" : "#f27a72";
   const safeMessage = message
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -211,7 +211,7 @@ function page(message: string, success: boolean, status: number, ready = false) 
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
   return new NextResponse(
-    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Pentra Gmail</title></head><body style="margin:0;background:#090b10;color:#edeef1;font:15px system-ui;display:grid;place-items:center;min-height:100vh"><main style="max-width:520px;padding:32px;text-align:center"><div style="font-size:36px;color:${color}">${success ? "✓" : "×"}</div><h1>Outreach mailbox</h1><p style="line-height:1.6;color:#a7aabd">${safeMessage}</p><a href="/backlinks" style="color:#38bdf8">Return to Backlinks</a></main><script>try{window.opener?.postMessage({type:"pentra-outreach-oauth",success:${success},ready:${ready}},window.location.origin)}catch{}${success ? "setTimeout(()=>window.close(),1800)" : ""}</script></body></html>`,
+    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Pentra Gmail</title></head><body style="margin:0;background:#08090a;color:#f7f8f8;font:15px system-ui;display:grid;place-items:center;min-height:100vh"><main style="max-width:520px;padding:32px;text-align:center"><div style="font-size:36px;color:${color}">${success ? "✓" : "×"}</div><h1>Outreach mailbox</h1><p style="line-height:1.6;color:#b4b8c0">${safeMessage}</p><a href="/backlinks" style="color:#f7f8f8;text-decoration-color:rgba(61,165,245,.45);text-underline-offset:3px">Return to Backlinks</a></main><script>try{window.opener?.postMessage({type:"pentra-outreach-oauth",success:${success},ready:${ready}},window.location.origin)}catch{}${success ? "setTimeout(()=>window.close(),1800)" : ""}</script></body></html>`,
     { status, headers: { "Content-Type": "text/html; charset=utf-8" } },
   );
 }

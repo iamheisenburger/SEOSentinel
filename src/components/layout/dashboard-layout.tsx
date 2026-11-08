@@ -2,9 +2,9 @@
 
 import type { ReactNode } from "react";
 import { useConvexAuth } from "convex/react";
-import Link from "next/link";
 import { Sidebar } from "./sidebar";
 import { OverLimitBanner } from "./over-limit-banner";
+import { DASHBOARD_COLUMN, WorkspaceConnecting, WorkspaceSessionError } from "./workspace-gate";
 import { SiteProvider } from "@/contexts/site-context";
 
 interface DashboardLayoutProps {
@@ -17,37 +17,14 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   // boundary, which does not reset just because authentication later succeeds.
   // Gate the whole private subtree, including its site/capacity providers.
   const { isLoading, isAuthenticated } = useConvexAuth();
-  if (isLoading || !isAuthenticated) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-[#08090A] px-6 text-[#F7F8F8]">
-        <div className="max-w-md text-center">
-          <p className="mb-4 text-xs font-semibold tracking-widest text-[#0EA5E9]">PENTRA</p>
-          {isLoading ? (
-            <p role="status" className="text-sm text-[#8A8F98]">Connecting your workspace…</p>
-          ) : (
-            <>
-              <h1 className="text-lg font-semibold">Your workspace session is not ready</h1>
-              <p className="mt-2 text-sm text-[#8A8F98]">
-                We could not verify your session. Try again, or sign in to continue. Your work is saved.
-              </p>
-              <div className="mt-5 flex justify-center gap-4 text-sm">
-                <button type="button" onClick={() => window.location.reload()} className="rounded-lg border border-white/15 px-4 py-2">
-                  Try again
-                </button>
-                <Link href="/sign-in" className="rounded-lg bg-[#F7F8F8] px-4 py-2 text-[#08090A]">Sign in</Link>
-              </div>
-            </>
-          )}
-        </div>
-      </main>
-    );
-  }
+  if (isLoading) return <WorkspaceConnecting />;
+  if (!isAuthenticated) return <WorkspaceSessionError />;
   return (
     <SiteProvider>
-      <div className="min-h-screen bg-[#08090A]">
+      <div className="min-h-dvh bg-bg">
         <Sidebar />
-        <main className="lg:pl-60">
-          <div className="mx-auto max-w-6xl px-6 py-6 pt-16 lg:pt-6">
+        <main id="main" className="lg:pl-60">
+          <div className={DASHBOARD_COLUMN}>
             <OverLimitBanner />
             {children}
           </div>

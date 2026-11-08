@@ -54,14 +54,14 @@ export function FreeCheckForm({ autoFocus = false }: { autoFocus?: boolean }) {
       <label htmlFor="free-check-url" className="sr-only">Your website address</label>
       <input id="free-check-url" type="text" inputMode="url" autoComplete="url" autoCapitalize="none" spellCheck={false} autoFocus={autoFocus}
         value={url} onChange={e => { setUrl(e.target.value); setError(""); }} placeholder="yourbusiness.com" aria-describedby="free-check-status"
-        className="min-w-0 flex-1 rounded-full border border-white/[0.12] bg-white/[0.03] px-5 py-3 text-[16px] text-[#F7F8F8] placeholder:text-[#62666D] focus:border-white/30 focus:outline-none" />
+        className="min-w-0 flex-1 rounded-full border border-white/[0.12] bg-white/[0.03] px-5 py-3 text-[16px] text-text placeholder:text-text-4 focus:border-white/30 focus:outline-none" />
       <button type="submit" disabled={busy || !url.trim()}
-        className="group inline-flex items-center justify-center gap-2 rounded-full bg-[#F7F8F8] px-6 py-3 text-[15px] font-medium text-[#08090A] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60">
+        className="group inline-flex items-center justify-center gap-2 rounded-full bg-action px-6 py-3 text-[15px] font-medium text-on-action transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60">
         {busy ? "Starting…" : "Check my site"}
         {!busy && <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />}
       </button>
     </div>
-    <p id="free-check-status" role="status" className={`mt-3 min-h-[1.25rem] text-[13px] ${error ? "text-[#F59E0B]" : "text-[#62666D]"}`}>
+    <p id="free-check-status" role="status" className={`mt-3 min-h-[1.25rem] text-[13px] ${error ? "text-rival" : "text-text-3"}`}>
       {error || (exhausted ? freeCheckMessage(paused ? "paused" : "limited")
         : `Free, no signup. Pentra reads only your public pages.${remaining !== null && remaining <= 3 ? ` ${remaining} free check${remaining === 1 ? "" : "s"} left today on this network.` : ""}`)}
     </p>

@@ -102,7 +102,7 @@ export default function ArticlesPage() {
           <div className="h-6 w-28 animate-pulse rounded bg-white/[0.04]" />
           <div className="mt-1.5 h-4 w-56 animate-pulse rounded bg-white/[0.03]" />
         </div>
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11]">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1">
           {[...Array(8)].map((_, i) => (
             <div key={i} className="flex items-center gap-4 px-5 py-3.5 border-b border-white/[0.04] last:border-0">
               <div className="h-4 w-16 animate-pulse rounded-full bg-white/[0.04]" />
@@ -146,14 +146,14 @@ export default function ArticlesPage() {
         title="Articles"
         subtitle={usageKnown ? `${articlesThisMonth} / ${maxArticles} articles this month` : "Checking this month's allowance…"}
         actions={midSetup ? (
-          <Link href="/dashboard" className="inline-flex items-center gap-1.5 rounded-lg bg-[#0EA5E9] px-3 py-1.5 text-[12px] font-medium text-white transition hover:bg-[#38BDF8]">
+          <Link href="/dashboard" className="inline-flex items-center gap-1.5 rounded-control bg-action px-3 py-1.5 text-[12px] font-semibold text-on-action transition hover:bg-action-hover">
             <PenTool className="h-3.5 w-3.5" />
             Start Pentra
           </Link>
         ) : (
           <div className="flex items-center gap-2">
             <select
-              className="rounded-lg border border-white/[0.06] bg-[#0E0F11] px-2.5 py-1.5 text-[12px] text-[#F7F8F8] outline-none transition focus:border-[#0EA5E9]/50"
+              className="rounded-lg border border-white/[0.06] bg-surface-1 px-2.5 py-1.5 text-[12px] text-text outline-none transition focus:border-[var(--border-focus)]"
               value={selectedTopic ?? ""}
               onChange={(e) =>
                 setSelectedTopic(
@@ -183,13 +183,13 @@ export default function ArticlesPage() {
       />
 
       {midSetup && (
-        <div role="status" className="rounded-lg bg-[#0EA5E9]/[0.08] px-4 py-2 text-[13px] text-[#38BDF8]">
+        <div role="status" className="rounded-lg bg-surface-2/50 px-4 py-2 text-[13px] text-text-2">
           {MID_SETUP_QUEUE_MESSAGE}
         </div>
       )}
 
       {status && (
-        <div className="rounded-lg bg-[#0EA5E9]/[0.08] px-4 py-2 text-[13px] text-[#38BDF8]">
+        <div className="rounded-lg bg-surface-2/50 px-4 py-2 text-[13px] text-text-2">
           {status}
         </div>
       )}
@@ -202,7 +202,7 @@ export default function ArticlesPage() {
             : readiness.ownerDraft.maximumMicroUsd != null && <p>Counts toward your monthly article allowance.</p>}
           {/* P257 (Oct 30 2026): after a change to the business details or the connection, Generate is refused until the owner
               confirms the change; this says where (Cowork: "Nothing says what to do to clear it"). */}
-          {readiness.bindingCurrent === false && <p role="alert" className="text-[#F59E0B]">Your business details or website connection changed since you started.{" "}
+          {readiness.bindingCurrent === false && <p role="alert" className="text-rival">Your business details or website connection changed since you started.{" "}
             <Link className="underline" href="/settings#changed-content-setup">Confirm the changed setup in Settings</Link> to keep getting drafts.</p>}
           {/* P256 (Oct 30 2026): the latest draft by its title and in plain words, never a review stage or a failure. */}
           {readiness.ownerDraft.latest && <p role="status">Latest draft{readiness.ownerDraft.latest.title ? <>, “{readiness.ownerDraft.latest.title}”</> : null}: {readiness.ownerDraft.latest.issue}
@@ -212,11 +212,11 @@ export default function ArticlesPage() {
       )}
 
       {atArticleLimit && (
-        <div className="flex items-center gap-3 rounded-lg border border-[#F59E0B]/[0.2] bg-[#F59E0B]/[0.05] px-4 py-3">
-          <Zap className="h-4 w-4 shrink-0 text-[#F59E0B]" />
-          <p className="flex-1 text-[13px] text-[#FBBF24]">
+        <div className="flex items-center gap-3 rounded-lg border border-rival/[0.2] bg-rival/[0.05] px-4 py-3">
+          <Zap className="h-4 w-4 shrink-0 text-rival" />
+          <p className="flex-1 text-[13px] text-rival">
             You&apos;ve used all {maxArticles} articles this month.{" "}
-            <Link href="/upgrade" className="underline font-medium hover:text-white transition">
+            <Link href="/upgrade" className="underline font-medium hover:text-text transition">
               Upgrade your plan
             </Link>{" "}
             to generate more.
@@ -225,17 +225,17 @@ export default function ArticlesPage() {
       )}
 
       {/* Article usage bar */}
-      <div className="rounded-lg border border-white/[0.06] bg-[#0E0F11] px-4 py-3">
+      <div className="rounded-lg border border-white/[0.06] bg-surface-1 px-4 py-3">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-[12px] text-[#8A8F98]">Monthly article usage</span>
-          <span className="text-[12px] font-medium text-[#F7F8F8] tabular-nums">{usageKnown ? `${articlesThisMonth} / ${maxArticles}` : "…"}</span>
+          <span className="text-[12px] text-text-2">Monthly article usage</span>
+          <span className="text-[12px] font-medium text-text tabular-nums">{usageKnown ? `${articlesThisMonth} / ${maxArticles}` : "…"}</span>
         </div>
         <div className="h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
           <div
             className="h-full rounded-full transition-all"
             style={{
               width: usageKnown ? `${Math.min(100, (articlesThisMonth / maxArticles) * 100)}%` : "0%",
-              backgroundColor: articlesThisMonth >= maxArticles ? '#EF4444' : articlesThisMonth >= maxArticles * 0.8 ? '#F59E0B' : '#0EA5E9',
+              backgroundColor: articlesThisMonth >= maxArticles ? 'var(--wrong)' : articlesThisMonth >= maxArticles * 0.8 ? 'var(--rival)' : 'var(--text-2)',
             }}
           />
         </div>
@@ -247,9 +247,9 @@ export default function ArticlesPage() {
 
       {/* Article List */}
       {filtered.length > 0 ? (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1 overflow-hidden">
           {/* Table header */}
-          <div className="hidden sm:grid sm:grid-cols-[1fr_110px_72px_110px_96px] gap-4 px-5 py-2.5 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#62666D]">
+          <div className="hidden sm:grid sm:grid-cols-[1fr_110px_72px_110px_96px] gap-4 px-5 py-2.5 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-text-3">
             <span>Title</span>
             <span>Status</span>
             <span>Words</span>
@@ -263,9 +263,9 @@ export default function ArticlesPage() {
             return (
               <div
                 key={article._id}
-                className="group flex flex-col sm:grid sm:grid-cols-[1fr_110px_72px_110px_96px] gap-1 sm:gap-4 sm:items-center px-5 py-3.5 border-b border-white/[0.04] last:border-0 transition hover:bg-white/[0.02]"
+                className="group grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 sm:grid-cols-[1fr_110px_72px_110px_96px] sm:gap-4 px-5 py-3.5 border-b border-white/[0.04] last:border-0 transition hover:bg-white/[0.02]"
               >
-                <Link href={`/articles/${article._id}`} className="flex items-center gap-3 min-w-0">
+                <Link href={`/articles/${article._id}`} className="col-span-2 flex items-center gap-3 min-w-0 sm:col-span-1">
                   {article.featuredImage && (
                     <img
                       src={article.featuredImage}
@@ -274,37 +274,37 @@ export default function ArticlesPage() {
                     />
                   )}
                   <div className="min-w-0">
-                    <p className="text-[13px] font-medium text-[#F7F8F8] leading-snug truncate group-hover:text-white transition">
+                    <p className="text-[13px] font-medium text-text leading-snug truncate group-hover:text-text transition">
                       {article.title}
                     </p>
-                    <p className="mt-0.5 text-[11px] text-[#62666D] font-mono truncate sm:hidden">
+                    <p className="mt-0.5 text-[11px] text-text-3 font-mono truncate sm:hidden">
                       /{article.slug.replace(/^\/+/, "")}
                     </p>
                   </div>
                 </Link>
-                <div className="flex items-center gap-1.5">
+                <div className="col-span-2 flex items-center gap-1.5 sm:col-span-1">
                   {article.status === "revision" ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-[#8A8F98] whitespace-nowrap" title="An earlier or retired version kept for your records. It is never published.">
-                      <span className="h-1.5 w-1.5 rounded-full bg-[#62666D]" />
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-text-2 whitespace-nowrap" title="An earlier or retired version kept for your records. It is never published.">
+                      <span className="h-1.5 w-1.5 rounded-full bg-text-4" />
                       Earlier version
                     </span>
                   ) : (
                     <StatusBadge status={article.status} />
                   )}
                   {(article as any).decayStatus === "declining" && (
-                    <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium bg-[#EF4444]/[0.08] text-[#F87171]" title={(article as any).decayReason || "Rankings declining"}>
+                    <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium bg-wrong/[0.08] text-wrong" title={(article as any).decayReason || "Rankings declining"}>
                       <TrendingDown className="h-2.5 w-2.5" />
                       Declining
                     </span>
                   )}
                   {(article as any).decayStatus === "warning" && (
-                    <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium bg-[#F59E0B]/[0.08] text-[#FBBF24]" title={(article as any).decayReason || "Rankings may be declining"}>
+                    <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium bg-rival/[0.08] text-rival" title={(article as any).decayReason || "Rankings may be declining"}>
                       <TrendingDown className="h-2.5 w-2.5" />
                       Warning
                     </span>
                   )}
                 </div>
-                <span className="text-[12px] text-[#8A8F98] tabular-nums hidden sm:block">
+                <span className="text-[12px] text-text-2 tabular-nums hidden sm:block">
                   {wc.toLocaleString()}
                 </span>
                 <div className="flex items-center gap-1.5">
@@ -319,7 +319,7 @@ export default function ArticlesPage() {
                           setStatus(userErrorMessage(err, "Could not publish this article. Open it to see what needs attention."));
                         }
                       }}
-                      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-[#22C55E] hover:bg-[#22C55E]/[0.08] transition"
+                      className="inline-flex h-8 items-center gap-1 rounded-control px-2 text-[12px] font-medium text-text-2 hover:bg-surface-2 hover:text-text transition"
                       title={manualPublicationBlocker(site) ?? "Publish"}
                     >
                       <Upload className="h-3 w-3" />
@@ -335,14 +335,15 @@ export default function ArticlesPage() {
                           deleteArticle({ articleId: article._id });
                         }
                       }}
-                      className="inline-flex items-center rounded-md p-1 text-[#62666D] hover:bg-[#EF4444]/[0.08] hover:text-[#F87171] transition"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-control text-text-3 hover:bg-wrong/[0.08] hover:text-wrong transition"
                       title="Delete"
+                      aria-label={`Delete ${article.title}`}
                     >
-                      <Trash2 className="h-3 w-3" />
+                      <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   )}
                 </div>
-                <Link href={`/articles/${article._id}`} title={formatDistanceToNow(article.createdAt, { addSuffix: true })} className="whitespace-nowrap text-[12px] tabular-nums text-[#62666D] sm:text-right flex items-center gap-1 sm:justify-end">
+                <Link href={`/articles/${article._id}`} title={formatDistanceToNow(article.createdAt, { addSuffix: true })} className="whitespace-nowrap text-right text-[12px] tabular-nums text-text-3 flex items-center justify-end gap-1">
                   {format(article.createdAt, "MMM d")}
                   <ArrowRight className="h-3 w-3 opacity-0 group-hover:opacity-100 transition" />
                 </Link>
@@ -351,9 +352,9 @@ export default function ArticlesPage() {
           })}
         </div>
       ) : (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-12 text-center">
-          <FileText className="mx-auto h-10 w-10 text-[#62666D]/30" />
-          <p className="mt-3 text-[13px] text-[#62666D]">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-12 text-center">
+          <FileText className="mx-auto h-10 w-10 text-text-4/30" />
+          <p className="mt-3 text-[13px] text-text-3">
             {articles === undefined
               ? "Loading..."
               : activeTab !== "all"

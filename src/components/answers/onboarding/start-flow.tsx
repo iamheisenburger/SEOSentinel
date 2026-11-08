@@ -8,12 +8,12 @@ import { Wordmark } from "@/components/marketing/wordmark";
 import { DomainInput } from "@/components/ui/domain-input";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { InlineError, ScreenErrorBoundary } from "@/components/answers/ui";
+import { FitDomain, InlineError, ScreenErrorBoundary } from "@/components/answers/ui";
 import { SiteSetup } from "@/components/answers/onboarding/site-setup";
 import { useAnswersActions, useAnswersQuery, useAppHref } from "@/lib/answers/backend";
 import { DOMAIN_ERROR, normalizeDomain, startAuthHref, startHref } from "@/lib/domain-input";
 import { createSiteWithEmail } from "@/lib/answers/create-site";
-import { HONESTY_LINE, SNAPSHOT } from "@/lib/product-facts";
+import { HONESTY_LINE, SNAPSHOT, TIMING } from "@/lib/product-facts";
 import { userErrorMessage } from "@/lib/user-error";
 import { cx } from "@/lib/cx";
 
@@ -167,8 +167,11 @@ function SignedOut({ requested }: { requested: string | null }) {
   return (
     <section aria-labelledby="start-title" className="mx-auto max-w-[640px] px-[var(--gutter)] py-16 sm:py-24">
       <p className="text-[14px] font-medium text-text-3">Free snapshot · step 2 of 5</p>
-      <h1 id="start-title" className="type-h1 mt-3 text-text [overflow-wrap:anywhere]">Create your account to check {domain}</h1>
-      <p className="type-lead mt-5">Your account is where the snapshot is saved. No card. In about an hour you&apos;ll see how {SNAPSHOT.assistants} assistants answer your buyers, with every answer as proof.</p>
+      <h1 id="start-title" className="type-h1 @container mt-3 text-text">
+        Create your account to check{" "}
+        <FitDomain domain={domain} className="mt-1" />
+      </h1>
+      <p className="type-lead mt-5">Your account is where the snapshot is saved. No card. In about {TIMING.snapshotMinutes} minutes you&apos;ll see how {SNAPSHOT.assistants} assistants answer your buyers, with every answer as proof; the first answers arrive in under {TIMING.firstAnswersMinutes}.</p>
       <ol className="mt-10 border-t border-border">
         {WHAT_HAPPENS.map((line, i) => (
           <li key={line} className="grid grid-cols-[40px_minmax(0,1fr)] border-b border-border py-4 text-[15px] leading-6 text-text-2">
@@ -226,7 +229,10 @@ function CreateSite({ requested, email }: { requested: string; email: string | n
   return (
     <section className="mx-auto max-w-[640px] px-[var(--gutter)] py-16 sm:py-24" aria-busy="true">
       <p className="text-[14px] font-medium text-text-3">Free snapshot</p>
-      <h1 className="type-h1 mt-3 text-text [overflow-wrap:anywhere]">Adding {domain}…</h1>
+      <h1 className="type-h1 @container mt-3 text-text">
+        Adding{" "}
+        <FitDomain domain={domain ?? requested} after="…" className="mt-1" />
+      </h1>
       <p className="type-lead mt-5">Pentra starts reading the site as soon as it&apos;s added.</p>
     </section>
   );

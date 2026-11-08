@@ -60,7 +60,7 @@ type SiteView = NonNullable<FunctionReturnType<typeof api.sites.get>>;
 const TONE_OPTIONS = ["professional", "friendly", "casual", "authoritative"];
 // P201: where a new site's owner starts connecting (GitHub and paste have their own buttons).
 const PLATFORM_CHOICES: Array<[string, string]> = [["wordpress", "WordPress (beta)"], ["shopify", "Shopify (beta)"], ["webflow", "Webflow (beta)"], ["ghost", "Ghost (beta)"]];
-const PLATFORM_CHOICE_CLS = "rounded-lg border border-white/[0.1] bg-[#0E0F11] px-3 py-1.5 text-[12px] font-medium text-[#D0D6E0] transition hover:border-[#0EA5E9]/50 hover:text-[#F7F8F8]";
+const PLATFORM_CHOICE_CLS = "rounded-lg border border-white/[0.1] bg-surface-1 px-3 py-1.5 text-[12px] font-medium text-text-2 transition hover:border-border-strong hover:text-text";
 // P200: what the repository step says when there is nothing to pick.
 const GITHUB_LIST_FAILED = "Pentra couldn't list your GitHub repositories. Reconnect GitHub and try again, or type the repository below.";
 const NO_GITHUB_REPOSITORIES = "This GitHub account has no repository Pentra can publish to. If your website's repository belongs to an organization, " +
@@ -77,9 +77,9 @@ function formatTone(tone: string): string {
 /** Growth-first sites manage Autopilot/Review first and pace on the dashboard. */
 function DashboardPointer({ className = "" }: { className?: string }) {
   return (
-    <p className={`text-[12px] text-[#8A8F98] ${className}`}>
+    <p className={`text-[12px] text-text-2 ${className}`}>
       Autopilot and publishing pace are set on your{" "}
-      <Link href="/dashboard" className="font-medium text-[#0EA5E9] hover:text-[#38BDF8] transition">
+      <Link href="/dashboard" className="text-text font-medium underline decoration-you-line underline-offset-[3px] hover:decoration-you">
         Dashboard
       </Link>
       .
@@ -166,7 +166,7 @@ export default function SiteDetailPage() {
       <div className="flex flex-col gap-5">
         <div className="h-6 w-48 animate-pulse rounded bg-white/[0.04]" />
         <div className="h-4 w-32 animate-pulse rounded bg-white/[0.03]" />
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-8">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-8">
           <div className="h-40 animate-pulse rounded-lg bg-white/[0.03]" />
         </div>
       </div>
@@ -176,8 +176,8 @@ export default function SiteDetailPage() {
   if (site === null) {
     return (
       <div className="flex flex-col items-center gap-4 py-20">
-        <Globe className="h-10 w-10 text-[#62666D]/30" />
-        <p className="text-[13px] text-[#62666D]">Website not found.</p>
+        <Globe className="h-10 w-10 text-text-4/30" />
+        <p className="text-[13px] text-text-3">Website not found.</p>
         <Button size="sm" onClick={() => router.push("/sites")}>
           Back to Websites
         </Button>
@@ -190,7 +190,6 @@ export default function SiteDetailPage() {
   const publishedCount = articles?.filter((a) => a.status === "published").length ?? 0;
   const draftCount = articles?.filter((a) => a.status === "draft").length ?? 0;
   const reviewCount = articles?.filter((a) => a.status === "review").length ?? 0;
-  const brandColor = site.brandPrimaryColor || "#0EA5E9";
   // Growth-first sites use the dashboard Autopilot / Review first switch; the
   // legacy cadence, autopilot and approval fields are neither shown nor sent.
   const growthFirst = site.serviceMode === "growth_first";
@@ -265,29 +264,26 @@ export default function SiteDetailPage() {
       <div className="flex items-start gap-4">
         <button
           onClick={() => router.push("/sites")}
-          className="mt-1 flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.06] bg-white/[0.02] text-[#62666D] hover:text-[#F7F8F8] transition shrink-0"
+          className="mt-1 flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.06] bg-white/[0.02] text-text-3 hover:text-text transition shrink-0"
         >
           <ArrowLeft className="h-4 w-4" />
         </button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3">
-            <div
-              className="flex h-10 w-10 items-center justify-center rounded-lg shrink-0"
-              style={{ backgroundColor: `${brandColor}15` }}
-            >
-              <Globe className="h-4.5 w-4.5" style={{ color: brandColor }} />
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-control border border-border bg-surface-2">
+              <Globe className="h-4.5 w-4.5 text-text-2" strokeWidth={1.5} />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="text-[16px] font-semibold text-[#F7F8F8] truncate">
+                <h1 className="text-[16px] font-semibold text-text truncate">
                   {site.siteName || site.domain}
                 </h1>
-                <span className="inline-flex items-center gap-1 rounded-full bg-[#22C55E]/[0.08] px-2 py-0.5 text-[10px] font-medium text-[#4ADE80] shrink-0">
-                  <span className="h-1.5 w-1.5 rounded-full bg-[#22C55E]" />
+                <span className="inline-flex items-center gap-1 rounded-full bg-named/[0.08] px-2 py-0.5 text-[10px] font-medium text-named shrink-0">
+                  <span className="h-1.5 w-1.5 rounded-full bg-named" />
                   Active
                 </span>
               </div>
-              <p className="text-[11px] text-[#62666D] truncate">
+              <p className="text-[11px] text-text-3 truncate">
                 {site.domain}
                 {site.siteType ? ` · ${site.siteType}` : ""}
               </p>
@@ -300,7 +296,7 @@ export default function SiteDetailPage() {
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => setShowDeleteConfirm(false)}
-              className="text-[11px] text-[#8A8F98] hover:text-[#F7F8F8] transition"
+              className="text-[11px] text-text-2 hover:text-text transition"
             >
               Cancel
             </button>
@@ -317,7 +313,7 @@ export default function SiteDetailPage() {
         ) : (
           <button
             onClick={() => setShowDeleteConfirm(true)}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.06] bg-white/[0.02] text-[#62666D] hover:text-[#EF4444] hover:border-[#EF4444]/20 transition shrink-0"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/[0.06] bg-white/[0.02] text-text-3 hover:text-wrong hover:border-wrong/20 transition shrink-0"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
@@ -335,13 +331,13 @@ export default function SiteDetailPage() {
               onClick={() => setActiveTab(tab.id)}
               className={`
                 relative flex items-center gap-2 px-4 pb-2.5 pt-1 text-[13px] font-medium transition-colors
-                ${active ? "text-[#F7F8F8]" : "text-[#62666D] hover:text-[#8A8F98]"}
+                ${active ? "text-text" : "text-text-3 hover:text-text-2"}
               `}
             >
-              <Icon className={`h-3.5 w-3.5 ${active ? "text-[#F7F8F8]" : ""}`} />
-              <span className="hidden sm:inline">{tab.label}</span>
+              <Icon className={`h-3.5 w-3.5 ${active ? "text-text" : ""}`} />
+              <span>{tab.label}</span>
               {active && (
-                <span className="absolute inset-x-0 -bottom-px h-px bg-[#F7F8F8]" />
+                <span className="absolute inset-x-0 -bottom-px h-px bg-action" />
               )}
             </button>
           );
@@ -370,9 +366,9 @@ export default function SiteDetailPage() {
         />
       )}
       {activeTab === "settings" && site.contentSetupRequestedAt && !site.serviceMode && site.publishMethod !== "manual" && (
-        <div className="rounded-xl border border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.06] p-4 text-sm" role="status">
-          <p className="font-medium text-[#F7F8F8]">Almost there</p>
-          <p className="mt-1 text-[#8A8F98]">Connect your website in the Connection section below and save. Once it&apos;s verified, go to your <Link className="underline text-[#0EA5E9]" href="/dashboard">Dashboard</Link> and choose Autopilot or Review first to turn Pentra on.</p>
+        <div className="rounded-xl border border-border-strong bg-surface-2/50 p-4 text-sm" role="status">
+          <p className="font-medium text-text">Almost there</p>
+          <p className="mt-1 text-text-2">Connect your website in the Connection section below and save. Once it&apos;s verified, go to your <Link className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you" href="/dashboard">Dashboard</Link> and choose Autopilot or Review first to turn Pentra on.</p>
         </div>
       )}
       {activeTab === "settings" && (
@@ -461,10 +457,10 @@ function OverviewTab({
       {/* The One Setup checklist (cadence, outreach mailbox…) belongs to the
           legacy service; growth-first progress lives on the dashboard. */}
       {growthFirst ? (
-        <div className="flex flex-col gap-3 rounded-xl border border-white/[0.06] bg-[#0E0F11] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 rounded-xl border border-white/[0.06] bg-surface-1 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-[13px] font-semibold text-[#F7F8F8]">Pentra service</p>
-            <p className="mt-1 text-[12px] text-[#8A8F98]">
+            <p className="text-[13px] font-semibold text-text">Pentra service</p>
+            <p className="mt-1 text-[12px] text-text-2">
               Your Dashboard shows what Pentra is working on and which
               articles are confirmed live on your site.
             </p>
@@ -482,7 +478,7 @@ function OverviewTab({
       <ArticleProgress siteId={siteId} />
 
       {/* At a glance: one strip, each figure opens where it lives */}
-      <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-white/[0.06] bg-[#0E0F11] sm:grid-cols-4 [&>*]:border-white/[0.06] [&>*:not(:first-child)]:sm:border-l [&>*:nth-child(n+3)]:border-t [&>*:nth-child(n+3)]:sm:border-t-0 [&>*:nth-child(2)]:border-l">
+      <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-white/[0.06] bg-surface-1 sm:grid-cols-4 [&>*]:border-white/[0.06] [&>*:not(:first-child)]:sm:border-l [&>*:nth-child(n+3)]:border-t [&>*:nth-child(n+3)]:sm:border-t-0 [&>*:nth-child(2)]:border-l">
         {[
           { label: "Published", value: publishedCount, go: () => onTabChange("articles") },
           { label: "Waiting for review", value: reviewCount, href: "/articles" },
@@ -490,8 +486,8 @@ function OverviewTab({
           { label: "Topics planned", value: topicCount, href: "/plan" },
         ].map(item => {
           const body = <>
-            <p className="text-[22px] font-semibold tracking-tight tabular-nums text-[#F7F8F8]">{item.value}</p>
-            <p className="mt-0.5 flex items-center gap-1 text-[12px] text-[#8A8F98]">{item.label}
+            <p className="text-[22px] font-semibold tracking-tight tabular-nums text-text">{item.value}</p>
+            <p className="mt-0.5 flex items-center gap-1 text-[12px] text-text-2">{item.label}
               <ArrowRight className="h-3 w-3 opacity-0 transition group-hover:opacity-100" /></p>
           </>;
           return item.href
@@ -501,8 +497,8 @@ function OverviewTab({
       </div>
 
       {/* Site details */}
-      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
-        <div className="px-5 py-3 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#62666D]">
+      <div className="rounded-xl border border-white/[0.06] bg-surface-1 overflow-hidden">
+        <div className="px-5 py-3 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-text-3">
           Site Details
         </div>
         <div className="grid gap-px bg-white/[0.02]">
@@ -513,7 +509,7 @@ function OverviewTab({
           {site.tone ? <DetailRow label="Tone" value={formatTone(site.tone)} /> : null}
           {site.language ? <DetailRow label="Language" value={site.language} /> : null}
           {growthFirst ? (
-            <div className="px-5 py-2.5 bg-[#0E0F11]">
+            <div className="px-5 py-2.5 bg-surface-1">
               <DashboardPointer />
             </div>
           ) : (
@@ -552,7 +548,7 @@ function OverviewTab({
           )}
           {site.publishMethod === "github" && (
             <DetailRow label="GitHub Status" value={site.githubConnected ? "Connected" : "Not connected"}>
-              <span className={"h-2 w-2 rounded-full " + (site.githubConnected ? "bg-[#22C55E]" : "bg-[#F59E0B]")} />
+              <span className={"h-2 w-2 rounded-full " + (site.githubConnected ? "bg-named" : "bg-rival")} />
             </DetailRow>
           )}
           {site.publishMethod === "wordpress" && site.wpUrl && (
@@ -600,11 +596,11 @@ function DetailRow({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between px-5 py-2.5 bg-[#0E0F11]">
-      <span className="text-[12px] text-[#62666D]">{label}</span>
+    <div className="flex items-center justify-between px-5 py-2.5 bg-surface-1">
+      <span className="text-[12px] text-text-3">{label}</span>
       <div className="flex items-center gap-2">
         {children}
-        <span className="text-[12px] text-[#F7F8F8]">{value}</span>
+        <span className="text-[12px] text-text">{value}</span>
       </div>
     </div>
   );
@@ -634,7 +630,7 @@ function ArticlesTab({
 
   if (articles === undefined) {
     return (
-      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11]">
+      <div className="rounded-xl border border-white/[0.06] bg-surface-1">
         {[...Array(5)].map((_, i) => (
           <div key={i} className="flex items-center gap-4 px-5 py-3.5 border-b border-white/[0.04] last:border-0">
             <div className="h-4 w-16 animate-pulse rounded-full bg-white/[0.04]" />
@@ -647,9 +643,9 @@ function ArticlesTab({
 
   if (articles.length === 0) {
     return (
-      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-12 text-center">
-        <FileText className="mx-auto h-10 w-10 text-[#62666D]/30" />
-        <p className="mt-3 text-[13px] text-[#62666D]">
+      <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-12 text-center">
+        <FileText className="mx-auto h-10 w-10 text-text-4/30" />
+        <p className="mt-3 text-[13px] text-text-3">
           {growthFirst
             ? "No articles yet. Pentra adds them here as it writes them."
             : "No articles yet. Generate one to get started."}
@@ -666,7 +662,7 @@ function ArticlesTab({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <p className="text-[12px] text-[#62666D]">
+        <p className="text-[12px] text-text-3">
           {articles.length} article{articles.length !== 1 ? "s" : ""}
         </p>
         {!growthFirst && (
@@ -678,9 +674,9 @@ function ArticlesTab({
         )}
       </div>
 
-      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
+      <div className="rounded-xl border border-white/[0.06] bg-surface-1 overflow-hidden">
         {/* Header */}
-        <div className="hidden sm:grid sm:grid-cols-[1fr_100px_80px_100px_40px] gap-4 px-5 py-2.5 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-[#62666D]">
+        <div className="hidden sm:grid sm:grid-cols-[1fr_100px_80px_100px_40px] gap-4 px-5 py-2.5 border-b border-white/[0.04] text-[10px] font-semibold uppercase tracking-[0.1em] text-text-3">
           <span>Title</span>
           <span>Status</span>
           <span>Words</span>
@@ -695,9 +691,9 @@ function ArticlesTab({
           return (
             <div
               key={article._id}
-              className="group flex flex-col sm:grid sm:grid-cols-[1fr_100px_80px_100px_40px] gap-1 sm:gap-4 sm:items-center px-5 py-3.5 border-b border-white/[0.04] last:border-0 transition hover:bg-white/[0.02]"
+              className="group grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 sm:grid-cols-[1fr_100px_80px_100px_40px] sm:gap-4 px-5 py-3.5 border-b border-white/[0.04] last:border-0 transition hover:bg-white/[0.02]"
             >
-              <Link href={`/articles/${article._id}`} className="flex items-center gap-3 min-w-0">
+              <Link href={`/articles/${article._id}`} className="col-span-2 flex items-center gap-3 min-w-0 sm:col-span-1">
                 {article.featuredImage && (
                   <img
                     src={article.featuredImage}
@@ -706,19 +702,19 @@ function ArticlesTab({
                   />
                 )}
                 <div className="min-w-0">
-                  <p className="text-[13px] font-medium text-[#F7F8F8] leading-snug truncate group-hover:text-white transition">
+                  <p className="text-[13px] font-medium text-text leading-snug truncate group-hover:text-text transition">
                     {article.title}
                   </p>
-                  <p className="mt-0.5 text-[11px] text-[#62666D] font-mono truncate sm:hidden">
+                  <p className="mt-0.5 text-[11px] text-text-3 font-mono truncate sm:hidden">
                     /{article.slug}
                   </p>
                 </div>
               </Link>
-              <StatusBadge status={article.status} />
-              <span className="text-[12px] text-[#8A8F98] tabular-nums hidden sm:block">
+              <StatusBadge status={article.status} className="col-span-2 justify-self-start sm:col-span-1" />
+              <span className="text-[12px] text-text-2 tabular-nums hidden sm:block">
                 {wc.toLocaleString()}
               </span>
-              <span className="text-[11px] text-[#62666D] sm:text-right">
+              <span className="text-[11px] text-text-3 sm:text-right">
                 {formatDistanceToNow(article.createdAt, { addSuffix: true })}
               </span>
               <div className="flex items-center justify-end">
@@ -726,7 +722,7 @@ function ArticlesTab({
                   <div className="flex items-center gap-1">
                     <button
                       onClick={() => setDeletingId(null)}
-                      className="text-[10px] text-[#8A8F98] hover:text-[#F7F8F8] transition"
+                      className="text-[10px] text-text-2 hover:text-text transition"
                     >
                       No
                     </button>
@@ -735,17 +731,19 @@ function ArticlesTab({
                         onDelete(article._id);
                         setDeletingId(null);
                       }}
-                      className="text-[10px] text-[#EF4444] hover:text-[#F87171] transition font-medium"
+                      className="text-[10px] text-wrong hover:text-wrong transition font-medium"
                     >
                       Yes
                     </button>
                   </div>
                 ) : (
                   <button
+                    type="button"
+                    aria-label={`Delete ${article.title}`}
                     onClick={() => setDeletingId(article._id)}
-                    className="text-[#62666D] hover:text-[#EF4444] transition opacity-0 group-hover:opacity-100"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-control text-text-3 transition hover:bg-surface-2 hover:text-wrong focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
                   >
-                    <Trash2 className="h-3 w-3" />
+                    <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 )}
               </div>
@@ -844,7 +842,7 @@ function SettingsTab({
     return (
       <div className="flex flex-col gap-4">
         <ConnectionSection site={site} />
-        <button type="button" onClick={() => setShowAllSettings(true)} className="self-start text-[12px] text-[#8A8F98] transition hover:text-[#F7F8F8]">
+        <button type="button" onClick={() => setShowAllSettings(true)} className="self-start text-[12px] text-text-2 transition hover:text-text">
           Show all settings (tone, language, brand). They&apos;re optional and you can change them any time.
         </button>
       </div>
@@ -856,8 +854,8 @@ function SettingsTab({
   return (
     <div className="flex flex-col gap-5">
       {/* Save bar */}
-      <div className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-[#0E0F11] px-5 py-3">
-        <p className="text-[12px] text-[#62666D]">
+      <div className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-surface-1 px-5 py-3">
+        <p className="text-[12px] text-text-3">
           Changes are saved when you click Save.
         </p>
         <Button
@@ -871,7 +869,7 @@ function SettingsTab({
         </Button>
       </div>
       {saveError && (
-        <div className="rounded-lg border border-[#EF4444]/[0.25] bg-[#EF4444]/[0.06] px-4 py-3 text-[12px] text-[#F87171]">
+        <div className="rounded-lg border border-wrong/[0.25] bg-wrong/[0.06] px-4 py-3 text-[12px] text-wrong">
           {saveError}
         </div>
       )}
@@ -887,7 +885,7 @@ function SettingsTab({
       {showSyndicationNotice && (
         <SettingsSection title="Medium and LinkedIn" icon={Share2}>
           <div className="px-5 py-4">
-            <p className="text-[11px] leading-relaxed text-[#8A8F98]">
+            <p className="text-[11px] leading-relaxed text-text-2">
               Automatic Medium and LinkedIn syndication is not available yet. Your saved Medium or LinkedIn connection is kept but not used.
             </p>
           </div>
@@ -904,7 +902,7 @@ function SettingsTab({
         </FieldRow>
         <FieldRow label="Tone" description="Writing style for generated articles">
           <select
-            className="w-full rounded-lg border border-white/[0.06] bg-[#0E0F11] px-3 py-2 text-[13px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="w-full rounded-lg border border-white/[0.06] bg-surface-1 px-3 py-2 text-[13px] text-text outline-none focus:border-[var(--border-focus)]"
             value={tone}
             onChange={(e) => setTone(e.target.value)}
           >
@@ -945,8 +943,8 @@ function SettingsTab({
                   disabled={cadenceCapacity === undefined || !cadenceCapacity.ready}
                   className={`rounded-lg px-3 py-2 text-[11px] font-medium transition ${
                     cadence === option.value
-                      ? "bg-[#F7F8F8] text-[#08090A]"
-                      : "bg-white/[0.04] text-[#8A8F98] hover:bg-white/[0.07]"
+                      ? "bg-action text-on-action"
+                      : "bg-white/[0.04] text-text-2 hover:bg-white/[0.07]"
                   }`}
                 >
                   {option.label}
@@ -960,15 +958,15 @@ function SettingsTab({
                 max={MAX_AUTOPILOT_CADENCE_PER_WEEK}
                 step={1}
                 aria-label="Articles per week"
-                className="w-full rounded-lg border border-white/[0.06] bg-[#0E0F11] px-3 py-2 text-[13px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+                className="w-full rounded-lg border border-white/[0.06] bg-surface-1 px-3 py-2 text-[13px] text-text outline-none focus:border-[var(--border-focus)]"
                 value={Number.isInteger(cadence) ? cadence : ""}
                 disabled={cadenceCapacity === undefined || !cadenceCapacity.ready}
                 onChange={(event) => setCadence(Number(event.target.value))}
               />
-            <p className="text-[10px] leading-relaxed text-[#62666D]">
+            <p className="text-[10px] leading-relaxed text-text-3">
               Enter 1–{MAX_AUTOPILOT_CADENCE_PER_WEEK} articles per week.
             </p>
-            <p className={`text-[10px] leading-relaxed ${cadenceValid ? "text-[#62666D]" : "text-[#F87171]"}`}>
+            <p className={`text-[10px] leading-relaxed ${cadenceValid ? "text-text-3" : "text-wrong"}`}>
               {cadenceCapacity === undefined || !cadenceCapacity.ready
                 ? "Checking the current account-wide article allowance."
                 : cadenceValid
@@ -976,7 +974,7 @@ function SettingsTab({
                   : `Choose a target cadence from 1 to ${MAX_AUTOPILOT_CADENCE_PER_WEEK} articles per week.`}
             </p>
             {cadenceCapacity?.siteParked && (
-              <p className="text-[10px] leading-relaxed text-[#FBBF24]">
+              <p className="text-[10px] leading-relaxed text-rival">
                 This site is parked by the current site allowance. Its requested
                 cadence will be reconsidered after an upgrade or site removal.
               </p>
@@ -1072,14 +1070,14 @@ function SettingsTab({
           <div className="flex items-center gap-2">
             <input
               type="color"
-              value={primaryColor || "#0EA5E9"}
+              value={primaryColor || "#1a1a1a"}
               onChange={(e) => setPrimaryColor(e.target.value)}
               className="h-9 w-9 cursor-pointer rounded border border-white/[0.1] bg-transparent"
             />
             <Input
               value={primaryColor}
               onChange={(e) => setPrimaryColor(e.target.value)}
-              placeholder="#0EA5E9"
+              placeholder="#1a1a1a"
               className="flex-1 font-mono"
             />
           </div>
@@ -1088,14 +1086,14 @@ function SettingsTab({
           <div className="flex items-center gap-2">
             <input
               type="color"
-              value={accentColor || "#0EA5E9"}
+              value={accentColor || "#1a1a1a"}
               onChange={(e) => setAccentColor(e.target.value)}
               className="h-9 w-9 cursor-pointer rounded border border-white/[0.1] bg-transparent"
             />
             <Input
               value={accentColor}
               onChange={(e) => setAccentColor(e.target.value)}
-              placeholder="#0EA5E9"
+              placeholder="#1a1a1a"
               className="flex-1 font-mono"
             />
           </div>
@@ -1189,7 +1187,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
     return () => { live = false; };
   }, [editing, isGithub, hasGithubToken, repoChoices, listGithubRepositories, site._id]);
 
-  const inputCls = "w-full rounded-lg border border-white/[0.06] bg-[#0E0F11] px-3 py-2 text-[13px] text-[#F7F8F8] placeholder-[#62666D] outline-none focus:border-[#0EA5E9]/50";
+  const inputCls = "w-full rounded-lg border border-white/[0.06] bg-surface-1 px-3 py-2 text-[13px] text-text placeholder-text-4 outline-none focus:border-[var(--border-focus)]";
 
   const handleSave = async () => {
     setSaving(true);
@@ -1237,22 +1235,22 @@ function ConnectionSection({ site }: { site: SiteView }) {
   };
 
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
+    <div className="rounded-xl border border-white/[0.06] bg-surface-1 overflow-hidden">
       <div className="flex items-center gap-2.5 px-5 py-3 border-b border-white/[0.04]">
-        <Upload className="h-4 w-4 text-[#8A8F98]" />
-        <p className="text-[13px] font-semibold text-[#F7F8F8]">Connection</p>
+        <Upload className="h-4 w-4 text-text-2" />
+        <p className="text-[13px] font-semibold text-text">Connection</p>
       </div>
       <div className="px-5 py-5">
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#0EA5E9]/[0.08]">
-              <MethodIcon className="h-5 w-5 text-[#0EA5E9]" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-surface-2/50">
+              <MethodIcon className="h-5 w-5 text-text-2" />
             </div>
             <div className="flex-1">
-              <p className="text-[14px] font-medium text-[#F7F8F8]">{choosingPlatform ? "GitHub · not connected yet" : labels[method] || method}</p>
+              <p className="text-[14px] font-medium text-text">{choosingPlatform ? "GitHub · not connected yet" : labels[method] || method}</p>
               {isGithub && site.repoOwner && !editing && (
                 <>
-                  <p className="text-[12px] text-[#62666D] font-mono">{site.repoOwner}/{site.repoName}</p>
+                  <p className="text-[12px] text-text-3 font-mono">{site.repoOwner}/{site.repoName}</p>
                   {/* P257 (Oct 30 2026): the folder Pentra found in this repository, why it can't publish there, or that it
                       hasn't checked yet; never content/blog for a repository it never read. */}
                   {/* P377 (Nov 6 2026): a Next.js site with no blog is offered one, then sees it added and live. */}
@@ -1263,31 +1261,31 @@ function ConnectionSection({ site }: { site: SiteView }) {
                     ? <div className="mt-2"><BlogKitCard siteId={site._id} domain={site.domain} repository={`${site.repoOwner}/${site.repoName}`}
                         offer={null} kit={site.githubBlog.kit} /></div>
                     : site.githubBlog?.state === "failed"
-                    ? <p role="status" className="text-[11px] text-[#F59E0B]">{site.githubBlog.detail} Choose another repository with Edit, or switch to Copy &amp; Paste.</p>
+                    ? <p role="status" className="text-[11px] text-rival">{site.githubBlog.detail} Choose another repository with Edit, or switch to Copy &amp; Paste.</p>
                     : site.githubBlog?.state === "unchecked"
-                      ? <p className="text-[11px] text-[#62666D]">{connectionVerified ? "Pentra is checking where this repository's blog keeps its posts…" : "Pentra checks where this repository's blog keeps its posts when you press Verify repository."}</p>
-                      : <p className="text-[11px] text-[#62666D]">Articles are saved as Markdown files in <span className="font-mono">{site.githubBlog?.state === "detected" ? site.githubBlog.postsDir : githubContentFolder(site.urlStructure)}/</span>{site.repoDefaultBranch ? <> on <span className="font-mono">{site.repoDefaultBranch}</span></> : null}.</p>}
+                      ? <p className="text-[11px] text-text-3">{connectionVerified ? "Pentra is checking where this repository's blog keeps its posts…" : "Pentra checks where this repository's blog keeps its posts when you press Verify repository."}</p>
+                      : <p className="text-[11px] text-text-3">Articles are saved as Markdown files in <span className="font-mono">{site.githubBlog?.state === "detected" ? site.githubBlog.postsDir : githubContentFolder(site.urlStructure)}/</span>{site.repoDefaultBranch ? <> on <span className="font-mono">{site.repoDefaultBranch}</span></> : null}.</p>}
                 </>
               )}
               {isWp && site.wpUrl && !editing && (
-                <p className="text-[12px] text-[#62666D]">{site.wpUrl}</p>
+                <p className="text-[12px] text-text-3">{site.wpUrl}</p>
               )}
               {isWebhook && site.webhookUrl && !editing && (
-                <p className="text-[12px] text-[#62666D] truncate max-w-[300px]">{site.webhookUrl}</p>
+                <p className="text-[12px] text-text-3 truncate max-w-[300px]">{site.webhookUrl}</p>
               )}
               {isManual && (
-                <p className="text-[12px] text-[#62666D]">Copy markdown or HTML from article pages</p>
+                <p className="text-[12px] text-text-3">Copy markdown or HTML from article pages</p>
               )}
             </div>
             {!editing && (
-              <button onClick={() => { setConnectionVerified(false); setEditing(true); }} className="text-[11px] font-medium text-[#8A8F98] hover:text-[#0EA5E9] transition">Edit</button>
+              <button onClick={() => { setConnectionVerified(false); setEditing(true); }} className="text-[11px] font-medium text-text-2 hover:text-text transition">Edit</button>
             )}
           </div>
 
           {editing && (
             <div className="flex flex-col gap-3 rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
               <div className="flex flex-col gap-1.5">
-                <label className="text-[12px] font-medium text-[#8A8F98]">Publishing method</label>
+                <label className="text-[12px] font-medium text-text-2">Publishing method</label>
                 <select
                   value={method}
                   onChange={(event) => setMethod(event.target.value)}
@@ -1304,7 +1302,7 @@ function ConnectionSection({ site }: { site: SiteView }) {
               </div>
               {isGithub && hasGithubToken && repoChoices && repoChoices.length > 0 && (
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[12px] font-medium text-[#8A8F98]">Choose a repository</label>
+                  <label className="text-[12px] font-medium text-text-2">Choose a repository</label>
                   <select
                     value={repoChoices.some((r) => r.owner === repoOwner && r.name === repoName) ? `${repoOwner}/${repoName}` : ""}
                     onChange={(event) => {
@@ -1318,40 +1316,40 @@ function ConnectionSection({ site }: { site: SiteView }) {
                       <option key={`${r.owner}/${r.name}`} value={`${r.owner}/${r.name}`}>{r.owner}/{r.name}{r.private ? " (private)" : ""}</option>
                     ))}
                   </select>
-                  <p className="text-[11px] text-[#62666D]">Or type it below.</p>
+                  <p className="text-[11px] text-text-3">Or type it below.</p>
                   {/* P211: one of the first real signups connected GitHub and stopped at this list; a site that isn't built from a repository needs the way out here. */}
-                  <p className="text-[11px] text-[#8A8F98]">Website not built from one of these repositories? Choose the platform it runs on under Publishing method above, or Copy &amp; Paste.</p>
+                  <p className="text-[11px] text-text-2">Website not built from one of these repositories? Choose the platform it runs on under Publishing method above, or Copy &amp; Paste.</p>
                 </div>
               )}
               {isGithub && hasGithubToken && repoChoices && repoChoices.length === 0 && (
-                <p role="status" className="text-[12px] text-[#FBBF24]">{repoListError ?? NO_GITHUB_REPOSITORIES}</p>
+                <p role="status" className="text-[12px] text-rival">{repoListError ?? NO_GITHUB_REPOSITORIES}</p>
               )}
               {isGithub && (
                 <div className="grid grid-cols-2 gap-3">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8A8F98]">Owner</label>
+                    <label className="text-[12px] font-medium text-text-2">Owner</label>
                     <input value={repoOwner} onChange={(e) => setRepoOwner(e.target.value)} placeholder="acme" className={inputCls} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8A8F98]">Repository</label>
+                    <label className="text-[12px] font-medium text-text-2">Repository</label>
                     <input value={repoName} onChange={(e) => setRepoName(e.target.value)} placeholder="my-blog" className={inputCls} />
                   </div>
                 </div>
               )}
               {isWp && (
                 <>
-                  <p className="text-[12px] text-[#8A8F98]">Pentra publishes to WordPress through a small plugin. <a className="underline" href="/pentra-wordpress-plugin.zip" download>Download the plugin (ZIP)</a> and install it in WordPress (Plugins → Add New → Upload Plugin → Activate). Then create an Application Password under Users → Profile, enter your details below and click Save to check the connection.</p>
+                  <p className="text-[12px] text-text-2">Pentra publishes to WordPress through a small plugin. <a className="underline" href="/pentra-wordpress-plugin.zip" download>Download the plugin (ZIP)</a> and install it in WordPress (Plugins → Add New → Upload Plugin → Activate). Then create an Application Password under Users → Profile, enter your details below and click Save to check the connection.</p>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8A8F98]">WordPress URL</label>
+                    <label className="text-[12px] font-medium text-text-2">WordPress URL</label>
                     <input value={wpUrl} onChange={(e) => setWpUrl(e.target.value)} placeholder="https://yoursite.com" className={inputCls} />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-[12px] font-medium text-[#8A8F98]">Username</label>
+                      <label className="text-[12px] font-medium text-text-2">Username</label>
                       <input value={wpUsername} onChange={(e) => setWpUsername(e.target.value)} placeholder="admin" className={inputCls} />
                     </div>
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-[12px] font-medium text-[#8A8F98]">App Password</label>
+                      <label className="text-[12px] font-medium text-text-2">App Password</label>
                       <input type="password" value={wpAppPassword} onChange={(e) => setWpAppPassword(e.target.value)} placeholder={site.wordpressConfigured ? "Leave blank to keep current password" : "xxxx xxxx xxxx"} className={inputCls} />
                     </div>
                   </div>
@@ -1359,67 +1357,67 @@ function ConnectionSection({ site }: { site: SiteView }) {
               )}
               {isHosted && (
                 <>
-                  <ol className="list-decimal space-y-1 pl-4 text-[12px] text-[#8A8F98]">
+                  <ol className="list-decimal space-y-1 pl-4 text-[12px] text-text-2">
                     {CMS_SETUP_STEPS[method].map((step) => <li key={step}>{step}</li>)}
                   </ol>
                   {method !== "webflow" && (
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-[12px] font-medium text-[#8A8F98]">{method === "shopify" ? "Store address" : "Ghost API URL"}</label>
+                      <label className="text-[12px] font-medium text-text-2">{method === "shopify" ? "Store address" : "Ghost API URL"}</label>
                       <input value={cmsEndpoint} onChange={(e) => setCmsEndpoint(e.target.value)} placeholder={method === "shopify" ? "your-store.myshopify.com" : "https://yoursite.ghost.io"} className={inputCls} />
                     </div>
                   )}
                   {method === "shopify" && (
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-[12px] font-medium text-[#8A8F98]">Client ID</label>
+                      <label className="text-[12px] font-medium text-text-2">Client ID</label>
                       <input value={cmsClientId} onChange={(e) => setCmsClientId(e.target.value)} placeholder="Leave blank if you use an shpat_ access token" className={inputCls} />
                     </div>
                   )}
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8A8F98]">{method === "shopify" ? "Client secret (or shpat_ access token)" : method === "webflow" ? "Site API token" : "Admin API key"}</label>
+                    <label className="text-[12px] font-medium text-text-2">{method === "shopify" ? "Client secret (or shpat_ access token)" : method === "webflow" ? "Site API token" : "Admin API key"}</label>
                     <input type="password" value={cmsSecret} onChange={(e) => setCmsSecret(e.target.value)} placeholder={site.cmsSecretConfigured ? "Leave blank to keep the current one" : method === "ghost" ? "id:secret" : ""} className={inputCls} />
                   </div>
                   {method !== "ghost" && (
                     <div className="flex flex-col gap-1.5">
-                      <label className="text-[12px] font-medium text-[#8A8F98]">{method === "shopify" ? "Blog handle" : "Blog collection slug"}</label>
+                      <label className="text-[12px] font-medium text-text-2">{method === "shopify" ? "Blog handle" : "Blog collection slug"}</label>
                       <input value={cmsCollection} onChange={(e) => setCmsCollection(e.target.value)} placeholder={CMS_DEFAULT_COLLECTION[method] ?? ""} className={inputCls} />
                     </div>
                   )}
-                  <p className="text-[11px] text-[#62666D]">Save checks the connection with {CMS_PLATFORM_LABELS[method]} (read-only). Nothing is published until you choose Autopilot or approve an article.</p>
+                  <p className="text-[11px] text-text-3">Save checks the connection with {CMS_PLATFORM_LABELS[method]} (read-only). Nothing is published until you choose Autopilot or approve an article.</p>
                 </>
               )}
               {isWebhook && (
                 <>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8A8F98]">Webhook URL</label>
+                    <label className="text-[12px] font-medium text-text-2">Webhook URL</label>
                     <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://api.yoursite.com/articles" className={inputCls} />
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[#8A8F98]">Signing secret (32+ characters)</label>
+                    <label className="text-[12px] font-medium text-text-2">Signing secret (32+ characters)</label>
                     <input type="password" value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} placeholder={site.webhookSecretConfigured ? "Leave blank to keep current secret" : "your-webhook-secret"} className={inputCls} />
                   </div>
-                  <p className="text-[11px] text-[#62666D]">Pentra sends signed JSON events (X-Pentra-Signature-256 is the HMAC-SHA256 of &quot;timestamp.body&quot; with your secret): pentra.article.publish.v1 for each article, and pentra.redirect.create.v1 when it merges two of your articles. For that one, add a permanent (301) redirect from each &quot;from&quot; path to its &quot;to&quot; path.</p>
+                  <p className="text-[11px] text-text-3">Pentra sends signed JSON events (X-Pentra-Signature-256 is the HMAC-SHA256 of &quot;timestamp.body&quot; with your secret): pentra.article.publish.v1 for each article, and pentra.redirect.create.v1 when it merges two of your articles. For that one, add a permanent (301) redirect from each &quot;from&quot; path to its &quot;to&quot; path.</p>
                 </>
               )}
               <div className="flex items-center gap-2 mt-1">
-                <button onClick={handleSave} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg bg-[#F7F8F8] px-4 py-2 text-[12px] font-medium text-[#08090A] transition hover:bg-white disabled:opacity-50">
+                <button onClick={handleSave} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg bg-action px-4 py-2 text-[12px] font-medium text-on-action transition hover:bg-white disabled:opacity-50">
                   <Check className="h-3 w-3" />
                   {saving ? "Saving..." : "Save"}
                 </button>
-                <button onClick={() => setEditing(false)} className="text-[12px] text-[#8A8F98] hover:text-[#F7F8F8] transition px-3 py-2">Cancel</button>
+                <button onClick={() => setEditing(false)} className="text-[12px] text-text-2 hover:text-text transition px-3 py-2">Cancel</button>
               </div>
               {connectionError && (
-                <p className="text-[11px] text-[#F87171]">{connectionError}</p>
+                <p className="text-[11px] text-wrong">{connectionError}</p>
               )}
             </div>
           )}
 
           {choosingPlatform && (
-            <div role="group" aria-label="Connect GitHub" className="flex flex-col gap-2 rounded-lg border border-[#0EA5E9]/[0.2] bg-[#0EA5E9]/[0.04] p-4">
-              <p className="text-[13px] font-medium text-[#F7F8F8]">Connect the GitHub repository your Next.js, Astro, Hugo, Jekyll or Gatsby blog builds from.</p>
+            <div role="group" aria-label="Connect GitHub" className="flex flex-col gap-2 rounded-lg border border-border bg-surface-2/50 p-4">
+              <p className="text-[13px] font-medium text-text">Connect the GitHub repository your Next.js, Astro, Hugo, Jekyll or Gatsby blog builds from.</p>
               <div className="flex flex-wrap gap-2">
                 <button onClick={connectGithub} className={PLATFORM_CHOICE_CLS}>Connect GitHub</button>
               </div>
-              <p className="text-[12px] text-[#8A8F98]">Not on GitHub?</p>
+              <p className="text-[12px] text-text-2">Not on GitHub?</p>
               <div className="flex flex-wrap gap-2">
                 {PLATFORM_CHOICES.map(([value, label]) => (
                   <button key={value} onClick={() => choose(value)} className={PLATFORM_CHOICE_CLS}>{label}</button>
@@ -1430,34 +1428,34 @@ function ConnectionSection({ site }: { site: SiteView }) {
           )}
 
           {isGithub && !choosingPlatform && (
-            <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (hasGithubToken ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]")}>
+            <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (hasGithubToken ? "bg-named/[0.04] border border-named/[0.12]" : "bg-rival/[0.04] border border-rival/[0.12]")}>
               {hasGithubToken ? (
                 <>
-                  <Check className="h-4 w-4 text-[#22C55E]" />
-                  <span className="flex-1 text-[12px] text-[#4ADE80]">GitHub connected</span>
+                  <Check className="h-4 w-4 text-named" />
+                  <span className="flex-1 text-[12px] text-named">GitHub connected</span>
                   {!editing && (site.repoOwner
-                    ? <button onClick={handleVerify} disabled={saving} className="text-[11px] font-medium text-[#0EA5E9] disabled:opacity-50">{saving ? "Checking…" : "Verify repository"}</button>
-                    : <button onClick={() => { setConnectionVerified(false); setEditing(true); }} className="text-[11px] font-medium text-[#0EA5E9]">Choose repository</button>)}
-                  <button onClick={connectGithub} className="text-[11px] text-[#62666D] hover:text-[#0EA5E9] transition">Reconnect</button>
+                    ? <button onClick={handleVerify} disabled={saving} className="text-[11px] font-medium text-text-2 disabled:opacity-50">{saving ? "Checking…" : "Verify repository"}</button>
+                    : <button onClick={() => { setConnectionVerified(false); setEditing(true); }} className="text-[11px] font-medium text-text-2">Choose repository</button>)}
+                  <button onClick={connectGithub} className="text-[11px] text-text-3 hover:text-text transition">Reconnect</button>
                 </>
               ) : (
                 <>
-                  <KeyRound className="h-4 w-4 text-[#F59E0B]" />
-                  <span className="flex-1 text-[12px] text-[#FBBF24]">GitHub not connected</span>
-                  <button onClick={connectGithub} className="text-[11px] font-medium text-[#0EA5E9] hover:text-[#38BDF8] transition">Connect</button>
+                  <KeyRound className="h-4 w-4 text-rival" />
+                  <span className="flex-1 text-[12px] text-rival">GitHub not connected</span>
+                  <button onClick={connectGithub} className="text-[11px] font-medium text-text-2 hover:text-text transition">Connect</button>
                 </>
               )}
             </div>
           )}
 
-          {!editing && connectionError && <p role="alert" className="text-[12px] text-[#F87171]">{connectionError}</p>}
-          {!editing && connectionVerified && site.githubBlog?.state !== "failed" && <p role="status" className="text-[12px] text-[#4ADE80]">Pentra can reach your repository. Nothing was published.</p>}
+          {!editing && connectionError && <p role="alert" className="text-[12px] text-wrong">{connectionError}</p>}
+          {!editing && connectionVerified && site.githubBlog?.state !== "failed" && <p role="status" className="text-[12px] text-named">Pentra can reach your repository. Nothing was published.</p>}
 
           {isWp && (() => {
             const ok = !!site.publicationAdapterVerified;
             return (
-              <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (ok ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]")}>
-                {ok ? (<><Check className="h-4 w-4 text-[#22C55E]" /><span className="flex-1 text-[12px] text-[#4ADE80]">WordPress verified for publishing</span></>) : (<><KeyRound className="h-4 w-4 text-[#F59E0B]" /><span className="flex-1 text-[12px] text-[#FBBF24]">WordPress connection not verified</span></>)}
+              <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (ok ? "bg-named/[0.04] border border-named/[0.12]" : "bg-rival/[0.04] border border-rival/[0.12]")}>
+                {ok ? (<><Check className="h-4 w-4 text-named" /><span className="flex-1 text-[12px] text-named">WordPress verified for publishing</span></>) : (<><KeyRound className="h-4 w-4 text-rival" /><span className="flex-1 text-[12px] text-rival">WordPress connection not verified</span></>)}
               </div>
             );
           })()}
@@ -1466,9 +1464,9 @@ function ConnectionSection({ site }: { site: SiteView }) {
             const ok = !!site.publicationAdapterVerified;
             const name = CMS_PLATFORM_LABELS[method as keyof typeof CMS_PLATFORM_LABELS];
             return (
-              <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (ok ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]")}>
-                {ok ? (<><Check className="h-4 w-4 text-[#22C55E]" /><span className="flex-1 text-[12px] text-[#4ADE80]">{name} verified for publishing</span></>) : (<><KeyRound className="h-4 w-4 text-[#F59E0B]" /><span className="flex-1 text-[12px] text-[#FBBF24]">{name} connection not verified</span></>)}
-                {!editing && <button onClick={handleVerify} disabled={saving} className="text-[11px] font-medium text-[#0EA5E9] disabled:opacity-50">{saving ? "Checking…" : "Check connection"}</button>}
+              <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (ok ? "bg-named/[0.04] border border-named/[0.12]" : "bg-rival/[0.04] border border-rival/[0.12]")}>
+                {ok ? (<><Check className="h-4 w-4 text-named" /><span className="flex-1 text-[12px] text-named">{name} verified for publishing</span></>) : (<><KeyRound className="h-4 w-4 text-rival" /><span className="flex-1 text-[12px] text-rival">{name} connection not verified</span></>)}
+                {!editing && <button onClick={handleVerify} disabled={saving} className="text-[11px] font-medium text-text-2 disabled:opacity-50">{saving ? "Checking…" : "Check connection"}</button>}
               </div>
             );
           })()}
@@ -1476,23 +1474,23 @@ function ConnectionSection({ site }: { site: SiteView }) {
           {isWebhook && (() => {
             const ok = !!site.publicationAdapterVerified;
             return (
-              <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (ok ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]")}>
-                {ok ? (<><Check className="h-4 w-4 text-[#22C55E]" /><span className="flex-1 text-[12px] text-[#4ADE80]">Webhook verified for publishing</span></>) : (<><KeyRound className="h-4 w-4 text-[#F59E0B]" /><span className="flex-1 text-[12px] text-[#FBBF24]">Webhook connection not verified</span></>)}
+              <div className={"flex items-center gap-3 rounded-lg px-4 py-3 " + (ok ? "bg-named/[0.04] border border-named/[0.12]" : "bg-rival/[0.04] border border-rival/[0.12]")}>
+                {ok ? (<><Check className="h-4 w-4 text-named" /><span className="flex-1 text-[12px] text-named">Webhook verified for publishing</span></>) : (<><KeyRound className="h-4 w-4 text-rival" /><span className="flex-1 text-[12px] text-rival">Webhook connection not verified</span></>)}
               </div>
             );
           })()}
 
           {isManual && (
-            <div className="flex items-center gap-3 rounded-lg px-4 py-3 bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]">
-              <Check className="h-4 w-4 text-[#22C55E]" />
-              <span className="flex-1 text-[12px] text-[#4ADE80]">Ready — copy articles from the Articles page</span>
+            <div className="flex items-center gap-3 rounded-lg px-4 py-3 bg-named/[0.04] border border-named/[0.12]">
+              <Check className="h-4 w-4 text-named" />
+              <span className="flex-1 text-[12px] text-named">Ready — copy articles from the Articles page</span>
             </div>
           )}
 
           {!isManual && (
             <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2">
-              <Shield className="h-3 w-3 shrink-0 text-[#22C55E]" />
-              <p className="text-[10px] text-[#62666D]">Credentials are <span className="text-[#8A8F98]">encrypted at rest</span> and transmitted over <span className="text-[#8A8F98]">HTTPS</span>.</p>
+              <Shield className="h-3 w-3 shrink-0 text-text-2" />
+              <p className="text-[10px] text-text-3">Credentials are <span className="text-text-2">encrypted at rest</span> and transmitted over <span className="text-text-2">HTTPS</span>.</p>
             </div>
           )}
         </div>
@@ -1532,43 +1530,43 @@ function GSCSection({ site }: { site: SiteView }) {
   };
 
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
+    <div className="rounded-xl border border-white/[0.06] bg-surface-1 overflow-hidden">
       <div className="flex items-center gap-2.5 px-5 py-3 border-b border-white/[0.04]">
-        <BarChart3 className="h-4 w-4 text-[#8A8F98]" />
-        <p className="text-[13px] font-semibold text-[#F7F8F8]">Google Search Console</p>
+        <BarChart3 className="h-4 w-4 text-text-2" />
+        <p className="text-[13px] font-semibold text-text">Google Search Console</p>
       </div>
       <div className="px-5 py-5">
         <div className="flex flex-col gap-4">
           {isConnected ? (
             <>
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#22C55E]/[0.08]">
-                  <BarChart3 className="h-5 w-5 text-[#22C55E]" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-named/[0.08]">
+                  <BarChart3 className="h-5 w-5 text-named" />
                 </div>
                 <div className="flex-1">
-                  <p className="text-[14px] font-medium text-[#F7F8F8]">Connected</p>
+                  <p className="text-[14px] font-medium text-text">Connected</p>
                   {site.gscEmail && (
-                    <p className="text-[12px] text-[#62666D]">{site.gscEmail}</p>
+                    <p className="text-[12px] text-text-3">{site.gscEmail}</p>
                   )}
                 </div>
               </div>
 
               {site.gscProperty && (
                 <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2.5">
-                  <ExternalLink className="h-3 w-3 shrink-0 text-[#0EA5E9]" />
-                  <p className="text-[12px] text-[#8A8F98] font-mono">{site.gscProperty}</p>
+                  <ExternalLink className="h-3 w-3 shrink-0 text-text-2" />
+                  <p className="text-[12px] text-text-2 font-mono">{site.gscProperty}</p>
                 </div>
               )}
 
               {site.gscConnectedAt && (
-                <p className="text-[11px] text-[#62666D]">
+                <p className="text-[11px] text-text-3">
                   Connected {formatDistanceToNow(new Date(site.gscConnectedAt), { addSuffix: true })}
                 </p>
               )}
 
-              <div className={`flex items-center gap-3 rounded-lg px-4 py-3 ${isGrowthEnabled ? "bg-[#22C55E]/[0.04] border border-[#22C55E]/[0.12]" : "bg-[#F59E0B]/[0.04] border border-[#F59E0B]/[0.12]"}`}>
-                {isGrowthEnabled ? <Check className="h-4 w-4 text-[#22C55E]" /> : <RefreshCw className="h-4 w-4 text-[#F59E0B]" />}
-                <span className={`flex-1 text-[12px] ${isGrowthEnabled ? "text-[#4ADE80]" : "text-[#FBBF24]"}`}>
+              <div className={`flex items-center gap-3 rounded-lg px-4 py-3 ${isGrowthEnabled ? "bg-named/[0.04] border border-named/[0.12]" : "bg-rival/[0.04] border border-rival/[0.12]"}`}>
+                {isGrowthEnabled ? <Check className="h-4 w-4 text-named" /> : <RefreshCw className="h-4 w-4 text-rival" />}
+                <span className={`flex-1 text-[12px] ${isGrowthEnabled ? "text-named" : "text-rival"}`}>
                   {isGrowthEnabled
                     ? "Pentra checks your rankings daily and can resubmit your sitemap when new pages aren't being indexed."
                     : "Reconnect Search Console so Pentra can resubmit your sitemap when new pages aren't being indexed."}
@@ -1578,16 +1576,16 @@ function GSCSection({ site }: { site: SiteView }) {
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleConnect}
-                  className="text-[11px] text-[#8A8F98] hover:text-[#0EA5E9] transition flex items-center gap-1"
+                  className="text-[11px] text-text-2 hover:text-text transition flex items-center gap-1"
                 >
                   <RefreshCw className="h-3 w-3" />
                   Reconnect
                 </button>
-                <span className="text-[#62666D]">·</span>
+                <span className="text-text-3">·</span>
                 <button
                   onClick={handleDisconnect}
                   disabled={disconnecting}
-                  className="text-[11px] text-[#8A8F98] hover:text-[#EF4444] transition disabled:opacity-50"
+                  className="text-[11px] text-text-2 hover:text-wrong transition disabled:opacity-50"
                 >
                   {disconnecting ? "Disconnecting..." : "Disconnect"}
                 </button>
@@ -1596,26 +1594,26 @@ function GSCSection({ site }: { site: SiteView }) {
           ) : (
             <>
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#F59E0B]/[0.08]">
-                  <BarChart3 className="h-5 w-5 text-[#F59E0B]" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rival/[0.08]">
+                  <BarChart3 className="h-5 w-5 text-rival" />
                 </div>
                 <div className="flex-1">
-                  <p className="text-[14px] font-medium text-[#F7F8F8]">Not connected</p>
-                  <p className="text-[12px] text-[#62666D]">Connect to see how your pages rank on Google and spot pages that are losing visitors</p>
+                  <p className="text-[14px] font-medium text-text">Not connected</p>
+                  <p className="text-[12px] text-text-3">Connect to see how your pages rank on Google and spot pages that are losing visitors</p>
                 </div>
               </div>
 
               <button
                 onClick={handleConnect}
-                className="flex items-center justify-center gap-2 rounded-lg bg-[#F7F8F8] px-4 py-2.5 text-[13px] font-medium text-[#08090A] transition hover:bg-white"
+                className="flex items-center justify-center gap-2 rounded-lg bg-action px-4 py-2.5 text-[13px] font-medium text-on-action transition hover:bg-white"
               >
                 <BarChart3 className="h-4 w-4" />
                 Connect Google Search Console
               </button>
 
               <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] border border-white/[0.04] px-3 py-2">
-                <Shield className="h-3 w-3 shrink-0 text-[#22C55E]" />
-                <p className="text-[10px] text-[#62666D]">Pentra reads performance/indexing data and can submit your sitemap. It cannot edit your website.</p>
+                <Shield className="h-3 w-3 shrink-0 text-text-2" />
+                <p className="text-[10px] text-text-3">Pentra reads performance/indexing data and can submit your sitemap. It cannot edit your website.</p>
               </div>
             </>
           )}
@@ -1638,10 +1636,10 @@ function SettingsSection({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden">
+    <div className="rounded-xl border border-white/[0.06] bg-surface-1 overflow-hidden">
       <div className="flex items-center gap-2.5 px-5 py-3 border-b border-white/[0.04]">
-        <Icon className="h-4 w-4 text-[#8A8F98]" />
-        <p className="text-[13px] font-semibold text-[#F7F8F8]">{title}</p>
+        <Icon className="h-4 w-4 text-text-2" />
+        <p className="text-[13px] font-semibold text-text">{title}</p>
       </div>
       <div className="divide-y divide-white/[0.04]">{children}</div>
     </div>
@@ -1660,8 +1658,8 @@ function FieldRow({
   return (
     <div className="px-5 py-4">
       <div className="mb-2">
-        <p className="text-[13px] font-medium text-[#F7F8F8]">{label}</p>
-        <p className="text-[11px] text-[#62666D]">{description}</p>
+        <p className="text-[13px] font-medium text-text">{label}</p>
+        <p className="text-[11px] text-text-3">{description}</p>
       </div>
       {children}
     </div>
@@ -1682,18 +1680,22 @@ function ToggleRow({
   return (
     <div className="flex items-center justify-between px-5 py-4">
       <div>
-        <p className="text-[13px] font-medium text-[#F7F8F8]">{label}</p>
-        <p className="text-[11px] text-[#62666D]">{description}</p>
+        <p className="text-[13px] font-medium text-text">{label}</p>
+        <p className="text-[11px] text-text-3">{description}</p>
       </div>
       <button
+        type="button"
+        role="switch"
+        aria-checked={value}
+        aria-label={label}
         onClick={() => onChange(!value)}
-        className={`relative h-5 w-9 rounded-full transition-colors shrink-0 ${
-          value ? "bg-[#0EA5E9]" : "bg-white/[0.08]"
+        className={`relative h-5 w-9 rounded-full border transition-colors shrink-0 ${
+          value ? "border-transparent bg-action" : "border-border-strong bg-surface-3"
         }`}
       >
         <span
-          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-            value ? "left-[18px]" : "left-0.5"
+          className={`absolute top-[1px] h-3.5 w-3.5 rounded-full transition-[left] ${
+            value ? "left-[18px] bg-on-action" : "left-[2px] bg-text-3"
           }`}
         />
       </button>
@@ -1728,19 +1730,19 @@ function TagEditor({
   return (
     <div className="px-5 py-4">
       <div className="mb-2">
-        <p className="text-[13px] font-medium text-[#F7F8F8]">{label}</p>
-        <p className="text-[11px] text-[#62666D]">{description}</p>
+        <p className="text-[13px] font-medium text-text">{label}</p>
+        <p className="text-[11px] text-text-3">{description}</p>
       </div>
       <div className="flex flex-wrap gap-1.5">
         {items.map((item, i) => (
           <span
             key={i}
-            className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] border border-white/[0.06] px-2 py-1 text-[12px] text-[#F7F8F8]"
+            className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] border border-white/[0.06] px-2 py-1 text-[12px] text-text"
           >
             {item}
             <button
               onClick={() => onChange(items.filter((_, j) => j !== i))}
-              className="text-[#62666D] hover:text-[#EF4444] transition-colors"
+              className="text-text-3 hover:text-wrong transition-colors"
             >
               <X className="h-3 w-3" />
             </button>
@@ -1757,12 +1759,12 @@ function TagEditor({
             onBlur={addItem}
             placeholder={placeholder}
             autoFocus
-            className="w-36 rounded-md border border-white/[0.1] bg-[#0E0F11] px-2 py-1 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="w-36 rounded-md border border-white/[0.1] bg-surface-1 px-2 py-1 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
           />
         ) : (
           <button
             onClick={() => setAdding(true)}
-            className="inline-flex items-center gap-1 rounded-md border border-dashed border-white/[0.08] px-2 py-1 text-[11px] text-[#62666D] hover:border-[#0EA5E9]/30 hover:text-[#0EA5E9] transition-colors"
+            className="inline-flex items-center gap-1 rounded-md border border-dashed border-white/[0.08] px-2 py-1 text-[11px] text-text-3 hover:border-border-strong hover:text-text transition-colors"
           >
             <Plus className="h-3 w-3" />
             Add

@@ -1,13 +1,26 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import test from "node:test";
+import { buildSync } from "esbuild";
+import { createElement, type ReactNode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { ANNUAL_MONTHS_FREE, ANNUAL_PER_MONTH, ANNUAL_SAVINGS, PENTRA_PLAN, formatUsd, planDisplayName } from "../src/lib/pricing.ts";
 import { ASSISTANTS, HONESTY_LINE, PUBLISH_TARGETS } from "../src/lib/product-facts.ts";
 import { ANSWERS_PLAN, ANSWERS_PLAN_FEATURE } from "../convex/lib/answersAccess.ts";
 import { ALL_FEATURE_KEYS } from "../convex/planLimits.ts";
 
 const read = (path: string) => readFileSync(path, "utf8");
+
+function loadComponent<T>(entry: string): T {
+  const code = buildSync({ entryPoints: [entry], bundle: true, platform: "node", format: "cjs", packages: "external",
+    write: false, jsx: "automatic", alias: { "next/link": "./tests/helpers/next-link-stub.tsx" } }).outputFiles[0]!.text;
+  const runtime = { exports: {} as T };
+  runInNewContext(code, { module: runtime, exports: runtime.exports, require: createRequire(import.meta.url), console });
+  return runtime.exports;
+}
 
 function files(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -53,6 +66,28 @@ test("public Pentra copy sells only what the product delivers", () => {
   assert.match(read("src/components/marketing/first-hour.tsx"), /title: "Shows who gets named instead"/);
   // Never name data suppliers in marketing copy.
   for (const [path, text] of marketing) assert.doesNotMatch(text, /DataForSEO|SerpApi|Bright ?Data/i, path);
+});
+
+test("the homepage examples read right on first paint: final counts, plain step titles, and 'named instead' lists only competitors", () => {
+  // The example counts are in the server's markup as their final values; nothing ticks up from zero or waits for a scroll.
+  const problem = read("src/components/marketing/problem-count.tsx");
+  assert.doesNotMatch(problem, /CountUp|count-up/);
+  assert.match(problem, /\{row\.count\.toLocaleString\("en-US"\)\}/);
+  assert.doesNotMatch(files("src").map(read).join("\n"), /from "@\/components\/ui\/count-up"/);
+  const { ProblemCount } = loadComponent<{ ProblemCount: () => ReactNode }>("src/components/marketing/problem-count.tsx");
+  const html = renderToStaticMarkup(createElement(ProblemCount));
+  for (const count of ["41", "27"]) assert.match(html, new RegExp(`<span class="type-number text-text">${count}</span>`), count);
+  // "Asks 5 assistants every question", not "all of them"; the business is never in its own "Named instead" list.
+  const firstHour = read("src/components/marketing/first-hour.tsx");
+  assert.match(firstHour, /title: `Asks \$\{SNAPSHOT\.assistants\} assistants every question`/);
+  assert.doesNotMatch(firstHour, /all of them|\(you\)/);
+  const { FirstHour } = loadComponent<{ FirstHour: () => ReactNode }>("src/components/marketing/first-hour.tsx");
+  const steps = renderToStaticMarkup(createElement(FirstHour));
+  const namedInstead = steps.slice(steps.indexOf("Named instead"), steps.indexOf("Sources they cite"));
+  assert.ok(namedInstead.length > 0);
+  assert.doesNotMatch(namedInstead, /Kettlewood/, "only the businesses named instead of the sample business");
+  assert.equal(namedInstead.match(/class="hl-rival truncate"/g)?.length, 3);
+  assert.match(steps, /In about 15 minutes you have a snapshot/);
 });
 
 test("the honesty line is said where buyers decide: the FAQ, pricing, the method page and sign-up", () => {

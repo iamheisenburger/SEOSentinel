@@ -58,14 +58,14 @@ function displayPath(slug: string): string {
 
 const markdownComponents: Components = {
   h1: ({ children }) => (
-    <h1 className="mt-10 mb-4 text-2xl font-bold tracking-tight text-[#F7F8F8]">
+    <h1 className="mt-10 mb-4 text-2xl font-bold tracking-tight text-text">
       {children}
     </h1>
   ),
   h2: ({ children, id }) => (
     <h2
       id={id}
-      className="mt-8 mb-3 text-xl font-bold tracking-tight text-[#F7F8F8]"
+      className="mt-8 mb-3 text-xl font-bold tracking-tight text-text"
     >
       {children}
     </h2>
@@ -73,18 +73,18 @@ const markdownComponents: Components = {
   h3: ({ children, id }) => (
     <h3
       id={id}
-      className="mt-6 mb-2 text-lg font-semibold text-[#F7F8F8]"
+      className="mt-6 mb-2 text-lg font-semibold text-text"
     >
       {children}
     </h3>
   ),
   p: ({ children }) => (
-    <p className="mb-4 text-[#8A8F98] leading-relaxed text-[14px]">{children}</p>
+    <p className="mb-4 text-text-2 leading-relaxed text-[14px]">{children}</p>
   ),
   a: ({ href, children }) => (
     <a
       href={href}
-      className="text-[#0EA5E9] underline decoration-[#0EA5E9]/30 underline-offset-2 transition hover:text-[#38BDF8]"
+      className="text-text-2 underline decoration-you-line underline-offset-2 transition hover:text-text"
       target={href?.startsWith("http") ? "_blank" : undefined}
       rel={href?.startsWith("http") ? "noopener noreferrer" : undefined}
     >
@@ -92,23 +92,23 @@ const markdownComponents: Components = {
     </a>
   ),
   ul: ({ children }) => (
-    <ul className="mb-4 list-disc space-y-1.5 pl-6 text-[14px] text-[#8A8F98]">
+    <ul className="mb-4 list-disc space-y-1.5 pl-6 text-[14px] text-text-2">
       {children}
     </ul>
   ),
   ol: ({ children }) => (
-    <ol className="mb-4 list-decimal space-y-1.5 pl-6 text-[14px] text-[#8A8F98]">
+    <ol className="mb-4 list-decimal space-y-1.5 pl-6 text-[14px] text-text-2">
       {children}
     </ol>
   ),
   li: ({ children }) => <li className="leading-relaxed">{children}</li>,
   blockquote: ({ children }) => (
-    <blockquote className="my-5 border-l-2 border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.04] py-3 pl-4 pr-4 text-[14px] text-[#8A8F98] italic">
+    <blockquote className="my-5 border-l-2 border-border-strong bg-surface-2/50 py-3 pl-4 pr-4 text-[14px] text-text-2 italic">
       {children}
     </blockquote>
   ),
   strong: ({ children }) => (
-    <strong className="font-semibold text-[#F7F8F8]">{children}</strong>
+    <strong className="font-semibold text-text">{children}</strong>
   ),
   table: ({ children }) => (
     <div className="my-5 overflow-x-auto rounded-lg border border-white/[0.06]">
@@ -121,12 +121,12 @@ const markdownComponents: Components = {
     </thead>
   ),
   th: ({ children }) => (
-    <th className="px-4 py-2 text-left font-semibold text-[#F7F8F8]">
+    <th className="px-4 py-2 text-left font-semibold text-text">
       {children}
     </th>
   ),
   td: ({ children }) => (
-    <td className="border-t border-white/[0.04] px-4 py-2 text-[#8A8F98]">
+    <td className="border-t border-white/[0.04] px-4 py-2 text-text-2">
       {children}
     </td>
   ),
@@ -134,13 +134,13 @@ const markdownComponents: Components = {
     const isBlock = className?.includes("language-");
     if (isBlock) {
       return (
-        <code className="block overflow-x-auto rounded-lg bg-[#08090A] px-4 py-3 text-[13px] text-[#8A8F98] font-mono border border-white/[0.06]">
+        <code className="block overflow-x-auto rounded-lg bg-bg px-4 py-3 text-[13px] text-text-2 font-mono border border-white/[0.06]">
           {children}
         </code>
       );
     }
     return (
-      <code className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[13px] font-mono text-[#F7F8F8]">
+      <code className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[13px] font-mono text-text">
         {children}
       </code>
     );
@@ -355,7 +355,8 @@ export default function ArticleDetailPage() {
   }, [ambiguityReview]);
 
   // ── Hooks MUST be called before any conditional returns ──
-  const primaryColor = site?.brandPrimaryColor ?? "#0EA5E9";
+  // The preview mirrors the customer's page: their brand colour when set, otherwise the same neutral ink as the titles.
+  const primaryColor = site?.brandPrimaryColor ?? "#1a1a1a";
   const accentColor = site?.brandAccentColor ?? primaryColor;
   const brandFont = site?.brandFontFamily;
 
@@ -372,7 +373,7 @@ export default function ArticleDetailPage() {
   if (article === undefined) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-[#0EA5E9] border-t-transparent" />
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-text-3 border-t-transparent" />
       </div>
     );
   }
@@ -380,7 +381,7 @@ export default function ArticleDetailPage() {
   if (article === null) {
     return (
       <div className="py-20 text-center">
-        <p className="text-[#62666D] text-[13px]">Article not found.</p>
+        <p className="text-text-3 text-[13px]">Article not found.</p>
         <Button
           variant="secondary"
           size="sm"
@@ -583,7 +584,7 @@ export default function ArticleDetailPage() {
       <div>
         <Link
           href="/articles"
-          className="mb-3 inline-flex items-center gap-1.5 text-[12px] text-[#62666D] transition hover:text-[#F7F8F8]"
+          className="mb-3 inline-flex items-center gap-1.5 text-[12px] text-text-3 transition hover:text-text"
         >
           <ArrowLeft className="h-3 w-3" />
           Back to Articles
@@ -615,12 +616,12 @@ export default function ArticleDetailPage() {
                     Reject
                   </Button>
                   {approveHint && (
-                    <p className="basis-full text-xs text-[#8A8F98]">{approveHint}</p>
+                    <p className="basis-full text-xs text-text-2">{approveHint}</p>
                   )}
                 </>
               )}
               {article.status === "ready" && site?.publishMethod === "manual" && (
-                <p className="basis-full text-xs text-[#8A8F98]">Approved and ready. Use Copy HTML (or Copy MD) and paste it into a new post in your site&apos;s blog editor, with the title and search description shown on this page.</p>
+                <p className="basis-full text-xs text-text-2">Approved and ready. Use Copy HTML (or Copy MD) and paste it into a new post in your site&apos;s blog editor, with the title and search description shown on this page.</p>
               )}
               {article.status === "ready" && site?.publishMethod === "manual" && site.contentSetupRequestedAt && (
                 <PastedLiveCheck articleId={article._id} domain={site.domain} />
@@ -636,8 +637,8 @@ export default function ArticleDetailPage() {
                 >
                   Publish Now
                 </Button>
-                {manualPublicationBlocker(site) && <p className="text-xs text-[#8A8F98]">{manualPublicationBlocker(site)} <a href="/settings" className="underline">Open Settings</a></p>}
-                {editing && <p className="text-xs text-[#8A8F98]">Save your edits for review or cancel editing before publishing.</p>}
+                {manualPublicationBlocker(site) && <p className="text-xs text-text-2">{manualPublicationBlocker(site)} <a href="/settings" className="underline">Open Settings</a></p>}
+                {editing && <p className="text-xs text-text-2">Save your edits for review or cancel editing before publishing.</p>}
                 </div>
               )}
             </div>
@@ -682,14 +683,14 @@ export default function ArticleDetailPage() {
       </div>
 
       {linkStatus && (
-        <div className="rounded-lg bg-[#0EA5E9]/[0.08] px-4 py-2 text-[13px] text-[#38BDF8]">
+        <div className="rounded-lg bg-surface-2/50 px-4 py-2 text-[13px] text-text-2">
           {linkStatus === "Publication accepted. Pentra is checking the live page." && article.publicUrlStatus === "verified"
             ? "Published and verified live." : linkStatus}
         </div>
       )}
 
       {article.status === "published" && (
-        <div role="status" className="rounded-lg border border-[#2B3040] px-4 py-3 text-sm">
+        <div role="status" className="rounded-lg border border-border-strong px-4 py-3 text-sm">
           {article.publicUrlStatus === "verified" ? "Published and verified live."
             : article.publicUrlStatus === "failed" ? "Publication was accepted, but the live page could not be verified. Delivery needs attention."
             : "Publication was accepted. Live-page verification is pending."}
@@ -698,14 +699,14 @@ export default function ArticleDetailPage() {
       )}
 
       {ambiguityReview && (
-        <div className="rounded-xl border border-[#F59E0B]/30 bg-[#F59E0B]/[0.06] p-5">
+        <div className="rounded-xl border border-rival/30 bg-rival/[0.06] p-5">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-[#FBBF24]" />
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rival" />
             <div className="min-w-0 flex-1">
-              <h3 className="text-[14px] font-semibold text-[#FDE68A]">
+              <h3 className="text-[14px] font-semibold text-rival">
                 Review an unverified external delivery
               </h3>
-              <p className="mt-1 text-[12px] leading-relaxed text-[#D1A94A]">
+              <p className="mt-1 text-[12px] leading-relaxed text-rival">
                 Pentra cannot prove whether the provider applied this exact
                 delivery. It will not replay it or count it as a success. If
                 you abandon it, the immutable attempt audit remains stored and
@@ -716,20 +717,20 @@ export default function ArticleDetailPage() {
 
               <div className="mt-4 space-y-3">
                 {ambiguityReview.initial && (
-                  <div className="rounded-lg border border-[#F59E0B]/20 bg-black/10 p-3 text-[11px] text-[#D6B760]">
-                    <p className="font-semibold text-[#FDE68A]">
+                  <div className="rounded-lg border border-rival/20 bg-black/10 p-3 text-[11px] text-rival">
+                    <p className="font-semibold text-rival">
                       Initial publication · {ambiguityReview.initial.method ?? "provider"}
                     </p>
                     <p className="mt-1">
                       Attempted {formatDistanceToNow(new Date(ambiguityReview.initial.attemptedAt), { addSuffix: true })}
                     </p>
                     {ambiguityReview.initial.deliveryKey && (
-                      <p className="mt-1 break-all font-mono text-[10px] text-[#A98D46]">
+                      <p className="mt-1 break-all font-mono text-[10px] text-rival">
                         {ambiguityReview.initial.deliveryKey}
                       </p>
                     )}
                     {ambiguityReview.initial.detail && (
-                      <p className="mt-2 text-[#B89A50]">
+                      <p className="mt-2 text-rival">
                         {ambiguityReview.initial.detail}
                       </p>
                     )}
@@ -746,18 +747,18 @@ export default function ArticleDetailPage() {
                 )}
 
                 {ambiguityReview.revision && (
-                  <div className="rounded-lg border border-[#F59E0B]/20 bg-black/10 p-3 text-[11px] text-[#D6B760]">
-                    <p className="font-semibold text-[#FDE68A]">
+                  <div className="rounded-lg border border-rival/20 bg-black/10 p-3 text-[11px] text-rival">
+                    <p className="font-semibold text-rival">
                       {ambiguityReview.revision.revisionKind.replaceAll("_", " ")} revision · {ambiguityReview.revision.method}
                     </p>
                     <p className="mt-1">
                       Attempted {formatDistanceToNow(new Date(ambiguityReview.revision.attemptedAt), { addSuffix: true })} · {ambiguityReview.revision.status}
                     </p>
-                    <p className="mt-1 break-all font-mono text-[10px] text-[#A98D46]">
+                    <p className="mt-1 break-all font-mono text-[10px] text-rival">
                       {ambiguityReview.revision.revisionKey}
                     </p>
                     {ambiguityReview.revision.detail && (
-                      <p className="mt-2 text-[#B89A50]">
+                      <p className="mt-2 text-rival">
                         {ambiguityReview.revision.detail}
                       </p>
                     )}
@@ -774,16 +775,16 @@ export default function ArticleDetailPage() {
                 )}
               </div>
 
-              <label className="mt-4 block text-[11px] font-medium text-[#FDE68A]">
+              <label className="mt-4 block text-[11px] font-medium text-rival">
                 Type the exact confirmation to abandon without asserting success:
               </label>
-              <code className="mt-1 block break-all text-[10px] text-[#D6B760]">
+              <code className="mt-1 block break-all text-[10px] text-rival">
                 {REVIEWED_AMBIGUITY_CONFIRMATION}
               </code>
               <input
                 value={ambiguityConfirmation}
                 onChange={(event) => setAmbiguityConfirmation(event.target.value)}
-                className="mt-2 w-full rounded-lg border border-[#F59E0B]/20 bg-[#090A0F] px-3 py-2 text-[12px] text-[#F7F8F8] outline-none focus:border-[#F59E0B]/50"
+                className="mt-2 w-full rounded-lg border border-rival/20 bg-bg px-3 py-2 text-[12px] text-text outline-none focus:border-rival/50"
                 autoComplete="off"
                 spellCheck={false}
               />
@@ -842,34 +843,34 @@ export default function ArticleDetailPage() {
       {/* Meta bar */}
       <div className="flex flex-wrap items-center gap-2">
         {article.status === "revision" ? (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-[#8A8F98]" title="An earlier or retired version kept for your records. It is never published.">
-            <span className="h-1.5 w-1.5 rounded-full bg-[#62666D]" />
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-text-2" title="An earlier or retired version kept for your records. It is never published.">
+            <span className="h-1.5 w-1.5 rounded-full bg-text-4" />
             Earlier version
           </span>
         ) : (
           <StatusBadge status={article.status} />
         )}
-        <span className="inline-flex items-center gap-1 text-[11px] text-[#62666D]">
+        <span className="inline-flex items-center gap-1 text-[11px] text-text-3">
           <FileText className="h-3 w-3" />
           {wc.toLocaleString()} words
         </span>
-        <span className="text-[11px] text-white/[0.1]">·</span>
-        <span className="inline-flex items-center gap-1 text-[11px] text-[#62666D]">
+        <span className="text-[11px] text-border-strong">·</span>
+        <span className="inline-flex items-center gap-1 text-[11px] text-text-3">
           <Clock className="h-3 w-3" />
           {rt} min read
         </span>
-        <span className="text-[11px] text-white/[0.1]">·</span>
-        <span className="text-[11px] text-[#62666D]">
+        <span className="text-[11px] text-border-strong">·</span>
+        <span className="text-[11px] text-text-3">
           {formatDistanceToNow(article.createdAt, { addSuffix: true })}
         </span>
-        <span className="text-[11px] text-white/[0.1]">·</span>
-        <span className="text-[11px] text-[#62666D] font-mono">
+        <span className="text-[11px] text-border-strong">·</span>
+        <span className="text-[11px] text-text-3 font-mono">
           {displayPath(article.slug)}
         </span>
         {article.featuredImage && (
           <>
-            <span className="text-[11px] text-white/[0.1]">·</span>
-            <span className="inline-flex items-center gap-1 text-[11px] text-[#22C55E]">
+            <span className="text-[11px] text-border-strong">·</span>
+            <span className="inline-flex items-center gap-1 text-[11px] text-named">
               <ImageIcon className="h-3 w-3" />
               Hero image
             </span>
@@ -877,13 +878,13 @@ export default function ArticleDetailPage() {
         )}
         {(article as any).contentScore != null && (
           <>
-            <span className="text-[11px] text-white/[0.1]">·</span>
+            <span className="text-[11px] text-border-strong">·</span>
             <span className={`text-[11px] font-medium ${
               (article as any).contentScore >= 80
-                ? "text-[#22C55E]"
+                ? "text-named"
                 : (article as any).contentScore >= 60
-                  ? "text-[#F59E0B]"
-                  : "text-[#EF4444]"
+                  ? "text-rival"
+                  : "text-wrong"
             }`}>
               {(article as any).contentScore}/100 SEO score
             </span>
@@ -891,11 +892,11 @@ export default function ArticleDetailPage() {
         )}
         {(article as any).serpDifficulty && (
           <>
-            <span className="text-[11px] text-white/[0.1]">·</span>
+            <span className="text-[11px] text-border-strong">·</span>
             <span className={`text-[11px] font-medium ${
-              (article as any).serpDifficulty === "easy" ? "text-[#22C55E]"
-                : (article as any).serpDifficulty === "medium" ? "text-[#F59E0B]"
-                : "text-[#EF4444]"
+              (article as any).serpDifficulty === "easy" ? "text-named"
+                : (article as any).serpDifficulty === "medium" ? "text-rival"
+                : "text-wrong"
             }`}>
               {(article as any).serpDifficulty} competition
             </span>
@@ -903,8 +904,8 @@ export default function ArticleDetailPage() {
         )}
         {(article as any).lastRefreshedAt && (
           <>
-            <span className="text-[11px] text-white/[0.1]">·</span>
-            <span className="inline-flex items-center gap-1 text-[11px] text-[#22D3EE]">
+            <span className="text-[11px] text-border-strong">·</span>
+            <span className="inline-flex items-center gap-1 text-[11px] text-text-2">
               <RefreshCw className="h-3 w-3" />
               Refreshed {formatDistanceToNow(new Date((article as any).lastRefreshedAt), { addSuffix: true })}
               {(article as any).refreshCount > 1 ? ` (${(article as any).refreshCount}x)` : ""}
@@ -924,47 +925,47 @@ export default function ArticleDetailPage() {
           .find((window) => window.topQueries.length > 0);
         const topKeywords = queryWindow?.topQueries.slice(0, 5) ?? [];
         return (
-          <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
+          <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-5">
             <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between mb-4">
               <div className="flex items-center gap-2">
-                <BarChart3 className="h-4 w-4 text-[#0EA5E9]" />
-                <h3 className="text-[13px] font-semibold text-[#F7F8F8]">SEO Outcome Scorecard</h3>
+                <BarChart3 className="h-4 w-4 text-text-2" />
+                <h3 className="text-[13px] font-semibold text-text">SEO Outcome Scorecard</h3>
               </div>
-              <p className="text-[10px] text-[#62666D]">
+              <p className="text-[10px] text-text-3">
                 GSC data through {articleSeoScorecard.dataThrough ?? "not yet available"}
               </p>
             </div>
-            <p className="text-[11px] text-[#62666D] mb-4">
+            <p className="text-[11px] text-text-3 mb-4">
               Page totals are authoritative. Known non-brand metrics come only from visible query rows; hidden or anonymized query impressions remain unattributed and never drive autonomous ranking actions.
             </p>
             <div className="mb-4 grid gap-3 sm:grid-cols-3">
               <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
-                <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Google index</p>
+                <p className="text-[9px] uppercase tracking-wider text-text-3">Google index</p>
                 <p className={`mt-1 text-sm font-semibold ${
                   articleSeoScorecard.indexInspection.verdict === "PASS"
-                    ? "text-[#4ADE80]"
+                    ? "text-named"
                     : articleSeoScorecard.indexInspection.verdict
-                      ? "text-[#FBBF24]"
-                      : "text-[#8A8F98]"
+                      ? "text-rival"
+                      : "text-text-2"
                 }`}>
                   {articleSeoScorecard.indexInspection.verdict ?? "Awaiting inspection"}
                 </p>
               </div>
               <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
-                <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Coverage</p>
-                <p className="mt-1 text-sm font-semibold text-[#F7F8F8]">
+                <p className="text-[9px] uppercase tracking-wider text-text-3">Coverage</p>
+                <p className="mt-1 text-sm font-semibold text-text">
                   {articleSeoScorecard.indexInspection.coverageState ?? "Not reported"}
                 </p>
               </div>
               <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
-                <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Page fetch</p>
-                <p className="mt-1 text-sm font-semibold text-[#F7F8F8]">
+                <p className="text-[9px] uppercase tracking-wider text-text-3">Page fetch</p>
+                <p className="mt-1 text-sm font-semibold text-text">
                   {articleSeoScorecard.indexInspection.pageFetchState ?? "Not reported"}
                 </p>
               </div>
             </div>
             {articleSeoScorecard.indexInspection.error && (
-              <p className="mb-4 rounded-lg border border-[#EF4444]/15 bg-[#EF4444]/5 px-3 py-2 text-[10px] text-[#F87171]">
+              <p className="mb-4 rounded-lg border border-wrong/15 bg-wrong/5 px-3 py-2 text-[10px] text-wrong">
                 Index inspection failed: {articleSeoScorecard.indexInspection.error}
               </p>
             )}
@@ -972,13 +973,13 @@ export default function ArticleDetailPage() {
               {articleSeoScorecard.windows.map((window) => (
                 <div key={window.days} className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <span className="text-[11px] font-semibold text-[#F7F8F8]">Day {window.days}</span>
+                    <span className="text-[11px] font-semibold text-text">Day {window.days}</span>
                     <span className={`rounded-full px-2 py-0.5 text-[9px] font-medium ${
                       window.status === "measured"
-                        ? "bg-[#22C55E]/10 text-[#4ADE80]"
+                        ? "bg-named/10 text-named"
                         : window.status === "no_search_visibility"
-                          ? "bg-[#EF4444]/10 text-[#F87171]"
-                          : "bg-[#F59E0B]/10 text-[#FBBF24]"
+                          ? "bg-wrong/10 text-wrong"
+                          : "bg-rival/10 text-rival"
                     }`}>
                       {window.status === "measured"
                         ? "Measured"
@@ -989,35 +990,35 @@ export default function ArticleDetailPage() {
                             : "Awaiting data"}
                     </span>
                   </div>
-                  <p className="text-[10px] text-[#62666D] mb-2">Due {window.expectedEndDate}</p>
+                  <p className="text-[10px] text-text-3 mb-2">Due {window.expectedEndDate}</p>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Total page imp.</p>
-                      <p className="text-base font-bold text-[#F7F8F8]">{window.impressions.toLocaleString()}</p>
+                      <p className="text-[9px] uppercase tracking-wider text-text-3">Total page imp.</p>
+                      <p className="text-base font-bold text-text">{window.impressions.toLocaleString()}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Known non-brand imp.</p>
-                      <p className="text-base font-bold text-[#F7F8F8]">{window.nonBrandedImpressions.toLocaleString()}</p>
+                      <p className="text-[9px] uppercase tracking-wider text-text-3">Known non-brand imp.</p>
+                      <p className="text-base font-bold text-text">{window.nonBrandedImpressions.toLocaleString()}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Hidden-query imp.</p>
-                      <p className="text-sm font-semibold text-[#F7F8F8]">{window.unattributedImpressions.toLocaleString()}</p>
+                      <p className="text-[9px] uppercase tracking-wider text-text-3">Hidden-query imp.</p>
+                      <p className="text-sm font-semibold text-text">{window.unattributedImpressions.toLocaleString()}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Total clicks</p>
-                      <p className="text-sm font-semibold text-[#F7F8F8]">{window.clicks}</p>
+                      <p className="text-[9px] uppercase tracking-wider text-text-3">Total clicks</p>
+                      <p className="text-sm font-semibold text-text">{window.clicks}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Total avg position</p>
-                      <p className="text-sm font-semibold text-[#F7F8F8]">{window.position ?? "—"}</p>
+                      <p className="text-[9px] uppercase tracking-wider text-text-3">Total avg position</p>
+                      <p className="text-sm font-semibold text-text">{window.position ?? "—"}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] uppercase tracking-wider text-[#62666D]">Known non-brand pos.</p>
-                      <p className="text-sm font-semibold text-[#F7F8F8]">{window.nonBrandedPosition ?? "—"}</p>
+                      <p className="text-[9px] uppercase tracking-wider text-text-3">Known non-brand pos.</p>
+                      <p className="text-sm font-semibold text-text">{window.nonBrandedPosition ?? "—"}</p>
                     </div>
                   </div>
                   <p className={`mt-3 border-t border-white/[0.04] pt-2 text-[9px] ${
-                    window.queryCoverageComplete ? "text-[#4ADE80]" : "text-[#FBBF24]"
+                    window.queryCoverageComplete ? "text-named" : "text-rival"
                   }`}>
                     {window.queryCoverageComplete
                       ? `Query detail complete · ${window.queryCount} known queries`
@@ -1028,15 +1029,15 @@ export default function ArticleDetailPage() {
             </div>
             {topKeywords.length > 0 && (
               <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-[#62666D] mb-2">Known query detail</p>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-text-3 mb-2">Known query detail</p>
                 <div className="flex flex-col gap-1">
                   {topKeywords.map((q, i) => (
                     <div key={i} className="flex items-center justify-between rounded-md bg-white/[0.02] px-3 py-1.5">
-                      <span className="text-[12px] text-[#F7F8F8] truncate">{q.query}</span>
-                      <div className="flex items-center gap-3 shrink-0 text-[10px] text-[#62666D]">
+                      <span className="text-[12px] text-text truncate">{q.query}</span>
+                      <div className="flex items-center gap-3 shrink-0 text-[10px] text-text-3">
                         <span>{q.clicks} clicks</span>
                         <span>{q.impressions} imp</span>
-                        <span className={`font-mono ${q.position <= 3 ? "text-[#22C55E]" : q.position <= 10 ? "text-[#0EA5E9]" : q.position <= 20 ? "text-[#F59E0B]" : "text-[#62666D]"}`}>
+                        <span className={`font-mono ${q.position <= 3 ? "text-named" : q.position <= 10 ? "text-text-2" : q.position <= 20 ? "text-rival" : "text-text-3"}`}>
                           pos {q.position}
                         </span>
                       </div>
@@ -1046,7 +1047,7 @@ export default function ArticleDetailPage() {
               </div>
             )}
             {topKeywords.length === 0 && (
-              <p className="rounded-lg bg-white/[0.02] px-3 py-2 text-[11px] text-[#62666D]">
+              <p className="rounded-lg bg-white/[0.02] px-3 py-2 text-[11px] text-text-3">
                 {evidenceWindow && evidenceWindow.impressions > 0
                   ? `Google reports ${evidenceWindow.impressions.toLocaleString()} total page impressions${evidenceWindow.position !== null ? ` at an overall average position of ${evidenceWindow.position}` : ""}. ${evidenceWindow.unattributedImpressions.toLocaleString()} impressions have no visible query attribution, so Pentra cannot label them branded or non-branded and will not use the overall position for an autonomous ranking action.`
                   : "No page-level Search Console impressions have been recorded in the most mature available window. Pentra will only treat this as no visibility after the window and its daily page totals are complete."}
@@ -1060,31 +1061,31 @@ export default function ArticleDetailPage() {
       {((article as any).decayStatus === "declining" || (article as any).decayStatus === "warning") && (
         <div className={`rounded-xl border px-5 py-4 ${
           (article as any).decayStatus === "declining"
-            ? "border-[#EF4444]/[0.2] bg-[#EF4444]/[0.04]"
-            : "border-[#F59E0B]/[0.2] bg-[#F59E0B]/[0.04]"
+            ? "border-wrong/[0.2] bg-wrong/[0.04]"
+            : "border-rival/[0.2] bg-rival/[0.04]"
         }`}>
           <div className="flex items-start gap-3">
             <TrendingDown className={`h-5 w-5 mt-0.5 shrink-0 ${
-              (article as any).decayStatus === "declining" ? "text-[#EF4444]" : "text-[#F59E0B]"
+              (article as any).decayStatus === "declining" ? "text-wrong" : "text-rival"
             }`} />
             <div className="flex-1 min-w-0">
               <p className={`text-[13px] font-semibold ${
-                (article as any).decayStatus === "declining" ? "text-[#F87171]" : "text-[#FBBF24]"
+                (article as any).decayStatus === "declining" ? "text-wrong" : "text-rival"
               }`}>
                 {(article as any).decayStatus === "declining" ? "Rankings Declining" : "Rankings Warning"}
               </p>
               {(article as any).decayReason && (
-                <p className="text-[12px] text-[#8A8F98] mt-1">{(article as any).decayReason}</p>
+                <p className="text-[12px] text-text-2 mt-1">{(article as any).decayReason}</p>
               )}
               {(article as any).positionHistory && (article as any).positionHistory.length >= 2 && (
-                <div className="flex items-center gap-3 mt-2 text-[11px] text-[#62666D]">
+                <div className="flex items-center gap-3 mt-2 text-[11px] text-text-3">
                   <span>Position: {(article as any).positionHistory[0].position} → {(article as any).positionHistory[(article as any).positionHistory.length - 1].position}</span>
                   <span>·</span>
                   <span>Clicks: {(article as any).positionHistory[0].clicks} → {(article as any).positionHistory[(article as any).positionHistory.length - 1].clicks}</span>
                 </div>
               )}
             </div>
-            <div className="max-w-[240px] rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[11px] leading-relaxed text-[#8A8F98]">
+            <div className="max-w-[240px] rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[11px] leading-relaxed text-text-2">
               {article.status === "published"
                 ? "Published content is protected. Pentra records the recovery action, but will not overwrite the live page without a newly audited revision."
                 : "Direct model refresh is disabled. Edit the draft, then use the audited review and publication workflow so quota, evidence, and delivery gates remain intact."}
@@ -1095,36 +1096,36 @@ export default function ArticleDetailPage() {
 
       {/* Refreshing status */}
       {(article as any).decayStatus === "refreshing" && (
-        <div className="rounded-xl border border-[#0EA5E9]/[0.2] bg-[#0EA5E9]/[0.04] px-5 py-4">
+        <div className="rounded-xl border border-border bg-surface-2/50 px-5 py-4">
           <div className="flex items-center gap-3">
-            <RefreshCw className="h-5 w-5 text-[#0EA5E9] animate-spin" />
+            <RefreshCw className="h-5 w-5 text-text-2 animate-spin" />
             <div>
-              <p className="text-[13px] font-semibold text-[#38BDF8]">Refreshing Article</p>
-              <p className="text-[12px] text-[#8A8F98] mt-0.5">Re-researching and rewriting with latest data. This may take a few minutes.</p>
+              <p className="text-[13px] font-semibold text-text-2">Refreshing Article</p>
+              <p className="text-[12px] text-text-2 mt-0.5">Re-researching and rewriting with latest data. This may take a few minutes.</p>
             </div>
           </div>
         </div>
       )}
 
       {factCheckLine && (
-        <p role="note" aria-label="Fact check" className="flex items-center gap-2 text-[13px] text-[#8A8F98]">
-          <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-[#0EA5E9]" />{factCheckLine}
+        <p role="note" aria-label="Fact check" className="flex items-center gap-2 text-[13px] text-text-2">
+          <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-text-2" />{factCheckLine}
         </p>
       )}
 
       {/* P256 (Oct 30 2026): a draft Pentra handed back reads as a draft: one plain line on what backs it and what isn't
           sourced, never a score or a check's name. Only an objective problem asks for a fix before Approve. */}
       {handedBack && (unsourcedNoted || blockingGateIssues.length > 0 || planNotes.length > 0) && (
-        <section role="note" aria-label="Before you publish" className="rounded-lg border border-[#F59E0B]/20 bg-[#F59E0B]/[0.05] p-3 space-y-2 text-sm">
-          <p className="font-medium text-[#F7F8F8]">Before you publish</p>
-          {unsourcedNoted && <p className="text-[#F7F8F8]">{sourcingLine(article.sources ?? [], unsourced.length)}</p>}
-          {unsourced.length > 0 && <p className="text-[#8A8F98]">They&apos;re highlighted in the draft below.</p>}
-          {unsourced.length > 0 && <details className="text-[#8A8F98]"><summary className="cursor-pointer">Show the statements to check</summary>
+        <section role="note" aria-label="Before you publish" className="rounded-lg border border-rival/20 bg-rival/[0.05] p-3 space-y-2 text-sm">
+          <p className="font-medium text-text">Before you publish</p>
+          {unsourcedNoted && <p className="text-text">{sourcingLine(article.sources ?? [], unsourced.length)}</p>}
+          {unsourced.length > 0 && <p className="text-text-2">They&apos;re highlighted in the draft below.</p>}
+          {unsourced.length > 0 && <details className="text-text-2"><summary className="cursor-pointer">Show the statements to check</summary>
             <ul className="mt-1 list-disc space-y-1 pl-5">{unsourced.slice(0, 12).map((claim, index) => <li key={index}>{claim}</li>)}</ul></details>}
-          {planNotes.length > 0 && <ul className="list-disc space-y-1 pl-5 text-[#F7F8F8]">{plainReviewNotes(planNotes).slice(0, 6).map((note, index) => <li key={index}>{note}</li>)}</ul>}
+          {planNotes.length > 0 && <ul className="list-disc space-y-1 pl-5 text-text">{plainReviewNotes(planNotes).slice(0, 6).map((note, index) => <li key={index}>{note}</li>)}</ul>}
           {blockingGateIssues.length > 0 && <>
-            <p className="font-medium text-[#F59E0B]">Fix this first, in Edit this draft below. Pentra checks the new version.</p>
-            <ul className="list-disc space-y-1 pl-5 text-[#F7F8F8]">{plainReviewNotes(blockingGateIssues).slice(0, 8).map((note, index) => <li key={index}>{note}</li>)}</ul>
+            <p className="font-medium text-rival">Fix this first, in Edit this draft below. Pentra checks the new version.</p>
+            <ul className="list-disc space-y-1 pl-5 text-text">{plainReviewNotes(blockingGateIssues).slice(0, 8).map((note, index) => <li key={index}>{note}</li>)}</ul>
           </>}
         </section>
       )}
@@ -1132,21 +1133,21 @@ export default function ArticleDetailPage() {
       {/* View mode toggle */}
       {contentReadiness?.ownerDraft.latest?.articleId === articleId &&
         ["ready", "failed"].includes(contentReadiness.ownerDraft.latest.stage) && article.status !== "published" && (
-        <section aria-label="Edit draft" className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-[#F7F8F8]">Edit this draft</h2>
-          <p className="text-sm text-[#8A8F98]">Edits create a new version for review; the original stays in your history. Review may correct unsupported claims. Nothing publishes without your approval.</p>
+        <section aria-label="Edit draft" className="rounded-xl border border-white/[0.06] bg-surface-1 p-5 space-y-3">
+          <h2 className="text-sm font-semibold text-text">Edit this draft</h2>
+          <p className="text-sm text-text-2">Edits create a new version for review; the original stays in your history. Review may correct unsupported claims. Nothing publishes without your approval.</p>
           {editing ? <>
-            {([['title', 'Article title', 200], ['metaTitle', 'Search title', 60], ['metaDescription', 'Search description', 155]] as const).map(([field, label, limit]) => <label key={field} className="block text-sm text-[#F7F8F8]">{label}
+            {([['title', 'Article title', 200], ['metaTitle', 'Search title', 60], ['metaDescription', 'Search description', 155]] as const).map(([field, label, limit]) => <label key={field} className="block text-sm text-text">{label}
               <input aria-label={label} value={editing[field]} maxLength={limit} disabled={editBusy}
                 onChange={event => { setEditing({ ...editing, [field]: event.target.value, requestKey: crypto.randomUUID() }); setEditError(null); }}
-                className="mt-1 block w-full rounded-lg border border-white/10 bg-[#08090A] p-3" />
+                className="mt-1 block w-full rounded-lg border border-white/10 bg-bg p-3" />
             </label>)}
-            <p className="text-xs text-[#8A8F98]">Use an accurate search description of 100–155 characters. Title and description changes are reviewed together with the article.</p>
-            <label htmlFor="draft-markdown" className="block text-sm text-[#F7F8F8]">Article Markdown</label>
+            <p className="text-xs text-text-2">Use an accurate search description of 100–155 characters. Title and description changes are reviewed together with the article.</p>
+            <label htmlFor="draft-markdown" className="block text-sm text-text">Article Markdown</label>
             <textarea id="draft-markdown" value={editing.markdown} disabled={editBusy} maxLength={100000}
               onChange={event => { setEditing({ ...editing, markdown: event.target.value, requestKey: crypto.randomUUID() }); setEditError(null); }}
-              className="min-h-96 w-full rounded-lg border border-white/10 bg-[#08090A] p-4 font-mono text-sm text-[#F7F8F8]" />
-            <p className="text-sm text-[#8A8F98]">{contentReadiness.ownerDraft.maximumMicroUsd === null ? "Review is not available right now. Try again later. "
+              className="min-h-96 w-full rounded-lg border border-white/10 bg-bg p-4 font-mono text-sm text-text" />
+            <p className="text-sm text-text-2">{contentReadiness.ownerDraft.maximumMicroUsd === null ? "Review is not available right now. Try again later. "
               : contentReadiness.ownerDraft.allowance ? "Reviewing your edits is free and does not use an article from your monthly allowance. " : ""}Your edited version is saved as a new draft with its own web address; the original stays in your history.</p>
             <div className="flex gap-2">
               <Button disabled={editBusy || !editing.markdown.trim() || !editing.title.trim() || !editing.metaTitle.trim() || editing.metaDescription.trim().length < 100 ||
@@ -1176,8 +1177,8 @@ export default function ArticleDetailPage() {
           onClick={() => setViewMode("editor")}
           className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition ${
             viewMode === "editor"
-              ? "bg-white/[0.08] text-[#F7F8F8]"
-              : "text-[#62666D] hover:text-[#8A8F98]"
+              ? "bg-white/[0.08] text-text"
+              : "text-text-3 hover:text-text-2"
           }`}
         >
           <Code className="h-3 w-3" />
@@ -1187,8 +1188,8 @@ export default function ArticleDetailPage() {
           onClick={() => setViewMode("preview")}
           className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition ${
             viewMode === "preview"
-              ? "bg-white/[0.08] text-[#F7F8F8]"
-              : "text-[#62666D] hover:text-[#8A8F98]"
+              ? "bg-white/[0.08] text-text"
+              : "text-text-3 hover:text-text-2"
           }`}
         >
           <Eye className="h-3 w-3" />
@@ -1198,7 +1199,7 @@ export default function ArticleDetailPage() {
 
       {/* Article Content */}
       {viewMode === "editor" ? (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-6 sm:p-8">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-6 sm:p-8">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={[rehypeSlug, rehypeRaw]}
@@ -1253,31 +1254,31 @@ export default function ArticleDetailPage() {
 
       {/* Schema Markup Preview */}
       {schemas.length > 0 && (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11]">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1">
           <button
             onClick={() => setSchemaOpen(!schemaOpen)}
             className="flex items-center gap-2 w-full px-5 py-3.5 text-left hover:bg-white/[0.02] transition"
           >
             {schemaOpen ? (
-              <ChevronDown className="h-3.5 w-3.5 text-[#62666D]" />
+              <ChevronDown className="h-3.5 w-3.5 text-text-3" />
             ) : (
-              <ChevronRight className="h-3.5 w-3.5 text-[#62666D]" />
+              <ChevronRight className="h-3.5 w-3.5 text-text-3" />
             )}
-            <Code2 className="h-3.5 w-3.5 text-[#0EA5E9]" />
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-[#62666D]">
+            <Code2 className="h-3.5 w-3.5 text-text-2" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-text-3">
               Schema Markup
             </span>
             <div className="ml-auto flex items-center gap-1.5">
-              <span className="rounded bg-[#0EA5E9]/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-[#38BDF8]">
+              <span className="rounded bg-surface-2/50 px-1.5 py-0.5 text-[10px] font-medium text-text-2">
                 Article
               </span>
               {faqCount > 0 && (
-                <span className="rounded bg-[#22C55E]/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-[#4ADE80]">
+                <span className="rounded bg-named/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-named">
                   FAQ ({faqCount})
                 </span>
               )}
               {hasHowTo && (
-                <span className="rounded bg-[#F59E0B]/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-[#FBBF24]">
+                <span className="rounded bg-rival/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-rival">
                   HowTo
                 </span>
               )}
@@ -1286,7 +1287,7 @@ export default function ArticleDetailPage() {
           {schemaOpen && (
             <div className="border-t border-white/[0.04] px-5 py-4">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-[11px] text-[#62666D]">
+                <p className="text-[11px] text-text-3">
                   Structured data for this article. Your site&apos;s blog template decides which structured data appears on the page; if yours doesn&apos;t add it, copy this into the article&apos;s page.
                 </p>
                 <button
@@ -1298,13 +1299,13 @@ export default function ArticleDetailPage() {
                     setLinkStatus("Schema markup copied.");
                     setTimeout(() => setLinkStatus(null), 2000);
                   }}
-                  className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] px-2 py-1 text-[10px] text-[#8A8F98] hover:bg-white/[0.08] transition"
+                  className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] px-2 py-1 text-[10px] text-text-2 hover:bg-white/[0.08] transition"
                 >
                   <Copy className="h-2.5 w-2.5" />
                   Copy
                 </button>
               </div>
-              <pre className="overflow-x-auto rounded-lg bg-[#08090A] border border-white/[0.06] p-4 text-[12px] text-[#8A8F98] font-mono leading-relaxed max-h-[400px] overflow-y-auto">
+              <pre className="overflow-x-auto rounded-lg bg-bg border border-white/[0.06] p-4 text-[12px] text-text-2 font-mono leading-relaxed max-h-[400px] overflow-y-auto">
                 {schemas.map((s) => JSON.stringify(s, null, 2)).join("\n\n")}
               </pre>
             </div>
@@ -1314,8 +1315,8 @@ export default function ArticleDetailPage() {
 
       {/* Sources */}
       {article.sources && article.sources.length > 0 && (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
-          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#62666D]">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-5">
+          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-3">
             Sources
           </h3>
           <ul className="space-y-1.5">
@@ -1325,7 +1326,7 @@ export default function ArticleDetailPage() {
                   href={source.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-[13px] text-[#0EA5E9] underline decoration-[#0EA5E9]/30 underline-offset-2 hover:text-[#38BDF8]"
+                  className="inline-flex items-center gap-1.5 text-[13px] text-text-2 underline decoration-you-line underline-offset-2 hover:text-text"
                 >
                   <ExternalLink className="h-3 w-3" />
                   {source.title || source.url}
@@ -1338,17 +1339,17 @@ export default function ArticleDetailPage() {
 
       {/* Internal Links */}
       {article.internalLinks && article.internalLinks.length > 0 && (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
-          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#62666D]">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-5">
+          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-3">
             Internal Links
           </h3>
           <ul className="space-y-1.5">
             {article.internalLinks.map((link, i) => (
               <li key={i} className="flex items-center gap-2 text-[13px]">
-                <Link2 className="h-3 w-3 text-[#62666D]" />
-                <span className="text-[#F7F8F8]">{link.anchor}</span>
-                <span className="text-[#62666D]">→</span>
-                <span className="font-mono text-[#0EA5E9]">{link.href}</span>
+                <Link2 className="h-3 w-3 text-text-3" />
+                <span className="text-text">{link.anchor}</span>
+                <span className="text-text-3">→</span>
+                <span className="font-mono text-text-2">{link.href}</span>
               </li>
             ))}
           </ul>

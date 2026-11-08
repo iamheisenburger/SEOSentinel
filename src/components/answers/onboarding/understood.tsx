@@ -5,11 +5,12 @@ import { ArrowRight, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea, fieldStyles } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { InlineError, LiveDot } from "@/components/answers/ui";
+import { FitDomain, InlineError, LiveDot } from "@/components/answers/ui";
 import { useAnswersActions, useNow } from "@/lib/answers/backend";
 import { COUNTRY_OPTIONS, elapsed } from "@/lib/answers/format";
 import type { Competitor, SetupState } from "@/lib/answers/types";
-import { SNAPSHOT } from "@/lib/product-facts";
+import { SNAPSHOT, TIMING } from "@/lib/product-facts";
+import { placeFrom, updateBusinessWithPlace } from "@/lib/answers/update-business";
 import { userErrorMessage } from "@/lib/user-error";
 import { cx } from "@/lib/cx";
 
@@ -36,8 +37,8 @@ export function Understood({ state, reading }: { state: SetupState; reading: boo
   return (
     <section aria-labelledby="understood-title" className="mx-auto max-w-[760px] px-[var(--gutter)] py-12 sm:py-16">
       <p className="text-[14px] font-medium text-text-3">Free snapshot · step 3 of 5</p>
-      <h1 id="understood-title" className="type-h1 mt-3 text-text [overflow-wrap:anywhere]">
-        {reading ? <>Reading {state.domain}</> : "Here’s what we understood"}
+      <h1 id="understood-title" className="type-h1 @container mt-3 text-text">
+        {reading ? <>Reading{" "}<FitDomain domain={state.domain} className="mt-1" /></> : "Here’s what we understood"}
       </h1>
       <p className="type-lead mt-4">
         {reading
@@ -60,7 +61,7 @@ function ReadingPanel() {
         <span className="ml-auto hidden text-[13px] text-text-3 sm:inline">Usually 20 to 40 seconds</span>
       </div>
       <div className="divide-y divide-border">
-        {["Business name", "What it sells", "Who buys it", "What it offers", "Market", "Competitors"].map((label, i) => (
+        {["Business name", "What it sells", "Who buys it", "What it offers", "Market", "City or area", "Competitors"].map((label, i) => (
           <div key={label} className="grid grid-cols-1 gap-2 px-5 py-4 sm:grid-cols-[180px_minmax(0,1fr)] sm:gap-6">
             <span className="text-[13px] font-medium text-text-3">{label}</span>
             <Skeleton className={cx("h-5", i % 2 ? "w-3/4" : "w-1/2")} />
@@ -117,6 +118,8 @@ function UnderstoodForm({ state }: { state: SetupState }) {
   const [buyers, setBuyers] = useState(state.buyers);
   const [offerings, setOfferings] = useState<string[]>(state.offerings);
   const [country, setCountry] = useState(state.country ?? "US");
+  // Filled in only when the read found a local business; an empty field means "not local".
+  const [location, setLocation] = useState(state.local ? state.location ?? "" : "");
   const [competitors, setCompetitors] = useState<Competitor[]>(state.competitors.slice(0, MAX_COMPETITORS));
   const [touched, setTouched] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -145,7 +148,7 @@ function UnderstoodForm({ state }: { state: SetupState }) {
     setSaving(true);
     setError(null);
     try {
-      await actions.updateBusiness({ siteId: state.siteId, name, sells, buyers, offerings });
+      await updateBusinessWithPlace(actions.updateBusiness, { siteId: state.siteId, name, sells, buyers, offerings }, placeFrom(location));
       await actions.confirmSetup({ siteId: state.siteId, name, competitors, country });
     } catch (e) {
       setError(userErrorMessage(e, "Pentra couldn't save this. Check the fields and try again."));
@@ -184,12 +187,12 @@ function UnderstoodForm({ state }: { state: SetupState }) {
             </div>
           </Row>
           <Row label="Market" hint="Assistants are asked from this country." htmlFor="biz-country">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
-              <select id="biz-country" value={country} onChange={(e) => setCountry(e.target.value)} className={cx(fieldStyles, "select-field h-10 sm:w-64")}>
-                {COUNTRY_OPTIONS.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
-              </select>
-              {state.local && state.location && <p className="text-[13px] leading-5 text-text-3">Serves {state.location} in person</p>}
-            </div>
+            <select id="biz-country" value={country} onChange={(e) => setCountry(e.target.value)} className={cx(fieldStyles, "select-field h-10 sm:w-64")}>
+              {COUNTRY_OPTIONS.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
+            </select>
+          </Row>
+          <Row label="City or area" hint="If you serve customers in person. Pentra asks what buyers there ask; leave it empty if you sell anywhere." htmlFor="biz-location">
+            <Input id="biz-location" value={location} onChange={(e) => setLocation(e.target.value)} maxLength={80} autoComplete="off" placeholder="Like Austin, TX" className="sm:w-64" />
           </Row>
           <Row label="Competitors" hint="Wrong ones would skew every count. Remove any that aren't, add the ones buyers compare you with." htmlFor="biz-rival-add">
             <div className="flex flex-col gap-2.5">
@@ -204,7 +207,7 @@ function UnderstoodForm({ state }: { state: SetupState }) {
               ) : (
                 <p className="text-[13px] leading-5 text-text-3">None yet. Add the businesses your buyers compare you with.</p>
               )}
-              <AddField id="biz-rival-add" placeholder="Name or website, like cedarrow.com" onAdd={addCompetitor}
+              <AddField id="biz-rival-add" placeholder="Name or website" onAdd={addCompetitor}
                 disabled={competitors.length >= MAX_COMPETITORS} buttonLabel="Add" />
               {competitors.length >= MAX_COMPETITORS && <p className="text-[12px] text-text-3">{MAX_COMPETITORS} at most. Remove one to add another.</p>}
             </div>
@@ -216,7 +219,7 @@ function UnderstoodForm({ state }: { state: SetupState }) {
         <Button type="submit" size="lg" loading={saving} loadingLabel="Starting…" iconRight={<ArrowRight className="h-4 w-4" strokeWidth={1.5} />} className="w-full sm:w-auto">
           Looks right. Ask the assistants
         </Button>
-        <p className="text-[13px] leading-5 text-text-3">First answers in minutes; the full snapshot in about an hour. Safe to close the tab.</p>
+        <p className="text-[13px] leading-5 text-text-3">{TIMING.line} Safe to close the tab.</p>
       </div>
     </form>
   );

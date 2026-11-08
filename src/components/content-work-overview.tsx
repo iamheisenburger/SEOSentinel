@@ -28,9 +28,9 @@ export const friendlyTime = (value: number, zone = viewerZone()) =>
 export function viewerZone() {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; }
 }
-const CARD = "rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5 space-y-3";
-const H2 = "text-[15px] font-semibold text-[#F7F8F8]";
-const BODY = "text-[14px] leading-relaxed text-[#8A8F98]";
+const CARD = "rounded-xl border border-white/[0.06] bg-surface-1 p-5 space-y-3";
+const H2 = "text-[15px] font-semibold text-text";
+const BODY = "text-[14px] leading-relaxed text-text-2";
 
 /** P189 (Oct 25 2026): a site that starts on Review first got no article until its
  * owner found the Articles page and asked for one; the first real signups stopped
@@ -49,9 +49,9 @@ function FirstDraft({ siteId, reviewToken, maximumMicroUsd }: { siteId: Id<"site
     } finally { setBusy(false); }
   };
   return <div className="space-y-2">
-    <p className={BODY}>Pentra writes each article from your confirmed business facts; you read it, then publish it from <Link className="text-[#0EA5E9] hover:underline" href="/articles">Articles</Link>. Nothing publishes automatically.</p>
+    <p className={BODY}>Pentra writes each article from your confirmed business facts; you read it, then publish it from <Link className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you" href="/articles">Articles</Link>. Nothing publishes automatically.</p>
     <button type="button" disabled={busy} onClick={write}
-      className="rounded-lg bg-[#0EA5E9] px-3.5 py-2 text-[14px] font-medium text-white transition hover:bg-[#0EA5E9]/90 disabled:opacity-60">
+      className="rounded-control bg-action px-3.5 py-2 text-[14px] font-semibold text-on-action transition hover:bg-action-hover disabled:opacity-60">
       {busy ? "Starting…" : "Write my first article"}</button>
     {message && <p role="status" className={BODY}>{message}</p>}
   </div>;
@@ -63,9 +63,9 @@ const OPEN_DRAFT_STAGES = ["prepare", "review", "review_failed", "publish", "ver
 function LatestDraft({ latest }: { latest: { articleId?: string | null; title?: string | null; readable?: boolean; approved?: boolean; issue?: string | null } }) {
   const href = latest.readable && latest.articleId ? `/articles/${latest.articleId}` : null;
   return <div className="space-y-1 text-[14px]">
-    <p className="text-[#F7F8F8]">{href ? <Link className="hover:text-[#0EA5E9]" href={href}>{latest.title ?? "Your draft"}</Link> : latest.title ?? "Your draft"}</p>
-    <p className="text-[12px] text-[#8A8F98]">{latest.issue}{href && <> · <Link className="text-[#0EA5E9] hover:underline" href={href}>{latest.approved ? "Open it" : "Read it now"}</Link></>}</p>
-    <p className={BODY}>Request more drafts from <Link className="text-[#0EA5E9] hover:underline" href="/articles">Articles</Link>. Nothing publishes until you approve it.</p>
+    <p className="text-text">{href ? <Link className="hover:underline hover:decoration-you underline-offset-[3px]" href={href}>{latest.title ?? "Your draft"}</Link> : latest.title ?? "Your draft"}</p>
+    <p className="text-[12px] text-text-2">{latest.issue}{href && <> · <Link className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you" href={href}>{latest.approved ? "Open it" : "Read it now"}</Link></>}</p>
+    <p className={BODY}>Request more drafts from <Link className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you" href="/articles">Articles</Link>. Nothing publishes until you approve it.</p>
   </div>;
 }
 
@@ -93,17 +93,17 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
   const planPerMonth = state.plan?.articlesPerMonth ?? 0;
   const quotaUsed = Boolean(plain && planPerMonth && (state.results?.planUsedThisMonth ?? 0) >= planPerMonth);
   const heldBack = plain ? state.work.filter(w => w.parked && w.articleId && !w.retiredAt && !w.superseded).slice(0, 3) : [];
-  const tone = delivery.status === "failed" || delivery.status === "changed" ? "bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/20"
-    : delivery.status === "paused" ? "bg-white/[0.04] text-[#8A8F98] border-white/10" : "bg-[#22C55E]/10 text-[#22C55E] border-[#22C55E]/20";
+  const tone = delivery.status === "failed" || delivery.status === "changed" ? "bg-rival/10 text-rival border-rival/20"
+    : delivery.status === "paused" ? "bg-white/[0.04] text-text-2 border-white/10" : "bg-named/10 text-named border-named/20";
   return <div className="space-y-5" aria-label="Content service overview">
     <header className="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight text-[#F7F8F8]">Pentra for {state.destination.domain}</h1>
-        <p className="mt-1 text-[13px] text-[#8A8F98]">{state.profile.name}</p>
+        <h1 className="text-xl font-semibold tracking-tight text-text">Pentra for {state.destination.domain}</h1>
+        <p className="mt-1 text-[13px] text-text-2">{state.profile.name}</p>
       </div>
       <div className="flex items-center gap-3">
         <span className={`rounded-full border px-2.5 py-1 text-[12px] font-medium ${tone}`}>{delivery.label}</span>
-        <Link className="text-[13px] text-[#0EA5E9] hover:underline" href="/settings#content-service-heading">Service settings</Link>
+        <Link className="text-text text-[13px] underline decoration-you-line underline-offset-[3px] hover:decoration-you" href="/settings#content-service-heading">Service settings</Link>
       </div>
     </header>
     {state.autopilot?.selectable && state.plan && (s?.ownerReviewedOnly || s?.autopilotSelected) &&
@@ -113,7 +113,7 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
     {state.autopilot?.adoptable && state.plan && state.bindingCurrent && state.destination.verified && state.entitlement &&
       <AdoptAutopilot siteId={siteId} reviewToken={state.reviewToken} intervalMs={state.plan.autopilotIntervalMs} articlesPerMonth={state.plan.articlesPerMonth} />}
     {state.autopilot?.on && s && !s.paused && s.nextDeadlineAt > state.funding.checkedAt &&
-      <p className="text-[14px] text-[#F7F8F8]">Next article is scheduled for <span className="font-medium">{when(s.nextDeadlineAt)}</span>.</p>}
+      <p className="text-[14px] text-text">Next article is scheduled for <span className="font-medium">{when(s.nextDeadlineAt)}</span>.</p>}
     {state.searchConsole?.connected === false && <SearchConsolePrompt siteId={siteId} />}
     {plain && state.results && <ResultsStrip siteId={siteId} live={state.results.live} liveThisMonth={state.results.liveThisMonth}
       planPerMonth={state.plan?.articlesPerMonth ?? null} planUsed={state.results.planUsedThisMonth ?? 0} ready={state.ready ?? 0} />}
@@ -128,23 +128,23 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
           ? <LatestDraft latest={state.ownerDraft.latest} />
           : s?.ownerReviewedOnly && !upcoming.length && !published.length && typeof state.ownerDraft?.maximumMicroUsd === "number"
           ? <FirstDraft siteId={siteId} reviewToken={state.reviewToken} maximumMicroUsd={state.ownerDraft.maximumMicroUsd} />
-          : s?.ownerReviewedOnly ? <p className={BODY}>Request, review and publish from <Link className="text-[#0EA5E9] hover:underline" href="/articles">Articles</Link>. Nothing publishes automatically.</p>
+          : s?.ownerReviewedOnly ? <p className={BODY}>Request, review and publish from <Link className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you" href="/articles">Articles</Link>. Nothing publishes automatically.</p>
           : simple ? <p className={BODY}>{upcoming.length ? (published.length ? "Pentra is preparing your next articles."
               : "Read your first article here as soon as it's ready. It goes live on your site at the time shown.")
-            : quotaUsed ? <>You&apos;ve used all {planPerMonth} articles in your plan this month{s ? <>, so the next one starts {when(s.nextDeadlineAt)}</> : null}. <Link className="text-[#0EA5E9] hover:underline" href="/upgrade">Upgrade for more articles</Link>.</>
+            : quotaUsed ? <>You&apos;ve used all {planPerMonth} articles in your plan this month{s ? <>, so the next one starts {when(s.nextDeadlineAt)}</> : null}. <Link className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you" href="/upgrade">Upgrade for more articles</Link>.</>
             : "Pentra will start preparing your next article shortly."}</p>
           : <p className={BODY}>{delivery.label}. Articles ready to publish: {state.complete ? `${state.ready} of 2` : "unknown (history incomplete)"}.</p>}
-        {s && !s.ownerReviewedOnly && !simple && <p className={BODY}>Next delivery due: {shownTime(s.nextDeadlineAt, zone)} ({zone}). {s.nextDeadlineAt < state.funding.checkedAt && <span role="alert" className="text-[#F59E0B]">Overdue. The missed deadline stays on record.</span>}</p>}
+        {s && !s.ownerReviewedOnly && !simple && <p className={BODY}>Next delivery due: {shownTime(s.nextDeadlineAt, zone)} ({zone}). {s.nextDeadlineAt < state.funding.checkedAt && <span role="alert" className="text-rival">Overdue. The missed deadline stays on record.</span>}</p>}
         {!upcoming.length && !s?.ownerReviewedOnly && !simple && <p className={BODY}>No upcoming item is prepared yet.</p>}
-        {upcoming.length > 0 && <ul className="divide-y divide-white/[0.06] text-[14px]">{upcoming.map(w => <li key={w.jobId} className={plain && w.title ? "space-y-1 py-2.5" : "flex items-center justify-between gap-3 py-2"}>
+        {upcoming.length > 0 && <ul className="divide-y divide-white/[0.06] text-[14px]">{upcoming.map(w => <li key={w.jobId} className={plain && w.title ? "space-y-1 py-2.5" : "flex flex-col gap-0.5 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3"}>
           {/* P248 (Oct 30 2026): a new user's first article was ready minutes after Start but only said "goes live" two hours
               later, so the first session ended with nothing to read. A ready article opens from here. */}
-          {plain && w.title ? <p className="text-[#F7F8F8]">{readyToRead(w) ? <Link className="hover:text-[#0EA5E9]" href={`/articles/${w.articleId}`}>{topicTitle(w.title)}</Link> : topicTitle(w.title)}</p> : <span className="text-[#F7F8F8]">{workLabel(w)}</span>}
-          <span className="flex items-center gap-1.5 text-[12px] text-[#8A8F98]">{plain && <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${w.stage === "ready" ? "bg-[#4CB782]" : "bg-[#0EA5E9]"}`} />}{stageLabel(w.stage)}{simple ? (w.stage === "ready" ? ` · goes live ${friendlyTime(w.deadlineAt, zone)}` : "") : ` · due ${shownTime(w.deadlineAt, zone)}`}
-            {plain && readyToRead(w) && <> · <Link className="text-[#0EA5E9] hover:underline" href={`/articles/${w.articleId}`}>Read it now</Link></>}</span></li>)}</ul>}
+          {plain && w.title ? <p className="text-text">{readyToRead(w) ? <Link className="hover:underline hover:decoration-you underline-offset-[3px]" href={`/articles/${w.articleId}`}>{topicTitle(w.title)}</Link> : topicTitle(w.title)}</p> : <span className="text-text">{workLabel(w)}</span>}
+          <span className="flex items-center gap-1.5 text-[12px] text-text-2">{plain && <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${w.stage === "ready" ? "bg-named" : "bg-you"}`} />}{stageLabel(w.stage)}{simple ? (w.stage === "ready" ? ` · goes live ${friendlyTime(w.deadlineAt, zone)}` : "") : ` · due ${shownTime(w.deadlineAt, zone)}`}
+            {plain && readyToRead(w) && <> · <Link className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you" href={`/articles/${w.articleId}`}>Read it now</Link></>}</span></li>)}</ul>}
         {heldBack.length > 0 && <div className="mt-3 space-y-1.5" aria-label="Held back drafts">
-          <p className="text-[12px] text-[#8A8F98]">Held back, not published: these drafts had a problem Pentra&apos;s one rewrite couldn&apos;t fix (a number, product fact or quote it couldn&apos;t back up), so they weren&apos;t published and your schedule continued with the next article. Held-back drafts don&apos;t count toward your monthly articles.</p>
-          <ul className="space-y-1 text-[13px]">{heldBack.map(w => <li key={w.jobId}><Link className="text-[#0EA5E9] hover:underline" href={`/articles/${w.articleId}`}>{w.title ? topicTitle(w.title) : "Held-back draft"}</Link><span className="text-[#62666D]"> · see the reviewer&apos;s notes</span></li>)}</ul>
+          <p className="text-[12px] text-text-2">Held back, not published: these drafts had a problem Pentra&apos;s one rewrite couldn&apos;t fix (a number, product fact or quote it couldn&apos;t back up), so they weren&apos;t published and your schedule continued with the next article. Held-back drafts don&apos;t count toward your monthly articles.</p>
+          <ul className="space-y-1 text-[13px]">{heldBack.map(w => <li key={w.jobId}><Link className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you" href={`/articles/${w.articleId}`}>{w.title ? topicTitle(w.title) : "Held-back draft"}</Link><span className="text-text-3"> · see the reviewer&apos;s notes</span></li>)}</ul>
         </div>}
       </section>
       {plain && <UpcomingTopics siteId={siteId} autopilot={simple} order={state.topicOrder} />}
@@ -152,34 +152,34 @@ export function ContentWorkOverview({ siteId }: { siteId: Id<"sites"> }) {
       <div className="space-y-4">
       <section className={CARD}><h2 className={H2}>{plain ? "Published articles" : "Verified changes"}</h2>
         {published.length > 0 && <ul className="divide-y divide-white/[0.06] text-[14px]" aria-label="Recently published">{published.map(a => <li key={a.articleId} className="space-y-1 py-2">
-          <Link className="font-medium text-[#F7F8F8] hover:text-[#0EA5E9]" href={`/articles/${a.articleId}`}>{a.title}</Link>
-          <div className="flex flex-wrap items-center gap-2 text-[12px] text-[#8A8F98]">
+          <Link className="font-medium text-text hover:underline hover:decoration-you underline-offset-[3px]" href={`/articles/${a.articleId}`}>{a.title}</Link>
+          <div className="flex flex-wrap items-center gap-2 text-[12px] text-text-2">
             {a.publishedAt && <span>{when(a.publishedAt)}</span>}
-            <span className={a.verified ? "rounded-full bg-[#22C55E]/10 px-2 py-0.5 text-[#22C55E]" : "rounded-full bg-white/[0.04] px-2 py-0.5"}>{a.verified ? "live" : "checking the live page"}</span>
-            {a.url && <a className="text-[#0EA5E9] hover:underline" href={a.url} target="_blank" rel="noreferrer">View on your site</a>}
+            <span className={a.verified ? "rounded-full bg-named/10 px-2 py-0.5 text-named" : "rounded-full bg-white/[0.04] px-2 py-0.5"}>{a.verified ? "live" : "checking the live page"}</span>
+            {a.url && <a className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you" href={a.url} target="_blank" rel="noreferrer">View on your site</a>}
           </div></li>)}</ul>}
-        {published.length === 0 && (plain ? !verified.length && <p className={BODY}>Your first published article will appear here once Pentra confirms it&apos;s live.</p> : s?.ownerReviewedOnly ? <p className={BODY}><Link className="text-[#0EA5E9] hover:underline" href="/articles">View reviewed drafts and publication status</Link>. A page counts as delivered only after live verification.</p> : !verified.length && <p className={BODY}>No live changes verified yet. Preparation and monitoring are not publications.</p>)}
-        <ul className="space-y-2 text-[14px]">{verified.filter(w => !published.some(a => a.articleId === w.articleId)).map(w => <li key={w.jobId}>{workLabel(w)}{w.articleId && <> · <Link className="text-[#0EA5E9] hover:underline" href={`/articles/${w.articleId}`}>View article</Link></>}{w.publishedAt && <p className="text-[12px] text-[#8A8F98]">Published {shownTime(w.publishedAt, zone)}</p>}{w.verifiedAt && <p className="text-[12px] text-[#8A8F98]">Verified {shownTime(w.verifiedAt, zone)}</p>}</li>)}</ul>
+        {published.length === 0 && (plain ? !verified.length && <p className={BODY}>Your first published article will appear here once Pentra confirms it&apos;s live.</p> : s?.ownerReviewedOnly ? <p className={BODY}><Link className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you" href="/articles">View reviewed drafts and publication status</Link>. A page counts as delivered only after live verification.</p> : !verified.length && <p className={BODY}>No live changes verified yet. Preparation and monitoring are not publications.</p>)}
+        <ul className="space-y-2 text-[14px]">{verified.filter(w => !published.some(a => a.articleId === w.articleId)).map(w => <li key={w.jobId}>{workLabel(w)}{w.articleId && <> · <Link className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you" href={`/articles/${w.articleId}`}>View article</Link></>}{w.publishedAt && <p className="text-[12px] text-text-2">Published {shownTime(w.publishedAt, zone)}</p>}{w.verifiedAt && <p className="text-[12px] text-text-2">Verified {shownTime(w.verifiedAt, zone)}</p>}</li>)}</ul>
       </section>
       <SiteHealth siteId={siteId} />
       </div>
     </div>
     {!plain && <OrganicOutcome key={siteId} siteId={siteId} simple={false} />}
     {(!plain || !state.entitlement || !state.destination.verified || !state.bindingCurrent || state.funding.status !== "available" || attention.length > 0) &&
-    <section className={`${CARD} border-[#F59E0B]/20`}><h2 className={H2}>Needs attention</h2>
-      <div className="space-y-2 text-[14px] text-[#F7F8F8]">
-      {!state.entitlement && <p role="alert">Verify your existing plan in <Link href="/settings/billing" className="text-[#0EA5E9] hover:underline">Billing</Link>.</p>}
+    <section className={`${CARD} border-rival/20`}><h2 className={H2}>Needs attention</h2>
+      <div className="space-y-2 text-[14px] text-text">
+      {!state.entitlement && <p role="alert">Verify your existing plan in <Link href="/settings/billing" className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you">Billing</Link>.</p>}
       {!state.destination.verified && <p role="alert">Publishing destination verification required.</p>}
-      {!state.bindingCurrent && <p role="alert">Business or destination changed. <Link className="text-[#0EA5E9] hover:underline" href="/settings#changed-content-setup">Review changed setup</Link> to replace stale unstarted work safely. Existing costs and deadlines remain.</p>}
+      {!state.bindingCurrent && <p role="alert">Business or destination changed. <Link className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you" href="/settings#changed-content-setup">Review changed setup</Link> to replace stale unstarted work safely. Existing costs and deadlines remain.</p>}
       {state.approvalRequired && !s?.ownerReviewedOnly && <p role="alert">Automatic publication consent is not active.</p>}
       {state.funding.status !== "available" && !delivery.systemFailure && <p role="alert">{plain
         ? fundingMessage(state.funding, zone)
         : state.funding.reason ?? fundingCopy[state.funding.status]}</p>}
       {!state.complete && !plain && <p role="alert">Work history is incomplete. No clean-health claim is possible.</p>}
       {attention.map(w => plain
-        ? <p role="alert" key={w.jobId}>{workLabel(w)}: {w.failure} {w.articleId && <Link className="text-[#0EA5E9] hover:underline" href={`/articles/${w.articleId}`}>Open draft</Link>}</p>
-        : <div role="alert" key={w.jobId}>{workLabel(w)}: {w.failure} <details className="text-[12px] text-[#8A8F98]"><summary>Technical details</summary>{w.jobId}{w.technicalReason && <p>{w.technicalReason}</p>}</details></div>)}
-      {!plain && <p className="text-[13px] text-[#8A8F98]">Delivery acceptance and organic growth are separate. A successful API response alone is not verification.</p>}
+        ? <p role="alert" key={w.jobId}>{workLabel(w)}: {w.failure} {w.articleId && <Link className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you" href={`/articles/${w.articleId}`}>Open draft</Link>}</p>
+        : <div role="alert" key={w.jobId}>{workLabel(w)}: {w.failure} <details className="text-[12px] text-text-2"><summary>Technical details</summary>{w.jobId}{w.technicalReason && <p>{w.technicalReason}</p>}</details></div>)}
+      {!plain && <p className="text-[13px] text-text-2">Delivery acceptance and organic growth are separate. A successful API response alone is not verification.</p>}
       </div>
     </section>}
   </div>;
@@ -205,25 +205,25 @@ function OrganicOutcome({ siteId, simple = false }: { siteId: Id<"sites">; simpl
   const delta = result?.current && result.previous ? result.current.clicks - result.previous.clicks : null;
   return <section className={CARD}>
     <div className="flex flex-wrap items-center justify-between gap-2"><h2 className={H2}>Organic clicks</h2>
-      <button type="button" className="text-[13px] text-[#0EA5E9] hover:underline disabled:opacity-50" disabled={pending} onClick={() => setRefresh(value => value + 1)}>Refresh measurements</button></div>
-    <p className="text-[12px] text-[#62666D]">Loaded when you open this page. Refresh to check for newer Search Console data.</p>
-    {error ? <p role="alert" className={BODY}>Measurements could not be loaded. Refresh to retry; this is not a zero-click result.</p> : !result ? <p className={BODY}>Loading measurements…</p> : result.status !== "available" || !result.current ? <p className={BODY}>{result.status === "not_connected" ? <>Connect Google Search Console to see clicks, rankings and what Pentra&apos;s work changed. <a className="font-medium text-[#0EA5E9] hover:underline" href={`/api/gsc/auth?siteId=${siteId}`} target="gsc-oauth">Connect Search Console</a></> : result.status === "incomplete" ? "The measurement window is incomplete. Clicks are unavailable, not zero." : "No finalized measurements yet. Google data can arrive late."}</p> : <>
+      <button type="button" className="text-[13px] text-text-2 hover:underline disabled:opacity-50" disabled={pending} onClick={() => setRefresh(value => value + 1)}>Refresh measurements</button></div>
+    <p className="text-[12px] text-text-3">Loaded when you open this page. Refresh to check for newer Search Console data.</p>
+    {error ? <p role="alert" className={BODY}>Measurements could not be loaded. Refresh to retry; this is not a zero-click result.</p> : !result ? <p className={BODY}>Loading measurements…</p> : result.status !== "available" || !result.current ? <p className={BODY}>{result.status === "not_connected" ? <>Connect Google Search Console to see clicks, rankings and what Pentra&apos;s work changed. <a className="text-text font-medium underline decoration-you-line underline-offset-[3px] hover:decoration-you" href={`/api/gsc/auth?siteId=${siteId}`} target="gsc-oauth">Connect Search Console</a></> : result.status === "incomplete" ? "The measurement window is incomplete. Clicks are unavailable, not zero." : "No finalized measurements yet. Google data can arrive late."}</p> : <>
       <div className="flex flex-wrap items-baseline gap-3">
-        <span className="text-3xl font-semibold tracking-tight text-[#F7F8F8]">{result.current.clicks}</span>{" "}
-        <span className="text-[13px] text-[#8A8F98]">{result.current.clicks === 1 ? "click" : "clicks"} · {result.current.start}–{result.current.end}</span>
-        {delta !== null && <span className={`rounded-full px-2 py-0.5 text-[12px] ${delta >= 0 ? "bg-[#22C55E]/10 text-[#22C55E]" : "bg-[#F59E0B]/10 text-[#F59E0B]"}`}>{delta >= 0 ? "+" : ""}{delta} vs previous</span>}
-        {result.delayed && <span className="text-[12px] text-[#8A8F98]">Data is delayed.</span>}
+        <span className="text-3xl font-semibold tracking-tight text-text">{result.current.clicks}</span>{" "}
+        <span className="text-[13px] text-text-2">{result.current.clicks === 1 ? "click" : "clicks"} · {result.current.start}–{result.current.end}</span>
+        {delta !== null && <span className={`rounded-full px-2 py-0.5 text-[12px] ${delta >= 0 ? "bg-named/10 text-named" : "bg-rival/10 text-rival"}`}>{delta >= 0 ? "+" : ""}{delta} vs previous</span>}
+        {result.delayed && <span className="text-[12px] text-text-2">Data is delayed.</span>}
       </div>
       <SearchProgress current={result.current} previousImpressions={result.previous?.impressions ?? null} index={"index" in result ? result.index : null}
         sitemap={"sitemap" in result ? result.sitemap : null} />
       {"daily" in result && result.daily && result.daily.length >= 28 && <ClicksChart daily={result.daily} />}
       <p className={BODY}>{result.previous ? `Previous complete window: ${clicks(result.previous.clicks)} (${result.previous.start}–${result.previous.end}); change ${result.current.clicks - result.previous.clicks >= 0 ? "+" : ""}${result.current.clicks - result.previous.clicks}.` : "No complete previous window; no comparison is shown."}</p>
-      {!simple && <p className="text-[13px] text-[#8A8F98]">Property: {result.property}. Search Console calendar dates. New-page cohorts start on the first full day after publication.</p>}
+      {!simple && <p className="text-[13px] text-text-2">Property: {result.property}. Search Console calendar dates. New-page cohorts start on the first full day after publication.</p>}
       {result.cohorts === null ? <p className={BODY}>New-page inventory is incomplete.</p> : !result.cohorts.length ? <p className={BODY}>No newly published pages in this window.</p> : <>
-        <ul className="divide-y divide-white/[0.06] text-[14px]">{[...result.cohorts].sort((a, b) => (b.clicks ?? -1) - (a.clicks ?? -1)).slice(0, simple ? 5 : 10).map(p => <li key={p.articleId} className="flex justify-between gap-3 py-2"><span className="text-[#F7F8F8]">{p.title}</span><span className="shrink-0 text-[12px] text-[#8A8F98]">{p.clicks === null ? "Awaiting a complete post-publication day" : `${clicks(p.clicks)} since ${p.start}`}</span></li>)}</ul>
-        {result.cohorts.length > (simple ? 5 : 10) && <p className="text-[12px] text-[#62666D]">and {result.cohorts.length - (simple ? 5 : 10)} more new pages · see Analytics</p>}</>}
+        <ul className="divide-y divide-white/[0.06] text-[14px]">{[...result.cohorts].sort((a, b) => (b.clicks ?? -1) - (a.clicks ?? -1)).slice(0, simple ? 5 : 10).map(p => <li key={p.articleId} className="flex justify-between gap-3 py-2"><span className="text-text">{p.title}</span><span className="shrink-0 text-[12px] text-text-2">{p.clicks === null ? "Awaiting a complete post-publication day" : `${clicks(p.clicks)} since ${p.start}`}</span></li>)}</ul>
+        {result.cohorts.length > (simple ? 5 : 10) && <p className="text-[12px] text-text-3">and {result.cohorts.length - (simple ? 5 : 10)} more new pages · see Analytics</p>}</>}
     </>}
-    {!simple && <p className="text-[13px] text-[#8A8F98]">Observed clicks do not prove Pentra caused the change. Monitoring without an edit is not a completed improvement.</p>}
+    {!simple && <p className="text-[13px] text-text-2">Observed clicks do not prove Pentra caused the change. Monitoring without an edit is not a completed improvement.</p>}
   </section>;
 }
 
@@ -246,16 +246,16 @@ export function SearchProgress({ current, previousImpressions, index, sitemap }:
   ];
   return <div className="space-y-2">
     <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-white/[0.06] bg-white/[0.06] sm:grid-cols-4">
-      {stats.map(stat => <div key={stat.label} className="bg-[#0B0C0E] px-3 py-2.5">
-        <dt className="text-[11px] uppercase tracking-[0.08em] text-[#62666D]">{stat.label}</dt>
-        <dd className="mt-1 text-[18px] font-semibold tracking-tight text-[#F7F8F8]">{stat.value}</dd>
-        <dd className="text-[11px] text-[#8A8F98]">{stat.note}</dd>
+      {stats.map(stat => <div key={stat.label} className="bg-surface-1 px-3 py-2.5">
+        <dt className="text-[11px] uppercase tracking-[0.08em] text-text-3">{stat.label}</dt>
+        <dd className="mt-1 text-[18px] font-semibold tracking-tight text-text">{stat.value}</dd>
+        <dd className="text-[11px] text-text-2">{stat.note}</dd>
       </div>)}
     </dl>
-    <p className="text-[12px] text-[#62666D]">Impressions and positions move first. Clicks follow once pages reach page one.</p>
+    <p className="text-[12px] text-text-3">Impressions and positions move first. Clicks follow once pages reach page one.</p>
     {sitemap && (sitemap.status === "not_permitted" || sitemap.status === "failed"
-      ? <p className="text-[12px] text-[#F2994A]">Google hasn&apos;t found some of your articles and Pentra couldn&apos;t send your sitemap{sitemap.status === "not_permitted" ? " (your Search Console access doesn't allow it)" : ""}. In Search Console, open Sitemaps and submit {sitemap.url ?? "sitemap.xml"}.</p>
-      : <p className="text-[12px] text-[#8A8F98]">Google hadn&apos;t found some of your articles, so Pentra sent your sitemap to Search Console on {new Date(sitemap.submittedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}.</p>)}
+      ? <p className="text-[12px] text-rival">Google hasn&apos;t found some of your articles and Pentra couldn&apos;t send your sitemap{sitemap.status === "not_permitted" ? " (your Search Console access doesn't allow it)" : ""}. In Search Console, open Sitemaps and submit {sitemap.url ?? "sitemap.xml"}.</p>
+      : <p className="text-[12px] text-text-2">Google hadn&apos;t found some of your articles, so Pentra sent your sitemap to Search Console on {new Date(sitemap.submittedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}.</p>)}
   </div>;
 }
 
@@ -281,18 +281,18 @@ function ClicksChart({ daily }: { daily: { date: string; clicks: number | null }
   const line = path(current), before = previous.length === 28 ? path(previous) : "";
   const lastIndex = current.map(d => d.clicks !== null).lastIndexOf(true);
   return <figure className="space-y-1.5" aria-label="Daily Search Console clicks, last 28 days compared with the 28 days before">
-    <p className="text-right text-[11px] text-[#62666D]">Clicks a day · busiest day {max}</p>
+    <p className="text-right text-[11px] text-text-3">Clicks a day · busiest day {max}</p>
     <svg viewBox={`0 0 ${w} ${h}`} className="h-28 w-full" preserveAspectRatio="none" aria-hidden>
-      <defs><linearGradient id="clicks-area" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#0EA5E9" stopOpacity="0.22" /><stop offset="100%" stopColor="#0EA5E9" stopOpacity="0" /></linearGradient></defs>
+      <defs><linearGradient id="clicks-area" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#3DA5F5" stopOpacity="0.22" /><stop offset="100%" stopColor="#3DA5F5" stopOpacity="0" /></linearGradient></defs>
       {[0.25, 0.5, 0.75].map(f => <line key={f} x1="0" x2={w} y1={h * f} y2={h * f} stroke="rgba(255,255,255,0.05)" vectorEffect="non-scaling-stroke" />)}
       {before && <path d={before} fill="none" stroke="#62666D" strokeWidth="1.2" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />}
       {line && lastIndex > 0 && <path d={`${line} L${x(lastIndex).toFixed(1)} ${h} L0 ${h} Z`} fill="url(#clicks-area)" />}
-      {line && <path d={line} fill="none" stroke="#0EA5E9" strokeWidth="1.8" vectorEffect="non-scaling-stroke" />}
+      {line && <path d={line} fill="none" stroke="#3DA5F5" strokeWidth="1.8" vectorEffect="non-scaling-stroke" />}
     </svg>
-    <figcaption className="flex items-center justify-between text-[11px] text-[#62666D]">
+    <figcaption className="flex items-center justify-between text-[11px] text-text-3">
       <span>{shortDay(current[0]?.date)}</span>
-      <span className="flex items-center gap-3"><span className="flex items-center gap-1.5"><span className="h-0.5 w-3 bg-[#0EA5E9]" />Last 28 days</span>
-        {before && <span className="flex items-center gap-1.5"><span className="h-0 w-3 border-t border-dashed border-[#62666D]" />28 days before</span>}</span>
+      <span className="flex items-center gap-3"><span className="flex items-center gap-1.5"><span className="h-0.5 w-3 bg-you" />Last 28 days</span>
+        {before && <span className="flex items-center gap-1.5"><span className="h-0 w-3 border-t border-dashed border-text-4" />28 days before</span>}</span>
       <span>{shortDay(current.at(-1)?.date)}</span>
     </figcaption>
   </figure>;
@@ -301,10 +301,10 @@ function ClicksChart({ daily }: { daily: { date: string; clicks: number | null }
 /** The result at a glance: what is live, how much of the plan is used, how healthy the site is. */
 function ResultsStrip({ siteId, live, liveThisMonth, planPerMonth, planUsed, ready }: { siteId: Id<"sites">; live: number; liveThisMonth: number; planPerMonth: number | null; planUsed: number; ready: number }) {
   const check = useQuery(api.siteHealth.latest, { siteId });
-  const tile = (label: string, value: string, hint?: string) => <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] px-4 py-3">
-    <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#62666D]">{label}</p>
-    <p className="mt-1 text-2xl font-semibold tracking-tight text-[#F7F8F8]">{value}</p>
-    {hint && <p className="text-[12px] text-[#8A8F98]">{hint}</p>}
+  const tile = (label: string, value: string, hint?: string) => <div className="rounded-xl border border-white/[0.06] bg-surface-1 px-4 py-3">
+    <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-text-3">{label}</p>
+    <p className="mt-1 text-2xl font-semibold tracking-tight text-text">{value}</p>
+    {hint && <p className="text-[12px] text-text-2">{hint}</p>}
   </div>;
   return <div className="grid grid-cols-2 gap-3 md:grid-cols-3" aria-label="Results at a glance">
     {tile("Articles live", String(live), "published and confirmed on your site")}
@@ -343,12 +343,12 @@ function UpcomingTopics({ siteId, autopilot, order }: { siteId: Id<"sites">; aut
           : "Pentra is researching topics your customers search for. They'll appear here."
           : "Pentra picks each draft's topic from your business details when you ask for one. Add a search below to choose it yourself."}</p>
       : <ol className="space-y-2 text-[14px]">{next.map((t, n) => <li key={t._id} className="flex gap-3">
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#0EA5E9]/10 text-[12px] font-semibold text-[#0EA5E9]">{n + 1}</span>
-          <span><span className="text-[#F7F8F8]">{topicTitle(t.label)}</span>{sameWords(topicTitle(t.label), t.primaryKeyword) ? null
-            : <> <span className="text-[12px] text-[#8A8F98]">“{t.primaryKeyword}”</span></>}
-            {t.ownerChosenAt !== undefined && <span className="block text-[12px] text-[#8A8F98]">Your search{ownerSearchNote(t)}</span>}</span></li>)}</ol>}
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-2 text-[12px] font-semibold text-text-2">{n + 1}</span>
+          <span><span className="text-text">{topicTitle(t.label)}</span>{sameWords(topicTitle(t.label), t.primaryKeyword) ? null
+            : <> <span className="text-[12px] text-text-2">“{t.primaryKeyword}”</span></>}
+            {t.ownerChosenAt !== undefined && <span className="block text-[12px] text-text-2">Your search{ownerSearchNote(t)}</span>}</span></li>)}</ol>}
     <OwnerSearchForm siteId={siteId} autopilot={autopilot} />
-    <Link className="text-[13px] text-[#0EA5E9] hover:underline" href="/plan">See or change all topics</Link>
+    <Link className="text-text text-[13px] underline decoration-you-line underline-offset-[3px] hover:decoration-you" href="/plan">See or change all topics</Link>
   </section>;
 }
 
@@ -387,13 +387,13 @@ function OwnerSearchForm({ siteId, autopilot }: { siteId: Id<"sites">; autopilot
       setMessage(error instanceof ConvexError && typeof error.data === "string" ? error.data : "Couldn't add that search. Try again.");
     } finally { setBusy(false); }
   }}>
-    <label htmlFor={`owner-search-${siteId}`} className="w-full text-[13px] text-[#8A8F98]">Want a page for a particular search? Add it here.</label>
+    <label htmlFor={`owner-search-${siteId}`} className="w-full text-[13px] text-text-2">Want a page for a particular search? Add it here.</label>
     <input id={`owner-search-${siteId}`} value={search} maxLength={80} onChange={event => setSearch(event.target.value)}
       placeholder="e.g. best invoicing app for freelancers" autoComplete="off"
-      className="min-w-0 flex-1 rounded-lg border border-white/10 bg-[#08090E] px-3 py-2 text-[14px] text-[#F7F8F8] placeholder:text-[#62666D] focus:border-[#0EA5E9] focus:outline-none" />
+      className="min-w-0 flex-1 rounded-lg border border-white/10 bg-bg px-3 py-2 text-[14px] text-text placeholder:text-text-4 focus:border-[var(--border-focus)] focus:outline-none" />
     <button type="submit" disabled={busy || !search.trim()}
-      className="rounded-lg bg-[#0EA5E9] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-50">{busy ? "Adding…" : "Add"}</button>
-    {message && <p role="status" className="w-full text-[13px] text-[#8A8F98]">{message}</p>}
+      className="rounded-control border border-border-strong px-3 py-2 text-[13px] font-semibold text-text transition hover:bg-surface-2 disabled:opacity-50">{busy ? "Adding…" : "Add"}</button>
+    {message && <p role="status" className="w-full text-[13px] text-text-2">{message}</p>}
   </form>;
 }
 
@@ -403,10 +403,10 @@ function SiteHealth({ siteId }: { siteId: Id<"sites"> }) {
   const [busy, setBusy] = useState(false), [message, setMessage] = useState("");
   const issues = (check?.pages ?? []).flatMap(p => p.issues.map(i => ({ ...i, url: p.url })))
     .sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1)).slice(0, 8);
-  const scoreTone = !check ? "" : check.score >= 90 ? "text-[#22C55E]" : check.score >= 70 ? "text-[#F59E0B]" : "text-red-400";
+  const scoreTone = !check ? "" : check.score >= 90 ? "text-named" : check.score >= 70 ? "text-rival" : "text-red-400";
   return <section className={CARD} aria-labelledby="site-health-heading">
     <div className="flex flex-wrap items-center justify-between gap-2"><h2 id="site-health-heading" className={H2}>Site health</h2>
-      <button type="button" className="text-[13px] text-[#0EA5E9] hover:underline disabled:opacity-50" disabled={busy} onClick={async () => {
+      <button type="button" className="text-[13px] text-text-2 hover:underline disabled:opacity-50" disabled={busy} onClick={async () => {
         setBusy(true); setMessage("");
         try { const result = await run({ siteId }); setMessage(result.skipped ? "Checked in the last 10 minutes; showing the latest result." : "Check complete."); }
         catch { setMessage("The check couldn't run. Try again in a few minutes."); }
@@ -415,14 +415,14 @@ function SiteHealth({ siteId }: { siteId: Id<"sites"> }) {
     {check === undefined ? <p className={BODY}>Loading…</p> : check === null ? <p className={BODY}>Pentra checks your important pages weekly: can Google reach them, are titles and descriptions right, is anything hidden from search, and does every page lead to your next step.</p> : <>
       <div className="flex flex-wrap items-baseline gap-3">
         <span className={`text-3xl font-semibold tracking-tight ${scoreTone}`}>{check.score}</span>{" "}
-        <span className="text-[13px] text-[#8A8F98]">Score {check.score}/100 across {check.pages.length} page{check.pages.length === 1 ? "" : "s"} · checked {friendlyTime(check.checkedAt)}</span>
+        <span className="text-[13px] text-text-2">Score {check.score}/100 across {check.pages.length} page{check.pages.length === 1 ? "" : "s"} · checked {friendlyTime(check.checkedAt)}</span>
       </div>
-      {check.error && <p role="alert" className="text-[14px] text-[#F59E0B]">{check.error}</p>}
+      {check.error && <p role="alert" className="text-[14px] text-rival">{check.error}</p>}
       {issues.length === 0 ? <p className={BODY}>No problems found on the pages checked.</p> :
         <ul className="space-y-2 text-[14px]">{issues.map((i, n) => <li key={n} className="flex gap-2">
-          <span className={`mt-0.5 shrink-0 self-start whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 ${i.severity === "critical" ? "bg-red-500/10 text-red-400" : "bg-[#F59E0B]/10 text-[#F59E0B]"}`}>{i.severity === "critical" ? "Fix now" : "Improve"}</span>
-          <span className="text-[#F7F8F8]">{i.message} <span className="text-[12px] text-[#8A8F98]">({new URL(i.url).pathname})</span></span></li>)}</ul>}
+          <span className={`mt-0.5 shrink-0 self-start whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 ${i.severity === "critical" ? "bg-red-500/10 text-red-400" : "bg-rival/10 text-rival"}`}>{i.severity === "critical" ? "Fix now" : "Improve"}</span>
+          <span className="text-text">{i.message} <span className="text-[12px] text-text-2">({new URL(i.url).pathname})</span></span></li>)}</ul>}
     </>}
-    {message && <p className="text-[13px] text-[#8A8F98]" role="status">{message}</p>}
+    {message && <p className="text-[13px] text-text-2" role="status">{message}</p>}
   </section>;
 }

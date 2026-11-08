@@ -36,7 +36,7 @@ export function ArticleProgress({ siteId }: { siteId: Id<"sites"> }) {
   if (runningJob?.type === "article" && runningJob.contentWork) {
     const labels: Record<string, string> = { prepare: "Preparing your draft", review: "Reviewing your draft",
       publish: "Publishing approved content", verify: "Checking the live page" };
-    return <div role="status" className="rounded-xl border border-[#0EA5E9]/[0.15] bg-[#0EA5E9]/[0.03] p-5 text-sm text-[#38BDF8]">
+    return <div role="status" className="rounded-xl border border-border bg-surface-2/50 p-5 text-sm text-text-2">
       {labels[runningJob.contentWork.stage] ?? "Processing content"}
     </div>;
   }
@@ -46,19 +46,19 @@ export function ArticleProgress({ siteId }: { siteId: Id<"sites"> }) {
   const { current, total } = runningJob.stepProgress;
 
   return (
-    <div className="rounded-xl border border-[#0EA5E9]/[0.15] bg-[#0EA5E9]/[0.03] p-5">
+    <div className="rounded-xl border border-border bg-surface-2/50 p-5">
       {/* Header */}
       <div className="flex items-center gap-2 mb-4">
         <span className="relative flex h-2 w-2">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#0EA5E9] opacity-75" />
-          <span className="relative inline-flex h-2 w-2 rounded-full bg-[#0EA5E9]" />
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-you opacity-75" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-you" />
         </span>
-        <p className="text-[13px] font-medium text-[#38BDF8] min-w-0 truncate">
+        <p className="text-[13px] font-medium text-text-2 min-w-0 truncate">
           {runningJob.stepProgress!.topicLabel
             ? `Generating: ${runningJob.stepProgress!.topicLabel}`
             : "Generating article..."}
         </p>
-        <span className="ml-auto text-[11px] text-[#62666D] tabular-nums">
+        <span className="ml-auto text-[11px] text-text-3 tabular-nums">
           {current}/{total}
         </span>
       </div>
@@ -66,7 +66,7 @@ export function ArticleProgress({ siteId }: { siteId: Id<"sites"> }) {
       {/* Progress bar */}
       <div className="mb-4 h-1 w-full rounded-full bg-white/[0.04]">
         <div
-          className="h-1 rounded-full bg-[#0EA5E9] transition-[width] duration-700 ease-out"
+          className="h-1 rounded-full bg-you transition-[width] duration-700 ease-out"
           style={{ width: `${(current / total) * 100}%` }}
         />
       </div>
@@ -84,7 +84,7 @@ export function ArticleProgress({ siteId }: { siteId: Id<"sites"> }) {
               key={step.label}
               className={`flex items-center gap-2.5 rounded-md px-2 py-1.5 ${
                 isActive
-                  ? "bg-[#0EA5E9]/[0.06]"
+                  ? "bg-surface-2/50"
                   : ""
               } ${
                 !isCompleted && !isActive ? "opacity-35" : ""
@@ -93,18 +93,18 @@ export function ArticleProgress({ siteId }: { siteId: Id<"sites"> }) {
               <div
                 className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${
                   isCompleted
-                    ? "bg-[#22C55E]/[0.1]"
+                    ? "bg-named/[0.1]"
                     : isActive
-                      ? "bg-[#0EA5E9]/[0.15]"
+                      ? "bg-surface-2"
                       : "bg-white/[0.03]"
                 }`}
               >
                 {isCompleted ? (
-                  <CheckCircle2 className="h-3 w-3 text-[#22C55E]" />
+                  <CheckCircle2 className="h-3 w-3 text-named" />
                 ) : (
                   <Icon
                     className={`h-3 w-3 ${
-                      isActive ? "text-[#0EA5E9]" : "text-[#62666D]"
+                      isActive ? "text-text-2" : "text-text-3"
                     }`}
                   />
                 )}
@@ -112,10 +112,10 @@ export function ArticleProgress({ siteId }: { siteId: Id<"sites"> }) {
               <span
                 className={`text-[12px] ${
                   isCompleted
-                    ? "text-[#22C55E]/80"
+                    ? "text-named/80"
                     : isActive
-                      ? "text-[#38BDF8] font-medium"
-                      : "text-[#62666D]"
+                      ? "text-text-2 font-medium"
+                      : "text-text-3"
                 }`}
               >
                 {isActive
@@ -123,7 +123,7 @@ export function ArticleProgress({ siteId }: { siteId: Id<"sites"> }) {
                   : step.label}
               </span>
               {isActive && (
-                <span className="h-1.5 w-1.5 rounded-full bg-[#0EA5E9] animate-pulse" />
+                <span className="h-1.5 w-1.5 rounded-full bg-you animate-pulse" />
               )}
             </div>
           );

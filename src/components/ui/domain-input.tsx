@@ -6,8 +6,9 @@ import { ArrowRight } from "lucide-react";
 import { Spinner } from "@/components/ui/button";
 import { cx } from "@/lib/cx";
 import { DOMAIN_ERROR, normalizeDomain, startHref, stripPastedUrl } from "@/lib/domain-input";
+import { TIMING } from "@/lib/product-facts";
 
-export const DOMAIN_NOTE = "Free. No card. Results in about an hour; first answers in minutes.";
+export const DOMAIN_NOTE = `Free. No card. ${TIMING.line}`;
 
 /**
  * The hero field: one input, one white button. A mono "https://" sits in front so people know an address

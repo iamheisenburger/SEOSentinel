@@ -61,7 +61,7 @@ export default function JobsPage() {
           <div className="h-6 w-28 animate-pulse rounded bg-white/[0.04]" />
           <div className="mt-1.5 h-4 w-48 animate-pulse rounded bg-white/[0.03]" />
         </div>
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11]">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1">
           {[...Array(8)].map((_, i) => (
             <div key={i} className="flex items-center gap-3 px-5 py-3.5 border-b border-white/[0.04] last:border-0">
               <div className="h-8 w-8 animate-pulse rounded-lg bg-white/[0.04]" />
@@ -89,12 +89,12 @@ export default function JobsPage() {
 
       {/* Status indicator */}
       {runningCount > 0 && (
-        <div className="flex items-center gap-2 rounded-lg bg-[#0EA5E9]/[0.06] border border-[#0EA5E9]/[0.1] px-4 py-2.5">
+        <div className="flex items-center gap-2 rounded-lg bg-surface-2/50 border border-border px-4 py-2.5">
           <span className="flex h-2 w-2">
-            <span className="absolute inline-flex h-2 w-2 animate-ping rounded-full bg-[#0EA5E9] opacity-75" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-[#0EA5E9]" />
+            <span className="absolute inline-flex h-2 w-2 animate-ping rounded-full bg-you opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-you" />
           </span>
-          <span className="text-[13px] text-[#38BDF8]">
+          <span className="text-[13px] text-text-2">
             Pentra is working on your website now
           </span>
         </div>
@@ -125,23 +125,23 @@ export default function JobsPage() {
                   {/* Timeline dot */}
                   <div className={`relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
                     job.status === "done"
-                      ? "bg-[#22C55E]/[0.08]"
+                      ? "bg-named/[0.08]"
                       : job.status === "running"
-                        ? "bg-[#0EA5E9]/[0.1] ring-1 ring-[#0EA5E9]/20"
+                        ? "bg-surface-2 ring-1 ring-border-strong"
                         : job.status === "failed"
-                          ? "bg-[#EF4444]/[0.08]"
+                          ? "bg-wrong/[0.08]"
                           : "bg-white/[0.04]"
                   }`}>
                     <JobIcon
                       type={job.type}
                       className={`h-3.5 w-3.5 ${
                         job.status === "done"
-                          ? "text-[#22C55E]"
+                          ? "text-named"
                           : job.status === "running"
-                            ? "text-[#0EA5E9]"
+                            ? "text-text-2"
                             : job.status === "failed"
-                              ? "text-[#EF4444]"
-                              : "text-[#62666D]"
+                              ? "text-wrong"
+                              : "text-text-3"
                       }`}
                     />
                   </div>
@@ -149,24 +149,24 @@ export default function JobsPage() {
                   {/* Content */}
                   <div className="min-w-0 flex-1 pt-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-[13px] font-medium text-[#F7F8F8]">
+                      <p className="text-[13px] font-medium text-text">
                         {jobLabel(job)}
                       </p>
                       {job.status === "done" && (
-                        <CheckCircle2 className="h-3 w-3 text-[#22C55E]" />
+                        <CheckCircle2 className="h-3 w-3 text-named" />
                       )}
                       {job.status === "running" && (
-                        <span className="flex items-center gap-1 text-[10px] text-[#0EA5E9]">
-                          <span className="h-1 w-1 rounded-full bg-[#0EA5E9] animate-pulse" />
+                        <span className="flex items-center gap-1 text-[10px] text-text-2">
+                          <span className="h-1 w-1 rounded-full bg-you animate-pulse" />
                           in progress
                         </span>
                       )}
                       {job.status === "failed" && (
-                        <span className="text-[10px] text-[#F87171]">stopped</span>
+                        <span className="text-[10px] text-wrong">stopped</span>
                       )}
                     </div>
                     {job.type === "article" && job.stepProgress?.topicLabel && (
-                      <p className="mt-0.5 truncate text-[12px] text-[#8A8F98]">{topicTitle(job.stepProgress.topicLabel)}</p>
+                      <p className="mt-0.5 truncate text-[12px] text-text-2">{topicTitle(job.stepProgress.topicLabel)}</p>
                     )}
 
                     {/* Step progress (live) */}
@@ -175,17 +175,17 @@ export default function JobsPage() {
                         <div className="flex items-center gap-2">
                           <div className="h-1 flex-1 rounded-full bg-white/[0.04]">
                             <div
-                              className="h-1 rounded-full bg-[#0EA5E9] transition-all duration-700 ease-out"
+                              className="h-1 rounded-full bg-you transition-all duration-700 ease-out"
                               style={{
                                 width: `${(job.stepProgress.current / job.stepProgress.total) * 100}%`,
                               }}
                             />
                           </div>
-                          <span className="text-[10px] text-[#0EA5E9] tabular-nums shrink-0">
+                          <span className="text-[10px] text-text-2 tabular-nums shrink-0">
                             {job.stepProgress.current}/{job.stepProgress.total}
                           </span>
                         </div>
-                        <p className="mt-1 text-[11px] text-[#8A8F98]">
+                        <p className="mt-1 text-[11px] text-text-2">
                           {job.stepProgress.stepLabel}
                         </p>
                       </div>
@@ -193,16 +193,16 @@ export default function JobsPage() {
 
                     {/* What happened, in plain words, and what to do next */}
                     {problem && (
-                      <div className="mt-1.5 flex items-start gap-1.5 rounded bg-[#EF4444]/[0.04] px-2.5 py-1.5">
-                        <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-[#F87171]" />
+                      <div className="mt-1.5 flex items-start gap-1.5 rounded bg-wrong/[0.04] px-2.5 py-1.5">
+                        <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-wrong" />
                         <div className="min-w-0 text-[11px] leading-relaxed">
-                          <p className="text-[#F87171]">{problem.message}</p>
-                          <p className="text-[#8A8F98]">
+                          <p className="text-wrong">{problem.message}</p>
+                          <p className="text-text-2">
                             {problem.next}
                             {problem.action && (
                               <>
                                 {" "}
-                                <Link href={problem.action.href} className="underline hover:text-[#F7F8F8]">
+                                <Link href={problem.action.href} className="underline hover:text-text">
                                   {problem.action.label}
                                 </Link>
                               </>
@@ -212,28 +212,28 @@ export default function JobsPage() {
                       </div>
                     )}
 
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-[#62666D]">
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-text-3">
                       <span>
                         {formatDistanceToNow(job.createdAt, { addSuffix: true })}
                       </span>
                       {duration && (
                         <>
-                          <span className="text-white/[0.08]">·</span>
+                          <span className="text-border">·</span>
                           <span>took {duration}</span>
                         </>
                       )}
                       {articleId && (
                         <>
-                          <span className="text-white/[0.08]">·</span>
-                          <Link href={`/articles/${articleId}`} className="text-[#0EA5E9] hover:text-[#38BDF8]">
+                          <span className="text-border">·</span>
+                          <Link href={`/articles/${articleId}`} className="text-text underline decoration-you-line underline-offset-[3px] hover:decoration-you">
                             Open article
                           </Link>
                         </>
                       )}
                       {job.retries != null && job.retries > 0 && (
                         <>
-                          <span className="text-white/[0.08]">·</span>
-                          <span className="text-[#F59E0B]">
+                          <span className="text-border">·</span>
+                          <span className="text-rival">
                             attempt {job.retries + 1}
                           </span>
                         </>
@@ -246,9 +246,9 @@ export default function JobsPage() {
           </div>
         </div>
       ) : (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-12 text-center">
-          <Zap className="mx-auto h-10 w-10 text-[#62666D]/30" />
-          <p className="mt-3 text-[13px] text-[#62666D]">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-12 text-center">
+          <Zap className="mx-auto h-10 w-10 text-text-4/30" />
+          <p className="mt-3 text-[13px] text-text-3">
             {activeTab !== "all"
               ? "Nothing to show here."
               : "No activity yet. Pentra will list its work here as it happens."}

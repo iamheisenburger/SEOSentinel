@@ -4,7 +4,7 @@ import { Reveal } from "@/components/ui/reveal";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Section, SectionHeading } from "@/components/marketing/section";
 import { SAMPLE_BUSINESS } from "@/components/marketing/samples";
-import { ASSISTANTS, SNAPSHOT } from "@/lib/product-facts";
+import { ASSISTANTS, SNAPSHOT, TIMING } from "@/lib/product-facts";
 
 /* Each step shows a small piece of the real interface (sample business), never an icon. */
 
@@ -99,19 +99,21 @@ function AskFragment() {
   );
 }
 
+/** Only the businesses named instead of you: the business itself is never on this list. */
+const NAMED_INSTEAD = [
+  { name: SAMPLE_BUSINESS.competitors[0], count: 41 },
+  { name: SAMPLE_BUSINESS.competitors[1], count: 27 },
+  { name: SAMPLE_BUSINESS.competitors[2], count: 12 },
+] as const;
+
 function NamedInsteadFragment() {
-  const rows = [
-    { name: SAMPLE_BUSINESS.competitors[0], count: 41, you: false },
-    { name: SAMPLE_BUSINESS.competitors[1], count: 27, you: false },
-    { name: `${SAMPLE_BUSINESS.name} (you)`, count: 3, you: true },
-  ];
   return (
     <Fragment>
       <FragmentLabel>Named instead</FragmentLabel>
       <ul className="mt-2.5 space-y-1.5 text-[12.5px] leading-[18px]">
-        {rows.map((row) => (
+        {NAMED_INSTEAD.map((row) => (
           <li key={row.name} className="flex items-center justify-between gap-3">
-            <span className={row.you ? "truncate text-text-2" : "hl-rival truncate"}>{row.name}</span>
+            <span className="hl-rival truncate">{row.name}</span>
             <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-text">{row.count}</span>
           </li>
         ))}
@@ -147,7 +149,7 @@ const STEPS: { title: string; body: string; fragment: ReactNode }[] = [
     fragment: <QuestionsFragment />,
   },
   {
-    title: `Asks ${SNAPSHOT.assistants} assistants all of them`,
+    title: `Asks ${SNAPSHOT.assistants} assistants every question`,
     body: `About ${SNAPSHOT.answers} answers, each stored in full as proof.`,
     fragment: <AskFragment />,
   },
@@ -169,7 +171,7 @@ export function FirstHour() {
       <SectionHeading
         id="first-hour-title"
         title="Your first hour, free."
-        lead={`Enter your domain. In about an hour you have a snapshot of how ${SNAPSHOT.assistants} AI assistants answer your buyers, and ${SNAPSHOT.draftPages} draft pages that answer back. No card.`}
+        lead={`Enter your domain. In about ${TIMING.snapshotMinutes} minutes you have a snapshot of how ${SNAPSHOT.assistants} AI assistants answer your buyers, and ${SNAPSHOT.draftPages} draft pages that answer back. The first answers arrive in under ${TIMING.firstAnswersMinutes} minutes. No card.`}
       />
       <Reveal as="ol" stagger={80} className="relative mt-14 grid grid-cols-1 gap-10 lg:mt-16 lg:grid-cols-5 lg:gap-5">
         {/* The rail: a hairline through the step markers on wide screens, down the left edge on phones. */}

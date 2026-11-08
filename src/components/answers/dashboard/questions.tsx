@@ -8,7 +8,7 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
 import { useEvidence } from "@/components/answers/evidence-sheet";
-import { InlineError, Notice, PanelSkeleton, ScreenHeader } from "@/components/answers/ui";
+import { ChipScroller, InlineError, Notice, PanelSkeleton, ScreenHeader } from "@/components/answers/ui";
 import { useAnswersActions, useAnswersQuery, useAppHref, useNow } from "@/lib/answers/backend";
 import { questionMatches, topCompetitor, WEEK_MS, type QuestionFilter } from "@/lib/answers/derive";
 import { intentLabel, plural, shortDate } from "@/lib/answers/format";
@@ -60,11 +60,11 @@ function QuestionsBody({ overview }: { overview: Overview }) {
 
   return (
     <>
-      <ScreenHeader title="Questions" meta={`${active} of ${MAX_ACTIVE} tracked${latestAt ? ` · latest run ${shortDate(latestAt)}` : ""}`} />
+      <ScreenHeader title="Questions" meta={`${plural(active, "question")} tracked${latestAt ? ` · latest run ${shortDate(latestAt)}` : ""}`} />
       <AddQuestion siteId={overview.site.siteId} full={active >= MAX_ACTIVE} />
       <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-          <div role="radiogroup" aria-label="Filter questions" className="scrollbar-none -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5">
+          <ChipScroller label="Filter questions" className="pb-0.5">
             {FILTERS.map((f) => {
               const count = overview.questions.filter((q) => questionMatches(q, f.id, now)).length;
               if (f.id !== "all" && count === 0 && filter !== f.id) return null;
@@ -76,7 +76,7 @@ function QuestionsBody({ overview }: { overview: Overview }) {
                 </button>
               );
             })}
-          </div>
+          </ChipScroller>
           <div className="relative lg:w-64">
             <Search aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-4" strokeWidth={1.5} />
             <label htmlFor="question-search" className="sr-only">Search questions</label>
@@ -85,7 +85,7 @@ function QuestionsBody({ overview }: { overview: Overview }) {
           </div>
         </div>
         <QuestionTable rows={rows} now={now}
-          empty={overview.questions.length === 0 ? "No questions yet. They're written in the first hour, from what your site sells." : "No questions match this filter and search."}
+          empty={overview.questions.length === 0 ? "No questions yet. They're written as soon as you confirm the setup, from what your site sells." : "No questions match this filter and search."}
           onClear={overview.questions.length && (filter !== "all" || query) ? () => { setFilter("all"); setQuery(""); } : undefined} />
       </div>
     </>
@@ -118,12 +118,13 @@ function AddQuestion({ siteId, full }: { siteId: string; full: boolean }) {
       <div className="flex flex-col gap-2 sm:flex-row">
         <label htmlFor="add-question" className="sr-only">A question your buyers ask</label>
         <input id="add-question" value={value} onChange={(e) => { setValue(e.target.value); setError(null); }} disabled={full}
-          placeholder={full ? `You're tracking ${MAX_ACTIVE} questions, the most at once. Pause one to add another.` : "Add a question your buyers ask, without your business's name"}
-          aria-invalid={error ? true : undefined} aria-describedby={error ? "add-question-error" : undefined}
-          className="h-10 min-w-0 flex-1 rounded-control border border-border bg-surface-1 px-3 text-[14px] text-text placeholder:text-text-4 outline-none transition-[border-color,box-shadow] duration-[var(--d-instant)] hover:border-border-strong focus:border-[var(--border-focus)] focus:shadow-[0_0_0_3px_var(--you-tint)] aria-[invalid=true]:border-wrong disabled:opacity-50" />
+          placeholder={full ? "Pause a question to add another" : "A question your buyers ask"}
+          aria-invalid={error ? true : undefined} aria-describedby={error ? "add-question-error" : "add-question-hint"}
+          className="h-10 w-full min-w-0 rounded-control border border-border bg-surface-1 px-3 text-[14px] text-text placeholder:text-text-4 outline-none sm:w-auto sm:flex-1 transition-[border-color,box-shadow] duration-[var(--d-instant)] hover:border-border-strong focus:border-[var(--border-focus)] focus:shadow-[0_0_0_3px_var(--you-tint)] aria-[invalid=true]:border-wrong disabled:opacity-50" />
         <Button type="submit" variant="secondary" loading={busy} loadingLabel="Adding…" disabled={full} icon={<Plus className="h-4 w-4" strokeWidth={1.5} />}>Add question</Button>
       </div>
-      {error && <p id="add-question-error" role="alert" className="text-[13px] leading-5 text-wrong">{error}</p>}
+      {error ? <p id="add-question-error" role="alert" className="text-[13px] leading-5 text-wrong">{error}</p>
+        : <p id="add-question-hint" className="text-[13px] leading-5 text-text-3">{full ? `You're tracking ${MAX_ACTIVE} questions, the most at once. Pause one to add another.` : "Ask it the way a buyer would, without your business's name."}</p>}
     </form>
   );
 }

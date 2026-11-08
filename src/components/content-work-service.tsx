@@ -39,7 +39,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     } catch { setError("Service selection could not be accepted. Review the saved business, destination, billing and unresolved work. No existing deadline or spending commitment was reset."); }
     finally { setSaving(false); }
   };
-  if (!state || state.siteId !== siteId) return <p>Loading delivery readiness…</p>;
+  if (!state || state.siteId !== siteId) return <p role="status" className="text-[13px] text-text-2">Loading delivery readiness…</p>;
   const interruptedRetry = state.work.find(w => w.creditRetry)?.creditRetry;
   const delivery = contentServiceStatus(state);
   const operate = async (action: "pause" | "resume" | "retry") => {
@@ -87,13 +87,13 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     // Only a retained draft can be reviewed; a slot that failed before any draft
     // existed (a provider interruption) is operator business, not the owner's.
     const needsReview = state.work.filter(w => !w.retiredAt && w.articleId && (w.stage === "failed" || w.stage === "review_failed") && !w.superseded && !w.parked && !(state.published ?? []).some(a => a.articleId === w.articleId));
-    const link = "text-[#F7F8F8] underline decoration-white/30 underline-offset-2 hover:decoration-white";
-    return <section className="overflow-hidden rounded-xl border border-white/[0.06] bg-[#0E0F11]" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
+    const link = "text-text underline decoration-white/30 underline-offset-2 hover:decoration-white";
+    return <section className="overflow-hidden rounded-xl border border-white/[0.06] bg-surface-1" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
       <div className="flex items-center justify-between gap-3 border-b border-white/[0.04] px-5 py-4">
-        <h2 id="content-service-heading" className="text-[13px] font-semibold text-[#F7F8F8]">Your Pentra service</h2>
-        <span className="text-[12px] text-[#62666D]">{state.destination.domain}</span>
+        <h2 id="content-service-heading" className="text-[13px] font-semibold text-text">Your Pentra service</h2>
+        <span className="text-[12px] text-text-3">{state.destination.domain}</span>
       </div>
-      <div className="space-y-4 px-5 py-5 text-[13px] leading-relaxed text-[#8A8F98]">
+      <div className="space-y-4 px-5 py-5 text-[13px] leading-relaxed text-text-2">
         <AutopilotSwitch siteId={siteId} reviewToken={state.reviewToken} on={Boolean(state.autopilot?.on)} intervalMs={state.plan?.autopilotIntervalMs ?? 86_400_000}
           reviewAvailable={state.autopilot?.reviewAvailable ?? true} paused={Boolean(state.schedule?.paused)}
           cadencePerWeek={state.plan?.cadencePerWeek ?? null} articlesPerMonth={state.plan?.articlesPerMonth ?? null} />
@@ -101,10 +101,10 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
           <p>Website: <Link className={link} href={`/sites/${state.siteId}?tab=settings`}>{state.destination.domain}</Link> · {state.destination.kind === "wordpress" ? "WordPress" : isApiCmsMethod(state.destination.kind) ? CMS_PLATFORM_LABELS[state.destination.kind] : "GitHub"} · {state.destination.verified ? "connected" : "not connected yet"}</p>
           <p>Status: {delivery.label}. {state.plan && `Your plan includes ${state.plan.articlesPerMonth} new article${state.plan.articlesPerMonth === 1 ? "" : "s"} a month.`}</p>
         </div>
-        {!state.entitlement && <p role="alert" className="text-[#F2994A]">Your plan isn&apos;t active. <Link href="/upgrade" className={link}>Plans &amp; billing</Link></p>}
-        {!state.destination.verified && <p role="alert" className="text-[#F2994A]">Connect and verify your website in <Link href={`/sites/${siteId}?tab=settings`} className={link}>website settings</Link>.</p>}
+        {!state.entitlement && <p role="alert" className="text-rival">Your plan isn&apos;t active. <Link href="/upgrade" className={link}>Plans &amp; billing</Link></p>}
+        {!state.destination.verified && <p role="alert" className="text-rival">Connect and verify your website in <Link href={`/sites/${siteId}?tab=settings`} className={link}>website settings</Link>.</p>}
         {state.searchConsole?.connected === false && <SearchConsolePrompt siteId={siteId} />}
-        {needsReview.length > 0 && <p role="alert" className="text-[#F2994A]">{needsReview.length === 1 ? "A draft needs" : `${needsReview.length} drafts need`} your review in <Link href="/articles" className={link}>Articles</Link>. Nothing was published.</p>}
+        {needsReview.length > 0 && <p role="alert" className="text-rival">{needsReview.length === 1 ? "A draft needs" : `${needsReview.length} drafts need`} your review in <Link href="/articles" className={link}>Articles</Link>. Nothing was published.</p>}
         {state.funding.status !== "available" && <p>{fundingMessage(state.funding, state.schedule?.timezone ?? "UTC")}{" "}
           {state.funding.status === "blocked" && <Link href="/upgrade" className={link}>Plans &amp; billing</Link>}</p>}
         {(delivery.canPause || delivery.canResume) && <div className="flex flex-wrap gap-2">
@@ -112,15 +112,15 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
           {delivery.canResume && <Button size="sm" disabled={saving} onClick={() => operate("resume")}>Resume Pentra</Button>}
         </div>}
         <BusinessFactsEditor siteId={siteId} reviewToken={state.reviewToken} profile={state.profile} questions={state.profile.questions ?? []} />
-        <div className="border-t border-white/[0.04] pt-4 [&_summary]:text-[#D0D6E0]">{setupDetails}</div>
-        {error && <p role="alert" className="text-[#EB5757]">{error}</p>}
+        <div className="border-t border-white/[0.04] pt-4 [&_summary]:text-text-2">{setupDetails}</div>
+        {error && <p role="alert" className="text-wrong">{error}</p>}
       </div>
     </section>;
   }
-  return <section className="rounded-xl border border-white/10 p-5 space-y-4" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
+  return <section className="space-y-4 rounded-xl border border-white/[0.06] bg-surface-1 p-5 text-[13px] leading-relaxed text-text-2 [&_a]:text-text [&_h3]:text-text [&_summary]:text-text-2" aria-labelledby="content-service-heading" data-content-site-id={state.siteId}>
     {newFlow && <AutopilotSwitch siteId={siteId} reviewToken={state.reviewToken} on={Boolean(state.autopilot?.on)} intervalMs={state.plan?.autopilotIntervalMs ?? 86_400_000}
       reviewAvailable={state.autopilot?.reviewAvailable ?? true} paused={Boolean(state.schedule?.paused)} />}
-    <h2 id="content-service-heading" className="font-semibold">Content delivery service</h2>
+    <h2 id="content-service-heading" className="text-[13px] font-semibold text-text">Content delivery service</h2>
     <p>Website: <Link className="underline" href={`/sites/${state.siteId}?tab=settings`}>{state.destination.domain}</Link></p>
     <p>Current contract: {state.setupPending ? "Not selected — setup is stopped" : state.schedule?.ownerReviewedOnly ? "Review first: you approve every article" : state.serviceMode === "growth_first" ? "Growth-first content work" : "Existing fixed-article delivery"}.</p>
     {state.schedule?.ownerReviewedOnly && <p>Request a draft in <Link className="underline" href="/articles">Articles</Link>, review it, then explicitly publish. No automatic schedule or publication is enabled.</p>}
@@ -151,7 +151,7 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
     </details>
     <details open={state.serviceMode !== "growth_first"} className="space-y-3"><summary className="cursor-pointer font-medium">Service mode and publication consent</summary>
     <label className="block">Choose service mode
-      <select aria-label="Service mode" value={mode} onChange={e => { setMode(e.target.value as typeof mode); setConfirmed(false); setSwitchResult(null); }} className="block bg-[#0E0F11] border rounded p-2">
+      <select aria-label="Service mode" value={mode} onChange={e => { setMode(e.target.value as typeof mode); setConfirmed(false); setSwitchResult(null); }} className="select-field mt-1.5 block rounded-control border border-border-strong bg-surface-2 px-3 py-2 text-[13px] text-text">
         <option value="legacy_articles">Keep fixed-article delivery</option><option value="growth_first">{ownerSetup || state.schedule?.ownerReviewedOnly ? "Review first: you approve every article" : "Explicitly switch to growth-first"}</option>
       </select>
     </label>
@@ -160,8 +160,8 @@ export function ContentWorkService({ siteId }: { siteId: Id<"sites"> }) {
       <label className="block"><input type="checkbox" checked={confirmed && confirmedReview === state.reviewToken} onChange={e => { setConfirmed(e.target.checked); setConfirmedReview(state.reviewToken); }} /> I confirm these saved business facts, offerings, audience and exact publishing destination.</label>
       {ownerSetup ? <p className="text-sm">Enable drafts for your review. Each publication requires your explicit approval. This does not enable a schedule, backlinks, a purchase or an increase in spending.</p> : <>
       <p className="text-sm">{PUBLISHER_AUTOPUBLISH_CONSENT_TEXT} Selecting growth-first authorizes this scheduled creation/improvement service, not backlinks or a spending increase.</p>
-      <label className="block">First deadline ({Intl.DateTimeFormat().resolvedOptions().timeZone})<input aria-label="First delivery deadline" type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} className="block bg-[#0E0F11] border rounded p-2" /></label>
-      <label className="block">Hours between deadlines<input aria-label="Delivery interval hours" type="number" min="1" value={hours} onChange={e => setHours(e.target.value)} className="block bg-[#0E0F11] border rounded p-2" /></label>
+      <label className="block">First deadline ({Intl.DateTimeFormat().resolvedOptions().timeZone})<input aria-label="First delivery deadline" type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} className="mt-1.5 block rounded-control border border-border-strong bg-surface-2 px-3 py-2 text-[13px] text-text" /></label>
+      <label className="block">Hours between deadlines<input aria-label="Delivery interval hours" type="number" min="1" value={hours} onChange={e => setHours(e.target.value)} className="mt-1.5 block rounded-control border border-border-strong bg-surface-2 px-3 py-2 text-[13px] text-text" /></label>
       <p className="text-sm">Selection does not purchase credits or increase spending limits. Preparation must be funded and two items ready before automatic schedule activation. Switching engines requires reconciliation of in-flight work.</p>
       </>}
     </>}
@@ -190,13 +190,13 @@ function EditablePageSelection({ siteId }: { siteId: Id<"sites"> }) {
     setBusy(true); setError(""); try { await work(); } catch { setError("The current source, layout, permission or destination could not be verified. Inspect the page again; unsupported pages remain excluded."); }
     finally { setBusy(false); }
   };
-  return <div className="border-t border-white/10 pt-4 space-y-3">
+  return <div className="border-t border-white/[0.06] pt-4 space-y-3">
     <h3 className="font-medium">Pages Pentra may improve</h3>
     <p className="text-sm">Pentra’s verified creations appear automatically. You may also authorize supported plain Markdown/MDX and classic WordPress pages. Reviewed guidance can be added or a bounded instructional paragraph improved; unrelated facts, links and formatting remain unchanged. Pricing, checkout, legal pages, unsupported layouts and executable blocks are excluded. Discretionary revisions are at least fourteen days apart.</p>
-    <select aria-label="Selected page adapter" value={kind} onChange={e => { setKind(e.target.value); setPreview(null); setConsent(false); }} className="bg-[#0E0F11] border rounded p-2">
+    <select aria-label="Selected page adapter" value={kind} onChange={e => { setKind(e.target.value); setPreview(null); setConsent(false); }} className="select-field rounded-control border border-border-strong bg-surface-2 px-3 py-2 text-[13px] text-text">
       <option value="github">GitHub Markdown/MDX path</option><option value="wordpress">WordPress post/page ID</option>
     </select>
-    <input aria-label="Exact page to improve" value={target} onChange={e => { setTarget(e.target.value); setPreview(null); setConsent(false); }} placeholder={kind === "github" ? "content/blog/your-page.md" : "Post or page ID"} className="block bg-[#0E0F11] border rounded p-2 w-full" />
+    <input aria-label="Exact page to improve" value={target} onChange={e => { setTarget(e.target.value); setPreview(null); setConsent(false); }} placeholder={kind === "github" ? "content/blog/your-page.md" : "Post or page ID"} className="block w-full rounded-control border border-border-strong bg-surface-2 px-3 py-2 text-[13px] text-text placeholder:text-text-4" />
     <Button disabled={busy || !target} onClick={() => run(async () => { const p = await inspect({ siteId, ...binding }); setPreview({ ...p, target, kind }); })}>Inspect exact source</Button>
     {preview && preview.target === target && preview.kind === kind && <div className="space-y-2">
       <p>{preview.title} · {preview.url}</p>
@@ -229,10 +229,10 @@ function BusinessFactsEditor({ siteId, reviewToken, profile, questions }: { site
   const [summary, setSummary] = useState(profile.summary), [audience, setAudience] = useState(profile.audience);
   const [product, setProduct] = useState(profile.productUsage), [offerings, setOfferings] = useState(profile.offerings.join("\n"));
   const [asked, setAsked] = useState(questions.join("\n")), [confirmed, setConfirmed] = useState(false);
-  const field = "block w-full rounded-lg border border-white/[0.1] bg-[#08090A] px-3 py-2 text-[13px] text-[#F7F8F8] focus:border-white/30 focus:outline-none";
-  const label = "block space-y-1.5 text-[12px] font-medium text-[#8A8F98]";
+  const field = "block w-full rounded-lg border border-white/[0.1] bg-bg px-3 py-2 text-[13px] text-text focus:border-white/30 focus:outline-none";
+  const label = "block space-y-1.5 text-[12px] font-medium text-text-2";
   if (!open) return <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/[0.06] px-4 py-3">
-    <p className="text-[13px] text-[#8A8F98]">Pentra writes only from your confirmed business facts. Keep them current.</p>
+    <p className="text-[13px] text-text-2">Pentra writes only from your confirmed business facts. Keep them current.</p>
     <Button size="sm" variant="secondary" onClick={() => { setOpen(true); setMessage(""); }}>Edit business facts</Button>
   </div>;
   const lines = (value: string) => value.split("\n").map(line => line.trim()).filter(Boolean);
@@ -248,20 +248,20 @@ function BusinessFactsEditor({ siteId, reviewToken, profile, questions }: { site
       setMessage(err instanceof ConvexError && typeof err.data === "string" ? err.data : "Couldn't save. Refresh and try again.");
     } finally { setBusy(false); }
   }}>
-    <p className="text-[14px] font-medium text-[#F7F8F8]">Business facts</p>
+    <p className="text-[14px] font-medium text-text">Business facts</p>
     <label className={label}>What your business is and does<textarea className={field} rows={4} value={summary} onChange={e => { setSummary(e.target.value); setConfirmed(false); }} /></label>
     <label className={label}>Who you serve<textarea className={field} rows={2} value={audience} onChange={e => { setAudience(e.target.value); setConfirmed(false); }} /></label>
     <label className={label}>What your product or service does<textarea className={field} rows={3} value={product} onChange={e => { setProduct(e.target.value); setConfirmed(false); }} /></label>
     <label className={label}>What you offer (one per line)<textarea className={field} rows={5} value={offerings} onChange={e => { setOfferings(e.target.value); setConfirmed(false); }} /></label>
     <label className={label}>Real customer questions (one per line)<textarea className={field} rows={3} value={asked} onChange={e => { setAsked(e.target.value); setConfirmed(false); }} /></label>
-    <label className="flex items-start gap-2 text-[13px] text-[#D0D6E0]"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#F7F8F8]" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+    <label className="flex items-start gap-2 text-[13px] text-text-2"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-text" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
       These facts are accurate. Pentra writes only from them.</label>
     <div className="flex flex-wrap gap-2">
       <Button size="sm" type="submit" disabled={!confirmed || busy || !summary.trim() || !audience.trim() || !product.trim()} loading={busy}>Save facts</Button>
       <Button size="sm" variant="secondary" type="button" onClick={() => setOpen(false)}>Cancel</Button>
     </div>
-    <p className="text-[12px] text-[#62666D]">Articles already prepared from the old facts are set aside, never published. Your schedule and spending history stay as they are.</p>
-    {message && <p role="status" className="text-[13px] text-[#8A8F98]">{message}</p>}
+    <p className="text-[12px] text-text-3">Articles already prepared from the old facts are set aside, never published. Your schedule and spending history stay as they are.</p>
+    {message && <p role="status" className="text-[13px] text-text-2">{message}</p>}
   </form>;
 }
 

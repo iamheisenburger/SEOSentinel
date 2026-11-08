@@ -5,7 +5,7 @@ import { useAuth } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { PageHeader } from "@/components/layout/page-header";
-import { Button } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
 import {
   Globe,
   Trash2,
@@ -42,7 +42,7 @@ export default function WebsitesPage() {
           {[...Array(2)].map((_, i) => (
             <div
               key={i}
-              className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5"
+              className="rounded-xl border border-white/[0.06] bg-surface-1 p-5"
             >
               <div className="h-5 w-40 animate-pulse rounded bg-white/[0.04]" />
               <div className="mt-3 h-10 animate-pulse rounded-lg bg-white/[0.03]" />
@@ -61,13 +61,9 @@ export default function WebsitesPage() {
         subtitle={maxSites >= 9999 ? `${sites.length} website${sites.length !== 1 ? "s" : ""}` : `${sites.length} of ${maxSites} website${maxSites !== 1 ? "s" : ""} on your plan`}
         actions={
           atSiteLimit ? (
-            <Link
-              href="/upgrade"
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[#F59E0B]/[0.1] border border-[#F59E0B]/20 px-3 py-1.5 text-[12px] font-medium text-[#FBBF24] hover:bg-[#F59E0B]/[0.15] transition"
-            >
-              <Plus className="h-3.5 w-3.5" />
+            <ButtonLink href="/upgrade" variant="secondary" size="sm" icon={<Plus className="h-3.5 w-3.5" />}>
               Upgrade to add more
-            </Link>
+            </ButtonLink>
           ) : (
             <Button
               size="sm"
@@ -81,9 +77,9 @@ export default function WebsitesPage() {
       />
 
       {sites.length === 0 ? (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-12 text-center">
-          <Globe className="mx-auto h-10 w-10 text-[#62666D]/30" />
-          <p className="mt-3 text-[13px] text-[#62666D]">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-12 text-center">
+          <Globe className="mx-auto h-10 w-10 text-text-4/30" />
+          <p className="mt-3 text-[13px] text-text-3">
             No websites configured yet. Add one to get started.
           </p>
           <Button
@@ -164,63 +160,56 @@ function SiteCard({
     }
   };
 
-  const brandColor = site.brandPrimaryColor || "#0EA5E9";
-
   return (
-    <div className="group relative rounded-xl border border-white/[0.06] bg-[#0E0F11] overflow-hidden transition-colors hover:border-white/[0.12]">
-      {/* Brand colour as a hairline, not a slab */}
-      <div aria-hidden className="h-px" style={{ background: `linear-gradient(90deg, transparent, ${brandColor}, transparent)` }} />
+    <div className="group relative rounded-xl border border-white/[0.06] bg-surface-1 overflow-hidden transition-colors hover:border-white/[0.12]">
 
       {/* Card body */}
       <Link href={`/sites/${site._id}`} className="block px-5 pt-4 pb-3">
         <div className="flex items-start gap-3">
-          <div
-            className="flex h-10 w-10 items-center justify-center rounded-lg shrink-0"
-            style={{ backgroundColor: `${brandColor}15` }}
-          >
-            <Globe className="h-4.5 w-4.5" style={{ color: brandColor }} />
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-control border border-border bg-surface-2">
+            <Globe className="h-4.5 w-4.5 text-text-2" strokeWidth={1.5} />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <p className="text-[14px] font-semibold text-[#F7F8F8] truncate">
+              <p className="text-[14px] font-semibold text-text truncate">
                 {site.siteName || site.domain}
               </p>
               {growthFirst ? null : isPaused ? (
-                <span className="inline-flex items-center gap-1 rounded-full bg-[#F59E0B]/[0.08] px-2 py-0.5 text-[10px] font-medium text-[#FBBF24] shrink-0">
+                <span className="inline-flex items-center gap-1 rounded-full bg-rival/[0.08] px-2 py-0.5 text-[10px] font-medium text-rival shrink-0">
                   <Pause className="h-2.5 w-2.5" />
                   Paused
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1 rounded-full bg-[#22C55E]/[0.08] px-2 py-0.5 text-[10px] font-medium text-[#4ADE80] shrink-0">
-                  <span className="h-1.5 w-1.5 rounded-full bg-[#22C55E]" />
+                <span className="inline-flex items-center gap-1 rounded-full bg-named/[0.08] px-2 py-0.5 text-[10px] font-medium text-named shrink-0">
+                  <span className="h-1.5 w-1.5 rounded-full bg-named" />
                   Active
                 </span>
               )}
             </div>
-            <p className="text-[11px] text-[#62666D] mt-0.5 truncate">
+            <p className="text-[11px] text-text-3 mt-0.5 truncate">
               {site.domain}
               {site.siteType ? ` · ${site.siteType}` : ""}
               {site.niche ? ` · ${site.niche}` : ""}
             </p>
           </div>
-          <ArrowRight className="h-4 w-4 text-[#62666D] opacity-0 group-hover:opacity-100 transition shrink-0 mt-1" />
+          <ArrowRight className="h-4 w-4 text-text-3 opacity-0 group-hover:opacity-100 transition shrink-0 mt-1" />
         </div>
 
         {/* Stats */}
         <div className="mt-4 grid grid-cols-3 divide-x divide-white/[0.06] rounded-lg border border-white/[0.06]">
           {([["Published", shown(counts?.published)], ["Drafts", shown(counts?.drafts)], ["Topics", shown(counts?.topics)]] as const).map(([label, value]) => (
             <div key={label} className="px-3 py-2.5">
-              <p className="text-[18px] font-semibold tracking-tight tabular-nums text-[#F7F8F8]">{value}</p>
-              <p className="text-[11px] text-[#62666D]">{label}</p>
+              <p className="text-[18px] font-semibold tracking-tight tabular-nums text-text">{value}</p>
+              <p className="text-[11px] text-text-3">{label}</p>
             </div>
           ))}
         </div>
 
         {/* Footer info */}
-        <div className="mt-3 flex items-center gap-3 text-[11px] text-[#62666D]">
+        <div className="mt-3 flex items-center gap-3 text-[11px] text-text-3">
           {growthFirst ? (
             <span className="flex items-center gap-1.5">
-              <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${site.contentSchedule?.paused ? "bg-[#F2994A]" : site.contentSchedule ? "bg-[#4CB782]" : "bg-[#62666D]"}`} />
+              <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${site.contentSchedule?.paused ? "bg-rival" : site.contentSchedule ? "bg-named" : "bg-text-4"}`} />
               {!site.contentSchedule
                 ? "Setting up"
                 : site.contentSchedule.paused
@@ -255,7 +244,7 @@ function SiteCard({
             <Link
               href="/dashboard"
               onClick={() => setActiveSiteId(site._id)}
-              className="inline-flex items-center gap-1.5 text-[12px] font-medium text-[#F7F8F8] hover:text-white transition"
+              className="inline-flex items-center gap-1.5 text-[12px] font-medium text-text transition hover:text-text-2"
             >
               <ArrowRight className="h-3 w-3" />
               Open dashboard
@@ -264,11 +253,7 @@ function SiteCard({
             <button
               onClick={handleTogglePause}
               disabled={toggling}
-              className={`inline-flex items-center gap-1.5 text-[11px] transition ${
-                isPaused
-                  ? "text-[#22C55E] hover:text-[#4ADE80]"
-                  : "text-[#F59E0B] hover:text-[#FBBF24]"
-              } ${toggling ? "opacity-50" : ""}`}
+              className={`inline-flex items-center gap-1.5 text-[12px] text-text-2 transition hover:text-text ${toggling ? "opacity-50" : ""}`}
             >
               {isPaused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
               {isPaused ? "Resume" : "Pause"}
@@ -276,7 +261,7 @@ function SiteCard({
           )}
           <Link
             href={`/sites/${site._id}`}
-            className="inline-flex items-center gap-1.5 text-[12px] text-[#8A8F98] hover:text-[#F7F8F8] transition"
+            className="inline-flex items-center gap-1.5 text-[12px] text-text-2 hover:text-text transition"
           >
             <Settings className="h-3 w-3" />
             Manage
@@ -287,7 +272,7 @@ function SiteCard({
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowDeleteConfirm(false)}
-              className="text-[11px] text-[#8A8F98] hover:text-[#F7F8F8] transition"
+              className="text-[11px] text-text-2 hover:text-text transition"
             >
               Cancel
             </button>
@@ -304,7 +289,7 @@ function SiteCard({
         ) : (
           <button
             onClick={() => setShowDeleteConfirm(true)}
-            className="inline-flex items-center gap-1 text-[11px] text-[#62666D] hover:text-[#EF4444] transition"
+            className="inline-flex items-center gap-1 text-[11px] text-text-3 hover:text-wrong transition"
           >
             <Trash2 className="h-3 w-3" />
             Delete

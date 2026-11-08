@@ -7,7 +7,7 @@ import { fieldStyles } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { useEvidence } from "@/components/answers/evidence-sheet";
 import { useRunLog } from "@/components/answers/snapshot";
-import { InlineError, Notice, Panel, PanelSkeleton, ScreenHeader } from "@/components/answers/ui";
+import { ChipScroller, InlineError, Notice, Panel, PanelSkeleton, ScreenHeader, ScrollX } from "@/components/answers/ui";
 import { parseCompetitor } from "@/components/answers/onboarding/understood";
 import { useAnswersActions, useAnswersQuery } from "@/lib/answers/backend";
 import { latestFullRun, rivalOnlyQuestions } from "@/lib/answers/derive";
@@ -57,7 +57,7 @@ function CompetitorsBody({ overview }: { overview: Overview }) {
           {rows === null ? (
             <PanelSkeleton lines={5} className="border-0 p-0" />
           ) : (
-            <div className="-mx-5 overflow-x-auto px-5">
+            <ScrollX className="-mx-5 px-5">
               <table className="w-full min-w-[680px] text-left">
                 <thead>
                   <tr className="border-b border-border">
@@ -86,7 +86,7 @@ function CompetitorsBody({ overview }: { overview: Overview }) {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </ScrollX>
           )}
         </Panel>
       ) : (
@@ -95,7 +95,7 @@ function CompetitorsBody({ overview }: { overview: Overview }) {
 
       {rivals.length > 0 && (
         <Panel title="Where they're named and you aren't" description="From each question's latest result. Each opens every answer to that question.">
-          <div role="radiogroup" aria-label="Competitor" className="scrollbar-none -mx-1 mb-3 flex gap-1.5 overflow-x-auto px-1">
+          <ChipScroller label="Competitor" className="mb-3">
             {rivals.map((r) => (
               <button key={r.name} type="button" role="radio" aria-checked={focus === r.name} onClick={() => setSelected(r.name)}
                 className={cx("inline-flex h-7 shrink-0 items-center rounded-full border px-2.5 text-[12px] font-medium transition-colors duration-[var(--d-instant)]",
@@ -103,7 +103,7 @@ function CompetitorsBody({ overview }: { overview: Overview }) {
                 {r.name}
               </button>
             ))}
-          </div>
+          </ChipScroller>
           {onlyThem.length ? (
             <ul className="flex flex-col divide-y divide-border">
               {onlyThem.slice(0, 12).map(({ question, answers }) => (
@@ -185,7 +185,7 @@ function EditCompetitors({ overview }: { overview: Overview }) {
         <div className="flex max-w-[520px] gap-2">
           <label htmlFor="add-competitor" className="sr-only">Add a competitor</label>
           <input id="add-competitor" value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={onKey} disabled={list.length >= 8}
-            placeholder="Name or website, like cedarrow.com" className={cx(fieldStyles, "h-9 min-w-0 flex-1 text-[14px]")} />
+            placeholder="Name or website" className={cx(fieldStyles, "h-9 min-w-0 flex-1 text-[14px]")} />
           <Button variant="secondary" size="sm" className="h-9" onClick={add} disabled={value.trim().length < 2 || list.length >= 8} icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.5} />}>Add</Button>
         </div>
         {error && <InlineError title="Not saved">{error}</InlineError>}

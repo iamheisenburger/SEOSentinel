@@ -98,7 +98,9 @@ test("One Setup exposes bootstrap-v1 adapters and visibly gates managed beta cho
     const choice = page.getByRole("button", { name: new RegExp(label) });
     await expect(choice).toBeVisible();
     await choice.click();
-    await expect(choice).toHaveClass(/border-\[#0EA5E9\]/);
+    await expect(choice).toHaveAttribute("aria-pressed", "true");
+    // The chosen card wears the focus colour (blue means "you": the owner's own choice), as on every Pentra choice card.
+    await expect(choice).toHaveClass(/border-\[var\(--border-focus\)\]/);
   }
   for (const label of ["WordPress", "Signed webhook", "Managed sender"]) {
     const choice = page.getByRole("button", { name: new RegExp(label) });

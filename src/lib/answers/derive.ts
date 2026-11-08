@@ -4,8 +4,8 @@
  * scores, no estimates. Pure.
  */
 import { ASSISTANTS } from "../product-facts.ts";
-import { displayUrl, listSentence, plural, PUBLISH_METHOD_LABELS, shortDate } from "./format.ts";
-import type { Check, Overview, OverviewQuestion, Publishing, Run, SiteConnection, TrendPoint } from "./types.ts";
+import { displayUrl, listSentence, num, plural, PUBLISH_METHOD_LABELS, shortDate } from "./format.ts";
+import type { Check, Overview, OverviewCitation, OverviewQuestion, Publishing, Run, SiteConnection, TrendPoint } from "./types.ts";
 
 export const WEEK_MS = 7 * 86_400_000;
 
@@ -175,6 +175,21 @@ export function rivalOnlyQuestions(questions: readonly OverviewQuestion[], compe
     .map((q) => ({ question: q, answers: q.latest!.competitorsNamed.find((c) => c.name === competitor)?.answers ?? 0 }))
     .filter((row) => row.answers > 0)
     .sort((a, b) => b.answers - a.answers);
+}
+
+/**
+ * The Citations screen's line in plain words: how many answers cited the site, and how many of those cited a page
+ * Pentra wrote. A citation is one cited address, so an answer citing two pages counts once. The overview lists the
+ * latest 20 citations; a full list says so.
+ */
+export function citationsMeta(citations: readonly Pick<OverviewCitation, "checkId" | "pageId">[], limit = 20): string {
+  const answers = new Set(citations.map((c) => c.checkId)).size;
+  const pentra = new Set(citations.filter((c) => c.pageId).map((c) => c.checkId)).size;
+  const pentraText = pentra === 0
+    ? answers === 1 ? "not a Pentra page yet" : "none cited a Pentra page yet"
+    : pentra < answers ? `${num(pentra)} cited a Pentra page`
+      : answers === 1 ? "it cited a Pentra page" : answers === 2 ? "both cited a Pentra page" : `all ${num(answers)} cited a Pentra page`;
+  return `${citations.length >= limit ? `Latest ${limit} citations · ` : ""}${plural(answers, "answer")} cited your site · ${pentraText}`;
 }
 
 export type Destination =

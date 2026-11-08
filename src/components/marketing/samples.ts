@@ -35,7 +35,7 @@ export const HERO_ANSWERS: EvidenceAnswer[] = [
       },
       { p: ["Get at least two written quotes, and ask whether the permit fee is included."] },
     ],
-    outcomes: [{ kind: "named", label: "Named you · position 2 of 4" }],
+    outcomes: [{ kind: "named", label: "Named you · 2nd of 4" }],
     sources: [
       { domain: "kettlewooddecks.com", title: "Composite decks in Austin", yours: true },
       { domain: "reddit.com", title: "Who built your deck? Austin recommendations" },
@@ -68,7 +68,7 @@ export const HERO_ANSWERS: EvidenceAnswer[] = [
       { p: ["Prices in reviews vary widely by material, so compare written quotes before you choose."] },
     ],
     outcomes: [
-      { kind: "named", label: "Named you · position 1 of 3" },
+      { kind: "named", label: "Named you · 1st of 3" },
       { kind: "cited", label: "Cited your page" },
     ],
     sources: [
@@ -120,7 +120,7 @@ export const HERO_ANSWERS: EvidenceAnswer[] = [
       },
       { p: ["Most builders recommend booking in late winter to start before summer."] },
     ],
-    outcomes: [{ kind: "named", label: "Named you · position 2 of 3" }],
+    outcomes: [{ kind: "named", label: "Named you · 2nd of 3" }],
     sources: [
       { domain: "localbuildersguide.com", title: "Deck builders in Austin · listings" },
       { domain: "houzz.com", title: "Deck builders near Austin, TX" },
@@ -146,7 +146,7 @@ export const HERO_ANSWERS: EvidenceAnswer[] = [
       },
       { p: ["Reading recent reviews and comparing at least two quotes is the usual advice."] },
     ],
-    outcomes: [{ kind: "named", label: "Named you · position 3 of 3" }],
+    outcomes: [{ kind: "named", label: "Named you · 3rd of 3" }],
     sources: [
       { domain: "yelp.com", title: "Top deck builders in Austin" },
       { domain: "kettlewooddecks.com", title: "Free deck estimates in Austin", yours: true },

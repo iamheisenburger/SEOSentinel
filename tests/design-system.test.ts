@@ -89,7 +89,9 @@ test("domain entry strips a pasted protocol, validates on submit and routes to /
   assert.match(field, /onPaste=\{onPaste\}/);
   assert.doesNotMatch(field, /onChange=/, "no validation per keystroke");
   assert.match(field, /router\.push\(startHref\(domain\)\)/);
-  assert.match(field, /Free\. No card\. Results in about an hour; first answers in minutes\./);
+  // The note under every domain field says the measured timing, from the one definition in product-facts.ts.
+  assert.match(field, /export const DOMAIN_NOTE = `Free\. No card\. \$\{TIMING\.line\}`;/);
+  assert.match(read("src/lib/product-facts.ts"), /line: "Results in about 15 minutes; first answers in under 2\.",/);
 });
 
 test("the evidence card highlights the business, underlines competitors and labels sample answers", () => {
@@ -97,7 +99,7 @@ test("the evidence card highlights the business, underlines competitors and labe
   const answer = {
     id: "a", assistant: "perplexity", askedAt: "2026-11-06 09:16 UTC", question: "Who are the best deck builders in Austin, TX?",
     answer: [{ p: [{ you: "Kettlewood Decks" }, " is often recommended", { cite: 1 }, ". ", { rival: "Cedar Row Builders" }, " ", { wrong: "only builds pine" }] }],
-    outcomes: [{ kind: "named", label: "Named you · position 1 of 2" }, { kind: "wrong", label: "Wrong fact" }],
+    outcomes: [{ kind: "named", label: "Named you · 1st of 2" }, { kind: "wrong", label: "Wrong fact" }],
     sources: [{ domain: "kettlewooddecks.com", title: "Deck permits", url: "https://kettlewooddecks.com/permits", yours: true }, { domain: "houzz.com", title: "Deck builders", url: "https://houzz.com/x" }],
     locale: "US English",
   };

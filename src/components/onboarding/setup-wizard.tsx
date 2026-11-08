@@ -393,24 +393,24 @@ export function SetupWizard({
     return (
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 py-6 sm:py-10">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#0EA5E9]">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-text-2">
             One Setup
           </p>
-          <h1 className="mt-1 text-xl font-semibold text-[#F7F8F8]">
+          <h1 className="mt-1 text-xl font-semibold text-text">
             Setup progress
           </h1>
-          <p className="mt-1 text-[12px] text-[#62666D]">
+          <p className="mt-1 text-[12px] text-text-3">
             One view for website, cadence, publishing, measurement, and authority readiness.
           </p>
         </div>
 
         {error && (
-          <div className="rounded-lg border border-[#EF4444]/20 bg-[#EF4444]/[0.06] px-4 py-3 text-[12px] text-[#F87171]">
+          <div className="rounded-lg border border-wrong/20 bg-wrong/[0.06] px-4 py-3 text-[12px] text-wrong">
             {error}
           </div>
         )}
         {notice && (
-          <div className="rounded-lg border border-[#0EA5E9]/20 bg-[#0EA5E9]/[0.06] px-4 py-3 text-[12px] text-[#38BDF8]">
+          <div className="rounded-lg border border-border bg-surface-2/50 px-4 py-3 text-[12px] text-text-2">
             {notice}
           </div>
         )}
@@ -428,14 +428,14 @@ export function SetupWizard({
         )}
 
         {hasSelfManaged && (
-          <details className="group rounded-xl border border-white/[0.06] bg-[#0E0F11]">
-            <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-4 text-[12px] font-medium text-[#8A8F98]">
+          <details className="group rounded-xl border border-white/[0.06] bg-surface-1">
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-4 text-[12px] font-medium text-text-2">
               <Settings2 className="h-3.5 w-3.5" />
               Advanced connection controls
               <ChevronDown className="ml-auto h-3.5 w-3.5 transition group-open:rotate-180" />
             </summary>
             <div className="border-t border-white/[0.04] px-5 py-4">
-              <p className="mb-3 text-[10px] leading-relaxed text-[#62666D]">
+              <p className="mb-3 text-[10px] leading-relaxed text-text-3">
                 These controls are only for accounts you chose to connect yourself.
                 One Setup keeps provider authorization inside this guided flow.
               </p>
@@ -512,13 +512,13 @@ export function SetupWizard({
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 py-6 sm:py-10">
       <div className="text-center">
-        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-[#0EA5E9]/[0.09]">
-          <Zap className="h-5 w-5 text-[#0EA5E9]" />
+        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-surface-2/50">
+          <Zap className="h-5 w-5 text-text-2" />
         </div>
-        <h1 className="mt-3 text-xl font-semibold text-[#F7F8F8]">
+        <h1 className="mt-3 text-xl font-semibold text-text">
           {existingSite ? "Finish One Setup" : "Set up Pentra once"}
         </h1>
-        <p className="mx-auto mt-1 max-w-lg text-[12px] leading-relaxed text-[#62666D]">
+        <p className="mx-auto mt-1 max-w-lg text-[12px] leading-relaxed text-text-3">
           {existingSite
             ? "Confirm this existing site's business, connections, and automation choices once. Pentra will preserve the same tenant and continue from durable receipts."
             : "Describe the business once, authorize each connection, and Pentra takes it from there."}
@@ -526,12 +526,12 @@ export function SetupWizard({
       </div>
 
       {error && (
-        <div className="rounded-lg border border-[#EF4444]/20 bg-[#EF4444]/[0.06] px-4 py-3 text-[12px] text-[#F87171]">
+        <div className="rounded-lg border border-wrong/20 bg-wrong/[0.06] px-4 py-3 text-[12px] text-wrong">
           {error}
         </div>
       )}
 
-      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5 sm:p-6">
+      <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-5 sm:p-6">
         <Input
           label="Website"
           placeholder="https://example.com"
@@ -545,10 +545,10 @@ export function SetupWizard({
 
         <div className="mt-5 rounded-xl border border-white/[0.06] bg-white/[0.015] p-4">
           <div>
-            <p className="text-[12px] font-medium text-[#F7F8F8]">
+            <p className="text-[12px] font-medium text-text">
               Business and target market
             </p>
-            <p className="mt-1 text-[10px] leading-relaxed text-[#707589]">
+            <p className="mt-1 text-[10px] leading-relaxed text-text-2">
               This profile is stored with the tenant and gates every topic,
               article, and outreach decision. The website crawl can enrich it,
               but cannot silently replace what you state here.
@@ -569,7 +569,7 @@ export function SetupWizard({
             />
           </div>
           <label className="mt-3 block">
-            <span className="mb-1.5 block text-[11px] font-medium text-[#8A8F98]">
+            <span className="mb-1.5 block text-[11px] font-medium text-text-2">
               What the business sells and why it is different
             </span>
             <textarea
@@ -579,11 +579,11 @@ export function SetupWizard({
               value={businessSummary}
               onChange={(event) => setBusinessSummary(event.target.value)}
               placeholder="Describe the product, service, customer problem, and differentiators."
-              className="min-h-24 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-[12px] leading-relaxed text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+              className="min-h-24 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-[12px] leading-relaxed text-text outline-none focus:border-[var(--border-focus)]"
             />
           </label>
           <label className="mt-3 block">
-            <span className="mb-1.5 block text-[11px] font-medium text-[#8A8F98]">
+            <span className="mb-1.5 block text-[11px] font-medium text-text-2">
               Ideal customer
             </span>
             <textarea
@@ -593,11 +593,11 @@ export function SetupWizard({
               value={targetAudience}
               onChange={(event) => setTargetAudience(event.target.value)}
               placeholder="Who buys, their role, company type, and buying problem."
-              className="min-h-20 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-[12px] leading-relaxed text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+              className="min-h-20 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-[12px] leading-relaxed text-text outline-none focus:border-[var(--border-focus)]"
             />
           </label>
           <label className="mt-3 block">
-            <span className="mb-1.5 block text-[11px] font-medium text-[#8A8F98]">
+            <span className="mb-1.5 block text-[11px] font-medium text-text-2">
               How customers use it
             </span>
             <textarea
@@ -607,7 +607,7 @@ export function SetupWizard({
               value={productUsage}
               onChange={(event) => setProductUsage(event.target.value)}
               placeholder="Describe the workflow and outcome a successful customer gets."
-              className="min-h-20 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-[12px] leading-relaxed text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+              className="min-h-20 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-[12px] leading-relaxed text-text outline-none focus:border-[var(--border-focus)]"
             />
           </label>
           <Input
@@ -618,16 +618,16 @@ export function SetupWizard({
           />
         </div>
 
-        <div className="mt-5 rounded-xl border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.04] p-4">
+        <div className="mt-5 rounded-xl border border-border bg-surface-2/50 p-4">
           <div className="flex items-start gap-3">
-            <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg bg-[#0EA5E9]/[0.1]">
-              <Sparkles className="h-4 w-4 text-[#38BDF8]" />
+            <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg bg-surface-2">
+              <Sparkles className="h-4 w-4 text-text-2" />
             </div>
             <div>
-              <p className="text-[12px] font-medium text-[#F7F8F8]">
+              <p className="text-[12px] font-medium text-text">
                 One guided setup
               </p>
-              <p className="mt-1 text-[10px] leading-relaxed text-[#8A8F98]">
+              <p className="mt-1 text-[10px] leading-relaxed text-text-2">
                 Choose the exact publishing destination and sender path now.
                 Provider authorization remains inside this guided flow, and
                 every unfinished step keeps a durable blocker and automatic wake.
@@ -644,7 +644,7 @@ export function SetupWizard({
         />
 
         <div className="mt-5">
-          <label className="mb-2 block text-[11px] font-medium text-[#8A8F98]">
+          <label className="mb-2 block text-[11px] font-medium text-text-2">
             How many articles should Pentra publish?
           </label>
           <div className="flex flex-wrap gap-2">
@@ -655,8 +655,8 @@ export function SetupWizard({
                 onClick={() => setCadence(option.value)}
                 className={`rounded-lg px-3 py-2 text-[11px] font-medium transition ${
                   cadence === option.value
-                    ? "bg-[#F7F8F8] text-[#08090A]"
-                    : "bg-white/[0.04] text-[#8A8F98] hover:bg-white/[0.07]"
+                    ? "bg-action text-on-action"
+                    : "bg-white/[0.04] text-text-2 hover:bg-white/[0.07]"
                 }`}
               >
                 {option.label}
@@ -664,7 +664,7 @@ export function SetupWizard({
             ))}
           </div>
           <label className="mt-3 block max-w-[220px]">
-              <span className="mb-1.5 block text-[10px] text-[#8A8F98]">
+              <span className="mb-1.5 block text-[10px] text-text-2">
                 Articles per week
               </span>
               <input
@@ -675,10 +675,10 @@ export function SetupWizard({
                 step={1}
                 value={Number.isFinite(cadence) ? cadence : ""}
                 onChange={(event) => setCadence(Number(event.target.value))}
-                className="w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+                className="w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
               />
             </label>
-          <p className="mt-2 text-[10px] leading-relaxed text-[#73788F]">
+          <p className="mt-2 text-[10px] leading-relaxed text-text-2">
             {capacity === undefined || !capacity.ready
               ? "Verifying your plan and monthly article allowance…"
               : cadenceInputReady
@@ -687,18 +687,18 @@ export function SetupWizard({
           </p>
         </div>
 
-        <div className="mt-5 rounded-xl border border-[#22C55E]/15 bg-[#22C55E]/[0.04] p-4">
+        <div className="mt-5 rounded-xl border border-named/15 bg-named/[0.04] p-4">
           <div className="flex items-start gap-3">
-            <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-lg bg-[#22C55E]/[0.1]">
-              <Check className="h-3.5 w-3.5 text-[#4ADE80]" />
+            <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-lg bg-named/[0.1]">
+              <Check className="h-3.5 w-3.5 text-named" />
             </div>
             <div>
-              <p className="text-[12px] font-medium text-[#4ADE80]">
+              <p className="text-[12px] font-medium text-named">
                 {automationMode === "full"
                   ? "Full Autopilot"
                   : "Assisted review"}
               </p>
-              <p className="mt-1 text-[10px] leading-relaxed text-[#8A8F98]">
+              <p className="mt-1 text-[10px] leading-relaxed text-text-2">
                 {automationMode === "full"
                   ? "Pentra automatically researches, creates, quality-checks, publishes, measures, and adapts after the required production readiness gates verify. Authority outreach begins only after sender consent, mailbox, compliance, pacing, and runtime gates are all ready."
                   : "Pentra prepares work for your approval before publishing. Authority outreach remains separately controlled."}
@@ -713,23 +713,23 @@ export function SetupWizard({
                 onChange={(event) =>
                   setAutopublishConsentAccepted(event.target.checked)
                 }
-                className="mt-0.5 h-4 w-4 rounded border-white/20 accent-[#0EA5E9]"
+                className="mt-0.5 h-4 w-4 rounded border-white/20 accent-text"
               />
-              <span className="text-[10px] leading-relaxed text-[#A3A7B8]">
+              <span className="text-[10px] leading-relaxed text-text-2">
                 {PUBLISHER_AUTOPUBLISH_CONSENT_TEXT}
               </span>
             </label>
           )}
         </div>
 
-        <div className="mt-5 rounded-xl border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.025] p-4">
+        <div className="mt-5 rounded-xl border border-border bg-surface-2/50 p-4">
             <div className="flex items-start gap-3">
-              <Mail className="mt-0.5 h-4 w-4 shrink-0 text-[#38BDF8]" />
+              <Mail className="mt-0.5 h-4 w-4 shrink-0 text-text-2" />
               <div className="min-w-0 flex-1">
-                <p className="text-[12px] font-medium text-[#F7F8F8]">
+                <p className="text-[12px] font-medium text-text">
                   Outreach sender details
                 </p>
-                <p className="mt-1 text-[10px] leading-relaxed text-[#8A8F98]">
+                <p className="mt-1 text-[10px] leading-relaxed text-text-2">
                   Outreach emails identify the sender and show a real postal
                   address in the footer. Enter a business address, registered
                   office, or postal mailbox where your business can receive
@@ -790,13 +790,13 @@ export function SetupWizard({
                   ].map((item) => (
                     <label
                       key={item.text}
-                      className="flex cursor-pointer items-start gap-2 text-[10px] leading-relaxed text-[#8A8F98]"
+                      className="flex cursor-pointer items-start gap-2 text-[10px] leading-relaxed text-text-2"
                     >
                       <input
                         type="checkbox"
                         checked={item.checked}
                         onChange={(event) => item.setChecked(event.target.checked)}
-                        className="mt-0.5 h-3.5 w-3.5 rounded border-white/20 bg-black/20 accent-[#0EA5E9]"
+                        className="mt-0.5 h-3.5 w-3.5 rounded border-white/20 bg-black/20 accent-text"
                       />
                       <span>{item.text}</span>
                     </label>
@@ -807,14 +807,14 @@ export function SetupWizard({
         </div>
 
         <details className="group mt-3 rounded-xl border border-white/[0.05] bg-white/[0.015]">
-          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-[10px] text-[#62666D] hover:text-[#8A8F98]">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-[10px] text-text-3 hover:text-text-2">
             <Settings2 className="h-3 w-3" />
             Advanced setup options
             <ChevronDown className="h-3 w-3 transition group-open:rotate-180" />
           </summary>
           <div className="space-y-4 border-t border-white/[0.04] px-4 pb-4 pt-3">
             <div>
-              <p className="mb-2 text-[10px] font-medium text-[#73788F]">
+              <p className="mb-2 text-[10px] font-medium text-text-2">
                 Integration ownership
               </p>
               <div className="space-y-3">
@@ -823,15 +823,15 @@ export function SetupWizard({
                   return (
                     <div key={capability.key}>
                       <div className="mb-2 flex items-center gap-2">
-                        <Icon className="h-3 w-3 text-[#8A8F98]" />
-                        <span className="text-[10px] text-[#8A8F98]">
+                        <Icon className="h-3 w-3 text-text-2" />
+                        <span className="text-[10px] text-text-2">
                           {capability.title}
                         </span>
-                        <span className="text-[9px] text-[#62666D]">
+                        <span className="text-[9px] text-text-3">
                           {capability.detail}
                         </span>
                       </div>
-                      <div className="rounded-lg border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.04] px-3 py-2 text-[10px] leading-relaxed text-[#8A8F98]">
+                      <div className="rounded-lg border border-border bg-surface-2/50 px-3 py-2 text-[10px] leading-relaxed text-text-2">
                         Customer-managed SMTP/IMAP · approval only. Managed
                         sending remains beta-gated and cannot be selected in
                         bootstrap v1.
@@ -843,7 +843,7 @@ export function SetupWizard({
             </div>
 
             <div>
-              <p className="mb-2 text-[10px] font-medium text-[#73788F]">
+              <p className="mb-2 text-[10px] font-medium text-text-2">
                 Content approval
               </p>
               <div className="grid grid-cols-2 gap-2 rounded-lg bg-white/[0.02] p-2">
@@ -854,8 +854,8 @@ export function SetupWizard({
                     onClick={() => setAutomationMode(mode)}
                     className={`rounded-lg px-3 py-2 text-[10px] font-medium transition ${
                       automationMode === mode
-                        ? "bg-[#0EA5E9]/15 text-[#38BDF8]"
-                        : "text-[#62666D] hover:bg-white/[0.03]"
+                        ? "bg-surface-2 text-text-2"
+                        : "text-text-3 hover:bg-white/[0.03]"
                     }`}
                   >
                     {mode === "full" ? "Full Autopilot" : "Assisted review"}
@@ -864,7 +864,7 @@ export function SetupWizard({
               </div>
             </div>
 
-            <p className="text-[9px] leading-relaxed text-[#62666D]">
+            <p className="text-[9px] leading-relaxed text-text-3">
               Automatic Medium and LinkedIn syndication is not available yet.
             </p>
           </div>
@@ -874,15 +874,15 @@ export function SetupWizard({
           <div
             id="one-setup-blockers"
             role="alert"
-            className="mt-4 rounded-xl border border-[#F59E0B]/25 bg-[#F59E0B]/[0.06] p-4"
+            className="mt-4 rounded-xl border border-rival/25 bg-rival/[0.06] p-4"
           >
             <div className="flex items-start gap-3">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#FBBF24]" />
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rival" />
               <div>
-                <p className="text-[11px] font-medium text-[#FBBF24]">
+                <p className="text-[11px] font-medium text-rival">
                   Complete {setupBlockers.length} required {setupBlockers.length === 1 ? "item" : "items"} to continue
                 </p>
-                <ul className="mt-2 space-y-1 text-[10px] leading-relaxed text-[#A3A7B8]">
+                <ul className="mt-2 space-y-1 text-[10px] leading-relaxed text-text-2">
                   {setupBlockers.map((blocker) => (
                     <li key={blocker.key}>• {blocker.message}</li>
                   ))}

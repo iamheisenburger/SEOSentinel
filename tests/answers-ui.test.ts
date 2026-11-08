@@ -12,15 +12,17 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { getFunctionName } from "convex/server";
 import { runTotals } from "../convex/lib/answerEngine.ts";
-import { checkOutcomes, checkToEvidence, highlight, textToBlocks } from "../src/lib/answers/evidence.ts";
-import { deltaText, describeDestination, headline, latestFullRun, nextFullRunAt, weekLog, weeklyDelta, winnable, WEEK_MS } from "../src/lib/answers/derive.ts";
-import { elapsed, indexingState, listSentence, pageStatus, plural, timeAgo, utcStamp, WAITING_FOR_PAGE } from "../src/lib/answers/format.ts";
+import { checkOutcomes, checkToEvidence, highlight, namedLabel, textToBlocks } from "../src/lib/answers/evidence.ts";
+import { citationsMeta, deltaText, describeDestination, headline, latestFullRun, nextFullRunAt, weekLog, weeklyDelta, winnable, WEEK_MS } from "../src/lib/answers/derive.ts";
+import { domainWidthEm, elapsed, indexingState, listSentence, ordinal, pageStatus, plural, timeAgo, utcStamp, WAITING_FOR_PAGE } from "../src/lib/answers/format.ts";
 import { createSiteWithEmail } from "../src/lib/answers/create-site.ts";
+import { placeFrom, updateBusinessWithPlace } from "../src/lib/answers/update-business.ts";
 import { ConvexError } from "convex/values";
 import { createSyntheticStore, type HarnessOptions } from "../src/lib/answers/synthetic.ts";
 import { SYNTHETIC_NOW } from "../src/lib/answers/synthetic-data.ts";
 import type { Check, Overview, Run } from "../src/lib/answers/types.ts";
 import { formatUsd, PENTRA_PLAN } from "../src/lib/pricing.ts";
+import { TIMING } from "../src/lib/product-facts.ts";
 
 const read = (path: string) => readFileSync(path, "utf8");
 const SITE = "site_kettlewood";
@@ -77,7 +79,16 @@ test("an answer is highlighted the way the engine matched it: the business, its 
 });
 
 test("each answer's outcome is the engine's own: position, competitors named, cited pages, no AI Overview, failed", () => {
-  assert.deepEqual(checkOutcomes(check({ named: true, position: 2, brandsNamed: 4 })), [{ kind: "named", label: "Named you · position 2 of 4" }]);
+  assert.deepEqual(checkOutcomes(check({ named: true, position: 2, brandsNamed: 4 })), [{ kind: "named", label: "Named you · 2nd of 4" }]);
+  // Position among every business the answer names, as an ordinal: "3rd of 7", never "position 3 of 7".
+  assert.equal(namedLabel(3, 7), "Named you · 3rd of 7");
+  assert.equal(namedLabel(1, 1), "Named you · the only business named");
+  assert.equal(namedLabel(4, 2), "Named you · 4th of 4", "never fewer businesses than the position");
+  assert.equal(namedLabel(null, 5), "Named you", "named by a citation only: no position");
+  assert.deepEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111, 112].map(ordinal), ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd", "101st", "111th", "112th"]);
+  for (const path of ["src/lib/answers/evidence.ts", "src/components/marketing/samples.ts", "src/app/method/page.tsx"]) {
+    assert.doesNotMatch(read(path), /position \d+ of \d+|position \$\{/, path);
+  }
   assert.deepEqual(checkOutcomes(check({ competitorsNamed: ["Cedar Row Builders", "Halden Outdoor Co.", "Pecan Street Carpentry"] })),
     [{ kind: "rival", label: "Not mentioned · named Cedar Row Builders, Halden Outdoor Co. +1 more" }]);
   assert.deepEqual(checkOutcomes(check({ named: true, cited: true, citedPageUrls: ["https://kettlewooddecks.com/a"] })),
@@ -144,6 +155,97 @@ test("a new site is created with the owner's email; an older backend without it 
   assert.equal(older.calls.length, 2, "retried once without the email");
   const refused = async () => { throw new ConvexError("Your account already tracks kettlewooddecks.com. One website per account for now; contact us to add another."); };
   await assert.rejects(createSiteWithEmail(refused, "another.com", "owner@kettlewooddecks.com"), /already tracks/, "a sentence for the owner is never retried away");
+});
+
+test("the Citations line is said in plain words: answers that cited the site, and how many cited a Pentra page", () => {
+  const c = (checkId: string, pageId: string | null = null) => ({ checkId, pageId });
+  assert.equal(citationsMeta([c("a"), c("b"), c("b"), c("c")]), "3 answers cited your site · none cited a Pentra page yet",
+    "an answer citing two pages of the site counts once");
+  assert.equal(citationsMeta([c("a")]), "1 answer cited your site · not a Pentra page yet");
+  assert.equal(citationsMeta([c("a", "p1")]), "1 answer cited your site · it cited a Pentra page");
+  assert.equal(citationsMeta([c("a", "p1"), c("b", "p2")]), "2 answers cited your site · both cited a Pentra page");
+  assert.equal(citationsMeta([c("a", "p1"), c("b", "p2"), c("c", "p2")]), "3 answers cited your site · all 3 cited a Pentra page");
+  assert.equal(citationsMeta([c("a", "p1"), c("b"), c("c", "p2"), c("c", "p1")]), "3 answers cited your site · 2 cited a Pentra page");
+  assert.equal(citationsMeta(Array.from({ length: 20 }, (_, i) => c(`a${i % 12}`))), "Latest 20 citations · 12 answers cited your site · none cited a Pentra page yet",
+    "the overview's list is the latest 20 citations, and the line says so");
+});
+
+test("the City or area field: filled in means local, empty means not; an older backend still saves the rest", async () => {
+  assert.deepEqual(placeFrom("  Austin,   TX "), { local: true, location: "Austin, TX" });
+  assert.deepEqual(placeFrom("   "), { local: false });
+  assert.equal(placeFrom("x".repeat(120)).location?.length, 80);
+  type Args = { siteId: string; name: string; sells: string; buyers: string; offerings: string[]; local?: boolean; location?: string };
+  const fields = { siteId: SITE, name: "Kettlewood Decks", sells: "Composite and hardwood decks in Austin.", buyers: "", offerings: [] };
+  const calls: Args[] = [];
+  await updateBusinessWithPlace(async (args: Args) => { calls.push(args); return { ok: true }; }, fields, placeFrom("Round Rock, TX"));
+  assert.equal(JSON.stringify(calls), JSON.stringify([{ ...fields, local: true, location: "Round Rock, TX" }]));
+  const older: Args[] = [];
+  await updateBusinessWithPlace(async (args: Args) => {
+    older.push(args);
+    if ("local" in args) throw new Error("ArgumentValidationError: Object contains extra field `local`");
+    return { ok: true };
+  }, fields, placeFrom("Austin, TX"));
+  assert.equal(older.length, 2, "retried once without the place");
+  assert.equal("local" in older[1]!, false);
+  await assert.rejects(updateBusinessWithPlace(async () => { throw new ConvexError("Say what the business sells in a sentence."); }, fields, placeFrom("")),
+    /Say what the business sells/, "a sentence for the owner is never retried away");
+
+  // The form shows the read's city for a local business, and an empty field otherwise; the harness store saves both.
+  const local = harness("understood~free", "start?site=site_kettlewood").html;
+  assert.match(text(local), /City or area/);
+  assert.match(local, /id="biz-location"[^>]*value="Austin, TX"|value="Austin, TX"[^>]*id="biz-location"/);
+  const unread = harness("read-error~free", "start?site=site_kettlewood").html;
+  assert.match(unread, /id="biz-location"[^>]*value=""|value=""[^>]*id="biz-location"/);
+  const s = store({ scenario: "understood", access: "free" });
+  await s.actions.updateBusiness({ ...fields, ...placeFrom("Round Rock, TX") });
+  assert.deepEqual([s.get("setupState", { siteId: SITE })!.local, s.get("setupState", { siteId: SITE })!.location], [true, "Round Rock, TX"]);
+  await s.actions.updateBusiness({ ...fields, ...placeFrom("") });
+  assert.deepEqual([s.get("setupState", { siteId: SITE })!.local, s.get("setupState", { siteId: SITE })!.location], [false, null]);
+  s.dispose();
+  assert.match(read("src/components/answers/onboarding/understood.tsx"), /updateBusinessWithPlace\(actions\.updateBusiness, \{ siteId: state\.siteId, name, sells, buyers, offerings \}, placeFrom\(location\)\)/);
+});
+
+test("a long domain in a /start headline stays whole on its own line, sized to fit a phone's column", () => {
+  const { html } = harness("reading~free~signed-out", "start?domain=osterkampfamilydental.com");
+  const domain = html.match(/<span style="--fit-em:([\d.]+)" class="([^"]+)">osterkampfamilydental\.com<\/span>/);
+  assert.ok(domain, "the domain is its own element, not words inside the sentence");
+  assert.match(domain[2]!, /\bblock\b/);
+  assert.match(domain[2]!, /whitespace-nowrap/);
+  assert.match(domain[2]!, /\[font-size:clamp\(16px,calc\(100cqi\/var\(--fit-em\)\),var\(--fit-max\)\)\]/);
+  assert.match(html, /<h1 id="start-title" class="type-h1 @container/, "the headline is the container the size follows");
+  // At 390px the column is 358px: the size is min(32px, 358px / em), at least 16px. It broke only because it started
+  // mid-sentence; on its own line it is whole at about 27px.
+  const em = Number(domain[1]);
+  assert.ok(Math.abs(em - domainWidthEm("osterkampfamilydental.com")) < 0.001);
+  assert.ok(358 / em >= 16 && 358 / em < 32, `osterkampfamilydental.com is ${(358 / em).toFixed(1)}px on a phone`);
+  // Measured in Chromium with Geist loaded (weight 500, -0.03em): the estimate is never under the real width.
+  for (const [name, measured] of [["osterkampfamilydental.com", 12.29], ["wwwwwwwwwwwwwwwwwwww.com", 18.03], ["the-very-long-business-name-and-sons.co.uk", 20.33],
+    ["kettlewooddecks.com", 9.75], ["pentra.dev", 4.69]] as const) {
+    assert.ok(domainWidthEm(name) >= measured, name);
+  }
+  assert.ok(358 / domainWidthEm("kettlewooddecks.com") > 32, "a short domain keeps the headline size");
+  // A longer one shrinks further and still stays whole.
+  const long = harness("reading~free~signed-out", "start?domain=the-very-long-business-name-and-sons.co.uk").html;
+  assert.match(long, /class="[^"]*whitespace-nowrap[^"]*">the-very-long-business-name-and-sons\.co\.uk<\/span>/);
+  assert.ok(358 / domainWidthEm("the-very-long-business-name-and-sons.co.uk") >= 16);
+  assert.match(text(harness("reading~free", "start?site=site_kettlewood").html), /Reading kettlewooddecks\.com/);
+  for (const path of ["src/components/answers/onboarding/start-flow.tsx", "src/components/answers/onboarding/understood.tsx"]) {
+    assert.doesNotMatch(read(path), /\[overflow-wrap:anywhere\]">(?:Create your account to check|Adding|Reading) \{/, path);
+  }
+});
+
+test("timing copy says what was measured: first answers in under 2 minutes, the snapshot in about 15", () => {
+  assert.equal(TIMING.line, "Results in about 15 minutes; first answers in under 2.");
+  assert.match(text(harness("understood~free", "start?site=site_kettlewood").html), /Results in about 15 minutes; first answers in under 2\. Safe to close the tab\./);
+  assert.match(text(harness("reading~free~signed-out", "start?domain=kettlewooddecks.com").html), /In about 15 minutes you'll see how 5 assistants answer your buyers/);
+  assert.match(text(harness("first-hour~free", "start?site=site_kettlewood").html), /Usually about 15 minutes\./);
+  const copy = ["src/components/ui/domain-input.tsx", "src/app/pricing/page.tsx", "src/app/method/page.tsx", "src/components/marketing/first-hour.tsx",
+    "src/components/marketing/final-cta.tsx", "src/components/marketing/faq-data.ts", "src/components/answers/onboarding/start-flow.tsx",
+    "src/components/answers/onboarding/understood.tsx", "src/components/answers/onboarding/first-hour.tsx", "src/components/answers/dashboard/overview.tsx",
+    "src/components/answers/dashboard/questions.tsx"];
+  for (const path of copy) {
+    assert.doesNotMatch(read(path), /about an hour|first answers in minutes|arrive in minutes|within a few minutes|in a few minutes|written in the first hour|when the first hour is done/i, path);
+  }
 });
 
 /* ─── The harness's synthetic data obeys the backend's rules ───────────── */
@@ -241,7 +343,7 @@ test("/start's first hour: honest counts as they arrive, partial failures said, 
   const run = s.get("setupState", { siteId: SITE })!.run as Run;
   const page = text(harness("first-hour~free", "start?site=site_kettlewood").html);
   assert.match(page, new RegExp(`${run.done} of ${run.total} asked · named in ${run.named} of ${run.answered} answers`));
-  assert.match(page, /Safe to close this tab\. We'll email you when it's ready\./);
+  assert.match(page, /Usually about 15 minutes\. Safe to close this tab; we'll email you when it's ready\./);
   assert.match(page, /1 answer failed; counts show what Pentra has/);
   assert.match(page, /Showing the newest 12 of 62/);
   // Per-assistant progress from the backend's counts (asked, answered, named), never estimated.
@@ -303,7 +405,8 @@ test("the overview: count sentence with the weekly change, each assistant, the t
 
 test("questions, pages, citations, competitors, settings and billing render from the API's shapes", () => {
   const questions = text(harness("dashboard~paid", "dashboard/questions").html);
-  assert.match(questions, /32 of 40 tracked/);
+  assert.match(questions, /32 questions tracked/);
+  assert.doesNotMatch(questions, /of 40 tracked/);
   assert.match(questions, /Winnable/);
   assert.match(questions, /New this week/);
   const published = text(harness("dashboard~paid", "dashboard/pages").html);
@@ -317,7 +420,10 @@ test("questions, pages, citations, competitors, settings and billing render from
   assert.match(detail, /Live since Oct 18\. Sent to IndexNow Oct 18\./);
   const cited = overviewOf().citations;
   const citations = text(harness("dashboard~paid", "dashboard/citations").html);
-  assert.match(citations, new RegExp(`${cited.length} citations · ${new Set(cited.map((c) => c.pageId).filter(Boolean)).size} pages cited`));
+  const answersCiting = new Set(cited.map((c) => c.checkId)).size;
+  assert.ok(answersCiting > 2 && cited.every((c) => c.pageId), "the scenario's citations are of Pentra pages");
+  assert.match(citations, new RegExp(`${answersCiting} answers cited your site · all ${answersCiting} cited a Pentra page`));
+  assert.doesNotMatch(citations, /pages cited|\d+ citations ·/);
   assert.match(text(harness("new-plan~paid", "dashboard/citations").html), /No citations yet/);
   assert.match(text(harness("dashboard~paid", "dashboard/competitors").html), /Who the answers name/);
   const settings = harness("dashboard~paid", "dashboard/settings").html;

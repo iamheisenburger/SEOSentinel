@@ -8,6 +8,6 @@ import test from "node:test";
 test("P248 a ready article opens from the dashboard before it goes live", () => {
   const overview = readFileSync("src/components/content-work-overview.tsx", "utf8");
   assert.match(overview, /const readyToRead = \(w: \{ stage: string; articleId\?: string \| null \}\)[^\n]*w\.stage === "ready" && Boolean\(w\.articleId\);/);
-  assert.match(overview, /\{plain && readyToRead\(w\) && <> · <Link className="text-\[#0EA5E9\] hover:underline" href=\{`\/articles\/\$\{w\.articleId\}`\}>Read it now<\/Link><\/>\}/);
+  assert.match(overview, /\{plain && readyToRead\(w\) && <> · <Link className="[^"]*" href=\{`\/articles\/\$\{w\.articleId\}`\}>Read it now<\/Link><\/>\}/);
   assert.match(overview, /Read your first article here as soon as it's ready\. It goes live on your site at the time shown\./);
 });

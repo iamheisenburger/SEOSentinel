@@ -44,8 +44,8 @@ function Block({ id, title, children }: { id: string; title: string; children: R
 const DEFINITIONS: { term: string; pill?: ReactNode; body: string }[] = [
   {
     term: "Named",
-    pill: <StatusPill kind="named">Named you · position 2 of 4</StatusPill>,
-    body: "The answer mentions your business by name. Position is where you appear among the businesses it names.",
+    pill: <StatusPill kind="named">Named you · 2nd of 4</StatusPill>,
+    body: "The answer mentions your business by name. “2nd of 4” means it named four businesses and yours came second, in order of first mention.",
   },
   {
     term: "Not mentioned",

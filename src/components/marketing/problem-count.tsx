@@ -1,4 +1,3 @@
-import { CountUp } from "@/components/ui/count-up";
 import { Reveal } from "@/components/ui/reveal";
 import { Section, SectionHeading } from "@/components/marketing/section";
 import { SNAPSHOT } from "@/lib/product-facts";
@@ -31,9 +30,8 @@ export function ProblemCount() {
                   {row.label}
                 </p>
                 <p className="mt-5 flex items-baseline gap-2">
-                  <span className="type-number text-text">
-                    {row.count === 0 ? "0" : <CountUp value={row.count} />}
-                  </span>
+                  {/* The final count from the first paint: an example never ticks up from zero. */}
+                  <span className="type-number text-text">{row.count.toLocaleString("en-US")}</span>
                   <span className="text-[14px] text-text-3">
                     of <span className="tabular-nums">{total}</span> answers
                   </span>

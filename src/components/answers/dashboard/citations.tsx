@@ -3,9 +3,10 @@
 import { useMemo, useState } from "react";
 import { Download } from "lucide-react";
 import { Button, ButtonLink } from "@/components/ui/button";
-import { Notice, PanelSkeleton, ScreenHeader } from "@/components/answers/ui";
+import { ChipScroller, Notice, PanelSkeleton, ScreenHeader } from "@/components/answers/ui";
 import { CitationCard } from "@/components/answers/dashboard/overview";
 import { useAnswersQuery, useAppHref } from "@/lib/answers/backend";
+import { citationsMeta } from "@/lib/answers/derive";
 import { assistantLabel, plural, utcStamp } from "@/lib/answers/format";
 import type { Overview } from "@/lib/answers/types";
 import { ASSISTANTS } from "@/lib/product-facts";
@@ -67,10 +68,10 @@ function CitationsBody({ overview }: { overview: Overview }) {
   return (
     <>
       <ScreenHeader title="Citations"
-        meta={`${plural(cited.length, "citation")}${cited.length >= 20 ? " (the latest 20)" : ""} · ${plural(pagesCited.length, "page")} cited`}
+        meta={citationsMeta(cited)}
         actions={<Button variant="secondary" size="sm" onClick={exportCsv} icon={<Download className="h-3.5 w-3.5" strokeWidth={1.5} />}>Export CSV</Button>} />
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div role="radiogroup" aria-label="Assistant" className="scrollbar-none -mx-1 flex gap-1.5 overflow-x-auto px-1">
+        <ChipScroller label="Assistant">
           {[{ id: "all", label: "All" }, ...ASSISTANTS.map((a) => ({ id: a.id as string, label: a.short }))].map((chip) => {
             const count = cited.filter((c) => (chip.id === "all" || c.assistant === chip.id) && (pageId === "all" || c.pageId === pageId)).length;
             if (chip.id !== "all" && count === 0) return null;
@@ -82,7 +83,7 @@ function CitationsBody({ overview }: { overview: Overview }) {
               </button>
             );
           })}
-        </div>
+        </ChipScroller>
         <div>
           <label htmlFor="citation-page" className="sr-only">Page</label>
           <select id="citation-page" value={pageId} onChange={(e) => setPageId(e.target.value)}

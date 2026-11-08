@@ -114,6 +114,8 @@ function LegacyDashboardPage() {
   const recentJobs = activity.recent?.jobs ?? [];
   const recentArticles = articles?.slice(0, 5) ?? [];
   const decayCount = decayingArticles?.length ?? 0;
+  // Until health, decay and articles load, the health card says so instead of "Good".
+  const healthLoading = autopilotHealth === undefined || decayingArticles === undefined || articles === undefined;
   const activeAutopilotAlerts = autopilotHealth?.alerts ?? [];
   const autopilotBlocked = dashboardAutopilotRequiresAttention({
     health: autopilotHealth?.health,
@@ -180,18 +182,18 @@ function LegacyDashboardPage() {
       {/* ─── Header ───────────────────────────────── */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight text-[#F7F8F8]">
+          <h1 className="text-xl font-semibold tracking-tight text-text">
             Overview
           </h1>
           <div className="mt-1 flex items-center gap-2">
-            <span className="text-[13px] text-[#62666D]">
+            <span className="text-[13px] text-text-3">
               {site.domain}
             </span>
             <span role="status" title={activity.detail} className={`inline-flex items-center gap-1 text-[11px] font-medium ${
-              activity.state === "running" ? "text-[#0EA5E9]" : "text-[#8A8F98]"
+              activity.state === "running" ? "text-text-2" : "text-text-2"
             }`}>
               <span className={`h-1.5 w-1.5 rounded-full ${
-                activity.state === "running" ? "bg-[#0EA5E9] animate-pulse" : "bg-[#62666D]"
+                activity.state === "running" ? "bg-you animate-pulse" : "bg-text-4"
               }`} />
               {activity.label}
             </span>
@@ -214,6 +216,7 @@ function LegacyDashboardPage() {
             Add Website
           </Button>
           <Button
+            variant="secondary"
             onClick={handleGenerateNow}
             loading={genBusy}
             disabled={availableTopics === 0 || atArticleLimit}
@@ -225,14 +228,14 @@ function LegacyDashboardPage() {
       </div>
 
       {autopilotBlocked && (
-        <div className="rounded-lg border border-[#EF4444]/[0.25] bg-[#EF4444]/[0.06] px-4 py-3">
+        <div className="rounded-lg border border-wrong/[0.25] bg-wrong/[0.06] px-4 py-3">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#F87171]" />
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-wrong" />
             <div>
-              <p className="text-[13px] font-semibold text-[#FCA5A5]">
+              <p className="text-[13px] font-semibold text-wrong">
                 Content automation needs attention
               </p>
-              <p className="mt-1 text-[12px] text-[#F87171]">
+              <p className="mt-1 text-[12px] text-wrong">
                 {autopilotAttentionMessage ??
                   "Automation is fail-closed."}
               </p>
@@ -243,11 +246,11 @@ function LegacyDashboardPage() {
 
       {/* Plan usage banner */}
       {atArticleLimit && (
-        <div className="flex items-center gap-3 rounded-lg border border-[#F59E0B]/[0.2] bg-[#F59E0B]/[0.05] px-4 py-3">
-          <Zap className="h-4 w-4 shrink-0 text-[#F59E0B]" />
-          <p className="flex-1 text-[13px] text-[#FBBF24]">
+        <div className="flex items-center gap-3 rounded-lg border border-rival/[0.2] bg-rival/[0.05] px-4 py-3">
+          <Zap className="h-4 w-4 shrink-0 text-rival" />
+          <p className="flex-1 text-[13px] text-rival">
             You&apos;ve used all {maxArticles} articles this month.{" "}
-            <Link href="/upgrade" className="underline font-medium hover:text-white transition">
+            <Link href="/upgrade" className="underline font-medium hover:text-text transition">
               Upgrade your plan
             </Link>{" "}
             to generate more.
@@ -256,9 +259,9 @@ function LegacyDashboardPage() {
       )}
 
       {profileIncomplete && (
-        <div className="flex items-center gap-3 rounded-lg border border-[#F59E0B]/[0.2] bg-[#F59E0B]/[0.05] px-4 py-3">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-[#F59E0B]" />
-          <p className="flex-1 text-[13px] text-[#FBBF24]">
+        <div className="flex items-center gap-3 rounded-lg border border-rival/[0.2] bg-rival/[0.05] px-4 py-3">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-rival" />
+          <p className="flex-1 text-[13px] text-rival">
             Site profile incomplete — article quality may be affected.
           </p>
           <Button
@@ -274,11 +277,11 @@ function LegacyDashboardPage() {
 
       {/* Decay alert banner */}
       {decayCount > 0 && (
-        <div className="flex items-center gap-3 rounded-lg border border-[#EF4444]/[0.2] bg-[#EF4444]/[0.05] px-4 py-3">
-          <TrendingDown className="h-4 w-4 shrink-0 text-[#EF4444]" />
-          <p className="flex-1 text-[13px] text-[#F87171]">
+        <div className="flex items-center gap-3 rounded-lg border border-wrong/[0.2] bg-wrong/[0.05] px-4 py-3">
+          <TrendingDown className="h-4 w-4 shrink-0 text-wrong" />
+          <p className="flex-1 text-[13px] text-wrong">
             {decayCount} article{decayCount > 1 ? "s" : ""} losing rankings.{" "}
-            <Link href="/articles" className="underline font-medium hover:text-white transition">
+            <Link href="/articles" className="underline font-medium hover:text-text transition">
               View declining articles
             </Link>
           </p>
@@ -289,10 +292,10 @@ function LegacyDashboardPage() {
         <div
           className={`rounded-lg px-4 py-2 text-[13px] ${
             genMessage.includes("failed") || genMessage.includes("No available")
-              ? "bg-[#EF4444]/[0.08] text-[#F87171]"
+              ? "bg-wrong/[0.08] text-wrong"
               : genMessage.includes("...")
-                ? "bg-[#0EA5E9]/[0.08] text-[#38BDF8]"
-                : "bg-[#22C55E]/[0.08] text-[#4ADE80]"
+                ? "bg-surface-2/50 text-text-2"
+                : "bg-named/[0.08] text-named"
           }`}
         >
           {genMessage}
@@ -306,17 +309,17 @@ function LegacyDashboardPage() {
 
       {/* ─── Search Performance (GSC) ────────────── */}
       {hasGSC && (
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-5">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
-              <BarChart3 className="h-4 w-4 text-[#0EA5E9]" />
-              <h2 className="text-[13px] font-semibold text-[#F7F8F8]">
+              <BarChart3 className="h-4 w-4 text-text-2" />
+              <h2 className="text-[13px] font-semibold text-text">
                 Search Performance
               </h2>
             </div>
             <Link
               href="/analytics"
-              className="text-[11px] text-[#62666D] hover:text-[#8A8F98] transition flex items-center gap-1"
+              className="text-[11px] text-text-3 hover:text-text-2 transition flex items-center gap-1"
             >
               Full analytics <ArrowRight className="h-2.5 w-2.5" />
             </Link>
@@ -324,55 +327,55 @@ function LegacyDashboardPage() {
           <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
             <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
               <div className="flex items-center gap-1.5 mb-1">
-                <MousePointerClick className="h-3 w-3 text-[#0EA5E9]" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-[#62666D]">Clicks (28d)</span>
+                <MousePointerClick className="h-3 w-3 text-text-2" />
+                <span className="text-[10px] font-medium uppercase tracking-wider text-text-3">Clicks (28d)</span>
               </div>
-              <p className="text-lg font-bold text-[#F7F8F8]">{gscSummary.totalClicks.toLocaleString()}</p>
+              <p className="text-lg font-bold text-text">{gscSummary.totalClicks.toLocaleString()}</p>
             </div>
             <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
               <div className="flex items-center gap-1.5 mb-1">
-                <Eye className="h-3 w-3 text-[#22D3EE]" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-[#62666D]">Impressions (28d)</span>
+                <Eye className="h-3 w-3 text-text-2" />
+                <span className="text-[10px] font-medium uppercase tracking-wider text-text-3">Impressions (28d)</span>
               </div>
-              <p className="text-lg font-bold text-[#F7F8F8]">{gscSummary.totalImpressions.toLocaleString()}</p>
+              <p className="text-lg font-bold text-text">{gscSummary.totalImpressions.toLocaleString()}</p>
             </div>
             <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
               <div className="flex items-center gap-1.5 mb-1">
-                <TrendingUp className="h-3 w-3 text-[#22C55E]" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-[#62666D]">CTR</span>
+                <TrendingUp className="h-3 w-3 text-text-2" />
+                <span className="text-[10px] font-medium uppercase tracking-wider text-text-3">CTR</span>
               </div>
-              <p className="text-lg font-bold text-[#F7F8F8]">{gscSummary.avgCtr}%</p>
+              <p className="text-lg font-bold text-text">{gscSummary.avgCtr}%</p>
             </div>
             <div className="rounded-lg bg-white/[0.02] border border-white/[0.04] p-3">
               <div className="flex items-center gap-1.5 mb-1">
-                <Search className="h-3 w-3 text-[#F59E0B]" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-[#62666D]">Avg Position</span>
+                <Search className="h-3 w-3 text-text-2" />
+                <span className="text-[10px] font-medium uppercase tracking-wider text-text-3">Avg Position</span>
               </div>
-              <p className="text-lg font-bold text-[#F7F8F8]">{gscSummary.avgPosition}</p>
+              <p className="text-lg font-bold text-text">{gscSummary.avgPosition}</p>
             </div>
           </div>
 
           {/* Top Keywords */}
           {topQueries && topQueries.length > 0 && (
             <div className="mt-4">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-[#62666D] mb-2">Top Keywords</p>
+              <p className="text-[11px] font-medium uppercase tracking-wider text-text-3 mb-2">Top Keywords</p>
               <div className="flex flex-col gap-1.5">
                 {topQueries.map((q, i) => {
                   const maxClicks = topQueries[0].clicks || 1;
                   return (
                     <div key={i} className="group flex items-center gap-3">
-                      <span className="text-[10px] font-mono text-[#62666D] w-4 text-right shrink-0">{i + 1}</span>
+                      <span className="text-[10px] font-mono text-text-3 w-4 text-right shrink-0">{i + 1}</span>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-2 mb-0.5">
-                          <span className="text-[12px] text-[#F7F8F8] truncate">{q.query}</span>
-                          <div className="flex items-center gap-3 shrink-0 text-[10px] text-[#62666D]">
+                          <span className="text-[12px] text-text truncate">{q.query}</span>
+                          <div className="flex items-center gap-3 shrink-0 text-[10px] text-text-3">
                             <span>{q.clicks} clicks</span>
                             <span>pos {q.position}</span>
                           </div>
                         </div>
                         <div className="h-1 w-full rounded-full bg-white/[0.04]">
                           <div
-                            className="h-1 rounded-full bg-[#0EA5E9]/40 transition-all"
+                            className="h-1 rounded-full bg-surface-3 transition-all"
                             style={{ width: `${Math.max((q.clicks / maxClicks) * 100, 2)}%` }}
                           />
                         </div>
@@ -389,24 +392,24 @@ function LegacyDashboardPage() {
       {/* ─── Stats Row ────────────────────────────── */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         {/* Published */}
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-4">
           <div className="flex items-center justify-between">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-[#62666D]">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-text-3">
               Published
             </p>
-            <FileText className="h-3.5 w-3.5 text-[#62666D]" />
+            <FileText className="h-3.5 w-3.5 text-text-3" />
           </div>
-          <p className="mt-2 text-2xl font-bold tracking-tight text-[#F7F8F8]">
+          <p className="mt-2 text-2xl font-bold tracking-tight text-text">
             {publishedCount}
           </p>
           <div className="mt-2">
-            <div className="flex items-center justify-between text-[10px] text-[#62666D] mb-1">
+            <div className="flex items-center justify-between text-[10px] text-text-3 mb-1">
               <span>{publishedCount} of {totalArticles}</span>
               <span>{totalArticles > 0 ? Math.round((publishedCount / totalArticles) * 100) : 0}%</span>
             </div>
             <div className="h-1 w-full rounded-full bg-white/[0.04]">
               <div
-                className="h-1 rounded-full bg-[#22C55E]"
+                className="h-1 rounded-full bg-named"
                 style={{ width: `${totalArticles > 0 ? (publishedCount / totalArticles) * 100 : 0}%` }}
               />
             </div>
@@ -414,24 +417,24 @@ function LegacyDashboardPage() {
         </div>
 
         {/* Topics Remaining */}
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-4">
           <div className="flex items-center justify-between">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-[#62666D]">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-text-3">
               Topics
             </p>
-            <Target className="h-3.5 w-3.5 text-[#62666D]" />
+            <Target className="h-3.5 w-3.5 text-text-3" />
           </div>
-          <p className="mt-2 text-2xl font-bold tracking-tight text-[#F7F8F8]">
+          <p className="mt-2 text-2xl font-bold tracking-tight text-text">
             {availableTopics}
           </p>
           <div className="mt-2">
-            <div className="flex items-center justify-between text-[10px] text-[#62666D] mb-1">
+            <div className="flex items-center justify-between text-[10px] text-text-3 mb-1">
               <span>{availableTopics} available</span>
               <span>{totalTopics - availableTopics} used</span>
             </div>
             <div className="h-1 w-full rounded-full bg-white/[0.04]">
               <div
-                className="h-1 rounded-full bg-[#0EA5E9]"
+                className="h-1 rounded-full bg-text-2"
                 style={{ width: `${totalTopics > 0 ? (availableTopics / totalTopics) * 100 : 0}%` }}
               />
             </div>
@@ -439,47 +442,54 @@ function LegacyDashboardPage() {
         </div>
 
         {/* Cadence */}
-        <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
+        <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-4">
           <div className="flex items-center justify-between">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-[#62666D]">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-text-3">
               Cadence
             </p>
-            <Clock className="h-3.5 w-3.5 text-[#62666D]" />
+            <Clock className="h-3.5 w-3.5 text-text-3" />
           </div>
-          <p className="mt-2 text-2xl font-bold tracking-tight text-[#F7F8F8]">
+          <p className="mt-2 text-2xl font-bold tracking-tight text-text">
             {cadenceLabel(site.cadencePerWeek ?? 4)}
           </p>
-          <p className="mt-2 text-[10px] text-[#62666D]">
+          <p className="mt-2 text-[10px] text-text-3">
             {site.approvalRequired ? "Approval required" : "Auto-publish"}
           </p>
         </div>
 
         {/* Content Health */}
+        {healthLoading ? (
+          <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-4" aria-busy="true">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-text-3">Health</p>
+            <p className="mt-2 text-2xl font-bold tracking-tight text-text-2">…</p>
+            <p className="mt-2 text-[10px] text-text-3">Checking your content</p>
+          </div>
+        ) : (
         <div className={`rounded-xl border p-4 ${
           autopilotBlocked || decayCount > 0
-            ? "border-[#EF4444]/[0.2] bg-[#EF4444]/[0.03]"
+            ? "border-wrong/[0.2] bg-wrong/[0.03]"
             : reviewCount > 0
-              ? "border-[#F59E0B]/[0.2] bg-[#F59E0B]/[0.03]"
-              : "border-white/[0.06] bg-[#0E0F11]"
+              ? "border-rival/[0.2] bg-rival/[0.03]"
+              : "border-white/[0.06] bg-surface-1"
         }`}>
           <div className="flex items-center justify-between">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-[#62666D]">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-text-3">
               {autopilotBlocked || decayCount > 0 ? "Attention" : reviewCount > 0 ? "Needs Review" : "Health"}
             </p>
             {autopilotBlocked || decayCount > 0 ? (
-              <TrendingDown className="h-3.5 w-3.5 text-[#EF4444]" />
+              <TrendingDown className="h-3.5 w-3.5 text-wrong" />
             ) : reviewCount > 0 ? (
-              <CheckCircle2 className="h-3.5 w-3.5 text-[#F59E0B]" />
+              <CheckCircle2 className="h-3.5 w-3.5 text-rival" />
             ) : (
-              <CheckCircle2 className="h-3.5 w-3.5 text-[#22C55E]" />
+              <CheckCircle2 className="h-3.5 w-3.5 text-named" />
             )}
           </div>
           {autopilotBlocked || decayCount > 0 ? (
             <>
-              <p className="mt-2 text-2xl font-bold tracking-tight text-[#F87171]">
+              <p className="mt-2 text-2xl font-bold tracking-tight text-wrong">
                 {autopilotBlocked ? "Blocked" : decayCount}
               </p>
-              <p className="mt-2 text-[10px] text-[#F87171]">
+              <p className="mt-2 text-[10px] text-wrong">
                 {autopilotBlocked
                   ? autopilotAttentionMessage ?? "Automation is fail-closed"
                   : "Ranking decline detected"}
@@ -487,57 +497,58 @@ function LegacyDashboardPage() {
             </>
           ) : reviewCount > 0 ? (
             <>
-              <p className="mt-2 text-2xl font-bold tracking-tight text-[#FBBF24]">
+              <p className="mt-2 text-2xl font-bold tracking-tight text-rival">
                 {reviewCount}
               </p>
-              <Link href="/articles" className="mt-2 inline-flex items-center gap-1 text-[10px] font-medium text-[#F59E0B] hover:text-[#FBBF24] transition">
+              <Link href="/articles" className="mt-2 inline-flex items-center gap-1 text-[10px] font-medium text-rival hover:text-rival transition">
                 Review articles <ArrowRight className="h-2.5 w-2.5" />
               </Link>
             </>
           ) : (
             <>
-              <p className="mt-2 text-2xl font-bold tracking-tight text-[#22C55E]">
+              <p className="mt-2 text-2xl font-bold tracking-tight text-named">
                 Good
               </p>
-              <p className="mt-2 text-[10px] text-[#62666D]">All content healthy</p>
+              <p className="mt-2 text-[10px] text-text-3">All content healthy</p>
             </>
           )}
         </div>
+        )}
       </div>
 
       {/* ─── Quick Nav ────────────────────────────── */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
-        <Link href="/plan" className="group rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
-          <Target className="h-4 w-4 text-[#0EA5E9] mb-2" />
-          <p className="text-[13px] font-medium text-[#F7F8F8]">Topics</p>
-          <p className="text-[11px] text-[#62666D]">{availableTopics} available · {totalTopics - availableTopics} used</p>
+        <Link href="/plan" className="group rounded-xl border border-white/[0.06] bg-surface-1 p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
+          <Target className="h-4 w-4 text-text-2 mb-2" />
+          <p className="text-[13px] font-medium text-text">Topics</p>
+          <p className="text-[11px] text-text-3">{availableTopics} available · {totalTopics - availableTopics} used</p>
         </Link>
-        <Link href="/articles" className="group rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
-          <FileText className="h-4 w-4 text-[#22C55E] mb-2" />
-          <p className="text-[13px] font-medium text-[#F7F8F8]">Articles</p>
-          <p className="text-[11px] text-[#62666D]">{publishedCount} published · {totalArticles - publishedCount} drafts</p>
+        <Link href="/articles" className="group rounded-xl border border-white/[0.06] bg-surface-1 p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
+          <FileText className="h-4 w-4 text-text-2 mb-2" />
+          <p className="text-[13px] font-medium text-text">Articles</p>
+          <p className="text-[11px] text-text-3">{publishedCount} published · {totalArticles - publishedCount} drafts</p>
         </Link>
-        <Link href="/analytics" className="group rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
-          <BarChart3 className="h-4 w-4 text-[#22D3EE] mb-2" />
-          <p className="text-[13px] font-medium text-[#F7F8F8]">Analytics</p>
-          <p className="text-[11px] text-[#62666D]">{hasGSC ? `${gscSummary.queryCount} keywords tracked` : "Connect GSC"}</p>
+        <Link href="/analytics" className="group rounded-xl border border-white/[0.06] bg-surface-1 p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
+          <BarChart3 className="h-4 w-4 text-text-2 mb-2" />
+          <p className="text-[13px] font-medium text-text">Analytics</p>
+          <p className="text-[11px] text-text-3">{hasGSC ? `${gscSummary.queryCount} keywords tracked` : "Connect GSC"}</p>
         </Link>
-        <Link href="/backlinks" className="group rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
-          <Link2 className="h-4 w-4 text-[#F59E0B] mb-2" />
-          <p className="text-[13px] font-medium text-[#F7F8F8]">Backlinks</p>
-          <p className="text-[11px] text-[#62666D]">Analyze & outreach</p>
+        <Link href="/backlinks" className="group rounded-xl border border-white/[0.06] bg-surface-1 p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.1]">
+          <Link2 className="h-4 w-4 text-text-2 mb-2" />
+          <p className="text-[13px] font-medium text-text">Backlinks</p>
+          <p className="text-[11px] text-text-3">Analyze & outreach</p>
         </Link>
       </div>
 
       {/* ─── Recent Articles ─────────────────────── */}
-      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
+      <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-5">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-[13px] font-semibold text-[#F7F8F8]">
+            <h2 className="text-[13px] font-semibold text-text">
               Latest Articles
             </h2>
             <Link
               href="/articles"
-              className="text-[11px] text-[#62666D] hover:text-[#8A8F98] transition"
+              className="text-[11px] text-text-3 hover:text-text-2 transition"
             >
               View all
             </Link>
@@ -555,18 +566,18 @@ function LegacyDashboardPage() {
                     <StatusBadge status={article.status} />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-[13px] font-medium text-[#F7F8F8] leading-snug line-clamp-1 group-hover:text-white transition">
+                    <p className="text-[13px] font-medium text-text leading-snug line-clamp-1 group-hover:text-text transition">
                       {article.title}
                     </p>
-                    <div className="mt-1 flex items-center gap-2 text-[11px] text-[#62666D]">
+                    <div className="mt-1 flex items-center gap-2 text-[11px] text-text-3">
                       <span>{(article.wordCount ?? 0).toLocaleString()} words</span>
-                      <span className="text-white/[0.08]">·</span>
+                      <span className="text-border">·</span>
                       <span>{formatDistanceToNow(article.createdAt, { addSuffix: true })}</span>
                       {(article.decayStatus === "warning" || article.decayStatus === "declining") && (
                         <>
-                          <span className="text-white/[0.08]">·</span>
+                          <span className="text-border">·</span>
                           <span className={`inline-flex items-center gap-1 ${
-                            article.decayStatus === "declining" ? "text-[#EF4444]" : "text-[#F59E0B]"
+                            article.decayStatus === "declining" ? "text-wrong" : "text-rival"
                           }`}>
                             <TrendingDown className="h-2.5 w-2.5" />
                             {article.decayStatus === "declining" ? "Declining" : "Warning"}
@@ -575,14 +586,14 @@ function LegacyDashboardPage() {
                       )}
                     </div>
                   </div>
-                  <ExternalLink className="h-3 w-3 mt-1 text-[#62666D] opacity-0 group-hover:opacity-100 transition shrink-0" />
+                  <ExternalLink className="h-3 w-3 mt-1 text-text-3 opacity-0 group-hover:opacity-100 transition shrink-0" />
                 </Link>
               ))}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-8 text-center">
-              <FileText className="h-8 w-8 text-[#62666D]/30" />
-              <p className="mt-2 text-[12px] text-[#62666D]">
+              <FileText className="h-8 w-8 text-text-4/30" />
+              <p className="mt-2 text-[12px] text-text-3">
                 No articles yet. Click &ldquo;Generate Now&rdquo; to create your first.
               </p>
             </div>
@@ -590,21 +601,21 @@ function LegacyDashboardPage() {
         </div>
 
       {/* ─── Activity Timeline ────────────────────── */}
-      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
+      <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-5">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-[13px] font-semibold text-[#F7F8F8]">
+          <h2 className="text-[13px] font-semibold text-text">
             Activity
           </h2>
           <Link
             href="/jobs"
-            className="text-[11px] text-[#62666D] hover:text-[#8A8F98] transition"
+            className="text-[11px] text-text-3 hover:text-text-2 transition"
           >
             View all
           </Link>
         </div>
 
         {activity.state === "loading" ? (
-          <p role="status" className="text-center py-6 text-[12px] text-[#62666D]">{activity.detail}</p>
+          <p role="status" className="text-center py-6 text-[12px] text-text-3">{activity.detail}</p>
         ) : recentJobs.length > 0 ? (
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {recentJobs.map((job) => (
@@ -614,53 +625,53 @@ function LegacyDashboardPage() {
               >
                 <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${
                   job.status === "done"
-                    ? "bg-[#22C55E]/[0.08]"
+                    ? "bg-named/[0.08]"
                     : job.status === "running"
-                      ? "bg-[#0EA5E9]/[0.08]"
+                      ? "bg-surface-2/50"
                       : job.status === "failed"
-                        ? "bg-[#EF4444]/[0.08]"
+                        ? "bg-wrong/[0.08]"
                         : "bg-white/[0.04]"
                 }`}>
                   <JobIcon
                     type={job.type}
                     className={`h-3 w-3 ${
                       job.status === "done"
-                        ? "text-[#22C55E]"
+                        ? "text-named"
                         : job.status === "running"
-                          ? "text-[#0EA5E9]"
+                          ? "text-text-2"
                           : job.status === "failed"
-                            ? "text-[#EF4444]"
-                            : "text-[#62666D]"
+                            ? "text-wrong"
+                            : "text-text-3"
                     }`}
                   />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-[11px] font-medium text-[#F7F8F8] truncate">
+                  <p className="text-[11px] font-medium text-text truncate">
                     {jobLabel(job.type)}
                   </p>
-                  <p className="text-[10px] text-[#62666D]">
+                  <p className="text-[10px] text-text-3">
                     {job.updatedAt === undefined ? "Update time unavailable" : formatDistanceToNow(job.updatedAt, { addSuffix: true })}
                   </p>
                 </div>
                 <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                   job.status === "done"
-                    ? "bg-[#22C55E]"
+                    ? "bg-named"
                     : job.status === "running"
-                      ? "bg-[#0EA5E9] animate-pulse"
+                      ? "bg-you animate-pulse"
                       : job.status === "failed"
-                        ? "bg-[#EF4444]"
-                        : "bg-[#62666D]"
+                        ? "bg-wrong"
+                        : "bg-text-4"
                 }`} />
               </div>
             ))}
           </div>
         ) : (
-          <p className="text-center py-6 text-[12px] text-[#62666D]">
+          <p className="text-center py-6 text-[12px] text-text-3">
             No pipeline activity yet.
           </p>
         )}
         {activity.recent?.status === "truncated" && (
-          <p className="mt-3 text-[11px] text-[#62666D]">Showing the 8 newest jobs for this site; older activity is not shown.</p>
+          <p className="mt-3 text-[11px] text-text-3">Showing the 8 newest jobs for this site; older activity is not shown.</p>
         )}
       </div>
     </div>
@@ -678,7 +689,7 @@ function DashboardSkeleton() {
       </div>
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         {[...Array(4)].map((_, i) => (
-          <div key={i} className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
+          <div key={i} className="rounded-xl border border-white/[0.06] bg-surface-1 p-4">
             <div className="h-3 w-16 animate-pulse rounded bg-white/[0.04]" />
             <div className="mt-3 h-7 w-12 animate-pulse rounded bg-white/[0.04]" />
             <div className="mt-3 h-1 w-full animate-pulse rounded bg-white/[0.04]" />
@@ -687,14 +698,14 @@ function DashboardSkeleton() {
       </div>
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         {[...Array(4)].map((_, i) => (
-          <div key={i} className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
+          <div key={i} className="rounded-xl border border-white/[0.06] bg-surface-1 p-4">
             <div className="h-4 w-4 animate-pulse rounded bg-white/[0.04] mb-2" />
             <div className="h-3.5 w-20 animate-pulse rounded bg-white/[0.04]" />
             <div className="mt-1 h-3 w-28 animate-pulse rounded bg-white/[0.03]" />
           </div>
         ))}
       </div>
-      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
+      <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-5">
         {[...Array(5)].map((_, i) => (
           <div key={i} className="flex items-center gap-3 py-3 border-b border-white/[0.03] last:border-0">
             <div className="h-4 w-14 animate-pulse rounded-full bg-white/[0.04]" />

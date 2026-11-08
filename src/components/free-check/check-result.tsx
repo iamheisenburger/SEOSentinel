@@ -12,8 +12,8 @@ import { FREE_CHECK_DOMAIN_KEY } from "@/lib/free-check-key";
 
 type View = NonNullable<FunctionReturnType<typeof api.freeCheck.get>>;
 
-const EYEBROW = "font-mono text-[12px] uppercase tracking-[0.12em] text-[#62666D]";
-const PANEL = "rounded-xl border border-white/[0.06] bg-[#0B0C0E] p-5 md:p-6";
+const EYEBROW = "font-mono text-[12px] uppercase tracking-[0.12em] text-text-3";
+const PANEL = "rounded-xl border border-white/[0.06] bg-surface-1 p-5 md:p-6";
 const STEPS = ["Reading your homepage", "Checking what Google can see", "Finding searches your customers make", "Checking which searches fit your business",
   "Checking the pages you already have", "Checking Google for each search"];
 
@@ -31,7 +31,7 @@ function SignupCta({ domain, signedIn, children }: { domain: string; signedIn: b
     catch { /* not counted */ }
   };
   return <Link href={signedIn ? "/dashboard?setup=new" : "/sign-up"} onClick={remember}
-    className="group inline-flex items-center gap-2 rounded-full bg-[#F7F8F8] px-5 py-2.5 text-[15px] font-medium text-[#08090A] transition hover:bg-white">
+    className="group inline-flex items-center gap-2 rounded-full bg-action px-5 py-2.5 text-[15px] font-medium text-on-action transition hover:bg-white">
     {children}<ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
   </Link>;
 }
@@ -45,10 +45,10 @@ function StartButton({ domain, label }: { domain: string; label: string }) {
       if ("error" in started) setError(started.error);
       else if (started.status === "failed") setError("This website's last check failed less than an hour ago. Try again later.");
       setBusy(false);
-    }} className="inline-flex items-center gap-2 rounded-full bg-[#F7F8F8] px-5 py-2.5 text-[15px] font-medium text-[#08090A] transition hover:bg-white disabled:opacity-60">
+    }} className="inline-flex items-center gap-2 rounded-full bg-action px-5 py-2.5 text-[15px] font-medium text-on-action transition hover:bg-white disabled:opacity-60">
       {busy ? "Starting…" : label}
     </button>
-    {error && <p role="alert" className="text-[13px] text-[#F59E0B]">{error}</p>}
+    {error && <p role="alert" className="text-[13px] text-rival">{error}</p>}
   </div>;
 }
 
@@ -71,17 +71,17 @@ function EmailReport({ domain, full }: { domain: string; full: boolean }) {
     finally { setBusy(false); }
   }
   return <form onSubmit={send} noValidate className="mt-5 border-t border-white/[0.06] pt-5">
-    <label htmlFor="free-check-email" className="text-[14px] font-medium text-[#F7F8F8]">{full ? "Email me the full list" : "Email me this report"}</label>
+    <label htmlFor="free-check-email" className="text-[14px] font-medium text-text">{full ? "Email me the full list" : "Email me this report"}</label>
     <div className="mt-2 flex flex-col gap-2 sm:flex-row">
       <input id="free-check-email" type="email" autoComplete="email" value={email} disabled={sent} placeholder="you@yourbusiness.com"
         onChange={e => { setEmail(e.target.value); setNote(""); }}
-        className="min-w-0 flex-1 rounded-lg border border-white/[0.1] bg-[#08090A] px-3 py-2.5 text-[14px] text-[#F7F8F8] placeholder:text-[#62666D] focus:border-white/30 focus:outline-none disabled:opacity-60" />
+        className="min-w-0 flex-1 rounded-lg border border-white/[0.1] bg-bg px-3 py-2.5 text-[14px] text-text placeholder:text-text-4 focus:border-white/30 focus:outline-none disabled:opacity-60" />
       <button type="submit" disabled={busy || sent || !email.trim()}
-        className="rounded-lg border border-white/[0.1] px-4 py-2.5 text-[14px] font-medium text-[#F7F8F8] transition hover:border-white/[0.18] hover:bg-white/[0.04] disabled:opacity-50">
+        className="rounded-lg border border-white/[0.1] px-4 py-2.5 text-[14px] font-medium text-text transition hover:border-white/[0.18] hover:bg-white/[0.04] disabled:opacity-50">
         {busy ? "Sending…" : sent ? "Sent" : "Send"}
       </button>
     </div>
-    <p role="status" className={`mt-2 text-[12px] ${note && !sent ? "text-[#F59E0B]" : "text-[#62666D]"}`}>
+    <p role="status" className={`mt-2 text-[12px] ${note && !sent ? "text-rival" : "text-text-3"}`}>
       {note || `One email with ${full ? "every missed search" : "this report"}. Pentra doesn't keep your address or add you to a list.`}
     </p>
   </form>;
@@ -91,15 +91,15 @@ function Running({ view }: { view: View }) {
   const current = Math.max(0, STEPS.indexOf(view.step ?? ""));
   return <section className={PANEL} aria-live="polite">
     <p className={EYEBROW}>Checking {view.domain}</p>
-    <h1 className="mt-3 text-2xl font-semibold tracking-tight text-[#F7F8F8] md:text-3xl">Finding the searches {view.domain} is missing</h1>
+    <h1 className="mt-3 text-2xl font-semibold tracking-tight text-text md:text-3xl">Finding the searches {view.domain} is missing</h1>
     <ol className="mt-6 space-y-3">
-      {STEPS.map((step, i) => <li key={step} className={`flex items-center gap-3 text-[14px] ${i <= current ? "text-[#F7F8F8]" : "text-[#62666D]"}`}>
-        {i < current ? <Check className="h-4 w-4 text-[#4CB782]" aria-hidden /> : i === current
-          ? <Loader2 className="h-4 w-4 animate-spin text-[#0EA5E9]" aria-hidden /> : <span className="h-4 w-4 rounded-full border border-white/[0.12]" aria-hidden />}
+      {STEPS.map((step, i) => <li key={step} className={`flex items-center gap-3 text-[14px] ${i <= current ? "text-text" : "text-text-3"}`}>
+        {i < current ? <Check className="h-4 w-4 text-named" aria-hidden /> : i === current
+          ? <Loader2 className="h-4 w-4 animate-spin text-text-2" aria-hidden /> : <span className="h-4 w-4 rounded-full border border-white/[0.12]" aria-hidden />}
         {step}
       </li>)}
     </ol>
-    <p className="mt-6 text-[13px] text-[#8A8F98]">This usually takes under a minute. You can share this page: the result appears here.</p>
+    <p className="mt-6 text-[13px] text-text-2">This usually takes under a minute. You can share this page: the result appears here.</p>
   </section>;
 }
 
@@ -109,20 +109,20 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
   return <div className="space-y-6">
     <section className={PANEL}>
       <p className={EYEBROW}>Missed searches{view.countryName ? ` · Google in ${view.countryName}` : ""}</p>
-      <h1 className="mt-3 text-2xl font-semibold tracking-tight text-[#F7F8F8] md:text-3xl [text-wrap:balance] [overflow-wrap:anywhere]">
+      <h1 className="mt-3 text-2xl font-semibold tracking-tight text-text md:text-3xl [text-wrap:balance] [overflow-wrap:anywhere]">
         {view.totalMissed > 0 ? `${view.totalMissed} Google ${view.totalMissed === 1 ? "search" : "searches"} ${view.domain} is missing`
           : view.almost.length > 0 ? `${view.domain} is close to page one for ${view.almost.length} ${view.almost.length === 1 ? "search" : "searches"}`
             : view.wins.length > 0 ? `${view.domain} already ranks near the top of Google for its customers' searches`
             : `No missed searches found for ${view.domain}`}
       </h1>
-      {view.summary && <p className="mt-2 text-[13px] leading-relaxed text-[#62666D]">
+      {view.summary && <p className="mt-2 text-[13px] leading-relaxed text-text-3">
         Pentra read {view.domain} as: {view.summary}{view.placesLabel ? ` Serves ${view.placesLabel}.` : ""}
       </p>}
-      {view.totalMissed > 0 ? <p className="mt-3 text-[15px] leading-relaxed text-[#8A8F98]">
+      {view.totalMissed > 0 ? <p className="mt-3 text-[15px] leading-relaxed text-text-2">
         {view.placesLabel ? `People in ${view.placesLabel} make these searches about ${number(view.monthlySearches)} times a month.`
           : `People who could become your customers make these searches about ${number(view.monthlySearches)} times a month.`}
         {" "}{view.domain} has no page for them, and a live Google check shows it isn&apos;t on the first two pages. Each has low competition, so a good page has a real chance to rank.
-      </p> : <p className="mt-3 text-[15px] leading-relaxed text-[#8A8F98]">
+      </p> : <p className="mt-3 text-[15px] leading-relaxed text-text-2">
         {view.keywordsUnavailable
           ? `Pentra couldn't find search data for ${view.domain}. This happens when a homepage has little text Pentra can read (for example, a site built entirely in JavaScript) or when the site is very new.`
           : view.almost.length > 0
@@ -135,18 +135,18 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
       </p>}
       {view.missed.length > 0 && <div className="mt-5 overflow-hidden rounded-lg border border-white/[0.06]">
         <table className="w-full text-left text-[14px]">
-          <thead className="bg-white/[0.02] text-[12px] text-[#8A8F98]"><tr>
+          <thead className="bg-white/[0.02] text-[12px] text-text-2"><tr>
             <th scope="col" className="px-4 py-2.5 font-medium">Search</th>
             <th scope="col" className="px-4 py-2.5 text-right font-medium">Searches a month</th>
             <th scope="col" className="hidden px-4 py-2.5 text-right font-medium sm:table-cell">Competition</th>
           </tr></thead>
           <tbody>
             {view.missed.map(row => <tr key={row.keyword} className="border-t border-white/[0.06]">
-              <td className="px-4 py-3 text-[#F7F8F8]">{row.keyword}
-                {similar(row.variants) && <span className="block text-[12px] text-[#62666D]">{similar(row.variants)}</span>}</td>
-              <td className="px-4 py-3 text-right tabular-nums text-[#D0D6E0]">{number(row.searchVolume)}
-                <span className="block text-[12px] text-[#62666D] sm:hidden">{competition(row.difficulty)} competition</span></td>
-              <td className="hidden px-4 py-3 text-right text-[#8A8F98] sm:table-cell">{competition(row.difficulty)} <span className="text-[#62666D]">({row.difficulty}/100)</span></td>
+              <td className="px-4 py-3 text-text">{row.keyword}
+                {similar(row.variants) && <span className="block text-[12px] text-text-3">{similar(row.variants)}</span>}</td>
+              <td className="px-4 py-3 text-right tabular-nums text-text-2">{number(row.searchVolume)}
+                <span className="block text-[12px] text-text-3 sm:hidden">{competition(row.difficulty)} competition</span></td>
+              <td className="hidden px-4 py-3 text-right text-text-2 sm:table-cell">{competition(row.difficulty)} <span className="text-text-3">({row.difficulty}/100)</span></td>
             </tr>)}
           </tbody>
         </table>
@@ -158,9 +158,9 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
             <span className="h-3 rounded bg-white/[0.08]" style={{ width: `${[56, 44, 62, 38][i]}%` }} /><span className="h-3 w-10 rounded bg-white/[0.08]" />
           </div>)}
         </div>
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#08090A]/70 px-4 text-center">
-          <p className="text-[15px] font-medium text-[#F7F8F8]">{view.hiddenCount} more missed {view.hiddenCount === 1 ? "search" : "searches"}</p>
-          <p className="max-w-sm text-[13px] text-[#8A8F98]">Create a free account to see them all. Pentra then writes your first 3 articles free.</p>
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-bg/70 px-4 text-center">
+          <p className="text-[15px] font-medium text-text">{view.hiddenCount} more missed {view.hiddenCount === 1 ? "search" : "searches"}</p>
+          <p className="max-w-sm text-[13px] text-text-2">Create a free account to see them all. Pentra then writes your first 3 articles free.</p>
           <SignupCta domain={view.domain} signedIn={signedIn}>See all {view.totalMissed}</SignupCta>
         </div>
       </div>}
@@ -168,53 +168,53 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
     </section>
 
     {view.almost.length > 0 && <section className={PANEL} aria-labelledby="free-check-almost">
-      <h2 id="free-check-almost" className="text-[17px] font-semibold text-[#F7F8F8]">Close to page one</h2>
-      <p className="mt-1.5 text-[14px] leading-relaxed text-[#8A8F98]">{view.domain} already shows up for these searches at positions 4 to 20 on Google. Improving the page that ranks is usually the quickest win.</p>
+      <h2 id="free-check-almost" className="text-[17px] font-semibold text-text">Close to page one</h2>
+      <p className="mt-1.5 text-[14px] leading-relaxed text-text-2">{view.domain} already shows up for these searches at positions 4 to 20 on Google. Improving the page that ranks is usually the quickest win.</p>
       <ul className="mt-4 divide-y divide-white/[0.06]">
         {view.almost.map(row => <li key={row.url} className="py-3 text-[14px]">
-          <span className="block text-[#F7F8F8]">{row.keyword}</span>
-          <span className="block text-[#8A8F98]"><span className="text-[#D0D6E0]">#{row.position}</span> on Google · {number(row.searchVolume)} a month{similar(row.variants) ? ` · ${similar(row.variants)}` : ""} · <span className="text-[#62666D] [overflow-wrap:anywhere]">{pagePath(row.url)}</span></span>
+          <span className="block text-text">{row.keyword}</span>
+          <span className="block text-text-2"><span className="text-text-2">#{row.position}</span> on Google · {number(row.searchVolume)} a month{similar(row.variants) ? ` · ${similar(row.variants)}` : ""} · <span className="text-text-3 [overflow-wrap:anywhere]">{pagePath(row.url)}</span></span>
         </li>)}
       </ul>
     </section>}
 
     {view.unranked.length > 0 && <section className={PANEL} aria-labelledby="free-check-unranked">
-      <h2 id="free-check-unranked" className="text-[17px] font-semibold text-[#F7F8F8]">Pages Google doesn&apos;t show yet</h2>
-      <p className="mt-1.5 text-[14px] leading-relaxed text-[#8A8F98]">{view.domain} has a page for these searches, but a live Google check shows it isn&apos;t on the first two pages. Improving that page is usually faster than writing a new one.</p>
+      <h2 id="free-check-unranked" className="text-[17px] font-semibold text-text">Pages Google doesn&apos;t show yet</h2>
+      <p className="mt-1.5 text-[14px] leading-relaxed text-text-2">{view.domain} has a page for these searches, but a live Google check shows it isn&apos;t on the first two pages. Improving that page is usually faster than writing a new one.</p>
       <ul className="mt-4 divide-y divide-white/[0.06]">
         {view.unranked.map(row => <li key={row.url} className="py-3 text-[14px]">
-          <span className="block text-[#F7F8F8]">{row.keyword}</span>
-          <span className="block text-[#8A8F98]">{number(row.searchVolume)} a month{similar(row.variants) ? ` · ${similar(row.variants)}` : ""} · <span className="text-[#62666D] [overflow-wrap:anywhere]">{pagePath(row.url)}</span></span>
+          <span className="block text-text">{row.keyword}</span>
+          <span className="block text-text-2">{number(row.searchVolume)} a month{similar(row.variants) ? ` · ${similar(row.variants)}` : ""} · <span className="text-text-3 [overflow-wrap:anywhere]">{pagePath(row.url)}</span></span>
         </li>)}
       </ul>
     </section>}
 
     {view.wins.length > 0 && <section className={PANEL} aria-labelledby="free-check-wins">
-      <h2 id="free-check-wins" className="text-[17px] font-semibold text-[#F7F8F8]">Already near the top</h2>
-      <p className="mt-1.5 text-[14px] leading-relaxed text-[#8A8F98]">Google shows {view.domain} in its top 3 for these searches from its customers. Keeping these pages current protects the visits they already bring.</p>
+      <h2 id="free-check-wins" className="text-[17px] font-semibold text-text">Already near the top</h2>
+      <p className="mt-1.5 text-[14px] leading-relaxed text-text-2">Google shows {view.domain} in its top 3 for these searches from its customers. Keeping these pages current protects the visits they already bring.</p>
       <ul className="mt-4 divide-y divide-white/[0.06]">
         {view.wins.map(row => <li key={row.url} className="py-3 text-[14px]">
-          <span className="block text-[#F7F8F8]">{row.keyword}</span>
-          <span className="block text-[#8A8F98]"><span className="text-[#D0D6E0]">#{row.position}</span> on Google · {number(row.searchVolume)} a month{similar(row.variants) ? ` · ${similar(row.variants)}` : ""} · <span className="text-[#62666D] [overflow-wrap:anywhere]">{pagePath(row.url)}</span></span>
+          <span className="block text-text">{row.keyword}</span>
+          <span className="block text-text-2"><span className="text-text-2">#{row.position}</span> on Google · {number(row.searchVolume)} a month{similar(row.variants) ? ` · ${similar(row.variants)}` : ""} · <span className="text-text-3 [overflow-wrap:anywhere]">{pagePath(row.url)}</span></span>
         </li>)}
       </ul>
     </section>}
 
     {view.health && <section className={PANEL} aria-labelledby="free-check-health">
-      <h2 id="free-check-health" className="text-[17px] font-semibold text-[#F7F8F8]">Google basics: {view.health.passed} of {view.health.total} pass</h2>
+      <h2 id="free-check-health" className="text-[17px] font-semibold text-text">Google basics: {view.health.passed} of {view.health.total} pass</h2>
       {view.health.issues.length === 0
-        ? <p className="mt-1.5 text-[14px] text-[#8A8F98]">Your homepage passes every basic check.</p>
+        ? <p className="mt-1.5 text-[14px] text-text-2">Your homepage passes every basic check.</p>
         : <ul className="mt-4 space-y-2.5">
-          {view.health.issues.map(item => <li key={item.code} className="flex gap-3 text-[14px] leading-relaxed text-[#D0D6E0]">
-            <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${item.severity === "critical" ? "bg-[#EF4444]" : "bg-[#F59E0B]"}`} aria-hidden />
+          {view.health.issues.map(item => <li key={item.code} className="flex gap-3 text-[14px] leading-relaxed text-text-2">
+            <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${item.severity === "critical" ? "bg-wrong" : "bg-rival"}`} aria-hidden />
             <span><span className="sr-only">{item.severity === "critical" ? "Serious: " : "Worth fixing: "}</span>{item.message}</span>
           </li>)}
         </ul>}
     </section>}
 
-    <section className="rounded-xl border border-[#0EA5E9]/25 bg-[#0EA5E9]/[0.05] p-5 md:p-6">
-      <h2 className="text-[17px] font-semibold text-[#F7F8F8]">Let Pentra write these pages for you</h2>
-      <p className="mt-1.5 text-[14px] leading-relaxed text-[#C9CDD6]">
+    <section className="rounded-xl border border-border bg-surface-2/50 p-5 md:p-6">
+      <h2 className="text-[17px] font-semibold text-text">Let Pentra write these pages for you</h2>
+      <p className="mt-1.5 text-[14px] leading-relaxed text-text-2">
         {view.totalMissed > 0 && "Set up your site and Pentra starts with these searches, checked against the business facts you confirm. "}
         Pentra learns what you sell, writes a fact-checked article for {view.totalMissed > 0 ? "each search" : "searches your customers make"}, publishes it to your site
         (a Next.js, Astro, Hugo, Jekyll or Gatsby blog on GitHub, or you paste it in), and improves the pages closest to page one.
@@ -222,17 +222,17 @@ function Done({ view, signedIn }: { view: View; signedIn: boolean }) {
       </p>
       <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-3">
         <SignupCta domain={view.domain} signedIn={signedIn}>{signedIn ? `Set up ${view.domain} in Pentra` : "Start free"}</SignupCta>
-        {!signedIn && <span className="text-[13px] text-[#8A8F98]">3 free articles a month · No credit card</span>}
+        {!signedIn && <span className="text-[13px] text-text-2">3 free articles a month · No credit card</span>}
       </div>
     </section>
 
-    <footer className="flex flex-wrap items-center justify-between gap-3 text-[13px] text-[#62666D]">
+    <footer className="flex flex-wrap items-center justify-between gap-3 text-[13px] text-text-3">
       <p>{checked ? `Checked ${checked}. ` : ""}Monthly searches and competition are Google data from DataForSEO. Results are kept for 7 days.</p>
       <div className="flex items-center gap-4">
-        <button type="button" className="text-[#D0D6E0] hover:text-white" onClick={() => {
+        <button type="button" className="text-text-2 hover:text-white" onClick={() => {
           navigator.clipboard?.writeText(window.location.href).then(() => setCopied(true), () => setCopied(false));
         }}>{copied ? "Link copied" : "Copy link"}</button>
-        <Link href="/check" className="text-[#D0D6E0] hover:text-white">Check another website</Link>
+        <Link href="/check" className="text-text-2 hover:text-white">Check another website</Link>
       </div>
     </footer>
   </div>;
@@ -244,23 +244,23 @@ export function FreeCheckResult({ domain }: { domain: string }) {
   const view = useQuery(api.freeCheck.get, { domain });
   if (view === undefined) return <section className={PANEL} aria-busy="true">
     <p className={EYEBROW}>Missed searches</p>
-    <h1 className="mt-3 text-2xl font-semibold tracking-tight text-[#F7F8F8]">Loading the check for {domain}…</h1>
+    <h1 className="mt-3 text-2xl font-semibold tracking-tight text-text">Loading the check for {domain}…</h1>
   </section>;
   if (view === null) return <section className={PANEL}>
     <p className={EYEBROW}>Missed searches</p>
-    <h1 className="mt-3 text-2xl font-semibold tracking-tight text-[#F7F8F8]">Pentra hasn&apos;t checked {domain} yet</h1>
-    <p className="mt-2 mb-5 text-[15px] text-[#8A8F98]">Find the Google searches its customers make that it has no page for. Free, about a minute.</p>
+    <h1 className="mt-3 text-2xl font-semibold tracking-tight text-text">Pentra hasn&apos;t checked {domain} yet</h1>
+    <p className="mt-2 mb-5 text-[15px] text-text-2">Find the Google searches its customers make that it has no page for. Free, about a minute.</p>
     <StartButton domain={domain} label={`Check ${domain} free`} />
   </section>;
   if (view.status === "running") return <Running view={view} />;
   if (view.status === "failed") {
     return <section className={PANEL}>
       <p className={EYEBROW}>Missed searches</p>
-      <h1 className="mt-3 text-2xl font-semibold tracking-tight text-[#F7F8F8]">The check for {domain} didn&apos;t finish</h1>
-      <p className="mt-2 mb-5 text-[15px] text-[#8A8F98]">{view.error ?? "Pentra couldn't finish this check."}</p>
+      <h1 className="mt-3 text-2xl font-semibold tracking-tight text-text">The check for {domain} didn&apos;t finish</h1>
+      <p className="mt-2 mb-5 text-[15px] text-text-2">{view.error ?? "Pentra couldn't finish this check."}</p>
       <div className="flex flex-wrap items-start gap-6">
         <StartButton domain={domain} label="Try again" />
-        <Link href="/check" className="mt-2.5 text-[14px] text-[#D0D6E0] hover:text-white">Check another website →</Link>
+        <Link href="/check" className="mt-2.5 text-[14px] text-text-2 hover:text-white">Check another website →</Link>
       </div>
     </section>;
   }

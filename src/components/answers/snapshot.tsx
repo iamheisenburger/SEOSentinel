@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AssistantBars, RivalBars } from "@/components/answers/charts";
 import { useEvidence, type RunOutcome } from "@/components/answers/evidence-sheet";
-import { CountButton, Panel } from "@/components/answers/ui";
+import { ChipScroller, CountButton, Panel } from "@/components/answers/ui";
 import { useAnswersQuery } from "@/lib/answers/backend";
 import { checkOutcomes } from "@/lib/answers/evidence";
 import { assistantRows, rivalsRanked } from "@/lib/answers/derive";
@@ -176,7 +176,7 @@ export function AnswerLog({ runId, log }: { runId: string; log: Check[] | null |
   return (
     <div className="flex flex-col gap-3" data-run={runId}>
       <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-        <div role="radiogroup" aria-label="Outcome" className="scrollbar-none -mx-1 flex gap-1.5 overflow-x-auto px-1">
+        <ChipScroller label="Outcome">
           {LOG_FILTERS.map((f) => {
             const count = (log ?? []).filter((c) => (assistant === "all" || c.assistant === assistant) && logMatches(c, f.id)).length;
             return (
@@ -187,7 +187,7 @@ export function AnswerLog({ runId, log }: { runId: string; log: Check[] | null |
               </button>
             );
           })}
-        </div>
+        </ChipScroller>
         <div className="flex gap-2">
           <label className="sr-only" htmlFor={`log-assistant-${runId}`}>Assistant</label>
           <select id={`log-assistant-${runId}`} value={assistant} onChange={(e) => { setAssistant(e.target.value); setShown(25); }}

@@ -39,7 +39,8 @@ export type ConnectionInput =
 export type AnswersActions = {
   /** `email` (the Clerk user's primary address) lets the first hour's "ready" email reach the owner. */
   createSite(args: { domain: string; email?: string }): Promise<{ siteId: string; created: boolean }>;
-  updateBusiness(args: { siteId: string; name: string; sells: string; buyers: string; offerings: string[] }): Promise<unknown>;
+  /** `local`/`location`: the City or area field (empty = not local). */
+  updateBusiness(args: { siteId: string; name: string; sells: string; buyers: string; offerings: string[]; local?: boolean; location?: string }): Promise<unknown>;
   confirmSetup(args: { siteId: string; name?: string; competitors: Competitor[]; country?: string }): Promise<unknown>;
   addQuestion(args: { siteId: string; question: string }): Promise<{ questionId: string }>;
   setQuestionStatus(args: { questionId: string; status: "active" | "paused" | "removed" }): Promise<unknown>;

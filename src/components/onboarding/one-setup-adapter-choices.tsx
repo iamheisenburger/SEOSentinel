@@ -31,7 +31,7 @@ function ChoiceGroup<T extends string>({
 }) {
   return (
     <div className="mt-5">
-      <label className="mb-2 block text-[11px] font-medium text-[#8A8F98]">
+      <label className="mb-2 block text-[11px] font-medium text-text-2">
         {label}
       </label>
       <div className="grid gap-2 sm:grid-cols-3">
@@ -46,16 +46,16 @@ function ChoiceGroup<T extends string>({
             aria-pressed={value === choice}
             className={`rounded-lg border px-3 py-3 text-left transition ${
               value === choice
-                ? "border-[#0EA5E9]/40 bg-[#0EA5E9]/[0.07]"
+                ? "border-[var(--border-focus)] bg-you-tint"
                 : disabled
                   ? "cursor-not-allowed border-white/[0.04] bg-white/[0.01] opacity-50"
                   : "border-white/[0.06] bg-white/[0.02] hover:border-white/[0.12]"
             }`}
           >
-            <span className="block text-[11px] font-medium text-[#F7F8F8]">
+            <span className="block text-[11px] font-medium text-text">
               {title}{disabled ? " · coming later" : ""}
             </span>
-            <span className="mt-1 block text-[9px] leading-relaxed text-[#62666D]">{detail}</span>
+            <span className="mt-1 block text-[9px] leading-relaxed text-text-3">{detail}</span>
           </button>
           );
         })}
@@ -89,7 +89,7 @@ export function OneSetupAdapterChoices({
         value={outreachTransport}
         onChange={onOutreachTransportChange}
       />
-      <p className="mt-2 text-[9px] leading-relaxed text-[#62666D]">
+      <p className="mt-2 text-[9px] leading-relaxed text-text-3">
         Bootstrap v1 supports GitHub plus customer-managed SMTP/IMAP in
         mandatory approval mode. Beta adapters cannot be selected or advertised as GA.
       </p>

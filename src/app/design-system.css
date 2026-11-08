@@ -772,6 +772,25 @@
   background: var(--surface-2) !important;
 }
 
+/* Clerk draws the card inside a card box. One hairline on the box and none on the card, so the right edge never
+ * doubles (the card sits 1px left of its box). */
+.cl-cardBox {
+  border: 0 !important;
+  border-radius: 10px !important;
+  box-shadow: 0 0 0 1px var(--border) !important;
+}
+
+.cl-cardBox > .cl-card {
+  border: 0 !important;
+  border-radius: 0 !important;
+  margin: 0 !important;
+  box-shadow: none !important;
+}
+
+.cl-cardBox > .cl-footer {
+  border-top: 1px solid var(--border) !important;
+}
+
 .cl-profileSectionContent,
 .cl-profileSection,
 .cl-accordionContent,

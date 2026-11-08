@@ -30,35 +30,35 @@ export function BlogKitCard({ siteId, domain, repository, offer, kit }: {
   };
 
   if (kit?.state === "installing") {
-    return <p role="status" className="text-sm text-[#F7F8F8]">Adding a blog to your site… This takes under a minute.</p>;
+    return <p role="status" className="text-sm text-text">Adding a blog to your site… This takes under a minute.</p>;
   }
   if (kit?.state === "deploying") {
-    return <p role="status" className="text-sm text-[#F7F8F8]">
+    return <p role="status" className="text-sm text-text">
       Pentra added your blog{kit.commit ? <> (commit <span className="font-mono">{kit.commit}</span>)</> : null}. Waiting for your site to
       deploy it{address ? <> at <span className="font-mono">{address}</span></> : null}. This usually takes a few minutes.
     </p>;
   }
   if (kit?.state === "live" && address) {
-    return <p role="status" className="text-sm text-[#F7F8F8]">
+    return <p role="status" className="text-sm text-text">
       Your blog is live at <a className="underline" href={`https://${address}`} target="_blank" rel="noreferrer">{address}</a>. Pentra publishes
       your articles there. Add a link to it in your site&apos;s menu or footer so visitors find it too.
     </p>;
   }
   if (kit?.state === "not_live") {
-    return <div className="space-y-2 text-sm text-[#F7F8F8]">
+    return <div className="space-y-2 text-sm text-text">
       <p role="status">{kit.detail}</p>
       <Button size="sm" disabled={busy} loading={busy} onClick={() => run(() => recheck({ siteId }))}>Check again</Button>
       {error && <p role="alert" className="text-red-400">{error}</p>}
     </div>;
   }
   if (!offer) return null;
-  return <div className="space-y-2 text-sm text-[#F7F8F8]">
+  return <div className="space-y-2 text-sm text-text">
     <p>{offer}</p>
-    <p className="text-[#8A8F98]">
+    <p className="text-text-2">
       It&apos;s one commit of new files to {repository ? <span className="font-mono">{repository}</span> : "your repository"}, shown in your
       site&apos;s own layout. Nothing else in your site changes and no packages are added. Pentra then publishes your articles there.
     </p>
-    {kit?.state === "failed" && kit.detail && <p role="alert" className="text-[#F59E0B]">{kit.detail}</p>}
+    {kit?.state === "failed" && kit.detail && <p role="alert" className="text-rival">{kit.detail}</p>}
     <Button size="sm" disabled={busy} loading={busy} onClick={() => run(() => request({ siteId }))}>Add a blog to my site</Button>
     {error && <p role="alert" className="text-red-400">{error}</p>}
   </div>;

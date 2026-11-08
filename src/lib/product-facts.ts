@@ -29,6 +29,16 @@ export const SNAPSHOT = {
   draftPages: 5,
 } as const;
 
+/**
+ * How long the free snapshot takes. Measured on live runs (Nov 8 2026): the first answers arrive in under 2 minutes,
+ * the snapshot and its drafts in about 10. Copy says "about 15" so a slow assistant never makes it untrue.
+ */
+export const TIMING = {
+  firstAnswersMinutes: 2,
+  snapshotMinutes: 15,
+  line: "Results in about 15 minutes; first answers in under 2.",
+} as const;
+
 /** The line Pentra never softens. */
 export const HONESTY_LINE =
   "We can't make an assistant recommend you. We show every answer we collect, so you can see exactly what changed.";

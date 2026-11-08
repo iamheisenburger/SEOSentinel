@@ -13,7 +13,7 @@ export function OneSetupAcceptanceClient() {
   const [outreachTransport, setOutreachTransport] =
     useState<OutreachTransport>("smtp");
   return (
-    <main className="mx-auto min-h-screen max-w-2xl bg-[#08090A] px-5 py-10 text-[#F7F8F8]">
+    <main className="mx-auto min-h-screen max-w-2xl bg-bg px-5 py-10 text-text">
       <h1 className="text-xl font-semibold">Set up Pentra once</h1>
       <OneSetupAdapterChoices
         publisherKind={publisherKind}
@@ -24,7 +24,7 @@ export function OneSetupAcceptanceClient() {
       <button
         type="button"
         disabled
-        className="mt-6 w-full rounded-lg bg-[#0EA5E9] px-4 py-3 disabled:opacity-40"
+        className="mt-6 w-full rounded-control bg-action px-4 py-3 font-semibold text-on-action disabled:opacity-40"
       >
         Start one setup
       </button>

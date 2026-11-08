@@ -37,24 +37,24 @@ type Notice = { tone: "success" | "error"; text: string } | null;
 type Tab = "opportunities" | "outreach";
 
 const OPPORTUNITY_STYLES: Record<string, string> = {
-  verified: "border-[#0EA5E9]/20 bg-[#0EA5E9]/10 text-[#38BDF8]",
-  outreach_prepared: "border-[#A78BFA]/20 bg-[#A78BFA]/10 text-[#C4B5FD]",
-  contacted: "border-[#F59E0B]/20 bg-[#F59E0B]/10 text-[#FBBF24]",
-  acquired: "border-[#22C55E]/20 bg-[#22C55E]/10 text-[#4ADE80]",
-  rejected: "border-white/[0.08] bg-white/[0.03] text-[#707589]",
+  verified: "border-border bg-surface-2 text-text-2",
+  outreach_prepared: "border-border bg-surface-2 text-text-2",
+  contacted: "border-rival/20 bg-rival/10 text-rival",
+  acquired: "border-named/20 bg-named/10 text-named",
+  rejected: "border-white/[0.08] bg-white/[0.03] text-text-2",
 };
 
 const MESSAGE_STYLES: Record<string, string> = {
-  draft: "border-[#0EA5E9]/20 bg-[#0EA5E9]/10 text-[#38BDF8]",
-  blocked: "border-[#EF4444]/20 bg-[#EF4444]/10 text-[#F87171]",
-  approved: "border-[#A78BFA]/20 bg-[#A78BFA]/10 text-[#C4B5FD]",
-  sending: "border-[#0EA5E9]/20 bg-[#0EA5E9]/10 text-[#38BDF8]",
-  delivery_unverified: "border-[#EF4444]/20 bg-[#EF4444]/10 text-[#F87171]",
-  delivery_reviewed_sent: "border-[#F59E0B]/20 bg-[#F59E0B]/10 text-[#FBBF24]",
-  sent: "border-[#F59E0B]/20 bg-[#F59E0B]/10 text-[#FBBF24]",
-  replied: "border-[#22C55E]/20 bg-[#22C55E]/10 text-[#4ADE80]",
-  failed: "border-[#EF4444]/20 bg-[#EF4444]/10 text-[#F87171]",
-  bounced: "border-[#EF4444]/20 bg-[#EF4444]/10 text-[#F87171]",
+  draft: "border-border bg-surface-2 text-text-2",
+  blocked: "border-wrong/20 bg-wrong/10 text-wrong",
+  approved: "border-border bg-surface-2 text-text-2",
+  sending: "border-border bg-surface-2 text-text-2",
+  delivery_unverified: "border-wrong/20 bg-wrong/10 text-wrong",
+  delivery_reviewed_sent: "border-rival/20 bg-rival/10 text-rival",
+  sent: "border-rival/20 bg-rival/10 text-rival",
+  replied: "border-named/20 bg-named/10 text-named",
+  failed: "border-wrong/20 bg-wrong/10 text-wrong",
+  bounced: "border-wrong/20 bg-wrong/10 text-wrong",
 };
 
 function labelStatus(status: string) {
@@ -261,10 +261,10 @@ export default function BacklinksPage() {
 
   if (!site) {
     return (
-      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] px-6 py-16 text-center">
-        <Link2 className="mx-auto mb-3 h-8 w-8 text-[#62666D]" />
-        <h1 className="text-[15px] font-semibold text-[#F7F8F8]">Add a site first</h1>
-        <p className="mt-2 text-[13px] text-[#62666D]">
+      <div className="rounded-xl border border-white/[0.06] bg-surface-1 px-6 py-16 text-center">
+        <Link2 className="mx-auto mb-3 h-8 w-8 text-text-3" />
+        <h1 className="text-[15px] font-semibold text-text">Add a site first</h1>
+        <p className="mt-2 text-[13px] text-text-3">
           Backlink discovery and outreach are isolated to one site at a time.
         </p>
       </div>
@@ -275,8 +275,8 @@ export default function BacklinksPage() {
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight text-[#F7F8F8]">Backlinks</h1>
-          <p className="mt-1 text-[13px] text-[#62666D]">
+          <h1 className="text-xl font-semibold tracking-tight text-text">Backlinks</h1>
+          <p className="mt-1 text-[13px] text-text-3">
             Evidence-backed opportunities and approval-first outreach for {site.domain}
           </p>
         </div>
@@ -337,34 +337,34 @@ export default function BacklinksPage() {
       {notice && (
         <div className={`flex items-start gap-3 rounded-lg border px-4 py-3 ${
           notice.tone === "success"
-            ? "border-[#22C55E]/20 bg-[#22C55E]/[0.06]"
-            : "border-[#EF4444]/20 bg-[#EF4444]/[0.06]"
+            ? "border-named/20 bg-named/[0.06]"
+            : "border-wrong/20 bg-wrong/[0.06]"
         }`}>
           {notice.tone === "success" ? (
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#4ADE80]" />
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-named" />
           ) : (
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#F87171]" />
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-wrong" />
           )}
-          <p className={`text-[13px] ${notice.tone === "success" ? "text-[#86EFAC]" : "text-[#FCA5A5]"}`}>
+          <p className={`text-[13px] ${notice.tone === "success" ? "text-named" : "text-wrong"}`}>
             {notice.text}
           </p>
         </div>
       )}
 
-      <section className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
+      <section className="rounded-xl border border-white/[0.06] bg-surface-1 p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex min-w-0 gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#0EA5E9]/10">
-              <Inbox className="h-5 w-5 text-[#38BDF8]" />
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-2">
+              <Inbox className="h-5 w-5 text-text-2" />
             </div>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-[14px] font-semibold text-[#F7F8F8]">Sending inbox</h2>
+                <h2 className="text-[14px] font-semibold text-text">Sending inbox</h2>
                 {inbox && (
                   <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
                     ["active", "warming"].includes(String(inbox.status))
-                      ? "border-[#22C55E]/20 bg-[#22C55E]/10 text-[#4ADE80]"
-                      : "border-[#F59E0B]/20 bg-[#F59E0B]/10 text-[#FBBF24]"
+                      ? "border-named/20 bg-named/10 text-named"
+                      : "border-rival/20 bg-rival/10 text-rival"
                   }`}>
                     {String(inbox.status)}
                   </span>
@@ -372,33 +372,33 @@ export default function BacklinksPage() {
               </div>
               {inbox ? (
                 <>
-                  <p className="mt-1 truncate text-[13px] text-[#8A8F98]">
+                  <p className="mt-1 truncate text-[13px] text-text-2">
                     {String(inbox.fromEmail)} · {String(inbox.mode ?? "approval")} mode
                   </p>
-                  <p className="mt-1 text-[11px] text-[#62666D]">
+                  <p className="mt-1 text-[11px] text-text-3">
                     Sent today: {Number(inbox.sentToday ?? 0)}/{Number(inbox.effectiveDailyCap ?? 0)} safe warm-up allowance
                   </p>
                 </>
               ) : (
                 <>
-                  <p className="mt-1 text-[13px] text-[#8A8F98]">
+                  <p className="mt-1 text-[13px] text-text-2">
                     Connect a customer-managed SMTP/IMAP mailbox. Gmail OAuth
                     and managed Smartlead remain optional beta paths.
                   </p>
-                  <p className="mt-1 text-[11px] text-[#62666D]">
+                  <p className="mt-1 text-[11px] text-text-3">
                     New inboxes remain in approval mode and start at the safe warm-up allowance.
                   </p>
                 </>
               )}
               {Boolean(inbox?.lastError) && (
-                <p className="mt-2 text-[11px] text-[#F87171]">{String(inbox?.lastError)}</p>
+                <p className="mt-2 text-[11px] text-wrong">{String(inbox?.lastError)}</p>
               )}
               {Boolean(inbox?.inboundLastError) && (
-                <p className="mt-2 text-[11px] text-[#F87171]">
+                <p className="mt-2 text-[11px] text-wrong">
                   Reply monitoring: {String(inbox?.inboundLastError).replaceAll("_", " ")}
                 </p>
               )}
-              <p className="mt-2 text-[11px] leading-relaxed text-[#707589]">
+              <p className="mt-2 text-[11px] leading-relaxed text-text-2">
                 {isManagedInbox
                   ? "Managed outreach remains blocked until the isolated sender is authenticated, warmed, and all controlled delivery-event canaries have passed."
                   : isSmtpInbox
@@ -406,14 +406,14 @@ export default function BacklinksPage() {
                     : "Gmail OAuth is optional and consented-recipient only. Each recipient needs separate affirmative opt-in evidence, and the inbound reply, STOP, and bounce lane must be verified before release."}
               </p>
               {dsnRoutingAddress && (
-                <div className="mt-3 rounded-lg border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.05] p-3">
-                  <p className="text-[10px] font-medium uppercase tracking-wider text-[#38BDF8]">
+                <div className="mt-3 rounded-lg border border-border bg-surface-2/50 p-3">
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-text-2">
                     Workspace delivery-status route
                   </p>
-                  <code className="mt-1 block break-all text-[11px] text-[#BAE6FD]">
+                  <code className="mt-1 block break-all text-[11px] text-text-2">
                     {dsnRoutingAddress}
                   </code>
-                  <p className="mt-2 text-[10px] leading-relaxed text-[#707589]">
+                  <p className="mt-2 text-[10px] leading-relaxed text-text-2">
                     Route structured delivery-status notifications for this exact sender to this
                     address. It is unique to this inbox and stays stable across routine reconnects,
                     profile edits, plan parking, and relay signing-key rotation.
@@ -478,12 +478,12 @@ export default function BacklinksPage() {
                   <ReadinessBadge label="DKIM" ready={Boolean(inbox.dkimVerifiedAt)} />
                   <ReadinessBadge label="DMARC" ready={Boolean(inbox.dmarcVerifiedAt)} />
                   {Boolean(inbox.dnsCheckedAt) && (
-                    <span className="self-center text-[10px] text-[#62666D]">
+                    <span className="self-center text-[10px] text-text-3">
                       DNS checked {formatTime(Number(inbox.dnsCheckedAt))}
                     </span>
                   )}
                   {Boolean(inbox.inboundLastCompletedAt) && (
-                    <span className="self-center text-[10px] text-[#62666D]">
+                    <span className="self-center text-[10px] text-text-3">
                       Inbound processed {formatTime(Number(inbox.inboundLastCompletedAt))}
                     </span>
                   )}
@@ -555,7 +555,7 @@ export default function BacklinksPage() {
             {!isManagedInbox && (
               <>
                 <Button
-                  variant={inboxNeedsReconnect && !isSmtpInbox ? "primary" : "secondary"}
+                  variant={isGmailInbox && inboxNeedsReconnect ? "primary" : "secondary"}
                   onClick={connectGmail}
                   icon={<Mail className="h-3.5 w-3.5" />}
                 >
@@ -564,7 +564,7 @@ export default function BacklinksPage() {
                     : "Connect Gmail"}
                 </Button>
                 <Button
-                  variant={isSmtpInbox || showSmtpForm ? "primary" : "secondary"}
+                  variant="secondary"
                   onClick={() => setShowSmtpForm((shown) => !shown)}
                   icon={<Settings2 className="h-3.5 w-3.5" />}
                 >
@@ -632,7 +632,7 @@ export default function BacklinksPage() {
             }}
           >
             <label className="block">
-              <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-[#62666D]">
+              <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-text-3">
                 Sender name
               </span>
               <input
@@ -642,12 +642,12 @@ export default function BacklinksPage() {
                 maxLength={100}
                 defaultValue={String(inbox.fromName ?? "")}
                 autoComplete="name"
-                className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+                className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
                 placeholder="Real person or business name"
               />
             </label>
             <label className="block">
-              <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-[#62666D]">
+              <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-text-3">
                 Physical mailing address
               </span>
               <input
@@ -657,7 +657,7 @@ export default function BacklinksPage() {
                 maxLength={300}
                 defaultValue={String(inbox.physicalMailingAddress ?? "")}
                 autoComplete="street-address"
-                className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+                className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
                 placeholder="Required in every outreach footer"
               />
             </label>
@@ -671,15 +671,15 @@ export default function BacklinksPage() {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="max-w-3xl">
                 <div className="flex items-center gap-2">
-                  <h3 className="text-[13px] font-semibold text-[#F7F8F8]">
+                  <h3 className="text-[13px] font-semibold text-text">
                     Authority autopilot
                   </h3>
                   <span className={`rounded-full border px-2 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
                     effectiveAutonomyLive
-                      ? "border-[#22C55E]/20 bg-[#22C55E]/10 text-[#4ADE80]"
+                      ? "border-named/20 bg-named/10 text-named"
                       : storedAutonomyConsentActive
-                        ? "border-[#F59E0B]/20 bg-[#F59E0B]/10 text-[#FBBF24]"
-                      : "border-white/[0.08] bg-white/[0.03] text-[#707589]"
+                        ? "border-rival/20 bg-rival/10 text-rival"
+                      : "border-white/[0.08] bg-white/[0.03] text-text-2"
                   }`}>
                     {effectiveAutonomyLive
                       ? "live"
@@ -688,11 +688,11 @@ export default function BacklinksPage() {
                         : "off"}
                   </span>
                 </div>
-                <p className="mt-2 text-[11px] leading-relaxed text-[#707589]">
+                <p className="mt-2 text-[11px] leading-relaxed text-text-2">
                   {OUTREACH_AUTONOMY_CONSENT_TEXT}
                 </p>
                 {!storedAutonomyConsentActive && (
-                  <label className="mt-3 flex items-start gap-2 text-[11px] text-[#B8BBC7]">
+                  <label className="mt-3 flex items-start gap-2 text-[11px] text-text-2">
                     <input
                       type="checkbox"
                       checked={autonomyConsentAccepted}
@@ -708,7 +708,7 @@ export default function BacklinksPage() {
               <div className="flex shrink-0 items-end gap-2">
                 {!storedAutonomyConsentActive && (
                   <label className="block">
-                    <span className="mb-1 block text-[9px] font-medium uppercase tracking-wider text-[#62666D]">
+                    <span className="mb-1 block text-[9px] font-medium uppercase tracking-wider text-text-3">
                       Daily cap
                     </span>
                     <input
@@ -719,7 +719,7 @@ export default function BacklinksPage() {
                       onChange={(event) =>
                         setAutonomyDailyCap(Number(event.target.value))
                       }
-                      className="h-8 w-20 rounded-lg border border-white/[0.08] bg-black/20 px-2 text-[12px] text-[#F7F8F8]"
+                      className="h-8 w-20 rounded-lg border border-white/[0.08] bg-black/20 px-2 text-[12px] text-text"
                     />
                   </label>
                 )}
@@ -780,7 +780,7 @@ export default function BacklinksPage() {
               </div>
             </div>
             {!Boolean(inbox.autonomousDeliveryReleaseAvailable) && (
-              <p className="mt-2 text-[10px] text-[#FBBF24]">
+              <p className="mt-2 text-[10px] text-rival">
                 {storedAutonomyConsentActive
                   ? "Autonomous delivery is paused by the environment, but your stored authorization remains active. Use Disable to prevent it from resuming when the release switch returns."
                   : "This environment has not released autonomous delivery."}
@@ -789,11 +789,11 @@ export default function BacklinksPage() {
           </div>
         )}
         {inbox && !managedAutonomyBetaAvailable && (
-          <div className="mt-5 rounded-xl border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.04] p-4">
-            <p className="text-[12px] font-semibold text-[#F7F8F8]">
+          <div className="mt-5 rounded-xl border border-border bg-surface-2/50 p-4">
+            <p className="text-[12px] font-semibold text-text">
               Approval-only outreach
             </p>
-            <p className="mt-1 text-[10px] leading-relaxed text-[#8A8F98]">
+            <p className="mt-1 text-[10px] leading-relaxed text-text-2">
               Bootstrap v1 never sends to a prospect automatically. You review,
               approve, and trigger each message. Reply, bounce, and exact STOP
               evidence cancels pending follow-ups before another approval.
@@ -802,10 +802,10 @@ export default function BacklinksPage() {
         )}
         {isSmtpInbox && controlledCanaries?.ready && (
           <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-            <p className="text-[11px] font-semibold text-[#F7F8F8]">
+            <p className="text-[11px] font-semibold text-text">
               Controlled transport verification
             </p>
-            <p className="mt-1 text-[10px] leading-relaxed text-[#707589]">
+            <p className="mt-1 text-[10px] leading-relaxed text-text-2">
               These release checks use only this mailbox and a reserved
               non-deliverable address. They never appear in prospect queues or
               customer growth metrics.
@@ -816,10 +816,10 @@ export default function BacklinksPage() {
                   key={canary.kind}
                   className={`rounded-full border px-2 py-1 text-[9px] font-medium uppercase tracking-wide ${
                     canary.inboundReceiptKind || canary.status === "sent"
-                      ? "border-[#22C55E]/20 bg-[#22C55E]/10 text-[#4ADE80]"
+                      ? "border-named/20 bg-named/10 text-named"
                       : canary.status === "not_started"
-                        ? "border-white/[0.08] bg-white/[0.03] text-[#707589]"
-                        : "border-[#F59E0B]/20 bg-[#F59E0B]/10 text-[#FBBF24]"
+                        ? "border-white/[0.08] bg-white/[0.03] text-text-2"
+                        : "border-rival/20 bg-rival/10 text-rival"
                   }`}
                 >
                   {labelStatus(canary.kind)} · {labelStatus(
@@ -836,26 +836,26 @@ export default function BacklinksPage() {
         <SummaryCard
           label="Verified queue"
           value={counts.opportunityCounts.verified ?? 0}
-          icon={<Search className="h-3.5 w-3.5 text-[#38BDF8]" />}
+          icon={<Search className="h-3.5 w-3.5 text-text-2" />}
         />
         <SummaryCard
           label="Drafts to review"
           value={counts.messageCounts.draft ?? 0}
-          icon={<Mail className="h-3.5 w-3.5 text-[#C4B5FD]" />}
+          icon={<Mail className="h-3.5 w-3.5 text-text-2" />}
         />
         <SummaryCard
           label="Contacted"
           value={counts.opportunityCounts.contacted ?? 0}
-          icon={<Send className="h-3.5 w-3.5 text-[#FBBF24]" />}
+          icon={<Send className="h-3.5 w-3.5 text-text-2" />}
         />
         <SummaryCard
           label="Verified links"
           value={counts.opportunityCounts.acquired ?? 0}
-          icon={<Check className="h-3.5 w-3.5 text-[#4ADE80]" />}
+          icon={<Check className="h-3.5 w-3.5 text-text-2" />}
         />
       </div>
 
-      <div className="flex flex-col gap-3 rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 rounded-xl border border-white/[0.06] bg-surface-1 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex rounded-lg border border-white/[0.06] bg-white/[0.02] p-1">
           <TabButton active={tab === "opportunities"} onClick={() => setTab("opportunities")}>
             Opportunities <CountBadge value={actionableOpportunities.length} />
@@ -903,17 +903,17 @@ export default function BacklinksPage() {
       </div>
 
       {isLoading ? (
-        <div className="flex items-center justify-center rounded-xl border border-white/[0.06] bg-[#0E0F11] py-16">
-          <Loader2 className="h-7 w-7 animate-spin text-[#38BDF8]" />
+        <div className="flex items-center justify-center rounded-xl border border-white/[0.06] bg-surface-1 py-16">
+          <Loader2 className="h-7 w-7 animate-spin text-text-2" />
         </div>
       ) : tab === "opportunities" ? (
         <div className="flex flex-col gap-3">
           {actionableOpportunities.length === 0 && (
-            <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-6 text-center">
-              <p className="text-[14px] font-medium text-[#F7F8F8]">
+            <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-6 text-center">
+              <p className="text-[14px] font-medium text-text">
                 No actionable opportunities right now
               </p>
-              <p className="mt-1 text-[13px] text-[#8A8FA3]">
+              <p className="mt-1 text-[13px] text-text-2">
                 {rejectedOpportunities.length > 0
                   ? `${rejectedOpportunities.length} previously found ${rejectedOpportunities.length === 1 ? "opportunity" : "opportunities"} no longer reconfirm on a live page, so Pentra will not pitch them. Discovery runs automatically; use Discover opportunities to search now.`
                   : "Discovery runs automatically. Use Discover opportunities to search now."}
@@ -924,7 +924,7 @@ export default function BacklinksPage() {
             <button
               type="button"
               onClick={() => setShowRejected((value) => !value)}
-              className="self-start rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-1.5 text-[12px] font-medium text-[#8A8FA3] transition hover:text-[#F7F8F8]"
+              className="self-start rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-1.5 text-[12px] font-medium text-text-2 transition hover:text-text"
             >
               {showRejected ? "Hide" : "Show"} {rejectedOpportunities.length} unconfirmed
             </button>
@@ -932,31 +932,31 @@ export default function BacklinksPage() {
           {visibleOpportunities.map((opportunity) => {
             const message = messageByOpportunity.get(opportunity._id);
             return (
-              <article key={opportunity._id} className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
+              <article key={opportunity._id} className="rounded-xl border border-white/[0.06] bg-surface-1 p-5">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${OPPORTUNITY_STYLES[opportunity.status] ?? OPPORTUNITY_STYLES.rejected}`}>
                         {labelStatus(opportunity.status)}
                       </span>
-                      <span className="text-[10px] font-medium uppercase tracking-wide text-[#62666D]">
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-text-3">
                         {opportunity.type === "broken_link" ? "Broken link" : "Unlinked mention"}
                       </span>
                       {message && (
-                        <span className="text-[10px] text-[#707589]">Message: {labelStatus(message.status)}</span>
+                        <span className="text-[10px] text-text-2">Message: {labelStatus(message.status)}</span>
                       )}
                     </div>
-                    <h2 className="mt-2 truncate text-[14px] font-semibold text-[#F7F8F8]">
+                    <h2 className="mt-2 truncate text-[14px] font-semibold text-text">
                       {opportunity.sourceDomain || safeHost(opportunity.sourceUrl)}
                     </h2>
-                    <p className="mt-1 line-clamp-2 text-[12px] leading-relaxed text-[#8A8F98]">
+                    <p className="mt-1 line-clamp-2 text-[12px] leading-relaxed text-text-2">
                       {opportunity.context}
                     </p>
                   </div>
                   {typeof opportunity.domainRank === "number" && (
                     <div className="shrink-0 text-right">
-                      <p className="text-[10px] uppercase tracking-wide text-[#62666D]">Domain rank</p>
-                      <p className="mt-0.5 text-[16px] font-semibold text-[#F7F8F8]">{opportunity.domainRank}</p>
+                      <p className="text-[10px] uppercase tracking-wide text-text-3">Domain rank</p>
+                      <p className="mt-0.5 text-[16px] font-semibold text-text">{opportunity.domainRank}</p>
                     </div>
                   )}
                 </div>
@@ -969,10 +969,10 @@ export default function BacklinksPage() {
                 </div>
 
                 {opportunity.status === "acquired" && opportunity.acquiredLinkUrl && (
-                  <div className="mt-4 flex flex-col gap-2 rounded-lg border border-[#22C55E]/20 bg-[#22C55E]/[0.05] px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="mt-4 flex flex-col gap-2 rounded-lg border border-named/20 bg-named/[0.05] px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-start gap-2">
-                      <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#4ADE80]" />
-                      <p className="text-[11px] text-[#86EFAC]">
+                      <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-named" />
+                      <p className="text-[11px] text-named">
                         Exact href observed on the requested page at {formatTime(opportunity.acquiredAt)}.
                       </p>
                     </div>
@@ -980,14 +980,14 @@ export default function BacklinksPage() {
                       href={externalUrl(opportunity.acquiredLinkUrl)}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-[#4ADE80] hover:underline"
+                      className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-named hover:underline"
                     >
                       View receipt <ExternalLink className="h-3 w-3" />
                     </a>
                   </div>
                 )}
                 {opportunity.status === "rejected" && (
-                  <p className="mt-4 flex items-center gap-2 text-[11px] text-[#707589]">
+                  <p className="mt-4 flex items-center gap-2 text-[11px] text-text-2">
                     <XCircle className="h-3.5 w-3.5" />
                     A later live-page scan did not reconfirm this evidence, so it is not actionable.
                   </p>
@@ -1022,17 +1022,17 @@ export default function BacklinksPage() {
               isGmailInbox && !message.gmailRecipientConsentCurrent,
             );
             return (
-              <article key={message._id} className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
+              <article key={message._id} className="rounded-xl border border-white/[0.06] bg-surface-1 p-5">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${MESSAGE_STYLES[message.status] ?? OPPORTUNITY_STYLES.rejected}`}>
                         {labelStatus(message.status)}
                       </span>
-                      <span className="truncate text-[11px] text-[#707589]">{message.toEmail || message.toDomain}</span>
+                      <span className="truncate text-[11px] text-text-2">{message.toEmail || message.toDomain}</span>
                     </div>
-                    <h2 className="mt-2 text-[14px] font-semibold text-[#F7F8F8]">{message.subject}</h2>
-                    <p className="mt-1 text-[10px] text-[#62666D]">Created {formatTime(message.createdAt)}</p>
+                    <h2 className="mt-2 text-[14px] font-semibold text-text">{message.subject}</h2>
+                    <p className="mt-1 text-[10px] text-text-3">Created {formatTime(message.createdAt)}</p>
                   </div>
                   {message.status === "draft" && (
                     <div className="flex shrink-0 gap-2">
@@ -1143,21 +1143,21 @@ export default function BacklinksPage() {
                   )}
                 </div>
                 {message.status === "draft" && needsGmailConsent && (
-                  <div className="mt-4 rounded-lg border border-[#F59E0B]/20 bg-[#F59E0B]/[0.06] p-3">
-                    <p className="text-[11px] font-medium text-[#FBBF24]">
+                  <div className="mt-4 rounded-lg border border-rival/20 bg-rival/[0.06] p-3">
+                    <p className="text-[11px] font-medium text-rival">
                       Gmail OAuth is consented-recipient only
                     </p>
-                    <p className="mt-1 text-[10px] leading-relaxed text-[#8F93A5]">
+                    <p className="mt-1 text-[10px] leading-relaxed text-text-2">
                       A public listing, discovered address, or your approval is not recipient consent. Pentra will not let Gmail send until an affirmative opt-in record is bound to this recipient.
                     </p>
                     {consentMessageId === String(message._id) && (
                       <div className="mt-3 grid gap-3 sm:grid-cols-[180px_1fr_auto] sm:items-end">
-                        <label className="grid gap-1 text-[10px] text-[#A9ADBA]">
+                        <label className="grid gap-1 text-[10px] text-text-2">
                           Consent source
                           <select
                             value={consentSource}
                             onChange={(event) => setConsentSource(event.target.value)}
-                            className="h-9 rounded-md border border-white/[0.08] bg-[#0B0D12] px-3 text-[11px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/60"
+                            className="h-9 rounded-md border border-white/[0.08] bg-bg px-3 text-[11px] text-text outline-none focus:border-[var(--border-focus)]"
                           >
                             <option value="web_form">Opt-in web form</option>
                             <option value="customer_request">Customer request</option>
@@ -1166,13 +1166,13 @@ export default function BacklinksPage() {
                             <option value="documented_relationship">Documented relationship</option>
                           </select>
                         </label>
-                        <label className="grid gap-1 text-[10px] text-[#A9ADBA]">
+                        <label className="grid gap-1 text-[10px] text-text-2">
                           Evidence reference
                           <input
                             value={consentEvidenceReference}
                             onChange={(event) => setConsentEvidenceReference(event.target.value)}
                             placeholder="Form submission URL or internal consent record ID"
-                            className="h-9 rounded-md border border-white/[0.08] bg-[#0B0D12] px-3 text-[11px] text-[#F7F8F8] outline-none placeholder:text-[#62666D] focus:border-[#0EA5E9]/60"
+                            className="h-9 rounded-md border border-white/[0.08] bg-bg px-3 text-[11px] text-text outline-none placeholder:text-text-4 focus:border-[var(--border-focus)]"
                           />
                         </label>
                         <Button
@@ -1209,7 +1209,7 @@ export default function BacklinksPage() {
                         >
                           Record proof
                         </Button>
-                        <label className="flex items-start gap-2 text-[10px] leading-relaxed text-[#8F93A5] sm:col-span-3">
+                        <label className="flex items-start gap-2 text-[10px] leading-relaxed text-text-2 sm:col-span-3">
                           <input
                             type="checkbox"
                             checked={recipientConsentConfirmed}
@@ -1224,31 +1224,31 @@ export default function BacklinksPage() {
                 )}
 
                 {reasons.length > 0 && (
-                  <div className="mt-4 rounded-lg border border-[#EF4444]/20 bg-[#EF4444]/[0.05] px-3 py-2.5">
-                    <p className="mb-1.5 flex items-center gap-2 text-[11px] font-medium text-[#FCA5A5]">
+                  <div className="mt-4 rounded-lg border border-wrong/20 bg-wrong/[0.05] px-3 py-2.5">
+                    <p className="mb-1.5 flex items-center gap-2 text-[11px] font-medium text-wrong">
                       <AlertCircle className="h-3.5 w-3.5" /> Why this message cannot proceed
                     </p>
-                    <ul className="space-y-1 pl-5 text-[11px] text-[#F87171]">
+                    <ul className="space-y-1 pl-5 text-[11px] text-wrong">
                       {reasons.map((reason, index) => <li key={`${reason}-${index}`} className="list-disc">{reason}</li>)}
                     </ul>
                   </div>
                 )}
 
-                <div className="mt-4 whitespace-pre-wrap rounded-lg border border-white/[0.05] bg-black/10 p-4 text-[12px] leading-relaxed text-[#B8BBC7]">
+                <div className="mt-4 whitespace-pre-wrap rounded-lg border border-white/[0.05] bg-black/10 p-4 text-[12px] leading-relaxed text-text-2">
                   {message.body}
                 </div>
 
-                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-[#62666D]">
+                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-text-3">
                   {message.sentAt && <span>Sent {formatTime(message.sentAt)}</span>}
                   {message.repliedAt && <span>Replied {formatTime(message.repliedAt)}</span>}
                   {message.bouncedAt && <span>Bounced {formatTime(message.bouncedAt)}</span>}
                   {message.inboundReceiptKind && message.inboundReceiptAt && (
-                    <span className="text-[#4ADE80]">
+                    <span className="text-named">
                       Inbound {labelStatus(String(message.inboundReceiptKind))} receipt sealed {formatTime(message.inboundReceiptAt)}
                     </span>
                   )}
                   {message.status === "approved" && (
-                    <span className="flex items-center gap-1 text-[#C4B5FD]">
+                    <span className="flex items-center gap-1 text-text-2">
                       <Clock3 className="h-3 w-3" />{
                         message.approvalKind === "account_autopilot"
                           ? ` Autopilot-authorized${message.scheduledAt ? ` for ${formatTime(message.scheduledAt)}` : ""}`
@@ -1257,7 +1257,7 @@ export default function BacklinksPage() {
                     </span>
                   )}
                   {message.status === "delivery_reviewed_sent" && (
-                    <span className="text-[#FBBF24]">
+                    <span className="text-rival">
                       Confirmed manually in the mailbox&apos;s Sent folder; Pentra did not capture a provider receipt.
                     </span>
                   )}
@@ -1315,7 +1315,7 @@ function SmtpConfigurationForm({
   return (
     <form
       key={selectedPreset}
-      className="mt-5 rounded-xl border border-[#0EA5E9]/15 bg-[#0EA5E9]/[0.035] p-4"
+      className="mt-5 rounded-xl border border-border bg-surface-2/50 p-4"
       onSubmit={(event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
@@ -1339,10 +1339,10 @@ function SmtpConfigurationForm({
     >
       <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h3 className="text-[13px] font-semibold text-[#F7F8F8]">
+          <h3 className="text-[13px] font-semibold text-text">
             Connect an SMTP/IMAP mailbox
           </h3>
-          <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-[#707589]">
+          <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-text-2">
             Use a dedicated secondary-domain mailbox and an app password. Pentra
             verifies both encrypted sockets without sending an email; no
             credential value is returned by the dashboard API.
@@ -1353,7 +1353,7 @@ function SmtpConfigurationForm({
             href={preset.appPasswordUrl}
             target="_blank"
             rel="noreferrer"
-            className="mt-2 inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-[#38BDF8] hover:underline sm:mt-0"
+            className="text-text mt-2 inline-flex shrink-0 items-center gap-1 text-[11px] font-medium sm:mt-0 underline decoration-you-line underline-offset-[3px] hover:decoration-you"
           >
             Create app password <ExternalLink className="h-3 w-3" />
           </a>
@@ -1365,7 +1365,7 @@ function SmtpConfigurationForm({
           <select
             value={selectedPreset}
             onChange={(event) => onPresetChange(event.target.value)}
-            className="h-9 w-full rounded-lg border border-white/[0.08] bg-[#090B10] px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-bg px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
           >
             {SMTP_PRESETS.map((entry) => (
               <option key={entry.id} value={entry.id}>{entry.label}</option>
@@ -1380,7 +1380,7 @@ function SmtpConfigurationForm({
             defaultValue={preset?.host ?? ""}
             placeholder="smtp.example.com"
             autoComplete="off"
-            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
           />
         </SmtpField>
         <SmtpField label="Port">
@@ -1391,7 +1391,7 @@ function SmtpConfigurationForm({
             min={1}
             max={65535}
             defaultValue={preset?.port ?? 587}
-            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
           />
         </SmtpField>
         <SmtpField label="DKIM selector">
@@ -1402,7 +1402,7 @@ function SmtpConfigurationForm({
             defaultValue={selectedPreset === "gmail" ? "20230601" : "selector1"}
             placeholder="selector1"
             autoComplete="off"
-            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
           />
         </SmtpField>
         <SmtpField label="SMTP username">
@@ -1412,7 +1412,7 @@ function SmtpConfigurationForm({
             required
             placeholder="outreach@secondary-domain.com"
             autoComplete="username"
-            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
           />
         </SmtpField>
         <SmtpField label="IMAP server">
@@ -1422,7 +1422,7 @@ function SmtpConfigurationForm({
             defaultValue={preset?.imapHost ?? ""}
             placeholder="imap.example.com"
             autoComplete="off"
-            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
           />
         </SmtpField>
         <SmtpField label="IMAP port">
@@ -1433,7 +1433,7 @@ function SmtpConfigurationForm({
             min={1}
             max={65535}
             defaultValue={preset?.imapPort ?? 993}
-            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
           />
         </SmtpField>
         <SmtpField label="IMAP username">
@@ -1443,7 +1443,7 @@ function SmtpConfigurationForm({
             required
             placeholder="Same mailbox address"
             autoComplete="username"
-            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
           />
         </SmtpField>
         <SmtpField label="IMAP app password (optional)">
@@ -1453,7 +1453,7 @@ function SmtpConfigurationForm({
             minLength={4}
             placeholder="Uses SMTP app password if blank"
             autoComplete="new-password"
-            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
           />
         </SmtpField>
         <SmtpField label="App password">
@@ -1464,7 +1464,7 @@ function SmtpConfigurationForm({
             minLength={4}
             placeholder="Never your normal password"
             autoComplete="new-password"
-            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
           />
         </SmtpField>
         <SmtpField label="From email">
@@ -1474,7 +1474,7 @@ function SmtpConfigurationForm({
             required
             placeholder="outreach@secondary-domain.com"
             autoComplete="email"
-            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
           />
         </SmtpField>
         <SmtpField label="Sender name">
@@ -1486,7 +1486,7 @@ function SmtpConfigurationForm({
             defaultValue={defaultFromName}
             placeholder="Real person or business"
             autoComplete="name"
-            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
           />
         </SmtpField>
       </div>
@@ -1500,11 +1500,11 @@ function SmtpConfigurationForm({
             defaultValue={defaultPhysicalMailingAddress}
             placeholder="Full business postal address"
             autoComplete="street-address"
-            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-[#F7F8F8] outline-none focus:border-[#0EA5E9]/50"
+            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/20 px-3 text-[12px] text-text outline-none focus:border-[var(--border-focus)]"
           />
         </SmtpField>
       </div>
-      <p className="mt-3 text-[10px] text-[#707589]">{preset?.note}</p>
+      <p className="mt-3 text-[10px] text-text-2">{preset?.note}</p>
       <div className="mt-4 flex justify-end gap-2">
         <Button type="button" variant="ghost" onClick={onCancel} disabled={pending}>
           Cancel
@@ -1526,7 +1526,7 @@ function SmtpField({
 }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-[#62666D]">
+      <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-text-3">
         {label}
       </span>
       {children}
@@ -1536,12 +1536,12 @@ function SmtpField({
 
 function SummaryCard({ label, value, icon }: { label: string; value: number; icon: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-4">
+    <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-4">
       <div className="flex items-center gap-1.5">
         {icon}
-        <span className="text-[10px] font-medium uppercase tracking-wider text-[#62666D]">{label}</span>
+        <span className="text-[10px] font-medium uppercase tracking-wider text-text-3">{label}</span>
       </div>
-      <p className="mt-2 text-xl font-bold text-[#F7F8F8]">{value}</p>
+      <p className="mt-2 text-xl font-bold text-text">{value}</p>
     </div>
   );
 }
@@ -1560,7 +1560,7 @@ function TabButton({
       type="button"
       onClick={onClick}
       className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-[12px] font-medium transition ${
-        active ? "bg-white/[0.06] text-[#F7F8F8]" : "text-[#62666D] hover:text-[#8A8F98]"
+        active ? "bg-white/[0.06] text-text" : "text-text-3 hover:text-text-2"
       }`}
     >
       {children}
@@ -1570,7 +1570,7 @@ function TabButton({
 
 function CountBadge({ value }: { value: number }) {
   return (
-    <span className="inline-flex min-w-4 items-center justify-center rounded-full bg-white/[0.06] px-1 text-[9px] text-[#8A8F98]">
+    <span className="inline-flex min-w-4 items-center justify-center rounded-full bg-white/[0.06] px-1 text-[9px] text-text-2">
       {value}
     </span>
   );
@@ -1580,8 +1580,8 @@ function ReadinessBadge({ label, ready }: { label: string; ready: boolean }) {
   return (
     <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-medium ${
       ready
-        ? "border-[#22C55E]/20 bg-[#22C55E]/[0.07] text-[#4ADE80]"
-        : "border-[#F59E0B]/20 bg-[#F59E0B]/[0.07] text-[#FBBF24]"
+        ? "border-named/20 bg-named/[0.07] text-named"
+        : "border-rival/20 bg-rival/[0.07] text-rival"
     }`}>
       {ready ? <Check className="h-2.5 w-2.5" /> : <Clock3 className="h-2.5 w-2.5" />}
       {label}
@@ -1592,12 +1592,12 @@ function ReadinessBadge({ label, ready }: { label: string; ready: boolean }) {
 function EvidenceLink({ label, url }: { label: string; url: string }) {
   return (
     <div className="min-w-0">
-      <p className="text-[9px] font-medium uppercase tracking-wider text-[#62666D]">{label}</p>
+      <p className="text-[9px] font-medium uppercase tracking-wider text-text-3">{label}</p>
       <a
         href={externalUrl(url)}
         target="_blank"
         rel="noreferrer"
-        className="mt-1 flex min-w-0 items-center gap-1 text-[11px] text-[#38BDF8] hover:underline"
+        className="text-text mt-1 flex min-w-0 items-center gap-1 text-[11px] underline decoration-you-line underline-offset-[3px] hover:decoration-you"
       >
         <span className="truncate">{safeHost(url)}</span>
         <ExternalLink className="h-3 w-3 shrink-0" />
@@ -1609,8 +1609,8 @@ function EvidenceLink({ label, url }: { label: string; url: string }) {
 function EvidenceValue({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
-      <p className="text-[9px] font-medium uppercase tracking-wider text-[#62666D]">{label}</p>
-      <p className="mt-1 truncate text-[11px] text-[#B8BBC7]" title={value}>{value}</p>
+      <p className="text-[9px] font-medium uppercase tracking-wider text-text-3">{label}</p>
+      <p className="mt-1 truncate text-[11px] text-text-2" title={value}>{value}</p>
     </div>
   );
 }
@@ -1625,10 +1625,10 @@ function EmptyState({
   detail: string;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-white/[0.06] bg-[#0E0F11] px-6 py-14 text-center">
-      <div className="mb-3 text-[#62666D]/50">{icon}</div>
-      <h2 className="text-[14px] font-semibold text-[#F7F8F8]">{title}</h2>
-      <p className="mt-2 max-w-lg text-[12px] leading-relaxed text-[#62666D]">{detail}</p>
+    <div className="flex flex-col items-center justify-center rounded-xl border border-white/[0.06] bg-surface-1 px-6 py-14 text-center">
+      <div className="mb-3 text-text-4/50">{icon}</div>
+      <h2 className="text-[14px] font-semibold text-text">{title}</h2>
+      <p className="mt-2 max-w-lg text-[12px] leading-relaxed text-text-3">{detail}</p>
     </div>
   );
 }

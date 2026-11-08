@@ -540,11 +540,12 @@ export function createSyntheticStore(options: HarnessOptions): SyntheticStore {
       if (existing) { existing.answers = true; emit(); return { siteId: existing.siteId, created: false }; }
       return fail(`Your account already tracks ${SYN_BUSINESS.domain}. One website per account for now; contact us to add another.`);
     },
-    async updateBusiness({ siteId, name, sells, buyers, offerings }) {
+    async updateBusiness({ siteId, name, sells, buyers, offerings, local, location }) {
       const site = requireSite(siteId);
       if (!name.trim() || sells.trim().length < 10) fail("Say what the business sells in a sentence.");
       Object.assign(site, { name: name.trim().slice(0, 80), sells: sells.trim().slice(0, 600), buyers: buyers.trim().slice(0, 300),
         offerings: offerings.map((o) => o.trim()).filter((o) => o.length > 1).slice(0, 10).map((o) => o.slice(0, 120)) });
+      if (local !== undefined) Object.assign(site, { local, location: local ? location?.trim().slice(0, 80) || site.location : null });
       emit();
       return { ok: true };
     },

@@ -89,29 +89,29 @@ export function ContentStart() {
   }
   const steps = (active: number) => <ol className="flex flex-wrap gap-2 text-[12px]" aria-label="Setup steps">
     {["Your business", "Connect your website", "Autopilot or Review first"].map((step, n) => <li key={step}
-      className={`flex items-center gap-2 rounded-full border px-3 py-1 ${n === active ? "border-white/20 bg-white/[0.06] text-[#F7F8F8]" : n < active ? "border-[#4CB782]/30 text-[#4CB782]" : "border-white/[0.08] text-[#8A8F98]"}`}>
-      <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold ${n === active ? "bg-[#F7F8F8] text-[#08090A]" : n < active ? "bg-[#4CB782]/20" : "bg-white/[0.06]"}`}>{n < active ? "✓" : n + 1}</span>{step}</li>)}
+      className={`flex items-center gap-2 rounded-full border px-3 py-1 ${n === active ? "border-white/20 bg-white/[0.06] text-text" : n < active ? "border-named/30 text-named" : "border-white/[0.08] text-text-2"}`}>
+      <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold ${n === active ? "bg-action text-on-action" : n < active ? "bg-named/20" : "bg-white/[0.06]"}`}>{n < active ? "✓" : n + 1}</span>{step}</li>)}
   </ol>;
   if (siteId) return <div className="mx-auto max-w-3xl space-y-5">
-    <header className="space-y-3"><h1 className="text-2xl font-semibold tracking-tight text-[#F7F8F8]">Finish setting up Pentra</h1>{steps(adapter === "manual" ? 2 : 1)}</header>
-    {adapter === "manual" ? <p className="text-[14px] text-[#8A8F98]">Your profile is saved. Start Pentra below: it researches and writes each article, and you paste it into your site.</p> : <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#0EA5E9]/30 bg-[#0EA5E9]/[0.04] p-4">
-      <p className="flex-1 text-[14px] text-[#F7F8F8]">Your profile is saved. Connect and verify your website, then choose Autopilot or Review first.</p>
-      <Link className="rounded-lg bg-[#F7F8F8] px-4 py-2 text-[13px] font-medium text-[#08090A] hover:bg-white" href={`/sites/${siteId}?tab=settings`}>Connect your website in settings</Link></div>}
+    <header className="space-y-3"><h1 className="text-2xl font-semibold tracking-tight text-text">Finish setting up Pentra</h1>{steps(adapter === "manual" ? 2 : 1)}</header>
+    {adapter === "manual" ? <p className="text-[14px] text-text-2">Your profile is saved. Start Pentra below: it researches and writes each article, and you paste it into your site.</p> : <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-surface-2/50 p-4">
+      <p className="flex-1 text-[14px] text-text">Your profile is saved. Connect and verify your website, then choose Autopilot or Review first.</p>
+      <Link className="rounded-lg bg-action px-4 py-2 text-[13px] font-medium text-on-action hover:bg-white" href={`/sites/${siteId}?tab=settings`}>Connect your website in settings</Link></div>}
     <ContentWorkService key={siteId} siteId={siteId} />
   </div>;
-  const PANEL = "space-y-4 rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5", H2 = "text-[15px] font-semibold text-[#F7F8F8]", HELP = "text-[13px] leading-relaxed text-[#8A8F98]";
+  const PANEL = "space-y-4 rounded-xl border border-white/[0.06] bg-surface-1 p-5", H2 = "text-[15px] font-semibold text-text", HELP = "text-[13px] leading-relaxed text-text-2";
   const edit = (set: (value: string) => void) => (e: { target: { value: string } }) => { set(e.target.value); setConfirmed(false); };
   return <div className="mx-auto max-w-2xl space-y-5">
     <header className="space-y-3">
-      <h1 className="text-2xl font-semibold tracking-tight text-[#F7F8F8]">Set up Pentra for your website</h1>
-      <p className="text-[14px] leading-relaxed text-[#8A8F98]">Tell Pentra about your business, connect your website, and choose Autopilot or Review first. Then Pentra researches, writes, publishes and checks every article for you.</p>
+      <h1 className="text-2xl font-semibold tracking-tight text-text">Set up Pentra for your website</h1>
+      <p className="text-[14px] leading-relaxed text-text-2">Tell Pentra about your business, connect your website, and choose Autopilot or Review first. Then Pentra researches, writes, publishes and checks every article for you.</p>
       {steps(0)}
     </header>
     <section className={PANEL} aria-labelledby="setup-website">
       <h2 id="setup-website" className={H2}>Your website</h2>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <div className="flex-1"><Input label="Website domain" value={domain} onChange={edit(setDomain)} placeholder="yourbusiness.com" /></div>
-        <Button disabled={!domain.trim() || filling} loading={filling} onClick={() => fillFromWebsite()}>Fill in from my website</Button>
+        <Button variant="secondary" disabled={!domain.trim() || filling} loading={filling} onClick={() => fillFromWebsite()}>Fill in from my website</Button>
       </div>
       <p className={HELP} role="status">{fillNote || "Pentra reads your homepage and suggests the details below. You check them before anything is written."}</p>
     </section>
@@ -129,12 +129,12 @@ export function ContentStart() {
         <p className={HELP}>Each article ends with one clear next step to this page. Leave it empty to link to your homepage.</p></div>
       <Input label="Where should readers go to become customers? (optional)" value={ctaUrl} onChange={edit(setCtaUrl)} placeholder="https://yourbusiness.com/book" />
       {ctaUrl.trim() && <Input label="Button text" value={ctaText} onChange={e => setCtaText(e.target.value)} placeholder="Book a visit" />}
-      {!ctaValid && <p role="alert" className="text-[13px] text-[#F59E0B]">Use a full link that starts with https://</p>}
+      {!ctaValid && <p role="alert" className="text-[13px] text-rival">Use a full link that starts with https://</p>}
     </section>
     <section className={PANEL} aria-labelledby="setup-destination">
       <h2 id="setup-destination" className={H2}>Where Pentra publishes</h2>
-      <label className="block space-y-1.5"><span className="text-[13px] font-medium text-[#8A8F98]">Publishing destination</span>
-        <select className="block w-full rounded-lg border border-white/[0.1] bg-[#08090A] px-3 py-2.5 text-[14px] text-[#F7F8F8] focus:border-white/30 focus:outline-none"
+      <label className="block space-y-1.5"><span className="text-[13px] font-medium text-text-2">Publishing destination</span>
+        <select className="block w-full rounded-lg border border-white/[0.1] bg-bg px-3 py-2.5 text-[14px] text-text focus:border-white/30 focus:outline-none"
           aria-label="Content publishing destination" value={adapter} onChange={e => { setAdapter(e.target.value); setConfirmed(false); }}>
           <option value="" disabled>Choose where your website runs</option>
           <option value="github">GitHub · a Next.js, Astro, Hugo, Jekyll or Gatsby blog with Markdown posts</option>
@@ -148,14 +148,14 @@ export function ContentStart() {
       {adapter === "github" && <p className={HELP}>Pentra reads your repository, finds where your blog keeps its Markdown posts and writes each article the same way, so it appears like your other posts. If your site has no Markdown blog yet, Pentra writes each article for you to review and paste. You&apos;ll connect GitHub in the next step.</p>}
       {adapter === "manual" && <p className={HELP}>Pentra researches, writes and fact-checks every article for you to review; you paste each one into your site&apos;s blog and Pentra confirms it&apos;s live.</p>}
       {isApiCmsMethod(adapter) && <p className={HELP}>Pentra publishes each article to your {CMS_PLATFORM_LABELS[adapter]} {adapter === "shopify" ? "store's blog" : adapter === "webflow" ? "CMS blog collection" : "site"} through {CMS_PLATFORM_LABELS[adapter]}&apos;s official API, then checks it&apos;s live. You&apos;ll connect it in the next step (about 3 minutes).</p>}
-      {adapter === "wordpress" && <p className={HELP}><a className="font-medium text-[#0EA5E9] hover:underline" href="/pentra-wordpress-plugin.zip" download>Download the Pentra WordPress plugin (ZIP)</a>. In WordPress go to Plugins → Add New → Upload Plugin, choose the ZIP and activate it. You&apos;ll connect it in the next step.</p>}
+      {adapter === "wordpress" && <p className={HELP}><a className="text-text font-medium underline decoration-you-line underline-offset-[3px] hover:decoration-you" href="/pentra-wordpress-plugin.zip" download>Download the Pentra WordPress plugin (ZIP)</a>. In WordPress go to Plugins → Add New → Upload Plugin, choose the ZIP and activate it. You&apos;ll connect it in the next step.</p>}
     </section>
     <section className={PANEL}>
-      <label className="flex items-start gap-3 text-[14px] text-[#F7F8F8]"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#F7F8F8]" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+      <label className="flex items-start gap-3 text-[14px] text-text"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-text" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
         <span>These facts are accurate. Pentra writes only from them.</span></label>
       <div className="flex flex-wrap items-center gap-4">
         <Button disabled={busy || !isLoaded || !userId || !confirmed || !ctaValid || !adapter || !domain.trim() || !summary.trim() || !audience.trim() || !product.trim()} onClick={save}>{busy ? "Saving…" : "Save and continue"}</Button>
-        <Link className="text-[13px] text-[#8A8F98] underline-offset-2 hover:text-[#F7F8F8] hover:underline" href="/upgrade">Plans &amp; billing</Link>
+        <Link className="text-[13px] text-text-2 underline-offset-2 hover:text-text hover:underline" href="/upgrade">Plans &amp; billing</Link>
       </div>
       <p className={HELP}>Saving doesn&apos;t charge you. Pentra only adds new articles; it never changes your pricing, checkout or legal pages.</p>
       {error && <p role="alert" className="text-[13px] text-red-400">{error}</p>}

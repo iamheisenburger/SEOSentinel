@@ -6,6 +6,7 @@ import { assistantLabel, isAssistantId, num, shortDate } from "@/lib/answers/for
 import type { AssistantRow } from "@/lib/answers/derive";
 import type { TrendPoint } from "@/lib/answers/types";
 import { cx } from "@/lib/cx";
+import { ScrollX } from "@/components/answers/ui";
 
 /*
  * Charts follow the dataviz rules: thin marks (8px bars, 2px lines), 4px rounded data ends square at the baseline,
@@ -291,7 +292,7 @@ export function TrendChart({
           <span className="group-open:hidden">Show as a table</span>
           <span className="hidden group-open:inline">Hide the table</span>
         </summary>
-        <div className="mt-3 overflow-x-auto">
+        <ScrollX className="mt-3">
           <table className="w-full min-w-[420px] text-left text-[13px]">
             <thead>
               <tr className="border-b border-border">
@@ -314,7 +315,7 @@ export function TrendChart({
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollX>
       </details>
     </figure>
   );

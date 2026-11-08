@@ -8,7 +8,7 @@ import { Reveal } from "@/components/ui/reveal";
 import { StatusPill } from "@/components/ui/status-pill";
 import { pageSocial } from "@/lib/page-social";
 import { ANNUAL_MONTHS_FREE, PENTRA_PLAN, formatUsd } from "@/lib/pricing";
-import { HONESTY_LINE, SNAPSHOT, SUPPORT_EMAIL } from "@/lib/product-facts";
+import { HONESTY_LINE, SNAPSHOT, SUPPORT_EMAIL, TIMING } from "@/lib/product-facts";
 
 const DESCRIPTION = `One plan: ${formatUsd(PENTRA_PLAN.monthly)} a month or ${formatUsd(PENTRA_PLAN.annual)} a year. Start with a free snapshot of how ChatGPT, Perplexity, Gemini and Google's AI describe your business.`;
 
@@ -84,7 +84,7 @@ export default function PricingPage() {
       </section>
 
       <Section labelledBy="snapshot-title">
-        <SectionHeading id="snapshot-title" title="What the free snapshot includes" lead="Enter your domain and in about an hour you have:" />
+        <SectionHeading id="snapshot-title" title="What the free snapshot includes" lead={`Enter your domain and in about ${TIMING.snapshotMinutes} minutes you have:`} />
         <Reveal as="ul" className="mt-12 grid grid-cols-1 gap-px overflow-hidden rounded-card border border-border bg-border sm:grid-cols-2 lg:grid-cols-5">
           {SNAPSHOT_ITEMS.map((item) => (
             <li key={item.label} data-reveal className="flex flex-col bg-bg p-6">

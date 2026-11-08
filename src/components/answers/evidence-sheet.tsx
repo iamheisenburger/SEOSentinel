@@ -13,6 +13,7 @@ import { assistantLabel, isAssistantId, plural, shortDate, utcStamp } from "@/li
 import type { Check } from "@/lib/answers/types";
 import { ASSISTANTS } from "@/lib/product-facts";
 import { cx } from "@/lib/cx";
+import { ChipScroller } from "@/components/answers/ui";
 
 /* ─── What a count opens ───────────────────────────────────────────────── */
 
@@ -119,7 +120,7 @@ type Chip = { id: string; label: ReactNode; count: number };
 
 function ChipRow({ label, chips, value, onChange }: { label: string; chips: Chip[]; value: string; onChange: (id: string) => void }) {
   return (
-    <div role="radiogroup" aria-label={label} className="scrollbar-none -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5">
+    <ChipScroller label={label} className="pb-0.5">
       {chips.map((chip) => {
         const active = chip.id === value;
         return (
@@ -140,7 +141,7 @@ function ChipRow({ label, chips, value, onChange }: { label: string; chips: Chip
           </button>
         );
       })}
-    </div>
+    </ChipScroller>
   );
 }
 

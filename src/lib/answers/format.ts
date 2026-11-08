@@ -72,6 +72,31 @@ export function plural(n: number, one: string, many = `${one}s`): string {
 
 export const num = (n: number) => n.toLocaleString("en-US");
 
+/** "1st", "2nd", "3rd", "4th", "11th", "22nd". */
+export function ordinal(n: number): string {
+  const tens = n % 100;
+  const suffix = tens >= 11 && tens <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[n % 10] ?? "th";
+  return `${n.toLocaleString("en-US")}${suffix}`;
+}
+
+/* Geist Sans advances at weight 500 with -0.03em tracking (the headline style), in em, measured in Chromium with the font
+ * loaded. Anything else (an internationalised name) counts as wide. */
+const ADVANCE: Record<string, number> = {
+  a: 0.535, b: 0.569, c: 0.524, d: 0.569, e: 0.537, f: 0.348, g: 0.568, h: 0.552, i: 0.21, j: 0.239, k: 0.534, l: 0.243, m: 0.838,
+  n: 0.544, o: 0.549, p: 0.569, q: 0.569, r: 0.332, s: 0.501, t: 0.371, u: 0.556, v: 0.53, w: 0.799, x: 0.539, y: 0.523, z: 0.518,
+  "0": 0.645, "1": 0.34, "2": 0.6, "3": 0.595, "4": 0.599, "5": 0.611, "6": 0.606, "7": 0.519, "8": 0.595, "9": 0.608, ".": 0.183, "-": 0.388,
+};
+
+/**
+ * How wide a domain set in the headline style is, in em, with a 5% margin: the headline sizes it to fit its column
+ * whole (`calc(100cqi / em)`), so a long address never breaks mid-word.
+ */
+export function domainWidthEm(domain: string): number {
+  let em = 0;
+  for (const char of domain.toLowerCase()) em += ADVANCE[char] ?? 0.85;
+  return Math.max(1, em * 1.05);
+}
+
 /** "A, B and C". */
 export function listSentence(items: readonly string[]): string {
   if (items.length <= 1) return items[0] ?? "";

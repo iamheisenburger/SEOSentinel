@@ -18,25 +18,25 @@ const STATUS_COPY = {
     title: "Setup complete",
     detail:
       "Your required connections are verified. Pentra now follows the cadence and automation mode you selected.",
-    color: "#22C55E",
+    color: "var(--named)",
   },
   in_progress: {
     title: "Pentra is preparing your setup",
     detail:
       "Managed work stays queued until the corresponding connection is independently verified.",
-    color: "#0EA5E9",
+    color: "var(--you)",
   },
   action_required: {
     title: "One step needs your approval",
     detail:
       "Complete the step below once, then Pentra continues automatically.",
-    color: "#F59E0B",
+    color: "var(--rival)",
   },
   blocked: {
     title: "Pentra needs help to continue",
     detail:
       "A plan, ownership, or provisioning fence must be resolved before setup can continue.",
-    color: "#EF4444",
+    color: "var(--wrong)",
   },
 } as const;
 
@@ -44,19 +44,19 @@ const DEPENDENCIES_READY_COPY = {
   title: "Connections verified",
   detail:
     "Your setup dependencies are verified. Pentra is preparing the controlled publishing rollout; live cadence begins only after its production readiness gates pass.",
-  color: "#0EA5E9",
+  color: "var(--you)",
 } as const;
 
 const STAGE_COPY = {
-  ready: { label: "Verified", icon: Check, className: "text-[#4ADE80]" },
-  queued: { label: "Queued", icon: Clock3, className: "text-[#38BDF8]" },
-  in_progress: { label: "In progress", icon: Loader2, className: "text-[#38BDF8]" },
+  ready: { label: "Verified", icon: Check, className: "text-named" },
+  queued: { label: "Queued", icon: Clock3, className: "text-text-2" },
+  in_progress: { label: "In progress", icon: Loader2, className: "text-text-2" },
   action_required: {
     label: "Action needed",
     icon: CircleDashed,
-    className: "text-[#FBBF24]",
+    className: "text-rival",
   },
-  blocked: { label: "Blocked", icon: AlertCircle, className: "text-[#F87171]" },
+  blocked: { label: "Blocked", icon: AlertCircle, className: "text-wrong" },
 } as const;
 
 export function SetupReadiness({
@@ -140,7 +140,7 @@ export function SetupReadiness({
 
   if (readiness === undefined) {
     return (
-      <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
+      <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-5">
         <div className="h-4 w-48 animate-pulse rounded bg-white/[0.05]" />
         <div className="mt-4 h-2 animate-pulse rounded-full bg-white/[0.04]" />
       </div>
@@ -166,7 +166,7 @@ export function SetupReadiness({
   ].includes(planningWait.blockerCode!);
 
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-[#0E0F11] p-5">
+    <div className="rounded-xl border border-white/[0.06] bg-surface-1 p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
@@ -174,17 +174,17 @@ export function SetupReadiness({
               className="h-2 w-2 rounded-full"
               style={{ backgroundColor: summary.color }}
             />
-            <h2 className="text-[14px] font-semibold text-[#F7F8F8]">
+            <h2 className="text-[14px] font-semibold text-text">
               {summary.title}
             </h2>
           </div>
           {!compact && (
-            <p className="mt-1 max-w-xl text-[11px] leading-relaxed text-[#62666D]">
+            <p className="mt-1 max-w-xl text-[11px] leading-relaxed text-text-3">
               {summary.detail}
             </p>
           )}
         </div>
-        <span className="shrink-0 text-[12px] font-semibold text-[#8A8F98]">
+        <span className="shrink-0 text-[12px] font-semibold text-text-2">
           {readiness.aggregate.readyCount}/{readiness.aggregate.totalCount}
         </span>
       </div>
@@ -200,18 +200,18 @@ export function SetupReadiness({
       </div>
 
       {activeOperation && (
-        <div className="mt-3 flex items-center gap-2 rounded-lg bg-[#0EA5E9]/[0.06] px-3 py-2 text-[11px] text-[#38BDF8]">
+        <div className="mt-3 flex items-center gap-2 rounded-lg bg-surface-2/50 px-3 py-2 text-[11px] text-text-2">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           {activeOperation}
         </div>
       )}
 
       {!readiness.requestExists && (
-        <div className="mt-4 rounded-lg border border-[#F59E0B]/15 bg-[#F59E0B]/[0.04] px-3 py-3">
-          <p className="text-[11px] font-medium text-[#FBBF24]">
+        <div className="mt-4 rounded-lg border border-rival/15 bg-rival/[0.04] px-3 py-3">
+          <p className="text-[11px] font-medium text-rival">
             Finish the current One Setup contract
           </p>
-          <p className="mt-1 text-[10px] leading-relaxed text-[#73788F]">
+          <p className="mt-1 text-[10px] leading-relaxed text-text-2">
             This website predates the current setup contract. Confirm its
             existing business, publishing, measurement, and sender choices;
             Pentra will keep the same tenant and continue from durable receipts.
@@ -219,7 +219,7 @@ export function SetupReadiness({
           <button
             type="button"
             onClick={() => window.location.assign("/dashboard?setup=existing")}
-            className="mt-3 rounded-md bg-[#F7F8F8] px-3 py-1.5 text-[10px] font-medium text-[#08090A] transition hover:bg-white"
+            className="mt-3 rounded-md bg-action px-3 py-1.5 text-[10px] font-medium text-on-action transition hover:bg-white"
           >
             Finish One Setup
           </button>
@@ -228,7 +228,7 @@ export function SetupReadiness({
 
       {readiness.aggregate.status !== "ready" &&
         readiness.fulfillment?.nextAttemptAt && (
-          <p className="mt-3 text-[10px] leading-relaxed text-[#73788F]">
+          <p className="mt-3 text-[10px] leading-relaxed text-text-2">
             Automatic receipt recheck: {new Date(
               readiness.fulfillment.nextAttemptAt,
             ).toLocaleString()} · attempt {readiness.fulfillment.attempt}
@@ -243,27 +243,27 @@ export function SetupReadiness({
             return (
               <div
                 key={stage.key}
-                className="rounded-lg border border-[#F59E0B]/15 bg-[#F59E0B]/[0.04] px-3 py-2.5"
+                className="rounded-lg border border-rival/15 bg-rival/[0.04] px-3 py-2.5"
               >
                 <div className="flex items-center gap-2">
                   <Icon className={`h-3.5 w-3.5 shrink-0 ${stageCopy.className}`} />
-                  <span className="flex-1 text-[11px] text-[#8A8F98]">
+                  <span className="flex-1 text-[11px] text-text-2">
                     {stage.label}
                   </span>
                   <span className={`text-[10px] font-medium ${stageCopy.className}`}>
                     {stage.actionRequiredBy === "owner" ? "Your action" : "Pentra action"}
                   </span>
                 </div>
-                <p className="mt-2 pl-5 text-[10px] leading-relaxed text-[#73788F]">
+                <p className="mt-2 pl-5 text-[10px] leading-relaxed text-text-2">
                   {stage.actionMessage}
                 </p>
                 {stage.reasonCode && (
-                  <p className="mt-1 pl-5 break-words font-mono text-[9px] text-[#73788F]">
+                  <p className="mt-1 pl-5 break-words font-mono text-[9px] text-text-2">
                     Reference: {stage.reasonCode}
                   </p>
                 )}
                 {stage.actionKind === "accept_publisher_autopublish" && (
-                  <p className="mt-2 pl-5 text-[9px] leading-relaxed text-[#73788F]">
+                  <p className="mt-2 pl-5 text-[9px] leading-relaxed text-text-2">
                     {readiness.publisherAutopublishConsent.text}
                   </p>
                 )}
@@ -274,7 +274,7 @@ export function SetupReadiness({
                       type="button"
                       disabled={pendingAction !== null}
                       onClick={() => void runOwnerAction(stage.actionKind!)}
-                      className="ml-5 mt-3 rounded-md bg-[#F7F8F8] px-3 py-1.5 text-[10px] font-medium text-[#08090A] transition hover:bg-white disabled:cursor-wait disabled:opacity-60"
+                      className="ml-5 mt-3 rounded-md bg-action px-3 py-1.5 text-[10px] font-medium text-on-action transition hover:bg-white disabled:cursor-wait disabled:opacity-60"
                     >
                       {pendingAction === stage.actionKind
                         ? "Saving…"
@@ -288,8 +288,8 @@ export function SetupReadiness({
       )}
 
       {planningWait && (
-        <div role="status" className="mt-3 rounded-lg border border-[#38BDF8]/15 bg-[#38BDF8]/[0.04] px-3 py-2.5 text-[10px] leading-relaxed text-[#8A8F98]">
-          <p className="font-medium text-[#38BDF8]">Planning is waiting—not currently generating</p>
+        <div role="status" className="mt-3 rounded-lg border border-border bg-surface-2/50 px-3 py-2.5 text-[10px] leading-relaxed text-text-2">
+          <p className="font-medium text-text-2">Planning is waiting—not currently generating</p>
           <p className="mt-1">
             {waitingForBudget
               ? "Pentra's internal planning allowance is reserved. This is separate from your provider wallet balance; adding provider credits does not reset this allowance."
@@ -300,13 +300,13 @@ export function SetupReadiness({
       )}
 
       {actionError && (
-        <p className="mt-3 text-[10px] leading-relaxed text-[#F87171]">
+        <p className="mt-3 text-[10px] leading-relaxed text-wrong">
           {actionError}
         </p>
       )}
 
       <details className="group mt-4 rounded-lg border border-white/[0.04] bg-white/[0.015]">
-        <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2.5 text-[10px] text-[#73788F] hover:text-[#A3A7B8]">
+        <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2.5 text-[10px] text-text-2 hover:text-text-2">
           View setup details
           <span>{readiness.aggregate.readyCount}/{readiness.aggregate.totalCount} verified</span>
         </summary>
@@ -325,7 +325,7 @@ export function SetupReadiness({
                     stage.state === "in_progress" ? "animate-spin" : ""
                   }`}
                 />
-                <span className="flex-1 text-[11px] text-[#8A8F98]">
+                <span className="flex-1 text-[11px] text-text-2">
                   {stage.label}
                 </span>
                 <span
@@ -335,7 +335,7 @@ export function SetupReadiness({
                 </span>
               </div>
               {stage.actionRequiredBy && stage.actionMessage && (
-                <p className="mt-2 pl-5 text-[10px] leading-relaxed text-[#73788F]">
+                <p className="mt-2 pl-5 text-[10px] leading-relaxed text-text-2">
                   {stage.actionRequiredBy === "owner"
                     ? "Your action"
                     : "Pentra action"}:
@@ -348,7 +348,7 @@ export function SetupReadiness({
         </div>
       </details>
 
-      <p className="mt-3 text-[10px] leading-relaxed text-[#62666D]">
+      <p className="mt-3 text-[10px] leading-relaxed text-text-3">
         Setup progress is separate from outcome reporting. Articles, deliveries,
         acquired links, and ranking changes appear only after Pentra verifies
         their production receipts.

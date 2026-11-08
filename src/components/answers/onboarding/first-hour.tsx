@@ -13,7 +13,7 @@ import { useAnswersActions, useAnswersQuery, useNow } from "@/lib/answers/backen
 import { checkToEvidence } from "@/lib/answers/evidence";
 import { assistantLabel, elapsed, intentLabel, isAssistantId, num, plural, shortStamp } from "@/lib/answers/format";
 import type { RunProgress, SetupState } from "@/lib/answers/types";
-import { ASSISTANTS, SNAPSHOT, SUPPORT_EMAIL } from "@/lib/product-facts";
+import { ASSISTANTS, SNAPSHOT, SUPPORT_EMAIL, TIMING } from "@/lib/product-facts";
 import { userErrorMessage } from "@/lib/user-error";
 import { cx } from "@/lib/cx";
 
@@ -72,7 +72,7 @@ export function FirstHour({ state }: { state: SetupState }) {
           </p>
         </div>
         <Notice className="lg:max-w-[360px]">
-          <span className="inline-flex items-start gap-2"><Mail aria-hidden="true" className="mt-[3px] h-4 w-4 shrink-0 text-text-3" strokeWidth={1.5} />Safe to close this tab. We&apos;ll email you when it&apos;s ready.</span>
+          <span className="inline-flex items-start gap-2"><Mail aria-hidden="true" className="mt-[3px] h-4 w-4 shrink-0 text-text-3" strokeWidth={1.5} />Usually about {TIMING.snapshotMinutes} minutes. Safe to close this tab; we&apos;ll email you when it&apos;s ready.</span>
         </Notice>
       </div>
 
@@ -118,7 +118,7 @@ function SetupErrorNotice({ state }: { state: SetupState }) {
     setMessage(null);
     try {
       await actions.confirmSetup({ siteId: state.siteId, competitors: state.competitors, ...(state.country ? { country: state.country } : {}) });
-      setMessage("Started again. The questions appear here in a few minutes.");
+      setMessage(`Started again. The first answers appear here in under ${TIMING.firstAnswersMinutes} minutes.`);
     } catch (e) {
       setMessage(userErrorMessage(e, "Pentra couldn't restart the setup. Try again in a minute."));
     } finally {
@@ -221,7 +221,7 @@ function Feed({ progress, waiting, business }: { progress: RunProgress | null; w
       <div className="flex flex-col gap-3">
         <p className="mono-caps text-text-3">Answers as they arrive</p>
         <div className="rounded-card border border-dashed border-border-strong px-5 py-10 text-center">
-          <p className="text-[14px] text-text-2">The first answers appear here within a few minutes.</p>
+          <p className="text-[14px] text-text-2">The first answers appear here in under {TIMING.firstAnswersMinutes} minutes.</p>
           <p className="mt-1 text-[13px] text-text-3">Each one is kept in full, with the sources the assistant cited.</p>
         </div>
         {[0, 1].map((i) => <Skeleton key={i} className="h-36 w-full rounded-card" />)}

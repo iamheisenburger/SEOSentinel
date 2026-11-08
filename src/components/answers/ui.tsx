@@ -1,10 +1,64 @@
 "use client";
 
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Component, Fragment, useRef, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
 import { AlertCircle, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { domainWidthEm } from "@/lib/answers/format";
 import { cx } from "@/lib/cx";
+import { useEdgeFade } from "@/lib/use-edge-fade";
+
+/** Up to ~40 characters a domain stays on one line at 16px or more, even in a phone's 358px column. */
+const FIT_MAX_EM = 22;
+
+/**
+ * A domain on its own line inside a headline, sized to fit the headline's width whole, so a long address never
+ * breaks mid-word ("osterkampfamilydental.co / m"). The size follows the column (container query units on the
+ * headline, which carries `@container`) up to the headline's own size; a longer address may wrap, only after a dot.
+ */
+export function FitDomain({ domain, after = "", className }: { domain: string; after?: string; className?: string }) {
+  const em = domainWidthEm(`${domain}${after}`);
+  const whole = em <= FIT_MAX_EM;
+  return (
+    <span
+      style={{ "--fit-em": em.toFixed(3) } as CSSProperties}
+      className={cx(
+        "block font-medium leading-[1.15] tracking-[-0.03em] [--fit-max:32px] md:[--fit-max:40px] xl:[--fit-max:48px] [font-size:clamp(16px,calc(100cqi/var(--fit-em)),var(--fit-max))]",
+        whole ? "whitespace-nowrap" : "[overflow-wrap:anywhere]",
+        className,
+      )}
+    >
+      {whole ? domain : domain.split(/(?<=\.)/).map((part, i) => <Fragment key={i}>{i > 0 && <wbr />}{part}</Fragment>)}
+      {after}
+    </span>
+  );
+}
+
+/**
+ * A row of filter chips (a radio group). On a phone it scrolls sideways and fades at the edge that has more chips,
+ * so a cut-off chip never looks like a mistake.
+ */
+export function ChipScroller({ label, className, children }: { label: string; className?: string; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const fade = useEdgeFade(ref);
+  return (
+    <div ref={ref} role="radiogroup" aria-label={label} onScroll={fade.onScroll} style={fade.style}
+      className={cx("scrollbar-none -mx-1 flex gap-1.5 overflow-x-auto px-1", className)}>
+      {children}
+    </div>
+  );
+}
+
+/** A table (or anything wider than a phone) that scrolls sideways, fading at the edge with more to show. */
+export function ScrollX({ className, children }: { className?: string; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const fade = useEdgeFade(ref);
+  return (
+    <div ref={ref} onScroll={fade.onScroll} style={fade.style} className={cx("overflow-x-auto", className)}>
+      {children}
+    </div>
+  );
+}
 
 /** A titled container for one piece of evidence or one control area (app cards: 10px radius, 20px padding). */
 export function Panel({

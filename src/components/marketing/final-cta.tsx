@@ -1,5 +1,6 @@
 import { DomainInput } from "@/components/ui/domain-input";
 import { Reveal } from "@/components/ui/reveal";
+import { TIMING } from "@/lib/product-facts";
 
 /** The domain field again, last thing on the page. */
 export function FinalCta({ title = "See what AI says about you." }: { title?: string }) {
@@ -10,7 +11,7 @@ export function FinalCta({ title = "See what AI says about you." }: { title?: st
           {title}
         </h2>
         <p data-reveal className="type-lead mt-4 max-w-[520px] [text-wrap:balance]">
-          Enter your domain. The snapshot is free, and the first answers arrive in minutes.
+          Enter your domain. The snapshot is free and ready in about {TIMING.snapshotMinutes} minutes; the first answers arrive in under {TIMING.firstAnswersMinutes}.
         </p>
         <div data-reveal className="mt-9 flex w-full justify-center">
           <DomainInput id="final-domain" align="center" />

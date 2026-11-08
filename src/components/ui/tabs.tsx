@@ -2,6 +2,7 @@
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useLayoutEffect, useRef, type KeyboardEvent } from "react";
+import { useEdgeFade } from "@/lib/use-edge-fade";
 import { cx } from "@/lib/cx";
 
 interface Tab {
@@ -24,12 +25,14 @@ interface TabsProps {
 /**
  * Underline tabs: 13px/500, inactive --text-3, active --text with a 2px --text underline that slides between
  * tabs (200ms ease-in-out). Arrow keys, Home and End move between tabs. Pair with useTabParam to keep the
- * active tab in the URL.
+ * active tab in the URL. On a narrow screen the list scrolls sideways, fades at the hidden edge and keeps the
+ * active tab in view.
  */
 export function Tabs({ tabs, active, onChange, label, idPrefix, className }: TabsProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const indicatorRef = useRef<HTMLSpanElement>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
+  const fade = useEdgeFade(listRef);
 
   // The underline is positioned directly (no re-render); it slides only after its first placement.
   const place = useCallback(() => {
@@ -43,6 +46,10 @@ export function Tabs({ tabs, active, onChange, label, idPrefix, className }: Tab
     indicator.style.opacity = "1";
     indicator.style.width = `${button.offsetWidth}px`;
     indicator.style.translate = `${button.offsetLeft}px 0`;
+    const list = listRef.current;
+    if (list && (button.offsetLeft < list.scrollLeft || button.offsetLeft + button.offsetWidth > list.scrollLeft + list.clientWidth)) {
+      list.scrollLeft = Math.max(0, button.offsetLeft - 28);
+    }
   }, [active]);
 
   useLayoutEffect(() => {
@@ -79,6 +86,8 @@ export function Tabs({ tabs, active, onChange, label, idPrefix, className }: Tab
       role="tablist"
       aria-label={label}
       onKeyDown={onKeyDown}
+      onScroll={fade.onScroll}
+      style={fade.style}
       className={cx("scrollbar-none relative flex gap-1 overflow-x-auto shadow-[inset_0_-1px_0_var(--border)]", className)}
     >
       {tabs.map((tab) => {

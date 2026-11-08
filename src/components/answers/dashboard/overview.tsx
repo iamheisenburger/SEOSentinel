@@ -18,6 +18,7 @@ import { checkToEvidence } from "@/lib/answers/evidence";
 import { deltaText, latestFullRun, nextFullRunAt, weekLog, weeklyDelta } from "@/lib/answers/derive";
 import { plural, shortDate, shortStamp, timeAgo, timeUntil } from "@/lib/answers/format";
 import type { Overview, OverviewCitation } from "@/lib/answers/types";
+import { TIMING } from "@/lib/product-facts";
 import { userErrorMessage } from "@/lib/user-error";
 import { cx } from "@/lib/cx";
 
@@ -107,7 +108,7 @@ function OverviewBody({ overview }: { overview: Overview }) {
         </>
       ) : !asking && !site.setupError ? (
         <Notice actions={<ButtonLink href={href(`/start?site=${encodeURIComponent(site.siteId)}`)} size="sm">Open setup</ButtonLink>}>
-          No finished run yet. Your snapshot appears here when the first hour is done.
+          No finished run yet. Your snapshot appears here when the first run finishes, about {TIMING.snapshotMinutes} minutes after you confirm the setup.
         </Notice>
       ) : null}
 
@@ -158,7 +159,7 @@ function SetupRetry({ overview }: { overview: Overview }) {
     setError(null);
     try {
       await actions.confirmSetup({ siteId: overview.site.siteId, competitors: overview.site.competitors, country: overview.site.country });
-      toast("Started again. The questions appear in a few minutes.", "success");
+      toast(`Started again. The first answers arrive in under ${TIMING.firstAnswersMinutes} minutes.`, "success");
     } catch (e) {
       setError(userErrorMessage(e, "Pentra couldn't start again. Try in a minute."));
     } finally {

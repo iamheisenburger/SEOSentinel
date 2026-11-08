@@ -262,7 +262,7 @@ export async function GET(req: NextRequest) {
 
 function renderPage(message: string, success: boolean, email?: string, autoSaved?: boolean): string {
   const icon = success ? "&#10003;" : "&#10007;";
-  const color = success ? "#22C55E" : "#EF4444";
+  const color = success ? "#3FCF8E" : "#F27A72";
   const safeMessage = escapeHtml(message);
   const userLine = email ? `<p class="msg">Signed in as <strong style="color:#F7F8F8">${escapeHtml(email)}</strong></p>` : "";
   const subMsg = success && autoSaved ? "This window will close automatically..." : success ? "Close this window and refresh the page." : "You can close this window.";
@@ -272,14 +272,14 @@ function renderPage(message: string, success: boolean, email?: string, autoSaved
 <html><head><title>Pentra - Search Console</title>
 <style>
 body{background:#08090A;color:#F7F8F8;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
-.card{text-align:center;padding:2rem;border-radius:1rem;border:1px solid rgba(255,255,255,0.06);background:#0E0F11;max-width:400px}
+.card{text-align:center;padding:2rem;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:#0F1011;max-width:400px}
 .icon{font-size:2rem;margin-bottom:0.75rem}
 .msg{font-size:0.9rem;color:#8A8F98;margin-top:0.5rem}
 h2{font-size:1.1rem;margin:0}
 </style></head>
 <body><div class="card">
-<div class="icon">${icon}</div>
-<h2 style="color:${color}">${safeMessage}</h2>
+<div class="icon" style="color:${color}">${icon}</div>
+<h2>${safeMessage}</h2>
 ${userLine}
 <p class="msg">${subMsg}</p>
 </div>${closeScript}</body></html>`;
