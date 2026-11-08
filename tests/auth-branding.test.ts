@@ -6,6 +6,7 @@ import {
   postAuthDestination,
   safeAuthDestination,
 } from "../src/lib/auth-redirect.ts";
+import { startAuthHref } from "../src/lib/domain-input.ts";
 
 /**
  * Regression for unbranded authentication.
@@ -133,11 +134,20 @@ test("every customer auth entry stays inside branded Pentra UI", () => {
   assert.doesNotMatch(landingNav, /SignInButton|SignUpButton|mode=["']modal/);
   assert.match(landingNav, /href=["']\/sign-in["']/);
   // Nov 2026: account creation starts from the free snapshot: the nav's "Check my site" opens /start, and /start
-  // hands over to Pentra's own /sign-up (never Clerk's modal or hosted portal).
+  // hands over to Pentra's own /sign-up or /sign-in (never Clerk's modal or hosted portal), coming back to /start with
+  // the domain kept, so the site is created and the check continues where it left off.
   assert.match(landingNav, /href=["']\/start["']/);
-  const start = readFileSync(new URL("../src/app/start/page.tsx", import.meta.url), "utf8");
-  assert.match(start, /`\/sign-up\?redirect_url=\$\{encodeURIComponent\("\/dashboard"\)\}`/);
-  assert.doesNotMatch(start, /SignUpButton|SignInButton|mode=["']modal/);
+  assert.equal(startAuthHref("/sign-up", "example.com"), "/sign-up?redirect_url=%2Fstart%3Fdomain%3Dexample.com");
+  assert.equal(startAuthHref("/sign-in", "example.com"), "/sign-in?redirect_url=%2Fstart%3Fdomain%3Dexample.com");
+  assert.equal(postAuthDestination({ redirectUrl: "/start?domain=example.com", plan: null, billing: null }), "/start?domain=example.com");
+  assert.equal(authCounterpartUrl("/sign-in", { redirectUrl: "/start?domain=example.com", plan: null, billing: null }),
+    "/sign-in?redirect_url=%2Fstart%3Fdomain%3Dexample.com");
+  const flow = readFileSync(new URL("../src/components/answers/onboarding/start-flow.tsx", import.meta.url), "utf8");
+  assert.match(flow, /startAuthHref\("\/sign-up", domain\)/);
+  assert.match(flow, /startAuthHref\("\/sign-in", domain\)/);
+  for (const path of ["../src/app/start/page.tsx", "../src/app/start/start-gate.tsx", "../src/components/answers/onboarding/start-flow.tsx"]) {
+    assert.doesNotMatch(readFileSync(new URL(path, import.meta.url), "utf8"), /SignUpButton|SignInButton|mode=["']modal/, path);
+  }
   assert.match(landingNav, /userProfileMode=["']modal["']/);
   assert.match(sidebar, /userProfileMode=["']modal["']/);
   assert.match(layout, /afterSignOutUrl=["']\/["']/);
