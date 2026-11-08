@@ -167,7 +167,9 @@ async function dispatchSite(ctx: MutationCtx, site: Doc<"sites">, now: number): 
   }
   if (settings.publishing?.target === "hosted" && settings.publishing.hostedStatus === "pending_dns" &&
     now - (settings.publishing.hostedCheckedAt ?? 0) >= 50 * 60_000) {
-    await ctx.scheduler.runAfter(0, internal.actions.answerPublish.checkHostedDomain, { siteId: site._id });
+    // Attach, then check: attaching is idempotent (409 once the address is on the project), and an address whose first
+    // attach ran before Pentra held a Vercel token is only ever added here.
+    await ctx.scheduler.runAfter(0, internal.actions.answerPublish.attachHostedDomain, { siteId: site._id });
   }
   // Drafts publish on the plan with automatic publishing on: the free hour's drafts go out within the hour after upgrading.
   // A page that failed to publish is tried again once a day (its destination may have been fixed elsewhere).

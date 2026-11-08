@@ -400,3 +400,48 @@ test("version 4: pentra.dev counts the AI-visibility tools, its profile describe
   await f.invoke("answersDispatch:dispatch", {});
   assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answers:prepareSnapshot").length, 1);
 });
+
+test("a hosted address is attached by the hourly pass and is live only when it serves the site's key through Pentra", async () => {
+  const calls: Array<{ url: string; body?: Fields }> = [];
+  let served: "missing" | "key" = "missing";
+  let attached = false;
+  const f = corePipelineFixture(async (url, init) => {
+    calls.push({ url: url.href });
+    if (url.hostname === "api.vercel.com" && url.pathname === "/v10/projects/prj_test/domains") {
+      if (attached) return json({ error: { code: "domain_already_in_use" } }, undefined, 409);
+      attached = true;
+      return json({ name: "answers.acme.example" });
+    }
+    if (url.hostname === "api.vercel.com" && url.pathname === "/v6/domains/answers.acme.example/config") return json({ misconfigured: false });
+    if (url.href === "https://answers.acme.example/pentra-indexnow.txt") {
+      // Before the address reaches Pentra's deployment, Vercel answers with its own 404.
+      if (served === "missing") return new Response("The deployment could not be found on Vercel.\n\nDEPLOYMENT_NOT_FOUND", { status: 404,
+        headers: { "content-type": "text/plain; charset=utf-8", "x-vercel-error": "DEPLOYMENT_NOT_FOUND" } });
+      return new Response(f.get(siteId)!.answers.indexNowKey, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } });
+    }
+    throw new Error(`unexpected network ${url.href}`);
+  }, { TREG_TOKEN: "synthetic-only", VERCEL_TOKEN: "synthetic-only", VERCEL_PROJECT_ID: "prj_test", VERCEL_TEAM_ID: "team_test" });
+  const now = f.now();
+  const siteId = f.add("sites", { domain: "acme.example", userId: "user_hosted", siteName: "Acme", createdAt: now, updatedAt: now,
+    answers: { enabled: true, enabledAt: now, source: "signup", confirmedAt: now, autopublish: true, weeklyEmail: true, country: "US", lastSnapshotRunId: "answer_runs:0",
+      lastFullRunAt: now, lastRecheckAt: now, publishing: { target: "hosted", hostedDomain: "answers.acme.example", hostedStatus: "pending_dns", hostedCheckedAt: now - 3_600_000 } } });
+  f.add("answer_host_index", { host: "answers.acme.example", siteId, createdAt: now });
+  f.add("account_plan_entitlements", { userId: "user_hosted", planFeatures: ["pentra_answers"], maxSites: 1, maxArticles: 0, syncVersion: 1, syncStartedAt: now });
+
+  await f.invoke("answersDispatch:dispatch", {});
+  await drain(f, 60_000);
+  assert.equal(calls.filter((c) => c.url.startsWith("https://api.vercel.com/v10/projects/prj_test/domains")).length, 1, "the hourly pass adds the address to the project");
+  const key = f.get(siteId)!.answers.indexNowKey;
+  assert.match(key, /^[0-9a-f]{32}$/);
+  assert.equal(await f.invoke("answerPublish:hostedKey", { host: "answers.acme.example" }), key, "the key is served while the address is checked");
+  assert.equal(await f.invoke("answerPublish:hostedIndex", { host: "answers.acme.example" }), null, "no pages before it is live");
+  assert.equal(f.get(siteId)!.answers.publishing.hostedStatus, "pending_dns", "a Vercel DEPLOYMENT_NOT_FOUND page is not live");
+
+  served = "key";
+  f.setTime(now + 51 * 60_000);
+  await f.invoke("answersDispatch:dispatch", {});
+  await drain(f, 60_000);
+  assert.equal(f.get(siteId)!.answers.publishing.hostedStatus, "live", "live once the address serves this site's key through Pentra");
+  assert.ok((await f.invoke("answerPublish:hostedIndex", { host: "answers.acme.example" }))?.business, "its pages are served now");
+  f.assertOffline();
+});

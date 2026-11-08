@@ -240,13 +240,17 @@ export const checkHostedDomain = internalAction({ args: { siteId: v.id("sites") 
   const qs = team ? `?teamId=${encodeURIComponent(team)}` : "";
   const config = await fetch(`https://api.vercel.com/v6/domains/${encodeURIComponent(state.host)}/config${qs}`, { headers: { Authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(20_000) }).then((r) => r.ok ? r.json() as Promise<{ misconfigured?: boolean }> : null).catch(() => null);
-  // Live: Vercel sees the DNS record, and the address answers over HTTPS through Pentra (any non-server-error reply).
-  const live = config !== null && config.misconfigured === false && await isReachable(`https://${state.host}/pentra-indexnow.txt`);
+  // Live: Vercel sees the DNS record, and the address serves this site's IndexNow key through Pentra. A platform error
+  // (DEPLOYMENT_NOT_FOUND, the address not yet on the project) is never live.
+  const live = config !== null && config.misconfigured === false && Boolean(state.key) && await servesKey(`https://${state.host}/pentra-indexnow.txt`, state.key!);
   await ctx.runMutation(internal.answerPublish.hostedDomainState, { siteId, status: live ? "live" : "pending_dns",
     ...(live ? {} : { error: `Add a CNAME record for ${state.host} pointing to cname.vercel-dns.com.` }) });
   if (live) await ctx.runMutation(internal.answerPublish.retryHostedPublishes, { siteId });
 } });
 
-async function isReachable(url: string): Promise<boolean> {
-  try { const r = await fetch(url, { signal: AbortSignal.timeout(15_000) }); return r.status < 500; } catch { return false; }
+async function servesKey(url: string, key: string): Promise<boolean> {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+    return r.status === 200 && !r.headers.get("x-vercel-error") && (await r.text()).trim() === key;
+  } catch { return false; }
 }
