@@ -56,6 +56,7 @@ export const recordIndexing = internalMutation({ args: { pageId: v.id("answer_pa
     if (!page) return;
     const now = Date.now();
     await ctx.db.patch(pageId, { ...(indexNow ? { indexNow: { at: now, status: indexNow } } : {}), ...(sitemap ? { googleSitemapAt: now } : {}),
+      ...(!liveIssue && !page.liveAt ? { liveAt: now } : {}),
       ...(liveIssue ? { issues: [...new Set([...page.issues.filter((i) => !i.startsWith("Not live yet")), liveIssue])] }
         : { issues: page.issues.filter((i) => !i.startsWith("Not live yet")) }), updatedAt: now });
   } });

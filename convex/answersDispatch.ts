@@ -7,9 +7,9 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { ANSWERS_OWNER_DOMAINS, answersAllows, competitorFromDomain } from "./lib/answersAccess";
 import { countryCode } from "./lib/aiAnswers";
-import { siteAnswersAccess } from "./answers";
+import { ANSWERS_WEEK_MS, siteAnswersAccess } from "./answers";
 
-const WEEK_MS = 7 * 86_400_000, RECHECK_GAP_MS = 22 * 3_600_000, SETUP_RETRY_MS = 6 * 3_600_000;
+const WEEK_MS = ANSWERS_WEEK_MS, RECHECK_GAP_MS = 22 * 3_600_000, SETUP_RETRY_MS = 6 * 3_600_000;
 
 /** Pentra's own sites carry code-made settings; each version applies once.
  * 2 (Nov 8 2026): competitor names re-derived ("copy.ai" is Copy.ai, never the word "Copy"); dawnlist and LeadPilot publish
@@ -161,6 +161,38 @@ export const weeklyContext = internalQuery({ args: { siteId: v.id("sites") }, ha
       dashboardUrl: "https://pentra.dev/dashboard",
     },
   };
+} });
+
+/** The first hour's email: its run's counts, the drafts written so far, and the next step for this account. Once per site,
+ * only to an owner who gets Pentra's emails. */
+export const readyContext = internalQuery({ args: { siteId: v.id("sites"), runId: v.id("answer_runs") }, handler: async (ctx, { siteId, runId }) => {
+  const site = await ctx.db.get(siteId);
+  const run = await ctx.db.get(runId);
+  if (!site?.answers || site.deletionStatus || site.answers.snapshotEmailAt || !site.userId || !run || run.siteId !== siteId || run.status !== "done" || !run.answered) return null;
+  const contact = await ctx.db.query("account_contacts").withIndex("by_user", (q) => q.eq("userId", site.userId!)).first();
+  if (!contact?.emailUpdates) return null;
+  const access = await siteAnswersAccess(ctx, site);
+  const allows = answersAllows(access);
+  const drafts = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "draft")).take(10);
+  const writing = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "writing")).take(10);
+  const destination = Boolean(site.answers.publishing?.target) || Boolean(site.publishMethod && site.publishMethod !== "manual");
+  return {
+    to: contact.email,
+    input: {
+      name: site.siteName?.trim() || site.domain, domain: site.domain, questions: new Set(run.jobs.map((j) => j.questionId)).size,
+      answered: run.answered, named: run.named,
+      byAssistant: (run.byAssistant ?? []).map((a) => ({ assistant: a.assistant, answered: a.answered, named: a.named })),
+      competitors: run.competitors ?? [],
+      drafts: drafts.map((p) => ({ title: p.title })), writing: writing.length,
+      next: (!allows.publish ? "free" : !destination ? "connect" : site.answers.autopublish === false ? "review" : "publishing") as "free" | "publishing" | "connect" | "review",
+      dashboardUrl: "https://pentra.dev/dashboard", billingUrl: "https://pentra.dev/dashboard/billing", settingsUrl: "https://pentra.dev/dashboard/settings#publishing",
+    },
+  };
+} });
+
+export const markReadySent = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (site?.answers) await ctx.db.patch(siteId, { answers: { ...site.answers, snapshotEmailAt: Date.now() } });
 } });
 
 export const markWeeklySent = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {

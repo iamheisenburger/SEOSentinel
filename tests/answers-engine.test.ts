@@ -12,7 +12,7 @@ import { answersAccess, answersAllows, answersEnabled, competitorFromDomain, spe
 import { parseQuestions, questionsRequest } from "../convex/lib/answerQuestions.ts";
 import { answerPageRequest, checkDraftPage, pageSource, parseDraftPage, uniqueSlug } from "../convex/lib/answerPages.ts";
 import { defaultContentDir, githubAnswerFile, hostedPageUrl, indexNowRequest, publicPageUrl, urlStructureOf, validHostedDomain } from "../convex/lib/answerPublishing.ts";
-import { answersWeeklyEmail } from "../convex/lib/answersWeekly.ts";
+import { answersReadyEmail, answersWeeklyEmail } from "../convex/lib/answersWeekly.ts";
 
 const business = { name: "Dawnlist", domain: "dawnlist.io" };
 const competitors = [{ name: "Apollo", domain: "apollo.io" }, { name: "Hunter", domain: "hunter.io" }];
@@ -186,4 +186,32 @@ test("the weekly email states counts with their denominators, says 'no change' p
   assert.match(email.text, /- ChatGPT: 2 of 30/);
   assert.match(email.text, /- Perplexity cited "Find clients" for "How do I find web design clients\?" \(2026-11-12\)/);
   assert.match(email.text, /We can't make an assistant recommend you\./);
+});
+
+test("a business is found under the punctuation answers use: ampersands, apostrophes, hyphens", () => {
+  const deck = brandMatcher({ name: "Lone Star Deck & Fence", domain: "lonestardeck.example" })!;
+  assert.ok(deck.test("For a new fence, Lone Star Deck & Fence is well reviewed.") >= 0);
+  assert.ok(deck.test("Try Lone Star Deck and Fence") < 0, "a different word between is a different name");
+  const lowes = brandMatcher({ name: "Lowe's" })!;
+  for (const text of ["Lowe's carries it.", "Lowe’s carries it.", "Lowes carries it."]) assert.ok(lowes.test(text) >= 0, text);
+  assert.ok(brandMatcher({ name: "HubSpot" })!.test("Hub-Spot and others") >= 0);
+  assert.ok(brandMatcher({ name: "Dawnlist" })!.test("Dawnlisting is not it") < 0, "a longer word is not the name");
+});
+
+test("the first-hour email: counts with denominators, the drafts, and one next step per account", () => {
+  const input = { name: "Acme", domain: "acme.example", questions: 30, answered: 120, named: 9,
+    byAssistant: [{ assistant: "chatgpt", answered: 30, named: 2 }, { assistant: "google_ai_overview", answered: 18, named: 0 }],
+    competitors: [{ name: "Apollo", named: 40 }], drafts: [{ title: "How do I find leads?" }], writing: 2, next: "free" as const,
+    dashboardUrl: "https://pentra.dev/dashboard", billingUrl: "https://pentra.dev/dashboard/billing", settingsUrl: "https://pentra.dev/dashboard/settings#publishing" };
+  const free = answersReadyEmail(input);
+  assert.equal(free.subject, "Your first hour: named in 9 of 120 AI answers · acme.example");
+  assert.match(free.text, /Acme was named in 9 of 120 answers\./);
+  assert.match(free.text, /- ChatGPT: 2 of 30\n- Google AI Overviews?: 0 of 18/);
+  assert.match(free.text, /- Apollo: 40 of 120/);
+  assert.match(free.text, /drafted for the questions you can win: 1\n- How do I find leads\?\n\(2 more are still being written\.\)/);
+  assert.match(free.text, /\$249 a month\): https:\/\/pentra\.dev\/dashboard\/billing/);
+  assert.doesNotMatch(free.text, /guarantee|will rank|will be recommended/i, "never a promise");
+  assert.match(answersReadyEmail({ ...input, next: "publishing" }).text, /publish to your site automatically/);
+  assert.match(answersReadyEmail({ ...input, next: "connect" }).text, /settings#publishing/);
+  assert.doesNotMatch(answersReadyEmail({ ...input, next: "publishing" }).text, /\$249/);
 });
