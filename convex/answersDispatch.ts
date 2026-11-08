@@ -60,7 +60,15 @@ async function applyOwnerVersion(ctx: MutationCtx, site: Doc<"sites">, domain: s
     }
     const settings = { ...site.answers! };
     delete settings.lastSnapshotRunId;
-    await ctx.db.patch(site._id, { answers: { ...settings, competitors, autopublish, ownerVersion: OWNER_SETTINGS_VERSION, snapshotRequestedAt: now + 3_600_000 } });
+    // pentra.dev's own blog renders from Pentra's database, not from repository files: its answer pages live at
+    // answers.pentra.dev (one DNS record; Pentra attaches the address once it holds a Vercel token).
+    const hostedDomain = `answers.${domain}`;
+    if (!(await ctx.db.query("answer_host_index").withIndex("by_host", (x) => x.eq("host", hostedDomain)).first())) {
+      await ctx.db.insert("answer_host_index", { host: hostedDomain, siteId: site._id, createdAt: now });
+    }
+    await ctx.db.patch(site._id, { answers: { ...settings, competitors, autopublish, ownerVersion: OWNER_SETTINGS_VERSION, snapshotRequestedAt: now + 3_600_000,
+      publishing: { target: "hosted", hostedDomain, hostedStatus: "pending_dns" } } });
+    await ctx.scheduler.runAfter(0, internal.actions.answerPublish.attachHostedDomain, { siteId: site._id });
     // The relaunched homepage is read once it has deployed, then the first hour runs again from it.
     await ctx.scheduler.runAfter(30 * 60_000, internal.actions.answersSetup.readSite, { siteId: site._id, force: true, then: "snapshot" });
     return;

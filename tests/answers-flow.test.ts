@@ -221,6 +221,8 @@ test("Pentra's own sites: Answers by code with drafts first, then version 2 publ
   assert.ok(scheduled.includes("actions/answerPublish:publishPage"), "its drafts go out");
   assert.equal(p.autopublish, false, "pentra.dev stays on drafts until its relaunch is read");
   assert.equal(p.lastSnapshotRunId, undefined, "its first hour runs again");
+  assert.deepEqual(p.publishing, { target: "hosted", hostedDomain: "answers.pentra.dev", hostedStatus: "pending_dns" }, "its pages live at answers.pentra.dev");
+  assert.ok(f.tables.answer_host_index.some((r) => r.host === "answers.pentra.dev" && r.siteId === pentra));
   assert.ok(f.tables.answer_questions.filter((q) => q.siteId === pentra).every((q) => q.status === "removed"), "old questions set aside, not deleted");
   assert.ok(f.tables.answer_pages.filter((q) => q.siteId === pentra).every((q) => q.status === "retired"), "old drafts retired, not deleted");
   const reread = f.tables._scheduled_functions.find((r) => r.name === "actions/answersSetup:readSite")!;
