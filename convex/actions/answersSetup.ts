@@ -15,18 +15,19 @@ const anthropic = () => new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, m
 const visibleText = (html: string) => html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<noscript[\s\S]*?<\/noscript>/gi, " ")
   .replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 
-export const readSite = internalAction({ args: { siteId: v.id("sites"), force: v.optional(v.boolean()), then: v.optional(v.literal("snapshot")) },
-  handler: async (ctx, { siteId, force, then }) => {
+export const readSite = internalAction({ args: { siteId: v.id("sites"), force: v.optional(v.boolean()), then: v.optional(v.literal("snapshot")),
+  competitorsOnly: v.optional(v.boolean()) },
+  handler: async (ctx, { siteId, force, then, competitorsOnly }) => {
   const site = await ctx.runQuery(internal.answers.setupSite, { siteId });
   if (!site) return;
   let page = await fetchPage(`https://${site.domain}/`, { maxBytes: FREE_CHECK_HOME_MAX_BYTES });
   if ((page.status === 0 || page.status >= 400) && !site.domain.startsWith("www.")) page = await fetchPage(`https://www.${site.domain}/`, { maxBytes: FREE_CHECK_HOME_MAX_BYTES });
   if (page.status === 0 || page.status >= 400) {
-    await ctx.runMutation(internal.answers.saveSetupRead, { siteId, force, then, error: `Pentra couldn't open ${site.domain} over HTTPS. Check the address, or fill in the details yourself.` });
+    await ctx.runMutation(internal.answers.saveSetupRead, { siteId, force, then, competitorsOnly, error: `Pentra couldn't open ${site.domain} over HTTPS. Check the address, or fill in the details yourself.` });
     return;
   }
   if (botWall(page.html)) {
-    await ctx.runMutation(internal.answers.saveSetupRead, { siteId, force, then, error: `${site.domain} showed Pentra a security check instead of its homepage. Fill in the details yourself.` });
+    await ctx.runMutation(internal.answers.saveSetupRead, { siteId, force, then, competitorsOnly, error: `${site.domain} showed Pentra a security check instead of its homepage. Fill in the details yourself.` });
     return;
   }
   const prefill = extractBusinessPrefill(page.html, site.domain) as { name?: string; questions?: string[] };
@@ -35,13 +36,13 @@ export const readSite = internalAction({ args: { siteId: v.id("sites"), force: v
   const headings = [...page.html.matchAll(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi)].map((m) => visibleText(m[1])).filter((h) => h.length > 2).slice(0, 25);
   const text = visibleText(page.html);
   if (!process.env.ANTHROPIC_API_KEY) {
-    await ctx.runMutation(internal.answers.saveSetupRead, { siteId, force, then, read: { name: prefill.name || site.domain, sells: description || title, buyers: "", offerings: [],
+    await ctx.runMutation(internal.answers.saveSetupRead, { siteId, force, then, competitorsOnly, read: { name: prefill.name || site.domain, sells: description || title, buyers: "", offerings: [],
       country: "", local: false, location: "", competitors: [] } });
     return;
   }
   const hold = await ctx.runMutation(internal.answers.holdSpend, { siteId, purpose: "read", microUsd: SETUP_READ_HOLD_MICRO_USD });
   if (!hold.ok) {
-    await ctx.runMutation(internal.answers.saveSetupRead, { siteId, force, then, read: { name: prefill.name || site.domain, sells: description || title, buyers: "", offerings: [],
+    await ctx.runMutation(internal.answers.saveSetupRead, { siteId, force, then, competitorsOnly, read: { name: prefill.name || site.domain, sells: description || title, buyers: "", offerings: [],
       country: "", local: false, location: "", competitors: [] } });
     return;
   }
@@ -56,10 +57,10 @@ export const readSite = internalAction({ args: { siteId: v.id("sites"), force: v
     cost = setupReadCost(response.usage);
     const tool = response.content.find((b) => b.type === "tool_use" && b.name === SETUP_READ_TOOL);
     const read = parseSetupRead(tool && tool.type === "tool_use" ? tool.input : null, site.domain);
-    await ctx.runMutation(internal.answers.saveSetupRead, read ? { siteId, force, then, read }
-      : { siteId, force, then, read: { name: prefill.name || site.domain, sells: description || title, buyers: "", offerings: [], country: "", local: false, location: "", competitors: [] } });
+    await ctx.runMutation(internal.answers.saveSetupRead, read ? { siteId, force, then, competitorsOnly, read }
+      : { siteId, force, then, competitorsOnly, read: { name: prefill.name || site.domain, sells: description || title, buyers: "", offerings: [], country: "", local: false, location: "", competitors: [] } });
   } catch {
-    await ctx.runMutation(internal.answers.saveSetupRead, { siteId, force, then, read: { name: prefill.name || site.domain, sells: description || title, buyers: "", offerings: [],
+    await ctx.runMutation(internal.answers.saveSetupRead, { siteId, force, then, competitorsOnly, read: { name: prefill.name || site.domain, sells: description || title, buyers: "", offerings: [],
       country: "", local: false, location: "", competitors: [] } });
   } finally {
     await ctx.runMutation(internal.answers.settleSpend, { spendId: hold.spendId, actualMicroUsd: cost, sent });

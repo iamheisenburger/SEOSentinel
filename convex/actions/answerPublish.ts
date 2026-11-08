@@ -37,6 +37,25 @@ export const publishPage = internalAction({ args: { pageId: v.id("answer_pages")
   }
 } });
 
+/** A published GitHub page's file written again at the same path with the same words (the current file format), then
+ * checked live and sent to search engines again. */
+export const refreshPublishedFile = internalAction({ args: { pageId: v.id("answer_pages") }, handler: async (ctx, { pageId }): Promise<{ refreshed: boolean; error?: string }> => {
+  const context = await ctx.runQuery(internal.answerPublish.refreshContext, { pageId });
+  if (!context) return { refreshed: false };
+  const { page, site, firstPublishedAt } = context;
+  const receipt = page.publishReceipt ? safeJson(page.publishReceipt) : null;
+  const deliveryKey = typeof receipt?.deliveryKey === "string" ? receipt.deliveryKey : answerDeliveryKey(page._id, page.version);
+  try {
+    const published = await publishToGithub(site, { title: page.title, slug: page.slug, metaDescription: page.metaDescription, markdown: page.markdown,
+      sources: page.sources, firstPublishedAt, deliveryKey }, receipt);
+    await ctx.runMutation(internal.answerPublish.recordRefresh, { pageId, receipt: JSON.stringify(published.receipt) });
+    await ctx.scheduler.runAfter(120_000, internal.actions.answerPublish.verifyAndIndex, { pageId, attempt: 0 });
+    return { refreshed: true };
+  } catch (error) {
+    return { refreshed: false, error: (error instanceof Error ? error.message : String(error)).slice(0, 200) };
+  }
+} });
+
 async function publishTo(site: Doc<"sites">, page: Doc<"answer_pages">, previous: Doc<"answer_pages"> | null): Promise<Published> {
   const deliveryKey = answerDeliveryKey(page._id, page.version);
   const firstPublishedAt = previous?.publishedAt ?? Date.now();
@@ -221,13 +240,17 @@ export const checkHostedDomain = internalAction({ args: { siteId: v.id("sites") 
   const qs = team ? `?teamId=${encodeURIComponent(team)}` : "";
   const config = await fetch(`https://api.vercel.com/v6/domains/${encodeURIComponent(state.host)}/config${qs}`, { headers: { Authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(20_000) }).then((r) => r.ok ? r.json() as Promise<{ misconfigured?: boolean }> : null).catch(() => null);
-  // Live: Vercel sees the DNS record, and the address answers over HTTPS through Pentra (any non-server-error reply).
-  const live = config !== null && config.misconfigured === false && await isReachable(`https://${state.host}/pentra-indexnow.txt`);
+  // Live: Vercel sees the DNS record, and the address serves this site's IndexNow key through Pentra. A platform error
+  // (DEPLOYMENT_NOT_FOUND, the address not yet on the project) is never live.
+  const live = config !== null && config.misconfigured === false && Boolean(state.key) && await servesKey(`https://${state.host}/pentra-indexnow.txt`, state.key!);
   await ctx.runMutation(internal.answerPublish.hostedDomainState, { siteId, status: live ? "live" : "pending_dns",
     ...(live ? {} : { error: `Add a CNAME record for ${state.host} pointing to cname.vercel-dns.com.` }) });
   if (live) await ctx.runMutation(internal.answerPublish.retryHostedPublishes, { siteId });
 } });
 
-async function isReachable(url: string): Promise<boolean> {
-  try { const r = await fetch(url, { signal: AbortSignal.timeout(15_000) }); return r.status < 500; } catch { return false; }
+async function servesKey(url: string, key: string): Promise<boolean> {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+    return r.status === 200 && !r.headers.get("x-vercel-error") && (await r.text()).trim() === key;
+  } catch { return false; }
 }

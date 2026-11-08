@@ -156,6 +156,8 @@ test("publishing: the blog's own layout when detected, Pentra's default otherwis
   assert.equal(plain.path, "content/blog/find-web-design-clients.md");
   assert.equal(plain.url, "https://dawnlist.io/blog/find-web-design-clients");
   assert.match(plain.content, /^---\ntitle: "Find web design clients"\ndescription: "How\."\ngenerator: "pentra"\npentraDeliveryKey: "answer:x:v1"\nstatus: "published"/);
+  // Blogs built to read Pentra's article files (LeadPilot's) hide a post without qualityGateVersion.
+  assert.match(plain.content, /\nstatus: "published"\nqualityGateVersion: 1\ncanonicalUrl: "https:\/\/dawnlist\.io\/blog\/find-web-design-clients"\n/);
   const layout = { version: 1, framework: "nextjs", postsDir: "posts", fileName: "slug", extension: ".md", urlStructure: "/articles/[slug]",
     fields: [{ key: "title", from: "title" }, { key: "summary", from: "description" }, { key: "layout", from: "copy", raw: "layout: post" }], sample: { path: "", slug: "", title: "" } };
   const mirrored = githubAnswerFile(page, { domain: "dawnlist.io", githubLayout: layout });

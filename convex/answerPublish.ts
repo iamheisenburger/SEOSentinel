@@ -20,6 +20,23 @@ export const publishContext = internalQuery({ args: { pageId: v.id("answer_pages
   return { page, site, previous: previous && previous.status === "published" ? previous : null, business: businessOf(site) };
 } });
 
+/** A published page whose file Pentra writes again in place (same address, same words): files an older Pentra wrote
+ * without a field the site's blog needs. GitHub only. */
+export const refreshContext = internalQuery({ args: { pageId: v.id("answer_pages") }, handler: async (ctx, { pageId }) => {
+  const page = await ctx.db.get(pageId);
+  if (!page || page.status !== "published" || page.publishTarget !== "github" || !page.publishedAt) return null;
+  const site = await ctx.db.get(page.siteId);
+  if (!site || !answersEnabled(site)) return null;
+  const previous = page.rewriteOf ? await ctx.db.get(page.rewriteOf) : null;
+  return { page, site, firstPublishedAt: previous?.publishedAt ?? page.publishedAt };
+} });
+
+export const recordRefresh = internalMutation({ args: { pageId: v.id("answer_pages"), receipt: v.string() }, handler: async (ctx, { pageId, receipt }) => {
+  const page = await ctx.db.get(pageId);
+  if (!page || page.status !== "published") return;
+  await ctx.db.patch(pageId, { publishReceipt: receipt.slice(0, 2000), issues: page.issues.filter((i) => !i.startsWith("Not live yet")), updatedAt: Date.now() });
+} });
+
 export const markPublishing = internalMutation({ args: { pageId: v.id("answer_pages") }, handler: async (ctx, { pageId }) => {
   const page = await ctx.db.get(pageId);
   if (!page || !["draft", "publish_failed"].includes(page.status)) return false;
@@ -125,6 +142,16 @@ export const hostedPage = query({ args: { host: v.string(), slug: v.string() }, 
 } });
 
 /** A hosted address's published pages (its index and sitemap), and its IndexNow key. */
+/** The IndexNow key of a registered hosted address (public by design: IndexNow reads it), served before the address is
+ * live so Pentra's live check can prove the address reaches Pentra and this site, not a platform error page. */
+export const hostedKey = query({ args: { host: v.string() }, handler: async (ctx, { host }) => {
+  const lookup = await ctx.db.query("answer_host_index").withIndex("by_host", (q) => q.eq("host", hostOf(host))).first();
+  if (!lookup) return null;
+  const site = await ctx.db.get(lookup.siteId);
+  if (!site?.answers?.publishing || site.answers.publishing.hostedDomain !== hostOf(host)) return null;
+  return site.answers.indexNowKey ?? null;
+} });
+
 export const hostedIndex = query({ args: { host: v.string() }, handler: async (ctx, { host }) => {
   const lookup = await ctx.db.query("answer_host_index").withIndex("by_host", (q) => q.eq("host", hostOf(host))).first();
   if (!lookup) return null;
@@ -155,7 +182,8 @@ export const hostedState = internalQuery({ args: { siteId: v.id("sites") }, hand
   const site = await ctx.db.get(siteId);
   const publishing = site?.answers?.publishing;
   return site && publishing?.target === "hosted" && publishing.hostedDomain
-    ? { host: publishing.hostedDomain, status: publishing.hostedStatus ?? "pending_dns", hasKey: Boolean(site.answers?.indexNowKey) } : null;
+    ? { host: publishing.hostedDomain, status: publishing.hostedStatus ?? "pending_dns", hasKey: Boolean(site.answers?.indexNowKey),
+      key: site.answers?.indexNowKey ?? null } : null;
 } });
 
 /** The hosted address went live: pages that waited for it publish now. */

@@ -10,9 +10,10 @@ export async function GET() {
   const host = await requestHost();
   if (!isHostedAnswersHost(host)) return new Response("Not found", { status: 404 });
   try {
-    const index = await convexHttp.query(api.answerPublish.hostedIndex, { host });
-    if (!index?.indexNowKey) return new Response("Not found", { status: 404 });
-    return new Response(index.indexNowKey, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=3600" } });
+    // The key is served while the address is still being checked: Pentra's live check reads it through the address.
+    const key = await convexHttp.query(api.answerPublish.hostedKey, { host });
+    if (!key) return new Response("Not found", { status: 404 });
+    return new Response(key, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=3600" } });
   } catch {
     return new Response("Unavailable", { status: 503 });
   }

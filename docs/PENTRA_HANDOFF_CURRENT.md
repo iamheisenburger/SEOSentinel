@@ -393,6 +393,8 @@ Build-cache gotcha (P23/P25): Vercel restores .next/cache and Turbopack kept ser
 src/app/globals.css (new rules at its end were dropped, old Clerk button rules survived edits). Fix: global CSS
 now lives in src/app/pentra.css (renamed) and article typography in its own route CSS. If a CSS change does not
 show up live, suspect the cache first: rename the file or redeploy without the build cache.
+P385 (Nov 8 2026): it happened again with P384 (new pages, previous design's pentra.css). The global CSS is now
+src/app/design-system.css and next.config.ts sets experimental.turbopackFileSystemCacheForBuild: false, so builds start cold.
 
 Next (not done):
 - (Done in P31) Bounded live web research + citations inside the audited content provider

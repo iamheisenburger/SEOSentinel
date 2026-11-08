@@ -38,6 +38,11 @@ export function isGithubLayout(value: unknown): value is GithubLayout {
 
 /** The file for a GitHub-hosted blog: the site's own post layout when Pentra detected one (its frontmatter mirrored), else
  * Pentra's default (content/<folder>/<slug>.md with the frontmatter Pentra's blog kit and its customers' blogs read). */
+/** The version of the objective publication checks an answer page passed (lib/answerPages.ts checkDraftPage). Written as
+ * qualityGateVersion, the field Pentra's article files always carry: blogs built to read them (LeadPilot's) hide a post
+ * without it. */
+export const ANSWER_PAGE_CHECKS_VERSION = 1;
+
 export function githubAnswerFile(page: AnswerPageForPublish, site: { domain: string; urlStructure?: string | null; githubLayout?: unknown }):
   { path: string; content: string; url: string } {
   assertSafeSlug(page.slug);
@@ -58,6 +63,7 @@ export function githubAnswerFile(page: AnswerPageForPublish, site: { domain: str
     `generator: "pentra"`,
     `pentraDeliveryKey: ${y(page.deliveryKey)}`,
     `status: "published"`,
+    `qualityGateVersion: ${ANSWER_PAGE_CHECKS_VERSION}`,
     `canonicalUrl: ${y(url)}`,
     `date: ${y(new Date(page.firstPublishedAt).toISOString())}`,
     page.sources.length ? `sources:\n${page.sources.map((s) => `  - url: ${y(s.url)}${s.title ? `\n    title: ${y(s.title)}` : ""}`).join("\n")}` : "",

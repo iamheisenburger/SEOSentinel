@@ -125,6 +125,15 @@ test("the first hour and the plan, end to end: questions, five assistants, proof
   const committed = Buffer.from(commits.find((c) => c.url.includes("/content/blog/"))!.body!.content, "base64").toString("utf8");
   assert.match(committed, /^---\ntitle: "How do I find local businesses that need a new website\?"\ndescription: ".+"\ngenerator: "pentra"/);
 
+  const anthropicCalls = calls.filter((c) => c.url.startsWith("https://api.anthropic.com/") && c.body?.tools);
+  const byTool = (name: string) => anthropicCalls.filter((c) => c.body!.tools[0].name === name);
+  for (const call of [...byTool("submit_buyer_questions"), ...byTool("submit_answer_page")]) {
+    assert.equal(call.body!.model, "claude-opus-5-5", "Opus 5.5 writes the questions and the pages");
+    assert.equal(call.body!.tool_choice.type, "auto", "Opus 5.5 refuses a forced tool: auto with the tool as the only option");
+    assert.match(JSON.stringify(call.body!.system), /Answer only by calling the submit_/);
+  }
+  assert.ok(byTool("submit_answer_page").length >= 5);
+
   const spend = f.tables.answer_spend;
   assert.ok(spend.length > 0 && spend.every((r) => r.state === "settled"), "every hold settled");
   const asked = spend.filter((r) => r.purpose === "ask").reduce((sum, r) => sum + r.actualMicroUsd, 0);
@@ -201,6 +210,10 @@ test("a new account: its website created on Answers, read for the owner to confi
   f.setIdentity("user_new");
   const state = await f.invoke("answers:setupState", { siteId });
   assert.equal(state.name, "Newco");
+  const read = calls.find((c) => c.url.startsWith("https://api.anthropic.com/") && c.body?.tools?.[0]?.name === "submit_business_read")!;
+  assert.equal(read.body!.model, "claude-sonnet-5-5", "Sonnet 5.5 reads the site (it sets the competitors every count uses)");
+  assert.equal(read.body!.tool_choice.type, "auto");
+  assert.match(String(read.body!.system), /Answer only by calling the submit_business_read tool once/);
   assert.equal(state.sells, "Daily lists of local businesses that need web design, with proof.");
   assert.deepEqual(state.competitors, [{ name: "Apollo", domain: "apollo.example" }], "the business is never its own competitor");
   assert.equal(state.country, "US");
@@ -230,12 +243,12 @@ test("Pentra's own sites: Answers by code with drafts first, then version 2 publ
   }
   await f.invoke("answersDispatch:dispatch", {});
   const d = f.get(dawnlist)!.answers, p = f.get(pentra)!.answers;
-  assert.equal(d.ownerVersion, 2);
+  assert.equal(d.ownerVersion, 5, "every version applies in one pass");
   assert.equal(d.autopublish, true, "dawnlist publishes now that its drafts were read");
   assert.deepEqual(d.competitors, [{ name: "Copy.ai", domain: "copy.ai" }, { name: "Apollo", domain: "apollo.io" }]);
   const scheduled = f.tables._scheduled_functions.map((r) => r.name);
   assert.ok(scheduled.includes("actions/answerPublish:publishPage"), "its drafts go out");
-  assert.equal(p.autopublish, false, "pentra.dev stays on drafts until its relaunch is read");
+  assert.equal(p.autopublish, true, "version 5: pentra.dev publishes automatically once its drafts were read");
   assert.equal(p.lastSnapshotRunId, undefined, "its first hour runs again");
   assert.deepEqual(p.publishing, { target: "hosted", hostedDomain: "answers.pentra.dev", hostedStatus: "pending_dns" }, "its pages live at answers.pentra.dev");
   assert.ok(f.tables.answer_host_index.some((r) => r.host === "answers.pentra.dev" && r.siteId === pentra));
@@ -247,7 +260,8 @@ test("Pentra's own sites: Answers by code with drafts first, then version 2 publ
   assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answerPublish:publishPage").length, 1, "dawnlist's one draft, once");
   await f.invoke("answersDispatch:dispatch", {});
   assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answersSetup:readSite").length, 1, "a version applies once");
-  assert.equal(f.get(pentra)!.answers.ownerVersion, 2);
+  assert.equal(f.get(pentra)!.answers.ownerVersion, 5);
+  assert.equal(f.get(pentra)!.answers.competitors[0].name, "Profound", "the AI-visibility tools buyers are shown instead");
 });
 
 test("a new account's first hour: its address kept, a failed setup retried at once, the ready email with counts and drafts", async () => {
@@ -306,4 +320,151 @@ test("a new account's first hour: its address kept, a failed setup retried at on
   await f.invoke("actions/answerEmail:sendSnapshotReady", { siteId, runId: f.tables.answer_runs[0]._id });
   assert.equal(emails.length, 1, "never twice");
   f.assertOffline();
+});
+
+test("version 3: LeadPilot's published answer files are written again with the field its blog needs; dawnlist gets suggested competitors", async () => {
+  const calls: Array<{ url: string; body?: Fields }> = [];
+  const base = network(calls);
+  const f = corePipelineFixture(async (url, init) => {
+    if (url.hostname === "dawnlist.io") return html("Dawnlist: daily lists of local businesses that need your service, with the proof attached. ".repeat(10));
+    if (url.hostname === "leadpilot.chat") return html("Best AI chatbot for a B2B SaaS site? LeadPilot answers every visitor. ".repeat(10));
+    return base(url, init);
+  }, { TREG_TOKEN: "synthetic-only" }, { syntheticHosts: ["api.github.com", "api.indexnow.org", "dawnlist.io", "leadpilot.chat"] });
+  const now = f.now();
+  const owner = { enabled: true, enabledAt: now, source: "owner", confirmedAt: now, autopublish: true, weeklyEmail: true, country: "US", ownerVersion: 2 };
+  const leadpilot = f.add("sites", { domain: "leadpilot.chat", userId: "owner", siteName: "LeadPilot", publishMethod: "github", githubToken: "synthetic-only",
+    repoOwner: "owner", repoName: "LeadPilot", repoDefaultBranch: "main", urlStructure: "/blog/[slug]", createdAt: now, updatedAt: now,
+    answers: { ...owner, competitors: [{ name: "Intercom", domain: "intercom.example" }], lastSnapshotRunId: "answer_runs:0", lastFullRunAt: now, lastRecheckAt: now } });
+  const dawnlist = f.add("sites", { domain: "dawnlist.io", userId: "owner", siteName: "Dawnlist", siteSummary: "Confirmed facts.", createdAt: now, updatedAt: now,
+    answers: { ...owner, competitors: [], lastSnapshotRunId: "answer_runs:1", lastFullRunAt: now, lastRecheckAt: now } });
+  const slug = "best-ai-chatbot-for-a-b2b-saas-site";
+  const questionId = f.add("answer_questions", { siteId: leadpilot, question: "Best AI chatbot for a B2B SaaS site?", key: "best ai chatbot b2b saas site", intent: "best",
+    source: "generated", status: "active", createdAt: now });
+  const pageId = f.add("answer_pages", { siteId: leadpilot, questionId, question: "Best AI chatbot for a B2B SaaS site?", status: "published",
+    title: "Best AI chatbot for a B2B SaaS site?", slug, metaDescription: "LeadPilot answers every visitor.", markdown: "LeadPilot answers every visitor.", facts: [],
+    sources: [], issues: [], version: 1, contentHash: "h", writerModel: "m", costMicroUsd: 1, createdAt: now, updatedAt: now, citations: 0,
+    publishedUrl: `https://leadpilot.chat/blog/${slug}`, publishedAt: now, publishTarget: "github",
+    publishReceipt: JSON.stringify({ method: "github", deliveryKey: "answer:p1:v1", path: `content/blog/${slug}.md`, sha: "old" }) });
+  f.setTime(now + 60_000);
+  await f.invoke("answersDispatch:dispatch", {});
+  assert.equal(f.get(leadpilot)!.answers.ownerVersion, 5);
+  assert.equal(f.get(dawnlist)!.answers.ownerVersion, 5);
+  await drain(f, 10 * 60_000);
+  const put = calls.find((c) => c.url.endsWith(`/contents/content/blog/${slug}.md`) && c.body?.content);
+  assert.ok(put, "the file is written again at its own path");
+  const file = Buffer.from(put!.body!.content, "base64").toString("utf8");
+  assert.match(file, /\nqualityGateVersion: 1\n/, "the field LeadPilot's blog requires");
+  assert.match(file, /pentraDeliveryKey: "answer:p1:v1"/, "the same delivery key");
+  assert.match(file, new RegExp(`date: "${new Date(now).toISOString()}"`), "the original date");
+  assert.equal(f.get(pageId)!.status, "published");
+  assert.ok(typeof f.get(pageId)!.liveAt === "number", "checked live again");
+  assert.ok(f.get(dawnlist)!.answers.competitors.some((c: Fields) => c.name === "Apollo"), "dawnlist's suggested competitors");
+  assert.equal(f.get(dawnlist)!.siteSummary, "Confirmed facts.", "its confirmed facts stay");
+  await f.invoke("answersDispatch:dispatch", {});
+  assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answerPublish:refreshPublishedFile").length, 1, "a version applies once");
+  f.assertOffline();
+});
+
+test("version 4: pentra.dev counts the AI-visibility tools, its profile describes the Answers product, and its first hour runs again once no run is asking", async () => {
+  const calls: Array<{ url: string; body?: Fields }> = [];
+  const f = corePipelineFixture(network(calls), { TREG_TOKEN: "synthetic-only" }, { syntheticHosts: ["api.github.com", "api.indexnow.org"] });
+  const now = f.now();
+  const pentra = f.add("sites", { domain: "pentra.dev", userId: "owner", siteName: "Pentra", createdAt: now, updatedAt: now,
+    pricingInfo: "3 articles/month free tier", painPoints: ["How often should a small business publish blog posts?"], productUsage: "Pick a pace of articles a week.",
+    answers: { enabled: true, enabledAt: now, source: "owner", confirmedAt: now, autopublish: false, weeklyEmail: true, country: "US", ownerVersion: 3,
+      competitors: [{ name: "Jasper", domain: "jasper.ai" }, { name: "Copy.ai", domain: "copy.ai" }], lastFullRunAt: now, lastRecheckAt: now } });
+  const runId = f.add("answer_runs", { siteId: pentra, kind: "snapshot", status: "asking", createdAt: now, startedAt: now, country: "US", assistants: ["chatgpt"],
+    jobs: [], nextJob: 0, done: 0, answered: 0, named: 0, cited: 0, failed: 0, noAnswer: 0, costMicroUsd: 0, leaseUntil: now + 60 * 60_000 });
+  f.get(pentra)!.answers.lastSnapshotRunId = runId;
+  const oldQuestion = f.add("answer_questions", { siteId: pentra, question: "How often should I publish blog posts?", key: "how often publish blog posts",
+    intent: "how_to", source: "generated", status: "active", createdAt: now });
+  const oldDraft = f.add("answer_pages", { siteId: pentra, questionId: oldQuestion, question: "How often should I publish blog posts?", status: "draft",
+    title: "How often should I publish blog posts?", slug: "how-often-publish", metaDescription: "x", markdown: "x", facts: [], sources: [], issues: [], version: 1,
+    contentHash: "h", writerModel: "m", costMicroUsd: 1, createdAt: now, updatedAt: now, citations: 0 });
+  await f.invoke("answersDispatch:dispatch", {});
+  assert.equal(f.get(pentra)!.answers.ownerVersion, 3, "never while a run is asking");
+  assert.equal(f.get(pentra)!.answers.competitors[0].name, "Jasper");
+  f.get(runId)!.status = "done";
+  await f.invoke("answersDispatch:dispatch", {});
+  const settings = f.get(pentra)!.answers;
+  assert.equal(settings.ownerVersion, 5);
+  assert.deepEqual(settings.competitors.map((c: Fields) => c.name), ["Profound", "Otterly.AI", "Peec AI", "AthenaHQ", "Semrush", "Ahrefs"]);
+  const site = f.get(pentra)!;
+  assert.match(site.pricingInfo, /^One plan: \$249 a month or \$2,490 a year\. The first hour is free/, "never the article product's free tier");
+  assert.doesNotMatch(JSON.stringify(site.painPoints), /blog posts/);
+  assert.match(site.productUsage, /asks ChatGPT, Perplexity, Gemini, Google AI Mode and Google AI Overviews/);
+  assert.equal(f.get(oldQuestion)!.status, "removed", "set aside, not deleted");
+  assert.equal(f.get(oldDraft)!.status, "retired", "retired, not deleted");
+  assert.equal(settings.lastSnapshotRunId, undefined, "the next first hour is the one shown");
+  assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answers:prepareSnapshot").length, 1, "its first hour runs again, once");
+  await f.invoke("answersDispatch:dispatch", {});
+  assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answers:prepareSnapshot").length, 1);
+});
+
+test("a hosted address is attached by the hourly pass and is live only when it serves the site's key through Pentra", async () => {
+  const calls: Array<{ url: string; body?: Fields }> = [];
+  let served: "missing" | "key" = "missing";
+  let attached = false;
+  const f = corePipelineFixture(async (url, init) => {
+    calls.push({ url: url.href });
+    if (url.hostname === "api.vercel.com" && url.pathname === "/v10/projects/prj_test/domains") {
+      if (attached) return json({ error: { code: "domain_already_in_use" } }, undefined, 409);
+      attached = true;
+      return json({ name: "answers.acme.example" });
+    }
+    if (url.hostname === "api.vercel.com" && url.pathname === "/v6/domains/answers.acme.example/config") return json({ misconfigured: false });
+    if (url.href === "https://answers.acme.example/pentra-indexnow.txt") {
+      // Before the address reaches Pentra's deployment, Vercel answers with its own 404.
+      if (served === "missing") return new Response("The deployment could not be found on Vercel.\n\nDEPLOYMENT_NOT_FOUND", { status: 404,
+        headers: { "content-type": "text/plain; charset=utf-8", "x-vercel-error": "DEPLOYMENT_NOT_FOUND" } });
+      return new Response(f.get(siteId)!.answers.indexNowKey, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } });
+    }
+    throw new Error(`unexpected network ${url.href}`);
+  }, { TREG_TOKEN: "synthetic-only", VERCEL_TOKEN: "synthetic-only", VERCEL_PROJECT_ID: "prj_test", VERCEL_TEAM_ID: "team_test" });
+  const now = f.now();
+  const siteId = f.add("sites", { domain: "acme.example", userId: "user_hosted", siteName: "Acme", createdAt: now, updatedAt: now,
+    answers: { enabled: true, enabledAt: now, source: "signup", confirmedAt: now, autopublish: true, weeklyEmail: true, country: "US", lastSnapshotRunId: "answer_runs:0",
+      lastFullRunAt: now, lastRecheckAt: now, publishing: { target: "hosted", hostedDomain: "answers.acme.example", hostedStatus: "pending_dns", hostedCheckedAt: now - 3_600_000 } } });
+  f.add("answer_host_index", { host: "answers.acme.example", siteId, createdAt: now });
+  f.add("account_plan_entitlements", { userId: "user_hosted", planFeatures: ["pentra_answers"], maxSites: 1, maxArticles: 0, syncVersion: 1, syncStartedAt: now });
+
+  await f.invoke("answersDispatch:dispatch", {});
+  await drain(f, 60_000);
+  assert.equal(calls.filter((c) => c.url.startsWith("https://api.vercel.com/v10/projects/prj_test/domains")).length, 1, "the hourly pass adds the address to the project");
+  const key = f.get(siteId)!.answers.indexNowKey;
+  assert.match(key, /^[0-9a-f]{32}$/);
+  assert.equal(await f.invoke("answerPublish:hostedKey", { host: "answers.acme.example" }), key, "the key is served while the address is checked");
+  assert.equal(await f.invoke("answerPublish:hostedIndex", { host: "answers.acme.example" }), null, "no pages before it is live");
+  assert.equal(f.get(siteId)!.answers.publishing.hostedStatus, "pending_dns", "a Vercel DEPLOYMENT_NOT_FOUND page is not live");
+
+  served = "key";
+  f.setTime(now + 51 * 60_000);
+  await f.invoke("answersDispatch:dispatch", {});
+  await drain(f, 60_000);
+  assert.equal(f.get(siteId)!.answers.publishing.hostedStatus, "live", "live once the address serves this site's key through Pentra");
+  assert.ok((await f.invoke("answerPublish:hostedIndex", { host: "answers.acme.example" }))?.business, "its pages are served now");
+  f.assertOffline();
+});
+
+test("version 5: pentra.dev publishes automatically, invites readers to /start, and its hosted address is checked at once", async () => {
+  const calls: Array<{ url: string; body?: Fields }> = [];
+  const f = corePipelineFixture(network(calls), { TREG_TOKEN: "synthetic-only" }, { syntheticHosts: ["api.github.com", "api.indexnow.org"] });
+  const now = f.now();
+  const pentra = f.add("sites", { domain: "pentra.dev", userId: "owner", siteName: "Pentra", ctaUrl: "https://pentra.dev/sign-up", createdAt: now, updatedAt: now,
+    answers: { enabled: true, enabledAt: now, source: "owner", confirmedAt: now, autopublish: false, weeklyEmail: true, country: "US", ownerVersion: 4,
+      competitors: [{ name: "Profound", domain: "tryprofound.com" }], lastSnapshotRunId: "answer_runs:0", lastFullRunAt: now, lastRecheckAt: now,
+      publishing: { target: "hosted", hostedDomain: "answers.pentra.dev", hostedStatus: "pending_dns", hostedCheckedAt: now } } });
+  const questionId = f.add("answer_questions", { siteId: pentra, question: "Which tool emails a weekly AI visibility report?", key: "weekly ai visibility report",
+    intent: "best", source: "generated", status: "active", createdAt: now });
+  f.add("answer_pages", { siteId: pentra, questionId, question: "Which tool emails a weekly AI visibility report?", status: "draft", title: "Weekly AI visibility reports",
+    slug: "weekly-ai-visibility-report", metaDescription: "x", markdown: "x", facts: [], sources: [], issues: [], version: 1, contentHash: "h", writerModel: "m",
+    costMicroUsd: 1, createdAt: now, updatedAt: now, citations: 0 });
+  await f.invoke("answersDispatch:dispatch", {});
+  const site = f.get(pentra)!;
+  assert.equal(site.answers.ownerVersion, 5);
+  assert.equal(site.answers.autopublish, true);
+  assert.equal(site.ctaUrl, "https://pentra.dev/start", "readers start at the domain step");
+  const scheduled = f.tables._scheduled_functions.map((r) => r.name);
+  assert.ok(scheduled.includes("actions/answerPublish:attachHostedDomain"), "the hosted address is attached and checked at once");
+  assert.ok(scheduled.includes("actions/answerPublish:publishPage"), "its read drafts go out");
 });

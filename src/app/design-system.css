@@ -1,8 +1,9 @@
 /* Pentra design system (Nov 2026 rebuild). Source of truth: ops/design/pentra-redesign-research.md.
  * Linear's dark instrument canvas; white is the one primary action; Signal Blue (--you) means "you" only;
  * green/amber/red exist only inside evidence. Depth comes from tone and 1px borders, never glow.
- * The file keeps the name pentra.css (renamed from globals.css on Sep 24 so Vercel's restored Turbopack
- * build cache cannot serve a stale copy of the old file). */
+ * Named design-system.css since P385 (Nov 8 2026): Vercel restored Turbopack's build cache and served the previous
+ * design's pentra.css with the new pages (globals.css had the same fault on Sep 24). next.config.ts now turns that build
+ * cache off, and the new name guaranteed a fresh copy at once. */
 @import "tailwindcss";
 
 /* ─── Tokens ─────────────────────────────────────────────────────────── */

@@ -24,7 +24,7 @@ test("a hosted page shows only a live, published page; the sitemap, robots and I
   assert.match(page, /alternates: \{ canonical: url \}/);
   assert.match(read("src/app/sitemap.ts"), /if \(isHostedAnswersHost\(host\)\) \{\n\s+const index = await convexHttp\.query\(api\.answerPublish\.hostedIndex/);
   assert.match(read("src/app/robots.ts"), /sitemap: `https:\/\/\$\{host\}\/sitemap\.xml`/);
-  assert.match(read("src/app/pentra-indexnow.txt/route.ts"), /index\.indexNowKey/);
+  assert.match(read("src/app/pentra-indexnow.txt/route.ts"), /api\.answerPublish\.hostedKey/);
   const query = read("convex/answerPublish.ts");
   assert.match(query, /site\.answers\.publishing\.hostedStatus !== "live"\) return null;/, "nothing renders before the address is live");
   assert.match(query, /\.filter\(\(q\) => q\.eq\(q\.field\("status"\), "published"\)\)/, "drafts never render");

@@ -559,12 +559,18 @@ export const setupSite = internalQuery({ args: { siteId: v.id("sites") }, handle
 
 export const saveSetupRead = internalMutation({
   args: { siteId: v.id("sites"), error: v.optional(v.string()), force: v.optional(v.boolean()), then: v.optional(v.literal("snapshot")),
+    competitorsOnly: v.optional(v.boolean()),
     read: v.optional(v.object({ name: v.string(), sells: v.string(), buyers: v.string(), offerings: v.array(v.string()), country: v.string(), local: v.boolean(),
       location: v.string(), competitors: v.array(v.object({ name: v.string(), domain: v.string() })) })) },
-  handler: async (ctx, { siteId, read, error, force, then }) => {
+  handler: async (ctx, { siteId, read, error, force, then, competitorsOnly }) => {
     const site = await ctx.db.get(siteId);
     if (!site?.answers) return;
     const now = Date.now();
+    // Only the suggested competitors, for a site that has none (Pentra's own sites); its confirmed facts stay as they are.
+    if (competitorsOnly) {
+      if (read?.competitors.length && !site.answers.competitors?.length) await ctx.db.patch(siteId, { answers: { ...site.answers, competitors: read.competitors } });
+      return;
+    }
     if (!read) {
       await ctx.db.patch(siteId, { answers: { ...site.answers, readAt: now, readError: (error ?? "Pentra couldn't read the site.").slice(0, 300) } });
       if (then === "snapshot") await ctx.scheduler.runAfter(0, internal.actions.answers.prepareSnapshot, { siteId });

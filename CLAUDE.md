@@ -26,8 +26,9 @@ that crawls a site, plans topics, writes research-backed articles and publishes 
 | Language | TypeScript (strict) |
 | Database + Backend | Convex (real-time, serverless) |
 | Auth | Clerk (with Convex integration via `ConvexProviderWithClerk`) |
-| Styling | Tailwind CSS 4 + custom CSS variables in `pentra.css` (renamed from globals.css) |
-| AI - Articles | Anthropic Claude (`claude-haiku-4-5-20251001`) via `@anthropic-ai/sdk` |
+| Styling | Tailwind CSS 4 + custom CSS variables in `design-system.css` (renamed from pentra.css/globals.css: Vercel's restored build cache served stale copies; the Turbopack build cache is off since P385) |
+| AI - Answers | Opus 5.5 (`claude-opus-5-5`) writes the buyer questions and answer pages; Sonnet 5.5 reads the site (P387, Nov 8 2026) |
+| AI - Articles | Anthropic Claude (`claude-haiku-4-5-20251001`) via `@anthropic-ai/sdk` | (legacy engine)
 | AI - Research | OpenAI `o4-mini-deep-research-2025-06-26` via `web_search_preview` tool |
 | AI - Images | OpenAI `gpt-image-1.5` for hero images and infographics |
 | Validation | Zod 4 |
@@ -128,7 +129,7 @@ This is the largest and most important file. Key exported actions:
 |------|---------|
 | `app/layout.tsx` | Root layout — ClerkProvider, Convex Providers, Geist fonts, dark theme |
 | `app/providers.tsx` | ConvexProviderWithClerk setup |
-| `app/pentra.css` | Design system CSS variables, animations, Clerk dark-theme overrides |
+| `app/design-system.css` | Design system CSS variables, animations, Clerk dark-theme overrides |
 | `middleware.ts` | Clerk auth middleware, public route matching, dynamic article path rewriting |
 | `contexts/site-context.tsx` | Active site context (multi-site support via SiteProvider) |
 | `hooks/usePlanLimits.ts` | Hook: reads Clerk features, syncs to Convex, returns plan limits |
@@ -224,7 +225,7 @@ Usage tracked in `usage_log` (immutable — survives deletions). `claimGeneratio
 ## Design System
 
 Redesigned Nov 2026 from Refero research (`ops/design/pentra-redesign-research.md`): Linear's dark "instrument" system.
-- Tokens are CSS variables in `src/app/pentra.css` mapped to Tailwind classes (`bg-surface-1`, `text-text-2`, ...).
+- Tokens are CSS variables in `src/app/design-system.css` mapped to Tailwind classes (`bg-surface-1`, `text-text-2`, ...).
 - Canvas `#08090A`, surfaces `#0F1011` / `#161718`, hairline borders `rgba(255,255,255,.08)`; text `#F7F8F8` / `#B4B8C0` / `#8A8F98`.
 - The primary action is a white button (one per view). Signal Blue `#3DA5F5` only means "you" (the customer's own name,
   series, links, focus). Green / amber / red appear only inside evidence (named you / competitor named / wrong fact).

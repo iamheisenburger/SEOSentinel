@@ -14,7 +14,7 @@ export type ButtonVariant =
   | "danger";
 export type ButtonSize = "sm" | "md" | "lg";
 
-// Focus: the global :focus-visible ring in pentra.css (2px Signal Blue, 2px offset) follows the 6px radius.
+// Focus: the global :focus-visible ring in design-system.css (2px Signal Blue, 2px offset) follows the 6px radius.
 const base =
   "relative inline-flex shrink-0 items-center justify-center whitespace-nowrap select-none font-semibold tracking-[0.005em] " +
   "rounded-control transition-[background-color,border-color,color,translate,scale,opacity] duration-[var(--d-instant)] ease-out " +
