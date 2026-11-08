@@ -3,12 +3,15 @@
  * asks a single assistant (wrong competitors would poison every count). Pure. */
 import { hostOf } from "./answerEngine.ts";
 import { countryCode } from "./aiAnswers.ts";
+import { forcedToolChoiceSupported, toolOnlyInstruction } from "./toolChoice.ts";
 
-export const SETUP_READ_MODEL = "claude-haiku-5-5";
+/** Sonnet 5.5 (Nov 8 2026; Haiku left dawnlist with no competitors): the read sets the competitors every count uses.
+ * Thinking is on (effort high) and counts toward max_tokens: at most ~9K tokens in and 12K out ($0.14). */
+export const SETUP_READ_MODEL = "claude-sonnet-5-5";
 export const SETUP_READ_TOOL = "submit_business_read";
-export const SETUP_READ_MAX_TOKENS = 6_000;
-export const SETUP_READ_HOLD_MICRO_USD = 50_000;
-export const SETUP_READ_PRICE = { inputUsdPerMillion: 0.1, outputUsdPerMillion: 0.5 };
+export const SETUP_READ_MAX_TOKENS = 12_000;
+export const SETUP_READ_HOLD_MICRO_USD = 150_000;
+export const SETUP_READ_PRICE = { inputUsdPerMillion: 2, outputUsdPerMillion: 10 };
 export const setupReadCost = (usage: { input_tokens?: number; output_tokens?: number } | undefined) =>
   Math.ceil(Math.max(0, usage?.input_tokens ?? 0) * SETUP_READ_PRICE.inputUsdPerMillion + Math.max(0, usage?.output_tokens ?? 0) * SETUP_READ_PRICE.outputUsdPerMillion);
 
@@ -27,6 +30,7 @@ export function setupReadRequest(args: { domain: string; title: string; descript
     "Rules: use only what the page shows, except competitors. `sells`: one or two plain sentences on what it offers and the outcome for the customer. `buyers`: who pays for it. `offerings`: up to 8 short phrases.",
     "`country`: the two-letter code of the market it serves if the page makes it clear, else empty. `local`: true only if it serves one city or region in person; then `location` names it.",
     "`competitors`: up to 5 real companies a buyer would compare it with, that you are confident exist, each with its real website domain. Leave the list empty rather than guess.",
+    ...(forcedToolChoiceSupported(SETUP_READ_MODEL) ? [] : [toolOnlyInstruction(SETUP_READ_TOOL)]),
   ].join("\n");
   const userMessage = [
     `Domain: ${args.domain}`, args.nameHint ? `Name on the page: ${args.nameHint}` : "", args.title ? `Title: ${args.title}` : "",

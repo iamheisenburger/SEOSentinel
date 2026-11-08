@@ -27,7 +27,8 @@ that crawls a site, plans topics, writes research-backed articles and publishes 
 | Database + Backend | Convex (real-time, serverless) |
 | Auth | Clerk (with Convex integration via `ConvexProviderWithClerk`) |
 | Styling | Tailwind CSS 4 + custom CSS variables in `design-system.css` (renamed from pentra.css/globals.css: Vercel's restored build cache served stale copies; the Turbopack build cache is off since P385) |
-| AI - Articles | Anthropic Claude (`claude-haiku-4-5-20251001`) via `@anthropic-ai/sdk` |
+| AI - Answers | Opus 5.5 (`claude-opus-5-5`) writes the buyer questions and answer pages; Sonnet 5.5 reads the site (P387, Nov 8 2026) |
+| AI - Articles | Anthropic Claude (`claude-haiku-4-5-20251001`) via `@anthropic-ai/sdk` | (legacy engine)
 | AI - Research | OpenAI `o4-mini-deep-research-2025-06-26` via `web_search_preview` tool |
 | AI - Images | OpenAI `gpt-image-1.5` for hero images and infographics |
 | Validation | Zod 4 |

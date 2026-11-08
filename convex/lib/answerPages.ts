@@ -7,12 +7,16 @@ import { sha256Hex } from "./publicationArtifact.ts";
 import { answerSlug, brandMatcher } from "./answerEngine.ts";
 import { toolOnlyInstruction } from "./toolChoice.ts";
 
-export const ANSWER_WRITER_MODEL = "claude-sonnet-5-5";
-export const ANSWER_WRITER_PRICE = { inputUsdPerMillion: 2, outputUsdPerMillion: 10 };
-export const ANSWER_WRITER_MAX_TOKENS = 24_000;
+/** Opus 5.5 writes the pages and the questions (Arshad, Nov 8 2026: the premium plan gets the best writer). Thinking is
+ * always on (adaptive, effort medium) and counts toward max_tokens and output tokens; forced tool_choice is refused, so the
+ * call uses "auto" with the tool as its only option (lib/toolChoice.ts). */
+export const ANSWER_WRITER_MODEL = "claude-opus-5-5";
+export const ANSWER_WRITER_PRICE = { inputUsdPerMillion: 4, outputUsdPerMillion: 20 };
+export const ANSWER_WRITER_MAX_TOKENS = 16_000;
 export const ANSWER_PAGE_TOOL = "submit_answer_page";
-/** Held before a page is written (a draft and at most one revision), far above its usual ~$0.10. */
-export const ANSWER_PAGE_HOLD_MICRO_USD = 600_000;
+/** Held before a page is written: a draft and at most one revision, each at most ~30K tokens in and 16K out ($0.44);
+ * a page usually costs ~$0.30. */
+export const ANSWER_PAGE_HOLD_MICRO_USD = 900_000;
 export const ANSWER_PAGE_MIN_WORDS = 450;
 export const ANSWER_PAGE_FLOOR_WORDS = 350;
 export const ANSWER_PAGE_MAX_WORDS = 1_600;

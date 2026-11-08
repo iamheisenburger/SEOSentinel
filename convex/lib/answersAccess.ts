@@ -35,8 +35,9 @@ export const answersAllows = (access: AnswersAccess) => ({
 });
 
 // ── Spend ──
-/** One free snapshot per account: ~30 questions to five assistants (~$0.45) plus the questions and five drafts (~$2.5). */
-export const ANSWERS_FREE_ACCOUNT_CAP_MICRO_USD = 4_000_000;
+/** One free snapshot per account: ~30 questions to five assistants (~$0.75), the read, the questions and five Opus drafts
+ * (~$2.40 in all). The cap covers what is held while the five drafts are written side by side (5 x $0.90). */
+export const ANSWERS_FREE_ACCOUNT_CAP_MICRO_USD = 8_000_000;
 /** A paid or owner site's month: weekly runs, daily rechecks of new pages, ~30 pages written. */
 export const ANSWERS_SITE_MONTHLY_CAP_MICRO_USD = 45_000_000;
 /** The whole service's daily circuit breaker (env ANSWERS_FLEET_DAILY_MICRO_USD raises it as customers grow). */

@@ -5,7 +5,7 @@ import { internalMutation, internalQuery, type MutationCtx } from "./_generated/
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { ANSWERS_OWNER_DOMAINS, answersAllows, competitorFromDomain } from "./lib/answersAccess";
+import { ANSWERS_OWNER_DOMAINS, ANSWERS_PLAN, answersAllows, competitorFromDomain } from "./lib/answersAccess";
 import { countryCode } from "./lib/aiAnswers";
 import { ANSWERS_WEEK_MS, siteAnswersAccess } from "./answers";
 
@@ -15,7 +15,7 @@ const WEEK_MS = ANSWERS_WEEK_MS, RECHECK_GAP_MS = 22 * 3_600_000, SETUP_RETRY_MS
  * 2 (Nov 8 2026): competitor names re-derived ("copy.ai" is Copy.ai, never the word "Copy"); dawnlist and LeadPilot publish
  * automatically now that their first drafts were read; pentra.dev restarts its first hour for the new product (its
  * questions and drafts were written from the old article product's profile): set aside, re-read, asked again. */
-export const OWNER_SETTINGS_VERSION = 3;
+export const OWNER_SETTINGS_VERSION = 4;
 const OWNER_AUTOPUBLISH = new Set(["dawnlist.io", "leadpilot.chat"]);
 const OWNER_RESTART = new Set(["pentra.dev"]);
 /** 3 (Nov 8 2026): LeadPilot's published answer files are written again with qualityGateVersion (its blog hides a post
@@ -23,6 +23,29 @@ const OWNER_RESTART = new Set(["pentra.dev"]);
  * no answer could count who was named instead). Its confirmed facts are untouched. */
 const OWNER_REFRESH_FILES = new Set(["leadpilot.chat"]);
 const OWNER_FILL_COMPETITORS = new Set(["dawnlist.io"]);
+/** 4 (Nov 8 2026): pentra.dev's competitors are the AI-visibility tools buyers are shown instead of it, and the profile
+ * fields its relaunch read never replaces (pain points, how it's used, pricing) describe the Answers product: the read kept
+ * the article product's Jasper, Copy.ai, "3 articles/month free" and SEO-article pains, so 3 of 5 first drafts were about
+ * the old product. Its questions are set aside, its drafts retired, and the first hour runs again (Opus questions and
+ * pages); never while a run is asking. */
+const OWNER_COMPETITORS: Record<string, ReadonlyArray<{ name: string; domain: string }>> = {
+  "pentra.dev": [{ name: "Profound", domain: "tryprofound.com" }, { name: "Otterly.AI", domain: "otterly.ai" }, { name: "Peec AI", domain: "peec.ai" },
+    { name: "AthenaHQ", domain: "athenahq.ai" }, { name: "Semrush", domain: "semrush.com" }, { name: "Ahrefs", domain: "ahrefs.com" }],
+};
+const OWNER_PROFILE: Record<string, { painPoints: string[]; productUsage: string; pricingInfo: string }> = {
+  "pentra.dev": {
+    painPoints: ["How do I get my business recommended by ChatGPT?", "Why do AI assistants recommend my competitors instead of my business?",
+      "How can I see what ChatGPT, Perplexity and Gemini say about my business?", "How do I get my website cited in Google's AI Overviews?",
+      "Which pages do AI assistants cite when buyers ask who to hire?", "How do I track whether AI assistants mention my brand?"],
+    productUsage: "The owner enters their website; Pentra reads it and the owner confirms what it sells and who it competes with. Pentra writes " +
+      "about 30 questions buyers ask AI assistants, asks ChatGPT, Perplexity, Gemini, Google AI Mode and Google AI Overviews each one, keeps every " +
+      "answer as proof, shows who gets named, and drafts answer pages for the questions the business can win. On the plan, Pentra publishes the " +
+      "pages to the owner's site (WordPress, Webflow, Shopify, Ghost, GitHub or a webhook) or hosts them at answers.<their domain>, tells search " +
+      "engines, asks the assistants again every week and records every citation.",
+    pricingInfo: `One plan: $${ANSWERS_PLAN.monthlyUsd} a month or $${ANSWERS_PLAN.annualUsd.toLocaleString("en-US")} a year. The first hour is ` +
+      "free with no card: how 5 AI assistants answer about 30 buyer questions, and 5 draft answer pages.",
+  },
+};
 
 export const dispatch = internalMutation({ args: {}, handler: async (ctx) => {
   const now = Date.now();
@@ -53,19 +76,47 @@ export const dispatch = internalMutation({ args: {}, handler: async (ctx) => {
 } });
 
 async function applyOwnerVersion(ctx: MutationCtx, site: Doc<"sites">, domain: string, now: number) {
-  if ((site.answers?.ownerVersion ?? 1) < 2) await applyOwnerVersion2(ctx, site, domain, now);
+  const from = site.answers?.ownerVersion ?? 1;
+  const competitors = from < 4 ? OWNER_COMPETITORS[domain] : undefined;
+  if (competitors) {
+    const latest = await ctx.db.query("answer_runs").withIndex("by_site_created", (q) => q.eq("siteId", site._id)).order("desc").first();
+    if (latest?.status === "asking") return; // the next hourly pass applies it, once this run has finished
+  }
+  if (from < 2) await applyOwnerVersion2(ctx, site, domain, now);
   const current = await ctx.db.get(site._id);
   if (!current?.answers) return;
+  if (from < 3) await applyOwnerVersion3(ctx, current, domain);
+  if (competitors) {
+    // Set aside, never deleted: questions written from the old profile stop being asked, and their drafts are retired.
+    for (const q of await ctx.db.query("answer_questions").withIndex("by_site", (x) => x.eq("siteId", site._id)).take(200)) {
+      if (q.status !== "removed") await ctx.db.patch(q._id, { status: "removed", pageId: undefined });
+    }
+    for (const p of await ctx.db.query("answer_pages").withIndex("by_site_status", (x) => x.eq("siteId", site._id).eq("status", "draft")).take(100)) {
+      await ctx.db.patch(p._id, { status: "retired", rewriteReason: "Written from the old product's profile; replaced", updatedAt: now });
+    }
+    const fresh = (await ctx.db.get(site._id))!;
+    // snapshotRequestedAt: the hourly rule below must not start the same first hour a second time.
+    const settings = { ...fresh.answers!, competitors: [...competitors], ...(from >= 2 ? { snapshotRequestedAt: now } : {}) };
+    delete settings.lastSnapshotRunId;
+    await ctx.db.patch(site._id, { ...(OWNER_PROFILE[domain] ?? {}), answers: settings, updatedAt: now });
+    // Version 2's re-read runs the first hour itself; otherwise it runs again now, from the corrected profile.
+    if (from >= 2) await ctx.scheduler.runAfter(0, internal.actions.answers.prepareSnapshot, { siteId: site._id });
+  }
+  const latest = (await ctx.db.get(site._id))!;
+  await ctx.db.patch(site._id, { answers: { ...latest.answers!, ownerVersion: OWNER_SETTINGS_VERSION } });
+}
+
+async function applyOwnerVersion3(ctx: MutationCtx, current: Doc<"sites">, domain: string) {
+  const site = current;
   if (OWNER_REFRESH_FILES.has(domain)) {
     const published = (await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", site._id).eq("status", "published")).take(50))
       .filter((p) => p.publishTarget === "github");
     let delay = 0;
     for (const page of published) { await ctx.scheduler.runAfter(delay, internal.actions.answerPublish.refreshPublishedFile, { pageId: page._id }); delay += 20_000; }
   }
-  if (OWNER_FILL_COMPETITORS.has(domain) && !current.answers.competitors?.length) {
+  if (OWNER_FILL_COMPETITORS.has(domain) && !current.answers?.competitors?.length) {
     await ctx.scheduler.runAfter(0, internal.actions.answersSetup.readSite, { siteId: site._id, force: true, competitorsOnly: true });
   }
-  await ctx.db.patch(site._id, { answers: { ...current.answers, ownerVersion: OWNER_SETTINGS_VERSION } });
 }
 
 async function applyOwnerVersion2(ctx: MutationCtx, site: Doc<"sites">, domain: string, now: number) {

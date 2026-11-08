@@ -3,10 +3,12 @@
 import { ANSWER_QUESTION_INTENTS, cleanQuestion, questionKey, type Brand } from "./answerEngine.ts";
 import { toolOnlyInstruction } from "./toolChoice.ts";
 
-export const QUESTION_MODEL = "claude-sonnet-5-5";
+/** The same model and price as the page writer (lib/answerPages.ts ANSWER_WRITER_MODEL): the questions decide what Pentra
+ * measures. Two attempts at most ~6K tokens in and 16K out ($0.35 each). */
+export const QUESTION_MODEL = "claude-opus-5-5";
 export const QUESTION_TOOL = "submit_buyer_questions";
 export const QUESTION_MAX_TOKENS = 16_000;
-export const QUESTION_HOLD_MICRO_USD = 300_000;
+export const QUESTION_HOLD_MICRO_USD = 700_000;
 
 export type QuestionBusiness = Brand & { domain: string; summary: string; audience: string; features: readonly string[]; problems: readonly string[];
   usage: string; pricing: string; market: string; siteType: string; language: string; competitors: readonly Brand[] };
