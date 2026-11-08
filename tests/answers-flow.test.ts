@@ -13,7 +13,7 @@ const html = (text: string) => new Response(`<html><head><title>Page</title></he
 
 const QUESTIONS = ["How do I find local businesses that need a new website?", "What's the best tool to find clients for a web design agency?",
   "How much does a lead list for agencies cost per month?", "How do I find small businesses with slow websites?", "Which lead tool gives the owner's email address?",
-  "How do I find businesses that need IT support near me?", "What are alternatives to Apollo for local agencies?", "How do SEO agencies find new local clients?",
+  "How do I find businesses that need IT support near me?", "What are alternatives to big lead databases for local agencies?", "How do SEO agencies find new local clients?",
   "How do I know a local business needs a new website?", "What's a good way to get clients for an accessibility audit service?",
   "How can a booking software company find salons without online booking?", "Where can I find restaurants that need a better website?"];
 const PAGE_BODY = ["Acme Leads finds local businesses that show a measured sign they need a new website, so you can contact them with the proof.", "",
@@ -44,6 +44,9 @@ function network(calls: Array<{ url: string; body?: Fields }>) {
         content: [{ type: "tool_use", id: "tool_0", name: tool, input: { name: "Newco", sells: "Daily lists of local businesses that need web design, with proof.",
           buyers: "Web design agencies", offerings: ["Daily lead lists", "Verified emails"], country: "US", local: false, location: "",
           competitors: [{ name: "Apollo", domain: "apollo.example" }, { name: "Newco", domain: "newco.example" }] } }], usage: { input_tokens: 3000, output_tokens: 300 } });
+      if (tool === "submit_named_businesses") return json({ id: "msg_n", type: "message", role: "assistant", model: body.model, stop_reason: "tool_use",
+        stop_sequence: null, content: [{ type: "tool_use", id: "tool_n", name: tool, input: { businesses: ["Leadfinder Pro", "Acme Leads", "Apollo"] } }],
+        usage: { input_tokens: 500, output_tokens: 20 } });
       const input = tool === "submit_buyer_questions"
         ? { questions: QUESTIONS.map((question) => ({ question, intent: "how_to" })) }
         : { title: "How do I find local businesses that need a new website?", metaDescription: "Look for measured signs like slow mobile pages.", markdown: PAGE_BODY,
@@ -137,7 +140,11 @@ test("the first hour and the plan, end to end: questions, five assistants, proof
   const spend = f.tables.answer_spend;
   assert.ok(spend.length > 0 && spend.every((r) => r.state === "settled"), "every hold settled");
   const asked = spend.filter((r) => r.purpose === "ask").reduce((sum, r) => sum + r.actualMicroUsd, 0);
-  assert.equal(asked, QUESTIONS.length * (2800 + 1300 + 2400 + 2400 + 2000), "settled at the providers' reported cost");
+  // Each answer naming Acme Leads (Perplexity's) also lists every business it names: 500 in + 20 out tokens of Haiku = 60 micro-USD.
+  assert.equal(asked, QUESTIONS.length * (2800 + 1300 + 2400 + 2400 + 2000) + QUESTIONS.length * 60, "settled at the providers' reported cost");
+  const perplexity = f.tables.answer_checks.find((c) => c.assistant === "perplexity")!;
+  assert.equal(perplexity.position, 2, "2nd of the 3 businesses the answer names, not 1st of the confirmed names");
+  assert.equal(perplexity.brandsNamed, 3);
   assert.equal(f.tables.answer_spend_days.length, 1);
   assert.equal(f.tables.answer_spend_days[0].microUsd, spend.reduce((sum, r) => sum + r.actualMicroUsd, 0), "the day's total is exactly what was spent");
 
@@ -467,4 +474,60 @@ test("version 5: pentra.dev publishes automatically, invites readers to /start, 
   const scheduled = f.tables._scheduled_functions.map((r) => r.name);
   assert.ok(scheduled.includes("actions/answerPublish:attachHostedDomain"), "the hosted address is attached and checked at once");
   assert.ok(scheduled.includes("actions/answerPublish:publishPage"), "its read drafts go out");
+});
+
+test("Cowork's dentist, end to end: a host's hidden bot check read through a real browser, a question the business can't answer skipped and replaced, the ready email when the drafts are done", async () => {
+  const calls: Array<{ url: string; body?: Fields }> = [];
+  const emails: Fields[] = [];
+  const readMessages: string[] = [];
+  const rendered: string[] = [];
+  const base = network(calls);
+  const SERVICES = "Dentist in Boise. Dental Services: Dental Implants, Invisalign, Same-Day Crowns, Sleep Apnea treatment with oral appliances that keep the airway open, Pediatric Dentistry. ";
+  const f = corePipelineFixture(async (url, init) => {
+    if (url.hostname === "api.resend.com") { emails.push(JSON.parse(String(init.body))); return json({ id: "email_1" }); }
+    // The host answers Pentra's servers with SiteGround's hidden bot check; a real browser (treg's renderer) gets the site.
+    if (url.hostname === "dentist.example") return new Response(`<html><head><meta http-equiv="refresh" content="0;/.well-known/sgcaptcha/?r=%2F"></head><body></body></html>`,
+      { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+    if (url.href === "https://treg.to/call/treg.web.extract") {
+      const target = JSON.parse(String(init.body)).url as string;
+      rendered.push(target);
+      if (target.startsWith("https://dentist.example")) return json({ success: true, result: { content: SERVICES.repeat(8) } });
+      return json({ success: false }, 0, 502);
+    }
+    if (url.hostname === "api.anthropic.com" && typeof init.body === "string") {
+      const body = JSON.parse(init.body);
+      if (body.tools?.[0]?.name === "submit_business_read") readMessages.push(String(body.messages?.[0]?.content ?? ""));
+      // The page writer says the business's pages don't show it offers what one question asks.
+      if (body.tools?.[0]?.name === "submit_answer_page" && /cost per month/.test(String(body.messages?.[0]?.content ?? ""))) {
+        return json({ id: "msg_fit", type: "message", role: "assistant", model: body.model, stop_reason: "tool_use", stop_sequence: null,
+          content: [{ type: "tool_use", id: "tool_fit", name: "submit_answer_page", input: { title: "t", metaDescription: "m", markdown: "Short.", facts: [],
+            fit: "none", fitReason: "Its pages list no prices" } }], usage: { input_tokens: 3000, output_tokens: 200 } });
+      }
+    }
+    const response = await base(url, init);
+    if (url.hostname !== "api.anthropic.com") return response;
+    // The read names the business "Newco": the synthetic page writer names it so.
+    return new Response((await response.text()).replaceAll("Acme Leads", "Newco"), { status: response.status, headers: response.headers });
+  }, { TREG_TOKEN: "synthetic-only", RESEND_API_KEY: "synthetic-only" }, { syntheticHosts: ["api.github.com", "api.indexnow.org"] });
+  f.setIdentity("user_dentist");
+  const { siteId } = await f.invoke("answers:createSite", { domain: "dentist.example", email: "owner@dentist.example" });
+  f.setIdentity(null);
+  await drain(f, 60_000);
+  assert.ok(rendered.includes("https://dentist.example/"), "the homepage read through a real browser");
+  assert.ok(rendered.includes("https://dentist.example/services"), "and its services page");
+  assert.match(readMessages[0] ?? "", /Sleep Apnea treatment with oral appliances/, "the read sees the services the site lists");
+  f.setIdentity("user_dentist");
+  await f.invoke("answers:confirmSetup", { siteId, competitors: [{ name: "Apollo", domain: "apollo.example" }] });
+  f.setIdentity(null);
+  const finished = f.now();
+  await drain(f, 20 * 60_000);
+  const pages = f.tables.answer_pages;
+  const skipped = pages.filter((p) => p.status === "not_written");
+  assert.equal(skipped.length, 1);
+  assert.match(skipped[0].notWrittenReason, /own pages don't show it offers this \(Its pages list no prices\), so Pentra skipped it/);
+  assert.equal(pages.filter((p) => p.status === "draft").length, 5, "the next question is written instead");
+  assert.equal(emails.length, 1, "the ready email goes out when the drafts are done");
+  assert.ok(f.now() - finished < 30 * 60_000, "not on the 30-minute fallback");
+  assert.match(emails[0].text, /Answer pages drafted for the questions you can win: 5/);
+  f.assertOffline();
 });

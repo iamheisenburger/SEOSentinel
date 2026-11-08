@@ -7,10 +7,13 @@ import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { v } from "convex/values";
 import { fetchPublicTextRendered } from "../lib/tregFetch";
+import { fetchPage } from "../lib/fetchPage";
 import { firstPartyProductEvidence } from "../lib/productEvidence";
+import { relevantLinks, siteLinks } from "../lib/siteLinks";
+import { hostOf } from "../lib/answerEngine";
 import {
-  ANSWER_PAGE_HOLD_MICRO_USD, ANSWER_PAGE_TOOL, ANSWER_WRITER_MAX_TOKENS, ANSWER_WRITER_MODEL, answerPageRequest, checkDraftPage, pageSource,
-  parseDraftPage, writerCostMicroUsd, type DraftPage, type PageSource,
+  ANSWER_PAGE_HOLD_MICRO_USD, ANSWER_PAGE_TOOL, ANSWER_WRITER_MAX_TOKENS, ANSWER_WRITER_MODEL, answerPageRequest, checkDraftPage, finalizeDraftPage,
+  pageSource, parseDraftPage, writerCostMicroUsd, type DraftPage, type PageSource,
 } from "../lib/answerPages";
 import { structuredToolChoice } from "../lib/toolChoice";
 import { spendRefusal } from "./answers";
@@ -40,9 +43,11 @@ export const writePage = internalAction({ args: { pageId: v.id("answer_pages") }
   if (!hold.ok) { await ctx.runMutation(internal.answerPages.abandonPage, { pageId, reason: spendRefusal(hold.reason), costMicroUsd: 0 }); return; }
   let cost = 0, sent = false;
   try {
-    const [sources, productEvidence] = await Promise.all([readSources(context.sources), businessEvidence(context.business)]);
+    // Competitors' own sites are never a page's sources (a page on the business's site never sends buyers to them).
+    const avoid = context.competitors.map((c) => c.domain).filter((d): d is string => Boolean(d)).map(hostOf);
+    const [sources, productEvidence] = await Promise.all([readSources(context.sources, avoid), businessEvidence(context.business, context.page.question)]);
     const base = { question: context.page.question, businessName: context.business.name, productEvidence, market: context.business.market,
-      language: context.business.language, landscape: context.landscape, sources, mayName: context.mayName };
+      language: context.business.language, landscape: context.landscape, sources, competitorNames: context.competitors.map((c) => c.name) };
     let draft: DraftPage | null = null, checked = { blocking: ["The writer didn't return a page."], notes: [] as string[] };
     for (let attempt = 0; attempt < 2; attempt++) {
       const request = answerPageRequest(attempt === 0 || !draft ? base : { ...base, revision: { markdown: draft.markdown, issues: checked.blocking } });
@@ -56,13 +61,21 @@ export const writePage = internalAction({ args: { pageId: v.id("answer_pages") }
       const parsed = parseDraftPage(tool && tool.type === "tool_use" ? tool.input : null, sources);
       if (!parsed) continue;
       draft = parsed;
-      checked = checkDraftPage(parsed, { businessName: context.business.name, businessDomain: context.business.domain, sources, productEvidence });
+      checked = checkDraftPage(parsed, { businessName: context.business.name, businessDomain: context.business.domain, sources, productEvidence,
+        competitors: context.competitors });
       if (!checked.blocking.length) break;
     }
     if (!draft) { await ctx.runMutation(internal.answerPages.abandonPage, { pageId, reason: "The page couldn't be written. Pentra will try again next week.", costMicroUsd: cost }); return; }
-    const saved = await ctx.runMutation(internal.answerPages.saveDraft, { pageId, title: draft.title, metaDescription: draft.metaDescription, markdown: draft.markdown,
-      facts: draft.facts, sources: sources.map((s) => ({ n: s.n, url: s.url, ...(s.title ? { title: s.title } : {}), excerpt: s.excerpt.slice(0, 1200),
-        contentHash: s.contentHash, retrievedAt: s.retrievedAt })),
+    // The business's own pages don't show it offers this: no page that sends buyers elsewhere; the next question instead.
+    if (draft.fit === "none") {
+      await ctx.runMutation(internal.answerPages.abandonPage, { pageId, costMicroUsd: cost, replace: true,
+        reason: `${context.business.name}'s own pages don't show it offers this${draft.fitReason ? ` (${draft.fitReason})` : ""}, so Pentra skipped it rather than write a page that sends buyers elsewhere.` });
+      return;
+    }
+    const final = finalizeDraftPage(draft, sources);
+    const saved = await ctx.runMutation(internal.answerPages.saveDraft, { pageId, title: final.page.title, metaDescription: final.page.metaDescription,
+      markdown: final.page.markdown, facts: final.page.facts, sources: final.sources.map((s) => ({ n: s.n, url: s.url, ...(s.title ? { title: s.title } : {}),
+        excerpt: s.excerpt.slice(0, 1200), contentHash: s.contentHash, retrievedAt: s.retrievedAt })),
       issues: checked.blocking.length ? checked.blocking : checked.notes, writerModel: ANSWER_WRITER_MODEL, costMicroUsd: cost, blocked: checked.blocking.length > 0 });
     if (saved?.status === "draft" && context.autopublish) await ctx.scheduler.runAfter(0, internal.actions.answerPublish.publishPage, { pageId });
   } catch (error) {
@@ -72,30 +85,39 @@ export const writePage = internalAction({ args: { pageId: v.id("answer_pages") }
   }
 } });
 
-/** The sources the assistants cite for this question, read live (rendered when needed), numbered in order. */
-async function readSources(candidates: ReadonlyArray<{ url: string; title?: string }>): Promise<PageSource[]> {
-  const read = await Promise.all(candidates.slice(0, SOURCES_PER_PAGE + 3).map(async (c) => {
+/** The sources the assistants cite for this question, read live (rendered when needed), numbered in order; never a
+ * competitor's site. A source whose title is only a generic label is titled by its site. */
+async function readSources(candidates: ReadonlyArray<{ url: string; title?: string }>, avoidHosts: readonly string[] = []): Promise<PageSource[]> {
+  const allowed = candidates.filter((c) => { const h = hostOf(c.url); return !avoidHosts.some((a) => h === a || h.endsWith(`.${a}`)); })
+    .map((c) => ({ ...c, title: c.title && !/^\s*(?:[\w\s-]{0,40}\b)?(website|site|homepage|home page|page)\s*$/i.test(c.title) ? c.title : hostOf(c.url) }));
+  const read = await Promise.all(allowed.slice(0, SOURCES_PER_PAGE + 3).map(async (c) => {
     try {
       const page = await Promise.race([fetchPublicTextRendered(c.url, 800), new Promise<null>((r) => setTimeout(() => r(null), 50_000))]);
       return page && page.text.length >= 600 ? { url: c.url, title: c.title, text: page.text } : null;
     } catch { return null; }
   }));
   const now = Date.now();
-  return read.filter((r): r is { url: string; title: string | undefined; text: string } => r !== null).slice(0, SOURCES_PER_PAGE)
+  return read.filter((r): r is { url: string; title: string; text: string } => r !== null).slice(0, SOURCES_PER_PAGE)
     .map((r, i) => pageSource(i + 1, r.url, r.title, r.text, now));
 }
 
-/** What the page may say about the business: the confirmed profile plus its homepage and pricing page, read now. */
-async function businessEvidence(business: { name: string; domain: string; summary: string; features: string[]; pricing: string; ctaText: string; ctaUrl: string }) {
+/** What the page may say about the business: the confirmed profile, its homepage and pricing page, and its own pages about
+ * the question's subject (a dentist's "Sleep Apnea" page for a sleep apnea question), all read now. */
+async function businessEvidence(business: { name: string; domain: string; summary: string; features: string[]; pricing: string; ctaText: string; ctaUrl: string },
+  question: string) {
   const origin = `https://${business.domain}`;
-  const [homepage, pricing] = await Promise.all([
+  const [homepage, pricing, home] = await Promise.all([
     fetchPublicTextRendered(origin, 400).then((p) => p.text).catch(() => ""),
     fetchPublicTextRendered(`${origin}/pricing`, 300).then((p) => p.text).catch(() => ""),
+    fetchPage(`${origin}/`, { maxBytes: 3_000_000 }).catch(() => null),
   ]);
+  const subject = home?.html ? relevantLinks(siteLinks(home.html, business.domain), question, 2) : [];
+  const pages = (await Promise.all(subject.map((link) => fetchPublicTextRendered(link.url, 300).then((p) => ({ url: link.url, text: p.text })).catch(() => null))))
+    .filter((p): p is { url: string; text: string } => p !== null && p.text.length >= 200);
   return firstPartyProductEvidence({ productName: business.name,
     site: { domain: business.domain, siteSummary: business.summary, keyFeatures: business.features, pricingInfo: business.pricing,
       ...(business.ctaText ? { ctaText: business.ctaText } : {}), ...(business.ctaUrl ? { ctaUrl: business.ctaUrl } : {}) },
-    crawled: { homepage, pricing } });
+    crawled: { homepage, pricing, pages } });
 }
 
 /** The plan's weekly loop, after each weekly run: a few new questions, rewrites of pages no assistant cites after three

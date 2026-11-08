@@ -10,7 +10,7 @@ import {
 import { answersAccess, answersAllows, answersEnabled, competitorFromDomain, spendFits, ANSWERS_FREE_ACCOUNT_CAP_MICRO_USD,
   ANSWERS_SITE_MONTHLY_CAP_MICRO_USD } from "../convex/lib/answersAccess.ts";
 import { parseQuestions, questionsRequest } from "../convex/lib/answerQuestions.ts";
-import { answerPageRequest, checkDraftPage, pageSource, parseDraftPage, uniqueSlug } from "../convex/lib/answerPages.ts";
+import { answerPageRequest, checkDraftPage, finalizeDraftPage, pageSource, parseDraftPage, uniqueSlug } from "../convex/lib/answerPages.ts";
 import { defaultContentDir, githubAnswerFile, hostedPageUrl, indexNowRequest, publicPageUrl, urlStructureOf, validHostedDomain } from "../convex/lib/answerPublishing.ts";
 import { answersReadyEmail, answersWeeklyEmail } from "../convex/lib/answersWeekly.ts";
 
@@ -95,8 +95,12 @@ test("questions are kept clean: real questions, never naming the business, once 
   assert.deepEqual(parsed, [{ question: "How do I find web design clients?", intent: "how_to" }, { question: "What does a lead list cost per month?", intent: "problem" }]);
   const request = questionsRequest({ ...business, summary: "Leads", audience: "Agencies", features: [], problems: [], usage: "", pricing: "", market: "US", siteType: "",
     language: "en", competitors }, 30, []);
-  assert.match(request.system, /Never name the business itself \(Dawnlist, dawnlist\.io\)/);
-  assert.match(request.system, /Apollo, Hunter/);
+  assert.match(request.system, /Never name any business, brand or product: not the business itself \(Dawnlist, dawnlist\.io\), not its competitors \(Apollo, Hunter\)/);
+  assert.doesNotMatch(request.system, /alternatives to <competitor>/, "no questions built around a competitor's name");
+  // Cowork, Nov 8 2026: "Boise Family Dental Care vs Mallard Family Dental Center" counted 5 of a rival's 16 mentions.
+  assert.equal(cleanQuestion("Apollo vs Hunter: which is better for agencies?", business, competitors), null, "a generated question never names a competitor");
+  assert.equal(parseQuestions({ questions: [{ question: "What are alternatives to Apollo for agencies?", intent: "comparison" },
+    { question: "Which lead tool fits a two-person agency?", intent: "recommendation" }] }, { ...business, competitors }, [], 10).length, 1);
   assert.equal(answerSlug("How do I find local businesses that need a new website?"), "find-local-businesses-that-need-a-new-website");
   assert.equal(uniqueSlug("Best lead tool?", new Set(["best-lead-tool"])), "best-lead-tool-2");
 });
@@ -134,8 +138,10 @@ test("an answer page: sources numbered from what it cites, facts tied to their s
     "## What should I look for?", "", "Reply rates average 8.4% for cold outreach [1]. Slow websites are a common sign [2].", "",
     "## How Dawnlist handles this", "", "Dawnlist sends a short list every weekday morning.", "", ...Array.from({ length: 60 }, (_, i) => `Practical point ${i} about choosing well.`)].join("\n");
   const draft = parseDraftPage({ title: "How do I find local businesses that need a new website?", metaDescription: "Look for measured signs.", markdown: body,
-    facts: [{ text: "Reply rates average 8.4%", source: "source", sourceNumber: 1 }, { text: "Dawnlist sends a list every weekday", source: "business" }] }, sources)!;
-  assert.match(draft.markdown, /## Sources\n\n1\. \[Guide\]\(https:\/\/a\.example\/guide\)\n2\. \[List\]\(https:\/\/b\.example\/list\)/);
+    facts: [{ text: "Reply rates average 8.4%", source: "source", sourceNumber: 1 }, { text: "Dawnlist sends a list every weekday", source: "business" }], fit: "strong" }, sources)!;
+  assert.equal(draft.fit, "strong");
+  const final = finalizeDraftPage(draft, sources);
+  assert.match(final.page.markdown, /## Sources\n\n1\. \[Guide\]\(https:\/\/a\.example\/guide\)\n2\. \[List\]\(https:\/\/b\.example\/list\)/);
   assert.deepEqual(draft.facts[0], { text: "Reply rates average 8.4%", source: "source", url: "https://a.example/guide" });
   const evidence = "Name: Dawnlist\nDomain: dawnlist.io\nSummary: Daily leads with proof.";
   assert.deepEqual(checkDraftPage(draft, { businessName: "Dawnlist", businessDomain: "dawnlist.io", sources, productEvidence: evidence }).blocking, []);
@@ -144,7 +150,7 @@ test("an answer page: sources numbered from what it cites, facts tied to their s
     .some((issue) => /state a number their source does not contain/.test(issue)), "a number its source doesn't contain blocks");
   const unnamed = { ...draft, markdown: draft.markdown.replace(/Dawnlist/g, "the tool") };
   assert.ok(checkDraftPage(unnamed, { businessName: "Dawnlist", businessDomain: "dawnlist.io", sources, productEvidence: evidence }).blocking.includes("The page never names Dawnlist."));
-  const request = answerPageRequest({ question: "Q?", businessName: "Dawnlist", productEvidence: evidence, market: "US", language: "en", landscape: [], sources, mayName: [] });
+  const request = answerPageRequest({ question: "Q?", businessName: "Dawnlist", productEvidence: evidence, market: "US", language: "en", landscape: [], sources, competitorNames: [] });
   assert.match(request.system, /trust the live pages and leave the conflicting claim out/);
   assert.match(request.system, /Never invent features, prices, customers, results, reviews/);
 });

@@ -20,8 +20,8 @@ export function questionsRequest(business: QuestionBusiness, count: number, exis
     "Rules:",
     "- Each question is one plain sentence a real buyer would type, ending with a question mark. Use the words buyers use, not marketing language.",
     "- Be specific about the need, the kind of product or service, and who it is for (their role, size, trade or situation).",
-    `- Never name the business itself (${business.name}, ${business.domain}).`,
-    `- Mix the intents: recommendation ("What's the best ... for ...?", "Which ... should I use ...?"), how_to (the problems it solves: "How do I ...?"), cost ("How much does ... cost ...?"), comparison (kinds of solution against each other${competitorNames.length ? `, and at most four "alternatives to <competitor>" or "<competitor> vs" questions using only these names: ${competitorNames.join(", ")}` : ""}), problem (the pain in the buyer's words), and local (only if the business serves a place: include the place).`,
+    `- Never name any business, brand or product: not the business itself (${business.name}, ${business.domain})${competitorNames.length ? `, not its competitors (${competitorNames.join(", ")})` : ""}, not anyone else. Ask the way a buyer who doesn't know the options yet would.`,
+    `- Mix the intents: recommendation ("What's the best ... for ...?", "Which ... should I use ...?"), how_to (the problems it solves: "How do I ...?"), cost ("How much does ... cost ...?"), comparison (kinds of solution against each other, never named companies), problem (the pain in the buyer's words), and local (only if the business serves a place: include the place).`,
     "- No definitions, no job or career questions, no questions only an existing customer would ask, no duplicates of the questions already tracked.",
     `- Write in the language of the market (${business.language || "en"}).`,
     toolOnlyInstruction(QUESTION_TOOL),
@@ -47,7 +47,7 @@ export function questionsRequest(business: QuestionBusiness, count: number, exis
 }
 
 /** The reply's questions, cleaned and once each (by their words), none naming the business, none already tracked. */
-export function parseQuestions(raw: unknown, business: Brand & { domain: string }, existing: readonly string[], max: number):
+export function parseQuestions(raw: unknown, business: Brand & { domain: string; competitors?: readonly Brand[] }, existing: readonly string[], max: number):
   Array<{ question: string; intent: string }> {
   const list = (raw as { questions?: unknown } | null)?.questions;
   if (!Array.isArray(list)) return [];
@@ -56,7 +56,7 @@ export function parseQuestions(raw: unknown, business: Brand & { domain: string 
   for (const item of list) {
     const q = item as { question?: unknown; intent?: unknown };
     if (typeof q.question !== "string") continue;
-    const question = cleanQuestion(q.question, business);
+    const question = cleanQuestion(q.question, business, business.competitors ?? []);
     if (!question) continue;
     const key = questionKey(question);
     if (seen.has(key)) continue;

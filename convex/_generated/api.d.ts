@@ -234,6 +234,7 @@ import type * as lib_siteDiagnosisSchema from "../lib/siteDiagnosisSchema.js";
 import type * as lib_siteDomainBinding from "../lib/siteDomainBinding.js";
 import type * as lib_siteHealth from "../lib/siteHealth.js";
 import type * as lib_siteJobActivity from "../lib/siteJobActivity.js";
+import type * as lib_siteLinks from "../lib/siteLinks.js";
 import type * as lib_sitePrefill from "../lib/sitePrefill.js";
 import type * as lib_siteSecurity from "../lib/siteSecurity.js";
 import type * as lib_slotOutcomes from "../lib/slotOutcomes.js";
@@ -517,6 +518,7 @@ declare const fullApi: ApiFromModules<{
   "lib/siteDomainBinding": typeof lib_siteDomainBinding;
   "lib/siteHealth": typeof lib_siteHealth;
   "lib/siteJobActivity": typeof lib_siteJobActivity;
+  "lib/siteLinks": typeof lib_siteLinks;
   "lib/sitePrefill": typeof lib_sitePrefill;
   "lib/siteSecurity": typeof lib_siteSecurity;
   "lib/slotOutcomes": typeof lib_slotOutcomes;

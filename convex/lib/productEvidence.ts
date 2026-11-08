@@ -14,7 +14,7 @@ export function configuredCallToAction(site: { ctaText?: string; ctaUrl?: string
 export function firstPartyProductEvidence(args: {
   productName: string;
   site: { domain: string; siteSummary?: string; keyFeatures?: string[]; pricingInfo?: string; ctaText?: string; ctaUrl?: string };
-  crawled: { homepage?: string; features?: string; pricing?: string };
+  crawled: { homepage?: string; features?: string; pricing?: string; pages?: ReadonlyArray<{ url: string; text: string }> };
 }): string {
   const { site, crawled } = args;
   const cta = configuredCallToAction(site, args.productName);
@@ -30,6 +30,7 @@ export function firstPartyProductEvidence(args: {
     crawled.homepage ? `Crawled homepage:\n${crawled.homepage.slice(0, 4000)}` : "",
     crawled.features ? `Crawled features page:\n${crawled.features.slice(0, 4000)}` : "",
     crawled.pricing ? `Crawled pricing page:\n${crawled.pricing.slice(0, 4000)}` : "",
+    ...(crawled.pages ?? []).map((page) => `Crawled page ${page.url}:\n${page.text.slice(0, 4000)}`),
   ]
     .filter(Boolean)
     .join("\n\n");

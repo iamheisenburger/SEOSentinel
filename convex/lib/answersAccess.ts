@@ -74,3 +74,20 @@ export function competitorFromDomain(domain: string): { name: string; domain: st
   // sentence that starts with the everyday word.
   return { name: label.length <= 5 && ["ai", "io", "so", "co", "app", "dev"].includes(tld) ? `${name}.${tld}` : name, domain: host };
 }
+
+/** A competitor whose name is only its domain's run-together first label ("Boiseriverviewdental" for
+ * boiseriverviewdental.com). Short one-word brands ("Apollo", "Hunter") are names already. */
+export function nameFromDomainOnly(name: string, domain: string): boolean {
+  const label = (hostOf(domain).split(".")[0] ?? "").replace(/[^a-z0-9]/g, "");
+  return label.length >= 10 && !/\s/.test(name.trim()) && name.replace(/[^a-z0-9]/gi, "").toLowerCase() === label;
+}
+
+/** A name found on a competitor's site replaces a run-together one only when it is the same words, spaced
+ * ("Boise Riverview Dental" for boiseriverviewdental). */
+export function properCompetitorName(found: string, domain: string): string | null {
+  const name = found.replace(/\s+/g, " ").trim();
+  const label = (hostOf(domain).split(".")[0] ?? "").replace(/[^a-z0-9]/g, "");
+  const compact = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (name.split(" ").length < 2 || name.length > 60 || !compact) return null;
+  return label.includes(compact) || compact.includes(label) ? name : null;
+}

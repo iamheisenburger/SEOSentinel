@@ -185,7 +185,7 @@ export type AnswerJudgement = {
 /** One answer, judged. "Named" means the answer's words name the business or it cites the business's site; "cited" means
  * one of its sources is on the business's site (or its hosted answers address). */
 export function judgeAnswer(answer: { text: string; sources: readonly AnswerSource[] }, business: Brand & { domain: string; extraHosts?: string[] },
-  competitors: readonly Brand[]): AnswerJudgement {
+  competitors: readonly Brand[], context: { question?: string; namedOrder?: readonly string[] } = {}): AnswerJudgement {
   const ownHosts = [hostOf(business.domain), ...(business.extraHosts ?? []).map(hostOf)].filter(Boolean);
   const isOwn = (url: string) => { const h = hostOf(url); return ownHosts.some((own) => h === own || h.endsWith(`.${own}`)); };
   const sources = answer.sources.map((s) => ({ url: s.url, ...(s.title ? { title: s.title } : {}), domain: hostOf(s.url), own: isOwn(s.url) }));
@@ -193,17 +193,23 @@ export function judgeAnswer(answer: { text: string; sources: readonly AnswerSour
   const businessMatcher = brandMatcher(business);
   const businessAt = businessMatcher ? businessMatcher.test(answer.text) : -1;
   const own = hostOf(business.domain);
+  // A competitor the question itself names ("alternatives to X") is the question echoed back, never a recommendation.
   const rivals = competitors.map((c) => brandMatcher(c, { caseSensitiveSingleWord: true }))
-    .filter((m): m is BrandMatcher => m !== null && (!m.domain || (m.domain !== own && !m.domain.endsWith(`.${own}`))));
+    .filter((m): m is BrandMatcher => m !== null && (!m.domain || (m.domain !== own && !m.domain.endsWith(`.${own}`))))
+    .filter((m) => !context.question || m.test(context.question) < 0);
   const seenRival = new Set<string>();
   const rivalHits = rivals.map((m) => ({ name: m.name, at: m.test(answer.text) })).filter((r) => r.at >= 0)
     .filter((r) => { const k = r.name.toLowerCase(); if (seenRival.has(k)) return false; seenRival.add(k); return true; })
     .sort((a, b) => a.at - b.at);
   const order = [...(businessAt >= 0 ? [{ name: "__business__", at: businessAt }] : []), ...rivalHits].sort((a, b) => a.at - b.at);
-  const position = businessAt >= 0 ? order.findIndex((o) => o.name === "__business__") + 1 : null;
+  // Every business the answer names, in its order (listed by a small model call): the business's place among all of them,
+  // not only among the competitors the owner confirmed. Without that list, the confirmed names are the fallback.
+  const listed = (context.namedOrder ?? []).filter((n) => n.trim().length > 1).slice(0, 30);
+  const listedAt = businessMatcher && listed.length ? listed.findIndex((n) => businessMatcher.test(n) >= 0 || (own !== "" && hostOf(n) === own)) : -1;
+  const position = businessAt < 0 ? null : listed.length ? (listedAt >= 0 ? listedAt + 1 : null) : order.findIndex((o) => o.name === "__business__") + 1;
   const cited = citedPageUrls.length > 0;
   return {
-    named: businessAt >= 0 || cited, cited, position, brandsNamed: order.length,
+    named: businessAt >= 0 || cited, cited, position, brandsNamed: listed.length ? Math.max(listed.length, position ?? 0) : order.length,
     competitorsNamed: rivalHits.map((r) => r.name).slice(0, 12), citedPageUrls: citedPageUrls.slice(0, 10), sources: sources.slice(0, 20),
     excerpt: excerptAround(answer.text, businessAt >= 0 ? businessAt : rivalHits[0]?.at ?? 0),
   };
@@ -264,6 +270,8 @@ export type Opportunity = { score: number; status: "winnable" | "covered" | "mon
 /** How much one answer page could change this question's answers, from the answers themselves (never a guess about
  * rankings): it is "covered" when most answers already name the business, "winnable" when they don't and the sources they
  * use are few, partial or small, "monitoring" when they lean on big sites only. Plain reasons go with it. */
+export const ANSWERS_WINNABLE_SCORE = 80;
+
 export function questionOpportunity(question: string, checks: QuestionChecks): Opportunity {
   const answered = checks.filter((c) => c.status === "answered");
   if (!answered.length) return { score: 40, status: "monitoring", reasons: ["No assistant answered this yet; it is asked again next run."] };
@@ -297,7 +305,9 @@ export function questionOpportunity(question: string, checks: QuestionChecks): O
   }
   if (words.length >= 6) { score += 5; reasons.push("It is a specific question, so fewer pages compete for it."); }
   score = Math.max(0, Math.min(100, score));
-  return { score, status: score >= 55 ? "winnable" : "monitoring", reasons: reasons.slice(0, 4) };
+  // Winnable means an opening, not just "not named yet": 80+ needs the business unnamed and either no precise page yet or
+  // competitors recommended from small sites (Cowork, Nov 8 2026: 28 of 30 "winnable" said nothing).
+  return { score, status: score >= ANSWERS_WINNABLE_SCORE ? "winnable" : "monitoring", reasons: reasons.slice(0, 4) };
 }
 
 // ── Questions and pages ──
@@ -308,12 +318,19 @@ export const ANSWER_QUESTION_INTENTS = ["recommendation", "how_to", "comparison"
 export type AnswerQuestionIntent = typeof ANSWER_QUESTION_INTENTS[number];
 
 /** A question as Pentra keeps it: one sentence, a real question, plain, not naming the business itself. */
-export function cleanQuestion(raw: string, business: Brand & { domain: string }): string | null {
+export function cleanQuestion(raw: string, business: Brand & { domain: string }, competitors: readonly Brand[] = []): string | null {
   const question = raw.replace(/\s+/g, " ").trim().replace(/\s+\?$/, "?");
   if (question.length < 12 || question.length > 200 || !question.endsWith("?")) return null;
   const matcher = brandMatcher(business);
   if (matcher && matcher.test(question) >= 0) return null;
+  if (namesCompetitor(question, competitors)) return null;
   return question[0].toUpperCase() + question.slice(1);
+}
+
+/** Whether a question names one of the confirmed competitors (generated questions never do; such a question's answers
+ * echo the name, and a page for it would be about the competitor). */
+export function namesCompetitor(question: string, competitors: readonly Brand[]): boolean {
+  return competitors.some((c) => { const m = brandMatcher(c, { caseSensitiveSingleWord: true }); return m !== null && m.test(question) >= 0; });
 }
 
 /** A page address from its question: lowercase words joined by hyphens, filler dropped, at most 70 characters. */
@@ -333,3 +350,40 @@ export function answerSlug(question: string): string {
 
 /** The month a spend row counts in ("2026-11"). */
 export const spendMonth = (timestamp: number) => new Date(timestamp).toISOString().slice(0, 7);
+
+// ── Every business an answer names ──
+
+export const NAMED_MODEL = "claude-haiku-5-5";
+export const NAMED_TOOL = "submit_named_businesses";
+export const NAMED_PRICE = { inputUsdPerMillion: 0.1, outputUsdPerMillion: 0.5 };
+export const namedCostMicroUsd = (usage: { input_tokens?: number; output_tokens?: number } | undefined) =>
+  Math.ceil(Math.max(0, usage?.input_tokens ?? 0) * NAMED_PRICE.inputUsdPerMillion + Math.max(0, usage?.output_tokens ?? 0) * NAMED_PRICE.outputUsdPerMillion);
+
+/** The request that lists, in order, every business an answer offers the buyer: the denominator of "3rd of 7". */
+export function namedBusinessesRequest(question: string, answer: string) {
+  return {
+    system: [
+      "You list the businesses an AI assistant's answer offers a buyer as options, in the order the answer presents them.",
+      "Include every company, practice, firm, store, clinic, agency, tool or product the buyer could choose, hire or contact, named as such.",
+      "Exclude: the assistant itself; websites or publications mentioned only as places to read or look (review sites, directories, news sites, Google Maps, Yelp) unless the answer recommends them as the option; generic kinds of business; people, unless the name is the business itself.",
+      "Use each name as written in the answer, once, in order of first appearance. An answer that names no business gets an empty list.",
+    ].join("\n"),
+    userMessage: `Question: ${question}\n\nAnswer:\n${answer.slice(0, 9000)}`,
+    inputSchema: { type: "object" as const, additionalProperties: false, required: ["businesses"],
+      properties: { businesses: { type: "array" as const, items: { type: "string" as const }, maxItems: 30 } } },
+  };
+}
+
+export function parseNamedBusinesses(raw: unknown): string[] | null {
+  const list = raw && typeof raw === "object" ? (raw as { businesses?: unknown }).businesses : null;
+  if (!Array.isArray(list)) return null;
+  const seen = new Set<string>();
+  return list.flatMap((n) => {
+    if (typeof n !== "string") return [];
+    const name = n.replace(/\s+/g, " ").trim().slice(0, 80);
+    const key = name.toLowerCase();
+    if (name.length < 2 || seen.has(key)) return [];
+    seen.add(key);
+    return [name];
+  }).slice(0, 30);
+}
