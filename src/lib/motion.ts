@@ -1,5 +1,5 @@
 /**
- * Motion tokens for JavaScript-driven animation, mirroring the CSS variables in pentra.css. Every animation
+ * Motion tokens for JavaScript-driven animation, mirroring the CSS variables in design-system.css. Every animation
  * does one of three jobs: feedback, continuity or hierarchy. No bounce, no transitions on every property, nothing longer
  * than 560ms except the one-time chart draw, and reduced motion turns travel off.
  */

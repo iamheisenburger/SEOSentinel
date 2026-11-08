@@ -1,7 +1,7 @@
 /* ─── Published article typography (public blog, also served on customers' own domains) ──────────
  * Kept in its own module (imported by this route) rather than at the end of the global stylesheet: a stale
  * Turbopack build-cache entry once dropped late global rules. No typography plugin is installed, so the article
- * body is styled here, on the design tokens in pentra.css: a 680px measure, quiet hierarchy, links underlined in
+ * body is styled here, on the design tokens in design-system.css: a 680px measure, quiet hierarchy, links underlined in
  * Signal Blue. */
 .article-content { font-size: 17px; line-height: 1.75; color: var(--text-2); }
 .article-content > * + * { margin-top: 1.25em; }

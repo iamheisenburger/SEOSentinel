@@ -30,7 +30,7 @@ function load<T>(entry: string): T {
 }
 
 test("tokens match the research and map onto Tailwind classes", () => {
-  const css = read("src/app/pentra.css");
+  const css = read("src/app/design-system.css");
   for (const [token, value] of [["--bg", "#08090a"], ["--surface-1", "#0f1011"], ["--surface-2", "#161718"], ["--surface-3", "#1d1e20"],
     ["--text", "#f7f8f8"], ["--text-2", "#b4b8c0"], ["--text-3", "#8a8f98"], ["--text-4", "#62666d"], ["--you", "#3da5f5"],
     ["--named", "#3fcf8e"], ["--rival", "#e8b24a"], ["--wrong", "#f27a72"], ["--action", "#f7f8f8"]] as const) {
@@ -51,7 +51,7 @@ test("tokens match the research and map onto Tailwind classes", () => {
 test("no transition: all, no indigo or violet, no emoji anywhere in the interface", () => {
   const all = files("src").map((path) => [path, read(path)] as const);
   for (const [path, text] of all) assert.doesNotMatch(text, /transition:\s*all/, path);
-  const rebuilt = all.filter(([path]) => /src\/(components\/(ui|marketing|auth)|app\/(page|pricing|method|start|contact|legal|layout|not-found|error|global-error))/.test(path) || path.endsWith("landing-nav.tsx") || path.endsWith("pentra.css"));
+  const rebuilt = all.filter(([path]) => /src\/(components\/(ui|marketing|auth)|app\/(page|pricing|method|start|contact|legal|layout|not-found|error|global-error))/.test(path) || path.endsWith("landing-nav.tsx") || path.endsWith("design-system.css"));
   for (const [path, text] of rebuilt) {
     assert.doesNotMatch(text, /transition-all/, path);
     assert.doesNotMatch(text, /#6366f1|#8b5cf6|#7c3aed|#5e6ad2|indigo-|violet-|purple-/i, path);
@@ -142,4 +142,14 @@ test("the hero carousel can be paused, stops when someone picks, and never rotat
   assert.match(card, /aria-roledescription="carousel"/);
   assert.match(read("src/lib/motion.ts"), /cycle: 6000,/);
   assert.match(read("src/lib/motion.ts"), /crossfade: 400,/);
+});
+
+test("P385: production builds never reuse Turbopack's restored build cache, and the global stylesheet is design-system.css", () => {
+  // Vercel restores .next/cache; with Next 16.3's default build cache it served the previous design's stylesheet with P384's
+  // new pages (headings at 16px, old tokens). The cache stays off for builds, and every importer uses the current file.
+  const config = read("next.config.ts");
+  assert.match(config, /experimental:\s*\{[^}]*turbopackFileSystemCacheForBuild:\s*false/);
+  assert.match(read("src/app/layout.tsx"), /import "\.\/design-system\.css";/);
+  assert.match(read("src/app/global-error.tsx"), /import "\.\/design-system\.css";/);
+  assert.ok(!files("src").some((path) => /(^|\/)(pentra|globals)\.css$/.test(path)), "the stale-cached names are never used again");
 });

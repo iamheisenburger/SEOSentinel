@@ -5,6 +5,12 @@ const nextConfig: NextConfig = {
     // Force the project root to this directory to avoid picking up parent lockfiles.
     root: __dirname,
   },
+  // P385 (Nov 8 2026): Next 16.3 caches Turbopack's build work in .next/cache by default and Vercel restores that cache,
+  // which served the previous design's stylesheet with P384's new pages (and a stale globals.css on Sep 24). Every
+  // production build starts cold: a slower build is better than a stale page.
+  experimental: {
+    turbopackFileSystemCacheForBuild: false,
+  },
   // P240 (Oct 29 2026): pentra.dev's article page and sitemap read the committed articles when Convex cannot be read.
   outputFileTracingIncludes: {
     "/blog/*": ["./content/blog/**/*"],
