@@ -405,7 +405,7 @@ test("the overview: count sentence with the weekly change, each assistant, the t
 
 test("questions, pages, citations, competitors, settings and billing render from the API's shapes", () => {
   const questions = text(harness("dashboard~paid", "dashboard/questions").html);
-  assert.match(questions, /32 questions tracked/);
+  assert.match(questions, /32 questions tracked · 1 paused/);
   assert.doesNotMatch(questions, /of 40 tracked/);
   assert.match(questions, /Winnable/);
   assert.match(questions, /New this week/);

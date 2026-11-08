@@ -27,7 +27,7 @@ export function AssistantBars({ rows, onOpen, label = "Answers naming you, by as
       {rows.map((row) => {
         const content = (
           <>
-            <span className="col-start-1 row-start-1 flex min-w-0 items-center gap-2 @[22rem]:w-[150px] @[22rem]:shrink-0">
+            <span className="col-start-1 row-start-1 flex min-w-0 items-center gap-2 @[22rem]:w-[176px] @[22rem]:shrink-0">
               {isAssistantId(row.assistant) ? (
                 <AssistantMark assistant={row.assistant} size="sm" showLabel labelClassName="truncate text-[13px] font-medium" />
               ) : (

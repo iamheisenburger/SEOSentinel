@@ -50,6 +50,7 @@ function QuestionsBody({ overview }: { overview: Overview }) {
   const [filter, setFilter] = useState<QuestionFilter>("all");
   const [query, setQuery] = useState("");
   const active = overview.questions.filter((q) => q.status === "active").length;
+  const paused = overview.questions.filter((q) => q.status === "paused").length;
   const latestAt = overview.questions.reduce((max, q) => Math.max(max, q.latest?.at ?? 0), 0);
   const rows = useMemo(() => {
     const text = query.trim().toLowerCase();
@@ -60,7 +61,7 @@ function QuestionsBody({ overview }: { overview: Overview }) {
 
   return (
     <>
-      <ScreenHeader title="Questions" meta={`${plural(active, "question")} tracked${latestAt ? ` · latest run ${shortDate(latestAt)}` : ""}`} />
+      <ScreenHeader title="Questions" meta={`${plural(active, "question")} tracked${paused ? ` · ${paused} paused` : ""}${latestAt ? ` · latest run ${shortDate(latestAt)}` : ""}`} />
       <AddQuestion siteId={overview.site.siteId} full={active >= MAX_ACTIVE} />
       <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
