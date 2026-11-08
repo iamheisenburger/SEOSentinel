@@ -58,7 +58,7 @@ export function billingTerms(interval: BillingInterval): string {
 /** What the plan does after the free snapshot. The pricing block, /pricing and /upgrade list exactly this. */
 export const PLAN_INCLUDES = [
   "Publishes your answer pages, or hosts them on answers.yourdomain.com",
-  "Fast indexing through IndexNow and Google Search Console",
+  "IndexNow for hosted pages; your sitemap to Google through your Search Console",
   "Keeps re-asking the assistants and records every citation in full",
   "Adds new questions your buyers ask, every week",
   "Rewrites pages the assistants don't cite",

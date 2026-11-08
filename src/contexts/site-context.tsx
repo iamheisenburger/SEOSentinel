@@ -9,11 +9,18 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { resolveActiveSite } from "../lib/active-site";
 
+/** Which of the owner's sites run Pentra Answers (api.answers.mySites), for the Answers dashboard. */
+export type AnswersSiteEntry = { siteId: string; domain: string; name: string | null; answers: boolean; confirmed: boolean };
+
 interface SiteContextValue {
   sites: any[] | undefined;
   activeSite: any | undefined;
   activeSiteId: Id<"sites"> | undefined;
   setActiveSiteId: (id: Id<"sites">) => void;
+  /** Undefined while loading (and in contexts that don't load it). */
+  answersSites?: AnswersSiteEntry[];
+  /** "loading" until api.answers.mySites answers; absent where the provider isn't mounted. */
+  answersStatus?: "loading" | "ready";
 }
 
 const SiteContext = createContext<SiteContextValue>({
@@ -31,6 +38,7 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
   const routeSiteId = typeof params.siteId === "string" ? params.siteId : undefined;
   const { userId: clerkUserId } = useAuth();
   const sites = useQuery(api.sites.list, clerkUserId ? { clerkUserId } : {});
+  const answersSites = useQuery(api.answers.mySites, {}) as AnswersSiteEntry[] | undefined;
   const [activeSiteId, setActiveSiteIdState] = useState<Id<"sites"> | undefined>(undefined);
 
   // Deep links must carry their tenant into global actions. Never fall back
@@ -62,7 +70,8 @@ export function SiteProvider({ children }: { children: React.ReactNode }) {
   const activeSite = resolveActiveSite(sites, activeSiteId, routeSiteId);
 
   return (
-    <SiteContext.Provider value={{ sites, activeSite, activeSiteId: activeSite?._id, setActiveSiteId }}>
+    <SiteContext.Provider value={{ sites, activeSite, activeSiteId: activeSite?._id, setActiveSiteId, answersSites,
+      answersStatus: answersSites === undefined ? "loading" : "ready" }}>
       {children}
     </SiteContext.Provider>
   );

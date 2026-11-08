@@ -32,7 +32,7 @@ export type Segment =
 
 export type AnswerBlock = { p: Segment[] } | { ol: Segment[][] } | { ul: Segment[][] };
 
-export type EvidenceOutcome = { kind: "named" | "none" | "wrong" | "cited"; label: string };
+export type EvidenceOutcome = { kind: "named" | "rival" | "none" | "wrong" | "cited"; label: string };
 
 export type EvidenceSource = { domain: string; title: string; url?: string; yours?: boolean };
 
@@ -212,6 +212,8 @@ export function EvidenceCard({
   onExpandedChange,
   showSources = true,
   showFooter = true,
+  onRaw,
+  rawPressed,
   className,
 }: {
   answer: EvidenceAnswer;
@@ -225,6 +227,9 @@ export function EvidenceCard({
   onExpandedChange?: (expanded: boolean) => void;
   showSources?: boolean;
   showFooter?: boolean;
+  /** In the app: "Raw" loads the full stored answer in place (a button, not a link). */
+  onRaw?: () => void;
+  rawPressed?: boolean;
   className?: string;
 }) {
   const [internalExpanded, setInternalExpanded] = useState(false);
@@ -250,15 +255,24 @@ export function EvidenceCard({
         className,
       )}
     >
-      <header className="flex items-center justify-between gap-3">
+      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <AssistantMark assistant={answer.assistant} showLabel size={compact ? "sm" : "md"} labelClassName={compact ? "text-[13px]" : undefined} />
         <div className="flex shrink-0 items-center gap-3">
           <time className="mono-label text-text-3">{answer.askedAt}</time>
-          {answer.rawHref && !sample && (
+          {onRaw && !sample ? (
+            <button
+              type="button"
+              onClick={onRaw}
+              aria-pressed={rawPressed}
+              className="mono-label rounded-[3px] text-text-2 underline decoration-border-strong underline-offset-2 transition-colors duration-[var(--d-instant)] hover:text-text aria-pressed:text-text aria-pressed:decoration-text-3"
+            >
+              Raw
+            </button>
+          ) : answer.rawHref && !sample ? (
             <a href={answer.rawHref} className="mono-label text-text-2 underline decoration-border-strong underline-offset-2 hover:text-text">
               Raw
             </a>
-          )}
+          ) : null}
         </div>
       </header>
 

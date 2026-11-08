@@ -102,8 +102,8 @@ export const HERO_ANSWERS: EvidenceAnswer[] = [
     locale: "US English",
   },
   {
-    id: "google-ai-mode",
-    assistant: "google-ai-mode",
+    id: "google_ai_mode",
+    assistant: "google_ai_mode",
     askedAt: "2026-11-06 09:22 UTC",
     question: QUESTION,
     answer: [
@@ -133,8 +133,8 @@ export const HERO_ANSWERS: EvidenceAnswer[] = [
     locale: "US English",
   },
   {
-    id: "google-ai-overviews",
-    assistant: "google-ai-overviews",
+    id: "google_ai_overview",
+    assistant: "google_ai_overview",
     askedAt: "2026-11-06 09:24 UTC",
     question: QUESTION,
     answer: [
@@ -255,8 +255,8 @@ export const WEEKLY_EMAIL = {
     { assistant: "chatgpt", named: 6 },
     { assistant: "perplexity", named: 8 },
     { assistant: "gemini", named: 2 },
-    { assistant: "google-ai-mode", named: 4 },
-    { assistant: "google-ai-overviews", named: 3 },
+    { assistant: "google_ai_mode", named: 4 },
+    { assistant: "google_ai_overview", named: 3 },
   ],
   perAssistant: 30,
 } as const;

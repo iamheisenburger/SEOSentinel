@@ -45,4 +45,12 @@ export function startHref(domain: string): string {
   return `/start?domain=${encodeURIComponent(domain)}`;
 }
 
+/**
+ * Pentra's own sign-up or sign-in, coming back to /start with the domain kept, so the account is created and the
+ * check continues where it left off (the auth pages accept same-site redirect_url paths only).
+ */
+export function startAuthHref(route: "/sign-up" | "/sign-in", domain: string): string {
+  return `${route}?redirect_url=${encodeURIComponent(startHref(domain))}`;
+}
+
 export const DOMAIN_ERROR = "Enter your website address, like yourbusiness.com.";

@@ -43,7 +43,7 @@ function Glyph({ id, size }: { id: AssistantId; size: number }) {
           />
         </svg>
       );
-    case "google-ai-mode":
+    case "google_ai_mode":
       // A G drawn as a ring with its crossbar.
       return (
         <svg {...common} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -51,7 +51,7 @@ function Glyph({ id, size }: { id: AssistantId; size: number }) {
           <path d="M8.25 8h5.25" />
         </svg>
       );
-    case "google-ai-overviews":
+    case "google_ai_overview":
       // A spark above summary lines.
       return (
         <svg {...common} strokeLinecap="round">

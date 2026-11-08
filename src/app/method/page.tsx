@@ -175,8 +175,8 @@ export default function MethodPage() {
             <Block id="limits" title="What we can't do">
               <p className="text-[18px] leading-[29px] text-text">{HONESTY_LINE}</p>
               <p>
-                What Pentra can do is publish accurate pages that answer your buyers&apos; questions, get them indexed, and
-                keep asking, so that when something changes, you have the answers that show it.
+                What Pentra can do is publish accurate pages that answer your buyers&apos; questions, tell search engines
+                they&apos;re live, and keep asking, so that when something changes, you have the answers that show it.
               </p>
             </Block>
           </article>

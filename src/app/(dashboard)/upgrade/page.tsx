@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { PricingTable, useAuth } from "@clerk/nextjs";
+import { useAuth } from "@clerk/nextjs";
 import {
   CheckoutButton,
   SubscriptionDetailsButton,
@@ -16,11 +16,9 @@ import type {
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SegmentedToggle } from "@/components/ui/segmented-toggle";
-import { PlanIncludes, PlanPrice } from "@/components/marketing/pricing-plan";
+import { CheckoutSoonNote, PentraPlanBlock } from "@/components/billing/pentra-plan-block";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
 import {
-  ANNUAL_MONTHS_FREE,
   PENTRA_PLAN,
   billingTerms,
   isPentraPlan,
@@ -30,8 +28,12 @@ import {
 import { SUPPORT_EMAIL } from "@/lib/product-facts";
 
 // One plan, defined in src/lib/pricing.ts and matched to its Clerk plan by slug or name ("pentra").
-// Checkout starts only from the explicit plan button below (Clerk's CheckoutButton); if the plan can't be read,
-// Clerk's own pricing table is shown instead, so checkout always works.
+// Checkout starts only from the explicit plan button below (Clerk's CheckoutButton). If Clerk has no "pentra" plan yet
+// (or it can't be read), the same plan block shows with a calm note and an email address, never Clerk's own table,
+// which would list the old tiers (coordinator, Nov 7 2026).
+
+/** After checkout: the dashboard says the plan is active and that the free hour's drafts publish within the hour. */
+const AFTER_CHECKOUT = "/dashboard?upgraded=1";
 
 function formatDate(value: Date | null | undefined) {
   if (!value) return null;
@@ -82,11 +84,17 @@ function PlansSkeleton() {
   );
 }
 
-function ClerkPricingFallback() {
+/** No checkout to open yet: the plan as it will be sold, and a person to email meanwhile. */
+function PlanWithoutCheckout({ period, onPeriodChange }: { period: BillingSubscriptionPlanPeriod; onPeriodChange: (period: BillingSubscriptionPlanPeriod) => void }) {
+  const interval: BillingInterval = period === "annual" ? "annual" : "monthly";
   return (
-    <div className="overflow-hidden rounded-card border border-border bg-surface-1 p-6">
-      <PricingTable for="user" newSubscriptionRedirectUrl="/dashboard" />
-    </div>
+    <PentraPlanBlock
+      period={period}
+      onPeriodChange={onPeriodChange}
+      interval={interval}
+      action={null}
+      note={<CheckoutSoonNote email={SUPPORT_EMAIL} />}
+    />
   );
 }
 
@@ -122,7 +130,7 @@ export default function UpgradePage() {
     return (
       <div className="flex flex-col gap-5">
         {header}
-        <ClerkPricingFallback />
+        <PlanWithoutCheckout period={period} onPeriodChange={setPeriod} />
       </div>
     );
   }
@@ -170,7 +178,7 @@ export default function UpgradePage() {
         planId={pentraPlan.id}
         planPeriod={checkoutPeriod}
         for="user"
-        newSubscriptionRedirectUrl="/dashboard"
+        newSubscriptionRedirectUrl={AFTER_CHECKOUT}
         onSubscriptionComplete={refresh}
       >
         <Button variant="primary" size="lg" className="w-full sm:w-auto">
@@ -240,37 +248,14 @@ export default function UpgradePage() {
       </div>
 
       {/* The plan */}
-      <div className="mx-auto mt-4 w-full max-w-[640px]">
-        <div className="flex justify-center">
-          <SegmentedToggle
-            label="Billing period"
-            value={period === "annual" ? "annual" : "month"}
-            onChange={(value) => setPeriod(value)}
-            options={[
-              { value: "month", label: "Monthly" },
-              { value: "annual", label: "Annual", tag: `${ANNUAL_MONTHS_FREE} months free` },
-            ]}
-          />
-        </div>
-
-        <div className="mt-8 rounded-hero border border-border bg-surface-1 p-6 sm:p-8">
-          <h2 className="text-[16px] font-semibold leading-[22px] text-text">{PENTRA_PLAN.name}</h2>
-          <p className="mt-1 text-[14px] leading-[22px] text-text-3">Everything Pentra does, after the free snapshot.</p>
-          <div className="mt-6">
-            <PlanPrice interval={interval} />
-          </div>
-          {period === "annual" && !annualOffered && (
-            <p className="mt-3 text-[13px] leading-5 text-text-3">Annual billing isn&apos;t available yet, so checkout bills monthly.</p>
-          )}
-          <div className="mt-8 flex flex-col gap-3">
-            <div>{action}</div>
-            {!(current.kind === "pentra" && samePeriod && !current.item.canceledAt) && (
-              <p className="text-[13px] leading-5 text-text-3">{billingTerms(interval)}</p>
-            )}
-          </div>
-          <PlanIncludes className="mt-8 border-t border-border pt-7" />
-        </div>
-      </div>
+      <PentraPlanBlock
+        period={period}
+        onPeriodChange={setPeriod}
+        interval={interval}
+        annualUnavailable={!annualOffered}
+        action={action}
+        terms={!(current.kind === "pentra" && samePeriod && !current.item.canceledAt) ? billingTerms(interval) : null}
+      />
 
       <div className="mt-2 text-center text-[13px] leading-5 text-text-3">
         <p>Prices are in US dollars. No usage charges. If you cancel, your plan stays active until the end of the period you&apos;ve paid for.</p>

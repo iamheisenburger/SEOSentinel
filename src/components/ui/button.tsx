@@ -50,7 +50,7 @@ function ButtonContent({
     );
   }
   return (
-    <span className="grid">
+    <span className="grid gap-[inherit]">
       <span
         className={cx("col-start-1 row-start-1 inline-flex items-center justify-center gap-[inherit]", loading && "invisible")}
         aria-hidden={loading || undefined}

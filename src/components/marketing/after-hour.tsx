@@ -10,8 +10,8 @@ const PLAN_WORK = [
     body: "To WordPress, Webflow, Shopify, Ghost, GitHub or any CMS by webhook, or hosted at answers.yourdomain.com.",
   },
   {
-    title: "Gets them indexed fast",
-    body: "IndexNow tells Bing the moment a page is live, and your sitemap goes to Google through Search Console.",
+    title: "Tells search engines they're live",
+    body: "IndexNow tells Bing the moment a hosted page is live; your sitemap goes to Google through your Search Console.",
   },
   {
     title: "Keeps asking the assistants",
@@ -118,7 +118,7 @@ export function AfterHour() {
           <SectionHeading
             id="after-title"
             title="After the first hour, Pentra keeps going."
-            lead="On the plan, Pentra publishes your answer pages, gets them indexed and keeps asking the assistants. Then it tells you what changed."
+            lead="On the plan, Pentra publishes your answer pages, tells search engines they're live and keeps asking the assistants. Then it tells you what changed."
           />
           <Reveal as="ul" className="mt-10 border-t border-border">
             {PLAN_WORK.map((item) => (

@@ -14,7 +14,8 @@ export type PillKind =
   | "draft"
   | "indexing"
   | "failed"
-  | "neutral";
+  | "neutral"
+  | "you";
 
 const kinds: Record<PillKind, { bg: string; dot: string; pulse?: boolean }> = {
   named: { bg: "bg-named-tint", dot: "bg-named" },
@@ -26,6 +27,8 @@ const kinds: Record<PillKind, { bg: string; dot: string; pulse?: boolean }> = {
   indexing: { bg: "bg-you-tint", dot: "bg-you", pulse: true },
   failed: { bg: "bg-wrong-tint", dot: "bg-wrong" },
   neutral: { bg: "bg-surface-3", dot: "bg-text-3" },
+  /** Something open to the business (a question it can win): Signal Blue means "you". */
+  you: { bg: "bg-you-tint", dot: "bg-you" },
 };
 
 export function StatusPill({

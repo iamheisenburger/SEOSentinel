@@ -18,7 +18,7 @@ export const LANDING_FAQ: { id: string; question: string; answer: string }[] = [
   {
     id: "guarantee",
     question: "Can you guarantee I'll be recommended?",
-    answer: `No. ${HONESTY_LINE} What Pentra does is publish accurate pages that answer your buyers' questions, get them indexed, and keep checking.`,
+    answer: `No. ${HONESTY_LINE} What Pentra does is publish accurate pages that answer your buyers' questions, tell search engines they're live, and keep checking.`,
   },
   {
     id: "access",

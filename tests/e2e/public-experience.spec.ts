@@ -49,8 +49,9 @@ test("a domain from the hero opens step one of the free snapshot", async ({ page
   await page.locator("#hero-domain").fill("https://www.Example.com/about");
   await page.locator("#check").getByRole("button", { name: /Check my site/ }).click();
   await expect(page).toHaveURL(/\/start\?domain=example\.com$/);
-  await expect(page.getByRole("heading", { name: "Check example.com" })).toBeVisible();
-  await expect(page.getByRole("link", { name: /Create free account/ })).toHaveAttribute("href", "/sign-up?redirect_url=%2Fdashboard");
+  await expect(page.getByRole("heading", { name: "Create your account to check example.com" })).toBeVisible();
+  // The domain survives sign-up: Pentra's own /sign-up comes back to /start, which creates the site and reads it.
+  await expect(page.getByRole("link", { name: /Create free account/ })).toHaveAttribute("href", "/sign-up?redirect_url=%2Fstart%3Fdomain%3Dexample.com");
 });
 
 test("pricing shows one plan with a monthly and annual price", async ({ page }) => {
