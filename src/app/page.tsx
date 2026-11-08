@@ -50,7 +50,7 @@ const organizationSchema = {
     "Wrong facts about your business, with the source each assistant used",
     "Answer pages written from your site's facts, with sources",
     "Publishing to WordPress, Webflow, Shopify, Ghost, GitHub, a signed webhook, or a hosted subdomain",
-    "Indexing through IndexNow and Google Search Console",
+    "IndexNow for hosted pages, and sitemaps sent to Google through the customer's own Search Console",
     "Weekly email with what changed",
   ],
 };
