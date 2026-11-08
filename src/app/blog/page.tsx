@@ -76,7 +76,7 @@ export default async function BlogIndex() {
                 <Link href={`/blog/${article.slug}`} className="group grid grid-cols-1 gap-2 py-6 md:grid-cols-[9rem_1fr_auto] md:items-baseline md:gap-8 md:py-7">
                   <span className="mono-label flex items-center gap-3 text-text-3">
                     {format(new Date(article.createdAt), "MMM d, yyyy")}
-                    {article.readingTime && <span className="flex items-center gap-1 md:hidden"><Clock className="h-3 w-3" strokeWidth={1.75} />{article.readingTime} min</span>}
+                    {article.readingTime && <span className="flex items-center gap-1 md:hidden"><Clock className="h-3 w-3" strokeWidth={1.5} />{article.readingTime} min</span>}
                   </span>
                   <span className="min-w-0">
                     <span className="block text-[18px] font-medium leading-[26px] tracking-[-0.01em] text-text md:text-[20px] md:leading-7">
@@ -90,7 +90,7 @@ export default async function BlogIndex() {
                   </span>
                   <span className="hidden items-center gap-3 text-[13px] text-text-3 md:flex">
                     {article.readingTime && <span className="tabular-nums">{article.readingTime} min read</span>}
-                    <ArrowRight className="h-4 w-4 text-text-4 transition-[translate,color] duration-[var(--d-state)] group-hover:translate-x-0.5 group-hover:text-text" strokeWidth={1.75} />
+                    <ArrowRight className="h-4 w-4 text-text-4 transition-[translate,color] duration-[var(--d-state)] group-hover:translate-x-0.5 group-hover:text-text" strokeWidth={1.5} />
                   </span>
                 </Link>
               </li>

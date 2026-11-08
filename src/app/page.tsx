@@ -78,7 +78,7 @@ async function LatestGuides() {
           <h2 id="guides-title" className="type-h3 text-text">From the Pentra blog</h2>
           <Link href="/blog" className="inline-flex items-center gap-1.5 text-[14px] font-medium text-text-2 transition-colors hover:text-text">
             All guides
-            <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
+            <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
           </Link>
         </div>
         <ul className="mt-8 grid grid-cols-1 gap-x-12 border-t border-border md:grid-cols-2">
@@ -121,7 +121,7 @@ export default function LandingPage() {
           <p className="mt-8 text-center text-[14px] text-text-3">
             <Link href="/pricing" className="inline-flex items-center gap-1.5 font-medium text-text-2 transition-colors hover:text-text">
               Pricing details and billing questions
-              <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.75} />
+              <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
             </Link>
           </p>
         </Section>

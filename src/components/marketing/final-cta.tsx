@@ -13,7 +13,7 @@ export function FinalCta({ title = "See what AI says about you." }: { title?: st
           Enter your domain. The snapshot is free, and the first answers arrive in minutes.
         </p>
         <div data-reveal className="mt-9 flex w-full justify-center">
-          <DomainInput id="final-domain" />
+          <DomainInput id="final-domain" align="center" />
         </div>
       </Reveal>
     </section>

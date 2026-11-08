@@ -62,7 +62,7 @@ export default async function StartPage({ searchParams }: { searchParams: Promis
                 <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
                   <Link href={signUpHref} className={buttonStyles({ size: "lg", className: "w-full sm:w-auto" })}>
                     Create free account
-                    <ArrowRight aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+                    <ArrowRight aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
                   </Link>
                   <p className="text-[14px] leading-[22px] text-text-3">
                     Already have one?{" "}
@@ -76,7 +76,7 @@ export default async function StartPage({ searchParams }: { searchParams: Promis
                 <details className="group mt-12 border-t border-border pt-6">
                   <summary className="flex w-fit cursor-pointer list-none items-center gap-2 rounded-control text-[14px] font-medium text-text-2 transition-colors hover:text-text [&::-webkit-details-marker]:hidden">
                     Not your site? Use a different domain
-                    <ChevronDown aria-hidden="true" className="h-4 w-4 text-text-3 transition-[rotate] duration-[var(--d-state)] ease-in-out group-open:rotate-180" strokeWidth={1.75} />
+                    <ChevronDown aria-hidden="true" className="h-4 w-4 text-text-3 transition-[rotate] duration-[var(--d-state)] ease-in-out group-open:rotate-180" strokeWidth={1.5} />
                   </summary>
                   <div className="mt-5">
                     <DomainInput id="start-domain-change" defaultValue={domain} note={null} buttonLabel="Check this site" />

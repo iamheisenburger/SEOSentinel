@@ -359,7 +359,7 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
           href="/blog"
           className="group mb-10 inline-flex items-center gap-1.5 text-[13px] font-medium text-text-3 transition-colors hover:text-text"
         >
-          <ArrowLeft className="h-3.5 w-3.5 transition-[translate] duration-[var(--d-state)] group-hover:-translate-x-0.5" strokeWidth={1.75} />
+          <ArrowLeft className="h-3.5 w-3.5 transition-[translate] duration-[var(--d-state)] group-hover:-translate-x-0.5" strokeWidth={1.5} />
           All guides
         </Link>
 
@@ -381,12 +381,12 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
           {/* P248 (Oct 30 2026): no post named who published it (Cowork's launch audit); the schema already did. */}
           <span className="text-text-2">By {publisherName}</span>
           <span className="flex items-center gap-1.5">
-            <Calendar className="h-3.5 w-3.5" strokeWidth={1.75} />
+            <Calendar className="h-3.5 w-3.5" strokeWidth={1.5} />
             <span className="mono-label">{format(new Date(article.createdAt), "MMMM d, yyyy")}</span>
           </span>
           {article.readingTime && (
             <span className="flex items-center gap-1.5">
-              <Clock className="h-3.5 w-3.5" strokeWidth={1.75} />
+              <Clock className="h-3.5 w-3.5" strokeWidth={1.5} />
               {article.readingTime} min read
             </span>
           )}
@@ -394,7 +394,7 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
               says what Autopilot's publication check establishes: each statistic appears in the source it cites. */}
           {article.sources && article.sources.length > 0 && (
             <span className="flex items-center gap-1.5 text-text-2">
-              <CheckCircle2 className="h-3.5 w-3.5 text-text-3" strokeWidth={1.75} />
+              <CheckCircle2 className="h-3.5 w-3.5 text-text-3" strokeWidth={1.5} />
               {article.sources.length} {article.sources.length === 1 ? "source" : "sources"} checked
             </span>
           )}
@@ -443,7 +443,7 @@ export default async function BlogPost({ params }: BlogPostPageProps) {
                     className="group flex items-center justify-between gap-4 py-3 text-[15px] leading-6 text-text-2 transition-colors hover:text-text"
                   >
                     {item.title}
-                    <ArrowRight className="h-3.5 w-3.5 shrink-0 text-text-4 transition-[translate,color] duration-[var(--d-state)] group-hover:translate-x-0.5 group-hover:text-text" strokeWidth={1.75} />
+                    <ArrowRight className="h-3.5 w-3.5 shrink-0 text-text-4 transition-[translate,color] duration-[var(--d-state)] group-hover:translate-x-0.5 group-hover:text-text" strokeWidth={1.5} />
                   </Link>
                 </li>
               ))}

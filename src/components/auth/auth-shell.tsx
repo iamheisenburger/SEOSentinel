@@ -31,7 +31,7 @@ export function AuthShell({
           href="/"
           className="group inline-flex items-center gap-1.5 rounded-control text-[13px] font-medium text-text-3 transition-colors duration-[var(--d-instant)] hover:text-text"
         >
-          <ArrowLeft aria-hidden="true" className="h-3.5 w-3.5 transition-[translate] duration-[var(--d-state)] group-hover:-translate-x-0.5" strokeWidth={1.75} />
+          <ArrowLeft aria-hidden="true" className="h-3.5 w-3.5 transition-[translate] duration-[var(--d-state)] group-hover:-translate-x-0.5" strokeWidth={1.5} />
           Product home
         </Link>
       </header>

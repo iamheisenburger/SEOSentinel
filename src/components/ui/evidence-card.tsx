@@ -333,7 +333,7 @@ export function EvidenceCard({
           </span>
           <Link href="/method" className="inline-flex items-center gap-1 text-text-3 transition-colors hover:text-text">
             How we measure
-            <ArrowRight aria-hidden="true" className="h-3 w-3" strokeWidth={1.75} />
+            <ArrowRight aria-hidden="true" className="h-3 w-3" strokeWidth={1.5} />
           </Link>
         </footer>
       )}
@@ -431,7 +431,8 @@ export function EvidenceCarousel({
       aria-roledescription="carousel"
       aria-label="Example AI answers"
     >
-      <div className="mb-3 flex items-center justify-between gap-3">
+      {/* Fixed height, so the row doesn't move when the pause control goes away. */}
+      <div className="mb-3 flex h-7 items-center justify-between gap-3">
         <p className="mono-caps text-text-3">{label}</p>
         {!reducedMotion && !userPicked && (
           <button
@@ -440,13 +441,13 @@ export function EvidenceCarousel({
             aria-label={userPaused ? "Play the examples" : "Pause the examples"}
             className="inline-flex h-7 items-center gap-1.5 rounded-control px-2 text-[12px] font-medium text-text-3 transition-colors duration-[var(--d-instant)] hover:bg-surface-2 hover:text-text"
           >
-            {userPaused ? <Play aria-hidden="true" className="h-3 w-3" strokeWidth={2} /> : <Pause aria-hidden="true" className="h-3 w-3" strokeWidth={2} />}
+            {userPaused ? <Play aria-hidden="true" className="h-3 w-3" strokeWidth={1.5} /> : <Pause aria-hidden="true" className="h-3 w-3" strokeWidth={1.5} />}
             <span>{userPaused ? "Play" : "Pause"}</span>
           </button>
         )}
       </div>
 
-      <div role="tablist" aria-label="Assistant" onKeyDown={onTabKeyDown} className="mb-3 flex gap-1">
+      <div role="tablist" aria-label="Assistant" onKeyDown={onTabKeyDown} className="scrollbar-none mb-3 flex gap-1 overflow-x-auto">
         {answers.map((answer, index) => {
           const selected = index === active;
           const short = ASSISTANTS.find((assistant) => assistant.id === answer.assistant)?.short ?? answer.assistant;
@@ -465,7 +466,7 @@ export function EvidenceCarousel({
               tabIndex={selected ? 0 : -1}
               onClick={() => pick(index)}
               className={cx(
-                "relative inline-flex h-9 min-w-9 flex-1 items-center justify-center gap-2 overflow-hidden rounded-control border px-2 text-[13px] font-medium tracking-[0.01em] sm:flex-none sm:px-2.5",
+                "relative inline-flex h-9 min-w-9 flex-1 shrink-0 items-center justify-center gap-2 overflow-hidden rounded-control border px-2 text-[13px] font-medium tracking-[0.01em] sm:flex-none sm:px-2.5 lg:gap-1.5 lg:px-2 xl:gap-2 xl:px-2.5",
                 "transition-[background-color,border-color,color] duration-[var(--d-state)] ease-in-out",
                 selected ? "border-border-strong bg-surface-2 text-text" : "border-transparent text-text-3 hover:bg-surface-1 hover:text-text-2",
               )}

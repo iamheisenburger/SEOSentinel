@@ -103,23 +103,40 @@ export function LandingNav() {
 
   const currentKey = onLanding ? activeSection : pathname === "/pricing" ? "pricing" : null;
 
-  // The underline is placed directly on the element; it slides (200ms) after its first placement.
+  // The underline is placed directly on the element; it slides (200ms) after its first placement and follows
+  // the links if the layout changes size.
   useLayoutEffect(() => {
     const underline = underlineRef.current;
     const container = linksRef.current;
     if (!underline || !container) return;
-    const link = currentKey ? container.querySelector<HTMLElement>(`[data-section="${currentKey}"]`) : null;
-    if (!link) {
-      underline.style.opacity = "0";
-      return;
-    }
-    const wasHidden = underline.style.opacity !== "1";
-    if (wasHidden) underline.removeAttribute("data-ready");
-    underline.style.width = `${link.offsetWidth - 24}px`;
-    underline.style.translate = `${link.offsetLeft + 12}px 0`;
-    underline.style.opacity = "1";
-    if (wasHidden) requestAnimationFrame(() => underline.setAttribute("data-ready", ""));
+    const place = () => {
+      const link = currentKey ? container.querySelector<HTMLElement>(`[data-section="${currentKey}"]`) : null;
+      if (!link) {
+        underline.style.opacity = "0";
+        return;
+      }
+      const wasHidden = underline.style.opacity !== "1";
+      if (wasHidden) underline.removeAttribute("data-ready");
+      underline.style.width = `${link.offsetWidth - 24}px`;
+      underline.style.translate = `${link.offsetLeft + 12}px 0`;
+      underline.style.opacity = "1";
+      if (wasHidden) requestAnimationFrame(() => underline.setAttribute("data-ready", ""));
+    };
+    place();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(place);
+    observer.observe(container);
+    return () => observer.disconnect();
   }, [currentKey]);
+
+  // The phone menu has no place on wide screens: close it (and release the page) if the window grows.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const media = window.matchMedia("(min-width: 768px)");
+    const onChange = () => media.matches && setMenuOpen(false);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, [menuOpen]);
 
   const linkClass = (key: string) =>
     cx(
@@ -128,7 +145,7 @@ export function LandingNav() {
     );
 
   const checkCta = onLanding ? (
-    <a href="#check" onClick={focusHeroInput} className={buttonStyles({ size: "sm" })}>
+    <a href={`#${HERO_FORM_ANCHOR}`} onClick={focusHeroInput} className={buttonStyles({ size: "sm" })}>
       Check my site
     </a>
   ) : (
@@ -270,7 +287,7 @@ export function LandingNav() {
                 <>
                   {onLanding ? (
                     <a
-                      href="#check"
+                      href={`#${HERO_FORM_ANCHOR}`}
                       onClick={(event) => {
                         event.preventDefault();
                         setMenuOpen(false);

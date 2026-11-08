@@ -12,7 +12,8 @@ export const DOMAIN_NOTE = "Free. No card. Results in about an hour; first answe
 /**
  * The hero field: one input, one white button. A mono "https://" sits in front so people know an address
  * goes here; a pasted URL loses its protocol and path at once; the address is checked on submit only, then
- * the visitor goes to /start?domain=… . Under 640px the button stacks under the field at full width.
+ * the visitor goes to /start?domain=… . When the field itself is narrower than 432px (phones, the 1024px hero
+ * column) the button stacks under it at full width; the layout follows the field's width, not the viewport.
  */
 export function DomainInput({
   id,
@@ -20,6 +21,7 @@ export function DomainInput({
   buttonLabel = "Check my site",
   note = DOMAIN_NOTE,
   autoFocus = false,
+  align = "left",
   className,
   onDomain,
 }: {
@@ -29,6 +31,8 @@ export function DomainInput({
   /** Pass null to hide the note. */
   note?: ReactNode | null;
   autoFocus?: boolean;
+  /** Where the note and the error sit under the field. */
+  align?: "left" | "center";
   className?: string;
   /** Replaces the default navigation to /start (used by tests and embedded flows). */
   onDomain?: (domain: string) => void;
@@ -81,25 +85,28 @@ export function DomainInput({
   const describedBy = [error ? errorId : null, note ? noteId : null].filter(Boolean).join(" ") || undefined;
 
   return (
-    <form noValidate onSubmit={onSubmit} aria-label="Check your website" className={cx("w-full max-w-[520px]", className)}>
+    <form noValidate onSubmit={onSubmit} aria-label="Check your website" className={cx("@container w-full max-w-[520px]", className)}>
       <label htmlFor={inputId} className="sr-only">
         Your website address
       </label>
       <div
         className={cx(
-          "flex flex-col gap-2 sm:h-14 sm:flex-row sm:items-center sm:gap-0 sm:rounded-[12px] sm:border sm:bg-surface-1 sm:p-1.5 sm:pl-4",
-          "sm:transition-[border-color,box-shadow] sm:duration-[var(--d-instant)] sm:ease-out",
+          "flex flex-col gap-2 @min-[27rem]:h-14 @min-[27rem]:flex-row @min-[27rem]:items-center @min-[27rem]:gap-0 @min-[27rem]:rounded-[12px] @min-[27rem]:border @min-[27rem]:bg-surface-1 @min-[27rem]:p-1.5 @min-[27rem]:pl-4",
+          "@min-[27rem]:transition-[border-color,box-shadow] @min-[27rem]:duration-[var(--d-instant)] @min-[27rem]:ease-out",
           error
-            ? "sm:border-wrong sm:focus-within:shadow-[0_0_0_3px_var(--wrong-tint)]"
-            : "sm:border-border-strong sm:hover:border-[rgba(255,255,255,0.2)] sm:focus-within:border-[var(--border-focus)] sm:focus-within:shadow-[0_0_0_3px_var(--you-tint)]",
+            ? "@min-[27rem]:border-wrong @min-[27rem]:focus-within:shadow-[0_0_0_3px_var(--wrong-tint)]"
+            : "@min-[27rem]:border-border-strong @min-[27rem]:hover:border-[rgba(255,255,255,0.2)] @min-[27rem]:focus-within:border-[var(--border-focus)] @min-[27rem]:focus-within:shadow-[0_0_0_3px_var(--you-tint)]",
         )}
       >
+        {/* Stacked (narrow) layout: this wrapper is the field. Row layout: the row above is the field. */}
         <div
           className={cx(
-            "flex h-14 min-w-0 items-center rounded-[12px] border bg-surface-1 pl-4 transition-[border-color,box-shadow] duration-[var(--d-instant)] ease-out sm:h-full sm:flex-1 sm:rounded-none sm:border-0 sm:bg-transparent sm:pl-0 sm:shadow-none",
+            "flex min-w-0 items-center @min-[27rem]:h-full @min-[27rem]:flex-1",
+            "@max-[27rem]:h-14 @max-[27rem]:rounded-[12px] @max-[27rem]:border @max-[27rem]:bg-surface-1 @max-[27rem]:pl-4",
+            "@max-[27rem]:transition-[border-color,box-shadow] @max-[27rem]:duration-[var(--d-instant)] @max-[27rem]:ease-out",
             error
-              ? "border-wrong focus-within:shadow-[0_0_0_3px_var(--wrong-tint)]"
-              : "border-border-strong focus-within:border-[var(--border-focus)] focus-within:shadow-[0_0_0_3px_var(--you-tint)]",
+              ? "@max-[27rem]:border-wrong @max-[27rem]:focus-within:shadow-[0_0_0_3px_var(--wrong-tint)]"
+              : "@max-[27rem]:border-border-strong @max-[27rem]:focus-within:border-[var(--border-focus)] @max-[27rem]:focus-within:shadow-[0_0_0_3px_var(--you-tint)]",
           )}
         >
           <span aria-hidden="true" className="select-none pr-0.5 font-mono text-[14px] tracking-[0.02em] text-text-4">
@@ -132,7 +139,7 @@ export function DomainInput({
           disabled={pending}
           aria-busy={pending || undefined}
           className={cx(
-            "inline-flex h-12 shrink-0 items-center justify-center rounded-control bg-action px-5 text-[15px] font-semibold text-on-action sm:h-11 sm:text-[14px]",
+            "inline-flex h-12 shrink-0 items-center justify-center rounded-control bg-action px-5 text-[15px] font-semibold text-on-action @min-[27rem]:h-11 @min-[27rem]:text-[14px]",
             "transition-[background-color,translate,scale] duration-[var(--d-instant)] ease-out hover:bg-action-hover active:scale-[0.98] active:bg-action-active active:duration-[90ms]",
             "disabled:cursor-progress",
           )}
@@ -141,7 +148,7 @@ export function DomainInput({
           <span className="grid">
             <span className={cx("col-start-1 row-start-1 inline-flex items-center justify-center gap-2", pending && "invisible")}>
               {buttonLabel}
-              <ArrowRight aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+              <ArrowRight aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
             </span>
             <span
               className={cx("col-start-1 row-start-1 inline-flex items-center justify-center gap-2", !pending && "invisible")}
@@ -155,7 +162,7 @@ export function DomainInput({
       </div>
       <div className="mt-3 min-h-5 space-y-1.5">
         {error && (
-          <p id={errorId} role="alert" className="flex items-center gap-1.5 text-[13px] leading-5 text-wrong">
+          <p id={errorId} role="alert" className={cx("flex items-center gap-1.5 text-[13px] leading-5 text-wrong", align === "center" && "justify-center")}>
             <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" className="h-3.5 w-3.5 shrink-0">
               <circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.5" />
               <path d="M8 4.75v3.75M8 10.9v.1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -164,7 +171,7 @@ export function DomainInput({
           </p>
         )}
         {note && (
-          <p id={noteId} className="text-[13px] leading-5 text-text-3">
+          <p id={noteId} className={cx("text-[13px] leading-5 text-text-3 [text-wrap:pretty]", align === "center" && "text-center")}>
             {note}
           </p>
         )}

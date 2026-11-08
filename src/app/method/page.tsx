@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { FinalCta } from "@/components/marketing/final-cta";
+import { OnThisPage } from "@/components/marketing/method-toc";
 import { HERO_ANSWERS } from "@/components/marketing/samples";
 import { AssistantMark } from "@/components/ui/assistant-mark";
 import { EvidenceCard } from "@/components/ui/evidence-card";
@@ -80,20 +81,9 @@ export default function MethodPage() {
 
       <div className="container-page pb-24 lg:pb-32">
         <div className="grid grid-cols-1 gap-12 border-t border-border pt-12 lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-16 lg:pt-14">
-          <nav aria-label="On this page" className="hidden lg:block">
-            <div className="sticky top-[100px]">
-              <p className="text-[13px] font-medium text-text-3">On this page</p>
-              <ol className="mt-4 space-y-2.5">
-                {SECTIONS.map((section) => (
-                  <li key={section.id}>
-                    <a href={`#${section.id}`} className="text-[14px] leading-5 text-text-2 transition-colors hover:text-text">
-                      {section.title}
-                    </a>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          </nav>
+          <div className="hidden lg:block">
+            <OnThisPage sections={SECTIONS} />
+          </div>
 
           <article className="max-w-[680px]">
             <Block id="assistants" title="The five assistants">

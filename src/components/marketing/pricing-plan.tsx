@@ -62,7 +62,7 @@ export function PlanPrice({ interval }: { interval: BillingInterval }) {
 /** Everything the plan does, in two columns with quiet check marks. */
 export function PlanIncludes({ className }: { className?: string }) {
   return (
-    <ul className={cx("grid gap-x-8 gap-y-3 sm:grid-cols-2", className)}>
+    <ul className={cx("grid grid-cols-1 gap-x-8 gap-y-3 sm:grid-cols-2", className)}>
       {PLAN_INCLUDES.map((item) => (
         <li key={item} className="flex gap-2.5 text-[14px] leading-[22px] text-text-2">
           <Check aria-hidden="true" className="mt-[3px] h-4 w-4 shrink-0 text-text-3" strokeWidth={1.5} />
@@ -73,28 +73,47 @@ export function PlanIncludes({ className }: { className?: string }) {
   );
 }
 
-/** Signed-in visitors: subscribers see their plan; everyone else can go straight to the upgrade screen. */
-function SignedInActions() {
+function StartSnapshot({ onLanding }: { onLanding: boolean }) {
+  const className = buttonStyles({ size: "lg", className: "w-full sm:w-auto" });
+  return onLanding ? (
+    <a href={`#${HERO_FORM_ANCHOR}`} onClick={focusHeroInput} className={className}>
+      Start with a free snapshot
+    </a>
+  ) : (
+    <Link href="/start" className={className}>
+      Start with a free snapshot
+    </Link>
+  );
+}
+
+const secondaryLink =
+  "text-[14px] font-medium text-text-2 underline decoration-border-strong underline-offset-4 transition-colors hover:text-text";
+
+/** Signed-in visitors: subscribers see their plan and billing; everyone else can also go straight to upgrading. */
+function SignedInActions({ onLanding }: { onLanding: boolean }) {
   const subscription = useSubscription({ for: "user" });
   const subscribed = subscription.data?.subscriptionItems.some(
     (item) => (item.status === "active" || item.status === "past_due") && isPentraPlan(item.plan),
   );
   if (subscribed) {
     return (
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+      <>
         <button type="button" disabled className={buttonStyles({ variant: "secondary", size: "lg", className: "w-full sm:w-auto" })}>
           Current plan
         </button>
-        <Link href="/upgrade" className="text-[14px] font-medium text-text-2 underline decoration-border-strong underline-offset-4 transition-colors hover:text-text">
+        <Link href="/upgrade" className={secondaryLink}>
           Manage billing
         </Link>
-      </div>
+      </>
     );
   }
   return (
-    <Link href="/upgrade" className="text-[14px] font-medium text-text-2 underline decoration-border-strong underline-offset-4 transition-colors hover:text-text">
-      Already have a snapshot? Upgrade
-    </Link>
+    <>
+      <StartSnapshot onLanding={onLanding} />
+      <Link href="/upgrade" className={secondaryLink}>
+        Already have a snapshot? Upgrade
+      </Link>
+    </>
   );
 }
 
@@ -129,16 +148,7 @@ export function PricingPlan({ className }: { className?: string }) {
         </div>
 
         <div className="mt-8 flex flex-col items-stretch gap-4 sm:flex-row sm:items-center sm:gap-6">
-          {onLanding ? (
-            <a href={`#${HERO_FORM_ANCHOR}`} onClick={focusHeroInput} className={buttonStyles({ size: "lg", className: "w-full sm:w-auto" })}>
-              Start with a free snapshot
-            </a>
-          ) : (
-            <Link href="/start" className={buttonStyles({ size: "lg", className: "w-full sm:w-auto" })}>
-              Start with a free snapshot
-            </Link>
-          )}
-          {isSignedIn && <SignedInActions />}
+          {isSignedIn ? <SignedInActions onLanding={onLanding} /> : <StartSnapshot onLanding={onLanding} />}
         </div>
 
         <PlanIncludes className="mt-8 border-t border-border pt-7" />

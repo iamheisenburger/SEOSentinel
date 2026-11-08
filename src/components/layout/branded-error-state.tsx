@@ -24,7 +24,7 @@ export function BrandedErrorState({
         onRetry ? "border border-border-strong text-text hover:bg-surface-2" : "bg-action text-on-action hover:bg-action-hover"
       }`}
     >
-      <ArrowLeft aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+      <ArrowLeft aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
       Back to Pentra
     </Link>
   );
@@ -46,7 +46,7 @@ export function BrandedErrorState({
                 onClick={onRetry}
                 className="inline-flex h-11 items-center justify-center gap-2 rounded-control bg-action px-5 text-[15px] font-semibold text-on-action transition-[background-color,scale] duration-[var(--d-instant)] ease-out hover:bg-action-hover active:scale-[0.98]"
               >
-                <RefreshCw aria-hidden="true" className="h-4 w-4" strokeWidth={1.75} />
+                <RefreshCw aria-hidden="true" className="h-4 w-4" strokeWidth={1.5} />
                 Try again
               </button>
             )}

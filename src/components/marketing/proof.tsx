@@ -44,7 +44,7 @@ function CountVisual({ onOpen }: { onOpen: () => void }) {
       </span>
       <span className="mt-5 flex items-center justify-between border-t border-border pt-3.5 text-[13px] font-medium text-text-2 transition-colors group-hover:text-text">
         Open the {named} answers
-        <ArrowRight aria-hidden="true" className="h-3.5 w-3.5 transition-[translate] duration-[var(--d-state)] group-hover:translate-x-0.5" strokeWidth={1.75} />
+        <ArrowRight aria-hidden="true" className="h-3.5 w-3.5 transition-[translate] duration-[var(--d-state)] group-hover:translate-x-0.5" strokeWidth={1.5} />
       </span>
     </button>
   );
