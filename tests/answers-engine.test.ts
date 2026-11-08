@@ -164,6 +164,8 @@ test("publishing: the blog's own layout when detected, Pentra's default otherwis
   assert.equal(validHostedDomain("answers.dawnlist.io", "dawnlist.io"), "answers.dawnlist.io");
   assert.equal(validHostedDomain("dawnlist.io", "dawnlist.io"), null);
   assert.equal(validHostedDomain("answers.evil.com", "dawnlist.io"), null);
+  assert.equal(validHostedDomain("help.dawnlist.io", "dawnlist.io"), null, "always answers.<domain>, so the site routes it without a lookup");
+  assert.equal(validHostedDomain("https://Answers.dawnlist.io/", "www.dawnlist.io"), "answers.dawnlist.io");
   assert.equal(hostedPageUrl("answers.dawnlist.io", "x"), "https://answers.dawnlist.io/x");
   assert.deepEqual(indexNowRequest("https://answers.dawnlist.io/x", "k", "https://answers.dawnlist.io/pentra-indexnow.txt", ["https://answers.dawnlist.io/x"]).body,
     { host: "answers.dawnlist.io", key: "k", keyLocation: "https://answers.dawnlist.io/pentra-indexnow.txt", urlList: ["https://answers.dawnlist.io/x"] });

@@ -66,15 +66,16 @@ export function githubAnswerFile(page: AnswerPageForPublish, site: { domain: str
   return { path: `${defaultContentDir(structure)}/${page.slug}.md`, content: `${frontmatter}\n\n${page.markdown.trim()}\n`, url };
 }
 
-/** answers.yourdomain.com: a subdomain of the site's own domain, nothing else. */
+/** The hosted answers address is always answers.<the site's own domain>: the site recognizes hosted traffic by its first
+ * label, without a database read on every request. */
+export const HOSTED_ANSWERS_LABEL = "answers";
 export function validHostedDomain(candidate: string, siteDomain: string): string | null {
   const host = hostOf(candidate);
   const root = hostOf(siteDomain);
-  if (!host || !root || host === root) return null;
-  if (!host.endsWith(`.${root}`)) return null;
-  const label = host.slice(0, -(root.length + 1));
-  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label) ? host : null;
+  if (!host || !root || host !== `${HOSTED_ANSWERS_LABEL}.${root}`) return null;
+  return host;
 }
+export const isHostedAnswersHost = (host: string) => hostOf(host).startsWith(`${HOSTED_ANSWERS_LABEL}.`) && hostOf(host).split(".").length >= 3;
 export const hostedPageUrl = (hostedDomain: string, slug: string) => `https://${hostOf(hostedDomain)}/${slug}`;
 
 /** IndexNow (Bing and the engines that share it): the request for one site's new or changed addresses. */
