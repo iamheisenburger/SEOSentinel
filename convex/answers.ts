@@ -66,16 +66,16 @@ export const holdSpend = internalMutation({
     const siteRows = await ctx.db.query("answer_spend").withIndex("by_site_month", (q) => q.eq("siteId", args.siteId).eq("month", month)).take(5000);
     const freeRows = access === "free" && site.userId
       ? await ctx.db.query("answer_spend").withIndex("by_user_month", (q) => q.eq("userId", site.userId)).take(5000) : [];
-    const dayStart = now - (now % 86_400_000);
-    const dayRows = await ctx.db.query("answer_spend").withIndex("by_created", (q) => q.gte("createdAt", dayStart)).take(20_000);
+    const dayRow = await ctx.db.query("answer_spend_days").withIndex("by_day", (q) => q.eq("day", spendDay(now))).unique();
     const fits = spendFits({
       access, holdMicroUsd: hold,
       accountFreeSpent: freeRows.filter((r) => r.free).reduce((sum, r) => sum + spendCounted(r), 0),
       siteMonthSpent: siteRows.reduce((sum, r) => sum + spendCounted(r), 0),
-      fleetDaySpent: dayRows.reduce((sum, r) => sum + spendCounted(r), 0),
+      fleetDaySpent: dayRow?.microUsd ?? 0,
       fleetDailyCap: answersFleetDailyCap(process.env.ANSWERS_FLEET_DAILY_MICRO_USD),
     });
     if (!fits.ok) return fits;
+    await addToSpendDay(ctx, now, hold);
     const spendId = await ctx.db.insert("answer_spend", { siteId: args.siteId, ...(site.userId ? { userId: site.userId } : {}),
       ...(args.runId ? { runId: args.runId } : {}), ...(args.pageId ? { pageId: args.pageId } : {}), purpose: args.purpose,
       free: access === "free", month, reservedMicroUsd: hold, state: "held", createdAt: now });
@@ -89,10 +89,26 @@ export const settleSpend = internalMutation({
   handler: async (ctx, { spendId, actualMicroUsd, sent }) => {
     const row = await ctx.db.get(spendId);
     if (!row || row.state !== "held") return;
-    if (!sent) { await ctx.db.patch(spendId, { state: "released", settledAt: Date.now() }); return; }
-    await ctx.db.patch(spendId, { state: "settled", actualMicroUsd: Math.max(0, Math.ceil(actualMicroUsd)), settledAt: Date.now() });
+    if (!sent) {
+      await ctx.db.patch(spendId, { state: "released", settledAt: Date.now() });
+      await addToSpendDay(ctx, row.createdAt, -row.reservedMicroUsd);
+      return;
+    }
+    const actual = Math.max(0, Math.ceil(actualMicroUsd));
+    await ctx.db.patch(spendId, { state: "settled", actualMicroUsd: actual, settledAt: Date.now() });
+    await addToSpendDay(ctx, row.createdAt, actual - row.reservedMicroUsd);
   },
 });
+
+const spendDay = (timestamp: number) => new Date(timestamp).toISOString().slice(0, 10);
+/** The day's running total moves with every hold, settlement and release (a settlement replaces its hold's amount). */
+async function addToSpendDay(ctx: MutationCtx, timestamp: number, deltaMicroUsd: number) {
+  if (!deltaMicroUsd) return;
+  const day = spendDay(timestamp);
+  const row = await ctx.db.query("answer_spend_days").withIndex("by_day", (q) => q.eq("day", day)).unique();
+  if (row) await ctx.db.patch(row._id, { microUsd: Math.max(0, row.microUsd + deltaMicroUsd), updatedAt: Date.now() });
+  else await ctx.db.insert("answer_spend_days", { day, microUsd: Math.max(0, deltaMicroUsd), updatedAt: Date.now() });
+}
 
 // ── Questions ──
 

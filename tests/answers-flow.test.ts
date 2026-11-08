@@ -129,6 +129,8 @@ test("the first hour and the plan, end to end: questions, five assistants, proof
   assert.ok(spend.length > 0 && spend.every((r) => r.state === "settled"), "every hold settled");
   const asked = spend.filter((r) => r.purpose === "ask").reduce((sum, r) => sum + r.actualMicroUsd, 0);
   assert.equal(asked, QUESTIONS.length * (2800 + 1300 + 2400 + 2400 + 2000), "settled at the providers' reported cost");
+  assert.equal(f.tables.answer_spend_days.length, 1);
+  assert.equal(f.tables.answer_spend_days[0].microUsd, spend.reduce((sum, r) => sum + r.actualMicroUsd, 0), "the day's total is exactly what was spent");
 
   f.setIdentity("user_acme");
   const overview = await f.invoke("answers:overview", { siteId });
@@ -149,7 +151,7 @@ test("the free first hour keeps its pages as drafts and never re-asks; the plan 
   const f = corePipelineFixture(network(calls), { TREG_TOKEN: "synthetic-only" }, { syntheticHosts: ["api.github.com", "api.indexnow.org"] });
   const now = f.now();
   const siteId = f.add("sites", { domain: "acme.example", userId: "user_free", siteName: "Acme Leads", siteSummary: "Daily lists of local businesses.",
-    publishMethod: "github", githubToken: "synthetic-only", repoOwner: "acme", repoName: "site", answers: { enabled: true, enabledAt: now, source: "signup" },
+    publishMethod: "github", githubToken: "synthetic-only", repoOwner: "acme", repoName: "site", repoDefaultBranch: "main", answers: { enabled: true, enabledAt: now, source: "signup" },
     createdAt: now, updatedAt: now });
   f.setIdentity("user_free");
   await f.invoke("answers:confirmSetup", { siteId, competitors: [{ name: "Apollo" }] });
@@ -164,8 +166,14 @@ test("the free first hour keeps its pages as drafts and never re-asks; the plan 
   await assert.rejects(f.invoke("answerPages:publishDraft", { pageId: f.tables.answer_pages[0]._id }), /part of the Pentra plan/);
   f.setIdentity(null);
   await f.invoke("answersDispatch:dispatch", {});
-  await drain(f, 8 * 86_400_000);
+  await drain(f, 60_000);
   assert.equal(f.tables.answer_runs.length, 1, "no weekly run on the free snapshot");
+  assert.ok(f.tables.answer_pages.every((p) => p.status === "draft"), "still drafts");
+  // The owner upgrades: the next hourly pass publishes the free hour's drafts.
+  f.add("account_plan_entitlements", { userId: "user_free", planFeatures: ["pentra_answers"], maxSites: 1, maxArticles: 0, syncVersion: 1, syncStartedAt: f.now() });
+  await f.invoke("answersDispatch:dispatch", {});
+  await drain(f, 10 * 60_000);
+  assert.ok(f.tables.answer_pages.every((p) => p.status === "published"), "published after upgrading");
   f.assertOffline();
 });
 
@@ -228,9 +236,8 @@ test("Pentra's own sites: Answers by code with drafts first, then version 2 publ
   const reread = f.tables._scheduled_functions.find((r) => r.name === "actions/answersSetup:readSite")!;
   assert.deepEqual(reread.args, { siteId: pentra, force: true, then: "snapshot" });
   assert.ok(reread.at >= now + 30 * 60_000, "read after the relaunch has deployed");
-  const before = f.tables._scheduled_functions.length;
+  assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answerPublish:publishPage").length, 1, "dawnlist's one draft, once");
   await f.invoke("answersDispatch:dispatch", {});
-  assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answerPublish:publishPage").length,
-    1, "a version applies once");
-  assert.ok(f.tables._scheduled_functions.length >= before);
+  assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answersSetup:readSite").length, 1, "a version applies once");
+  assert.equal(f.get(pentra)!.answers.ownerVersion, 2);
 });

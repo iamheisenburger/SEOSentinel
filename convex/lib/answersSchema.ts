@@ -187,6 +187,14 @@ export const answersTables = {
     .index("by_host", ["host"])
     .index("by_site", ["siteId"]),
 
+  /** The service's spend per UTC day (held plus settled), kept as one running total so the daily circuit breaker reads one
+   * row, not every hold of the day. */
+  answer_spend_days: defineTable({
+    day: v.string(),
+    microUsd: v.number(),
+    updatedAt: v.number(),
+  }).index("by_day", ["day"]),
+
   /** Every provider call Pentra Answers pays for: held before it is sent, settled at the provider's reported cost. */
   answer_spend: defineTable({
     siteId: v.id("sites"),

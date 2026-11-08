@@ -164,3 +164,15 @@ export const retryHostedPublishes = internalMutation({ args: { siteId: v.id("sit
   for (const page of failed) { await ctx.scheduler.runAfter(delay, internal.actions.answerPublish.publishPage, { pageId: page._id }); delay += 1_500; }
   return { retried: failed.length };
 } });
+
+/** The owner connected a publishing destination (or switched to hosted): pages that failed for lack of one publish now. */
+export const retryFailed = mutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const identity = await ctx.auth.getUserIdentity();
+  const site = await ctx.db.get(siteId);
+  if (!identity || !site || site.userId !== identity.subject || !answersEnabled(site)) throw new ConvexError("Site not found.");
+  if (!answersAllows(await siteAnswersAccess(ctx, site)).publish) return { retried: 0 };
+  const failed = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "publish_failed")).take(50);
+  let delay = 0;
+  for (const page of failed) { await ctx.scheduler.runAfter(delay, internal.actions.answerPublish.publishPage, { pageId: page._id }); delay += 1_500; }
+  return { retried: failed.length };
+} });

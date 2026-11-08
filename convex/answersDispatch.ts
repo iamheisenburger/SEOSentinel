@@ -73,14 +73,8 @@ async function applyOwnerVersion(ctx: MutationCtx, site: Doc<"sites">, domain: s
     await ctx.scheduler.runAfter(30 * 60_000, internal.actions.answersSetup.readSite, { siteId: site._id, force: true, then: "snapshot" });
     return;
   }
+  // With publishing on, the hourly rule below publishes their drafts (dispatchSite).
   await ctx.db.patch(site._id, { answers: { ...site.answers!, competitors, autopublish, ownerVersion: OWNER_SETTINGS_VERSION } });
-  if (autopublish) {
-    let delay = 0;
-    for (const p of await ctx.db.query("answer_pages").withIndex("by_site_status", (x) => x.eq("siteId", site._id).eq("status", "draft")).take(20)) {
-      await ctx.scheduler.runAfter(delay, internal.actions.answerPublish.publishPage, { pageId: p._id });
-      delay += 20_000;
-    }
-  }
 }
 
 async function dispatchSite(ctx: MutationCtx, site: Doc<"sites">, now: number): Promise<number> {
@@ -102,6 +96,17 @@ async function dispatchSite(ctx: MutationCtx, site: Doc<"sites">, now: number): 
   if (settings.publishing?.target === "hosted" && settings.publishing.hostedStatus === "pending_dns" &&
     now - (settings.publishing.hostedCheckedAt ?? 0) >= 50 * 60_000) {
     await ctx.scheduler.runAfter(0, internal.actions.answerPublish.checkHostedDomain, { siteId: site._id });
+  }
+  // Drafts publish on the plan with automatic publishing on: the free hour's drafts go out within the hour after upgrading.
+  // A page that failed to publish is tried again once a day (its destination may have been fixed elsewhere).
+  if (allows.publish && settings.autopublish !== false) {
+    const waiting = [
+      ...await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", site._id).eq("status", "draft")).take(20),
+      ...(await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", site._id).eq("status", "publish_failed")).take(20))
+        .filter((p) => now - p.updatedAt >= 24 * 3_600_000),
+    ];
+    let delay = 0;
+    for (const page of waiting) { await ctx.scheduler.runAfter(delay, internal.actions.answerPublish.publishPage, { pageId: page._id }); delay += 15_000; }
   }
   if (!allows.weekly || asking) return 0;
   const lastFull = settings.lastFullRunAt ?? 0;
