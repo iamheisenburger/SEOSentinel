@@ -394,7 +394,7 @@ async function askAssistants(siteId: Id<"sites">, questions: readonly string[], 
   /** One call: its answer, or why there was none. */
   const call = async (question: string, assistant: AiAssistant): Promise<{ answer: { text: string; sources: string[] } | null; error?: string }> => {
     const endpoint = AI_ASSISTANT_ENDPOINTS[assistant];
-    const body = assistant === "gemini" ? { prompt: question, country: market } : assistant === "google_ai_mode" ? { prompt: question, gl: market } : { prompt: question };
+    const body = assistant === "google_ai_mode" ? { prompt: question, gl: market } : { prompt: question, country: market };
     try {
       const response = await fetch(`https://treg.to/call/${endpoint}`, { method: "POST", signal: AbortSignal.timeout(Math.max(10_000, Math.min(AI_CALL_TIMEOUT_MS, deadline + 60_000 - Date.now()))),
         headers: { "X-Treg-Token": token, "X-Treg-Meta": `site=${siteId}, feature=site-diagnosis`, "X-Treg-Route-Max-Cost": String(AI_CALL_MAX_MICRO_USD / 1e6),
