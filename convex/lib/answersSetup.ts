@@ -35,7 +35,7 @@ export function setupReadRequest(args: { domain: string; title: string; descript
   const userMessage = [
     `Domain: ${args.domain}`, args.nameHint ? `Name on the page: ${args.nameHint}` : "", args.title ? `Title: ${args.title}` : "",
     args.description ? `Description: ${args.description}` : "", args.headings.length ? `Headings: ${args.headings.slice(0, 25).join(" | ")}` : "",
-    `Page text:\n${args.text.slice(0, 7000)}`,
+    `Page text:\n${args.text.slice(0, 16000)}`,
   ].filter(Boolean).join("\n");
   const inputSchema = {
     type: "object" as const, additionalProperties: false, required: ["name", "sells", "buyers", "offerings", "country", "local", "location", "competitors"],

@@ -11,7 +11,8 @@ import {
   ANSWER_ASSISTANTS, ANSWER_QUESTION_INTENTS, cleanQuestion, isAnswerAssistant, questionKey, questionOpportunity, runTotals, spendMonth, hostOf,
 } from "./lib/answerEngine";
 import {
-  answersAccess, answersAllows, answersEnabled, answersFleetDailyCap, competitorFromDomain, isAnswersOwnerDomain, spendCounted, spendFits, type AnswersAccess,
+  answersAccess, answersAllows, answersEnabled, answersFleetDailyCap, competitorFromDomain, isAnswersOwnerDomain, nameFromDomainOnly, properCompetitorName,
+  spendCounted, spendFits, type AnswersAccess,
 } from "./lib/answersAccess";
 import { normalizeNewDomain } from "./lib/answersSetup";
 import { countryCode } from "./lib/aiAnswers";
@@ -22,8 +23,8 @@ export const ANSWERS_MAX_ACTIVE_QUESTIONS = 40;
 export const ANSWERS_BATCH_JOBS = 30;
 export const ANSWERS_BATCH_LEASE_MS = 9 * 60_000;
 export const ANSWERS_WEEK_MS = 7 * 86_400_000;
-/** The first drafts take a few minutes each and are written side by side; the ready email waits for them. */
-export const ANSWERS_READY_EMAIL_DELAY_MS = 12 * 60_000;
+/** The ready email goes out when the last first draft is saved (answerPages.readyEmailWhenDraftsDone); this is the fallback. */
+export const ANSWERS_READY_EMAIL_DELAY_MS = 30 * 60_000;
 
 // ── Access ──
 
@@ -129,7 +130,8 @@ export const addQuestionsInternal = internalMutation({
     let room = ANSWERS_MAX_ACTIVE_QUESTIONS - active.length, added = 0;
     for (const item of questions) {
       if (room <= 0) break;
-      const question = cleanQuestion(item.question, business);
+      // Generated questions never name a competitor; the owner's own questions may.
+      const question = cleanQuestion(item.question, business, source === "owner" ? [] : business.competitors);
       if (!question) continue;
       const key = questionKey(question);
       if (await ctx.db.query("answer_questions").withIndex("by_site_key", (q) => q.eq("siteId", siteId).eq("key", key)).first()) continue;
@@ -450,6 +452,7 @@ export const confirmSetup = mutation({
     await ctx.db.patch(siteId, { ...(name?.trim() ? { siteName: name.trim().slice(0, 80) } : {}),
       answers: { ...site.answers!, competitors: cleaned, ...(country ? { country: countryCode(country) } : {}), confirmedAt: site.answers?.confirmedAt ?? now },
       updatedAt: now });
+    if (cleaned.some((c) => c.domain && nameFromDomainOnly(c.name, c.domain))) await ctx.scheduler.runAfter(0, internal.actions.answersSetup.nameCompetitors, { siteId });
     // After a setup error ("Try again"), the first hour starts again at once; otherwise never twice within 30 minutes.
     const failedSetup = Boolean(site.answers?.setupError);
     if (!site.answers?.lastSnapshotRunId && (failedSetup || !(site.answers?.snapshotRequestedAt && now - site.answers.snapshotRequestedAt < 30 * 60_000))) {
@@ -462,6 +465,18 @@ export const confirmSetup = mutation({
     return { ok: true };
   },
 });
+
+/** A competitor's proper name, found on its own site; never replaces a name the owner typed. */
+export const renameCompetitor = internalMutation({ args: { siteId: v.id("sites"), domain: v.string(), name: v.string() },
+  handler: async (ctx, { siteId, domain, name }) => {
+    const site = await ctx.db.get(siteId);
+    if (!site?.answers?.competitors) return;
+    const proper = properCompetitorName(name, domain);
+    if (!proper) return;
+    const competitors = site.answers.competitors.map((c) => c.domain && hostOf(c.domain) === hostOf(domain) && nameFromDomainOnly(c.name, c.domain)
+      ? { ...c, name: proper } : c);
+    await ctx.db.patch(siteId, { answers: { ...site.answers, competitors } });
+  } });
 
 export const addQuestion = mutation({ args: { siteId: v.id("sites"), question: v.string() }, handler: async (ctx, { siteId, question }) => {
   const site = await requireOwnedAnswersSite(ctx, siteId);
@@ -552,6 +567,11 @@ async function recordFirstContact(ctx: MutationCtx, identity: UserIdentity, pass
   await ctx.db.insert("account_contacts", { userId: identity.subject, email, emailUpdates: true, updatedAt: Date.now() });
 }
 
+export const competitorsToName = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  return (site?.answers?.competitors ?? []).flatMap((c) => c.domain && nameFromDomainOnly(c.name, c.domain) ? [{ domain: hostOf(c.domain) }] : []).slice(0, 8);
+} });
+
 export const setupSite = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await ctx.db.get(siteId);
   return site && answersEnabled(site) ? { domain: hostOf(site.domain) } : null;
@@ -617,12 +637,18 @@ export const setupState = query({ args: { siteId: v.id("sites") }, handler: asyn
 
 /** The owner corrects what Pentra read before confirming (or later, in Settings). */
 export const updateBusiness = mutation({
-  args: { siteId: v.id("sites"), name: v.string(), sells: v.string(), buyers: v.string(), offerings: v.array(v.string()) },
-  handler: async (ctx, { siteId, name, sells, buyers, offerings }) => {
-    await requireOwnedAnswersSite(ctx, siteId);
+  args: { siteId: v.id("sites"), name: v.string(), sells: v.string(), buyers: v.string(), offerings: v.array(v.string()),
+    location: v.optional(v.string()), local: v.optional(v.boolean()) },
+  handler: async (ctx, { siteId, name, sells, buyers, offerings, location, local }) => {
+    const site = await requireOwnedAnswersSite(ctx, siteId);
     if (!name.trim() || sells.trim().length < 10) throw new ConvexError("Say what the business sells in a sentence.");
+    // The city or area a local business serves: the questions and pages are asked and written for it.
+    const area = location?.replace(/\s+/g, " ").trim().slice(0, 80);
     await ctx.db.patch(siteId, { siteName: name.trim().slice(0, 80), siteSummary: sells.trim().slice(0, 600), targetAudienceSummary: buyers.trim().slice(0, 300),
-      keyFeatures: offerings.map((o) => o.trim()).filter((o) => o.length > 1).slice(0, 10).map((o) => o.slice(0, 120)), updatedAt: Date.now() });
+      keyFeatures: offerings.map((o) => o.trim()).filter((o) => o.length > 1).slice(0, 10).map((o) => o.slice(0, 120)),
+      ...(location !== undefined || local !== undefined ? { answers: { ...site.answers!, ...(local !== undefined ? { local } : {}),
+        ...(location !== undefined ? (area ? { location: area, local: local ?? true } : { location: undefined }) : {}) } } : {}),
+      updatedAt: Date.now() });
     return { ok: true };
   } });
 

@@ -4,7 +4,7 @@
 import { readerVisibleIssues } from "./articleQuality.ts";
 import { rebuildSourcesSection } from "./backedFacts.ts";
 import { sha256Hex } from "./publicationArtifact.ts";
-import { answerSlug, brandMatcher } from "./answerEngine.ts";
+import { answerSlug, brandMatcher, hostOf, type Brand } from "./answerEngine.ts";
 import { toolOnlyInstruction } from "./toolChoice.ts";
 
 /** Opus 5.5 writes the pages and the questions (Arshad, Nov 8 2026: the premium plan gets the best writer). Thinking is
@@ -35,19 +35,21 @@ export function pageSource(n: number, url: string, title: string | undefined, te
 }
 
 export function answerPageRequest(args: { question: string; businessName: string; productEvidence: string; market: string; language: string;
-  landscape: AnswerLandscape; sources: readonly PageSource[]; mayName: readonly string[]; revision?: { markdown: string; issues: readonly string[] } }) {
+  landscape: AnswerLandscape; sources: readonly PageSource[]; competitorNames: readonly string[]; revision?: { markdown: string; issues: readonly string[] } }) {
   const system = [
     `You write one answer page for ${args.businessName}'s website. It answers a single question that buyers ask AI assistants (ChatGPT, Perplexity, Gemini, Google), so that an assistant can quote it and a buyer can trust it.`,
     "Rules:",
     "1. The first paragraph answers the question directly in two or three sentences (at most 60 words): the answer a buyer needs, no preamble.",
     "2. Then the substance: what matters, how to do it, what it costs, what to watch out for. Be specific and practical. Use numbers only from the business facts or the numbered sources.",
-    `3. Present ${args.businessName} honestly as a solution where it truly fits: what it does, who it is for, what it costs, using ONLY the business facts given. Include one section whose heading says how ${args.businessName} handles this. Be fair: say plainly when another kind of option fits a buyer better. Never invent features, prices, customers, results, reviews, quotes or personal experience. When the configured facts and the crawled live pages disagree (a price, an offer, a guarantee, a number), trust the live pages and leave the conflicting claim out.`,
-    "4. Every statistic or claim that comes from outside the business facts carries a citation marker like [2] matching the numbered sources. If no source supports a claim, leave the claim out.",
-    `5. Name other companies only when the question asks about them, and then only with facts from the sources. Allowed names: ${args.mayName.length ? args.mayName.join(", ") : "none"}.`,
+    `3. Present ${args.businessName} as the answer where its facts show it fits: what it offers for this, who it is for, what it costs, using ONLY the business facts and its own crawled pages. Include one section whose heading says how ${args.businessName} handles this. Never invent features, prices, customers, results, reviews, quotes or personal experience. When the configured facts and the crawled live pages disagree (a price, an offer, a guarantee, a number), trust the live pages and leave the conflicting claim out.`,
+    `4. Never say or imply that ${args.businessName} does not offer, do or include something unless its own pages say so in those words. If its pages don't mention something, say nothing about it.`,
+    `5. Never name, link to or recommend another business, and never send the reader to one${args.competitorNames.length ? ` (in particular: ${args.competitorNames.join(", ")})` : ""}. Where a buyer needs something ${args.businessName} doesn't show it offers, describe the kind of help to look for in general terms only. Product or brand names the business facts themselves use (a treatment, tool or partner of ${args.businessName}) are fine.`,
+    "5b. Every statistic or claim that comes from outside the business facts carries a citation marker like [2] matching the numbered sources. If no source supports a claim, leave the claim out.",
     "6. Subheadings are the buyer's follow-up questions in plain words. Short paragraphs. End with a short FAQ: three or four questions, each answered in one to three sentences.",
     `7. Length: ${ANSWER_PAGE_MIN_WORDS}-1100 words in the body. Plain, confident English (or the market's language if it isn't English: ${args.language}). No filler, no hype words, no "in today's fast-paced world".`,
     "8. Do not write the page title as a heading in the body, and do not add a Sources section: the page adds both.",
     "9. In `facts`, list every factual statement the page makes, each with where it comes from: \"business\" (the business facts) or \"source\" with its number.",
+    `10. In \`fit\`, say whether ${args.businessName}'s facts and pages show it offers what the question asks: \"strong\" (clearly), \"partial\" (some of it), or \"none\" (they don't show it). With \"none\", submit a short page and say why in \`fitReason\`: it won't be published.`,
     toolOnlyInstruction(ANSWER_PAGE_TOOL),
   ].join("\n");
   const userMessage = [
@@ -64,8 +66,10 @@ export function answerPageRequest(args: { question: string; businessName: string
     args.revision ? `Your previous draft had these problems. Fix every one and resubmit the whole page:\n${args.revision.issues.map((i) => `- ${i}`).join("\n")}\n\nPrevious draft:\n${args.revision.markdown}` : "",
   ].filter(Boolean).join("\n\n");
   const inputSchema = {
-    type: "object" as const, additionalProperties: false, required: ["title", "metaDescription", "markdown", "facts"],
+    type: "object" as const, additionalProperties: false, required: ["title", "metaDescription", "markdown", "facts", "fit"],
     properties: {
+      fit: { type: "string" as const, enum: ["strong", "partial", "none"] },
+      fitReason: { type: "string" as const },
       title: { type: "string" as const, description: "At most 70 characters: the question or a direct rephrasing of it." },
       metaDescription: { type: "string" as const, description: "At most 155 characters: the direct answer." },
       markdown: { type: "string" as const, description: "The page body in Markdown, without a title heading or Sources section." },
@@ -77,20 +81,20 @@ export function answerPageRequest(args: { question: string; businessName: string
   return { system, userMessage, inputSchema };
 }
 
-export type DraftPage = { title: string; metaDescription: string; markdown: string; facts: Array<{ text: string; source: string; url?: string }> };
+export type DraftPage = { title: string; metaDescription: string; markdown: string; facts: Array<{ text: string; source: string; url?: string }>;
+  fit: "strong" | "partial" | "none"; fitReason?: string };
 
 const words = (markdown: string) => markdown.replace(/[#>*_`|[\]()-]/g, " ").split(/\s+/).filter(Boolean).length;
 export const pageWords = words;
 
-/** The writer's reply as a page: sources section rebuilt from the citations it actually makes, the title kept short, facts
- * tied to their source addresses. `null` when the reply isn't a page. */
+/** The writer's reply as a page in the sources' own numbering (checks and a revision read it that way), the title kept
+ * short, facts tied to their source addresses. `null` when the reply isn't a page. finalizeDraftPage numbers it for readers. */
 export function parseDraftPage(raw: unknown, sources: readonly PageSource[]): DraftPage | null {
   if (!raw || typeof raw !== "object") return null;
-  const r = raw as { title?: unknown; metaDescription?: unknown; markdown?: unknown; facts?: unknown };
+  const r = raw as { title?: unknown; metaDescription?: unknown; markdown?: unknown; facts?: unknown; fit?: unknown; fitReason?: unknown };
   if (typeof r.title !== "string" || typeof r.markdown !== "string" || typeof r.metaDescription !== "string") return null;
-  let markdown = r.markdown.replace(/^#\s+[^\n]*\n+/, "").replace(/\n#{1,3}\s*Sources\s*\n[\s\S]*$/i, "").trim();
-  if (sources.length) markdown = rebuildSourcesSection(`${markdown}\n\n## Sources\n\n1. placeholder`, sources.map((s) => ({ url: s.url, ...(s.title ? { title: s.title } : {}) })));
-  markdown = markdown.replace(/\n## Sources\n\n1\. placeholder$/, "").trim();
+  const markdown = r.markdown.replace(/^#\s+[^\n]*\n+/, "").replace(/\n#{1,3}\s*Sources\s*\n[\s\S]*$/i, "").trim();
+  const fit = r.fit === "none" || r.fit === "partial" ? r.fit : "strong";
   const byNumber = new Map(sources.map((s) => [s.n, s.url]));
   const facts = (Array.isArray(r.facts) ? r.facts : []).flatMap((f) => {
     const fact = f as { text?: unknown; source?: unknown; sourceNumber?: unknown };
@@ -99,14 +103,31 @@ export function parseDraftPage(raw: unknown, sources: readonly PageSource[]): Dr
     const url = source === "source" && typeof fact.sourceNumber === "number" ? byNumber.get(fact.sourceNumber) : undefined;
     return [{ text: fact.text.trim().slice(0, 300), source, ...(url ? { url } : {}) }];
   }).slice(0, 60);
-  return { title: r.title.trim().replace(/\s+/g, " ").slice(0, 90), metaDescription: r.metaDescription.trim().replace(/\s+/g, " ").slice(0, 170), markdown, facts };
+  return { title: r.title.trim().replace(/\s+/g, " ").slice(0, 90), metaDescription: r.metaDescription.trim().replace(/\s+/g, " ").slice(0, 170), markdown, facts,
+    fit, ...(typeof r.fitReason === "string" && r.fitReason.trim() ? { fitReason: r.fitReason.trim().slice(0, 300) } : {}) };
+}
+
+/** The page as readers get it: its citations numbered 1, 2, 3 in order of first use (no gaps, no source 1 missing), and a
+ * Sources section listing exactly the sources it cites. Returns those sources, renumbered, to store with the page. */
+export function finalizeDraftPage(page: DraftPage, sources: readonly PageSource[]): { page: DraftPage; sources: PageSource[] } {
+  const known = new Map(sources.map((s) => [s.n, s]));
+  const order: number[] = [];
+  for (const m of page.markdown.matchAll(/\[(\d+)\]/g)) { const n = Number(m[1]); if (known.has(n) && !order.includes(n)) order.push(n); }
+  const renumber = new Map(order.map((n, i) => [n, i + 1]));
+  let markdown = page.markdown.replace(/\[(\d+)\]/g, (all, d: string) => renumber.has(Number(d)) ? `[${renumber.get(Number(d))}]` : all);
+  const cited = order.map((n, i) => ({ ...known.get(n)!, n: i + 1 }));
+  if (cited.length) {
+    markdown = rebuildSourcesSection(`${markdown}\n\n## Sources\n\n1. placeholder`, cited.map((s) => ({ url: s.url, ...(s.title ? { title: s.title } : {}) })));
+    markdown = markdown.replace(/\n## Sources\n\n1\. placeholder$/, "").trim();
+  }
+  return { page: { ...page, markdown }, sources: cited };
 }
 
 /** What stops a page from going out, objectively (rule 2a): pipeline text, a number its cited source doesn't contain, a
  * product number the business facts don't contain, a citation to no source; plus the page's own contract: long enough to
  * help, names the business, answers first. `blocking` must be empty to publish; `notes` are shown, never block. */
 export function checkDraftPage(page: DraftPage, args: { businessName: string; businessDomain: string; sources: readonly PageSource[];
-  productEvidence: string }): { blocking: string[]; notes: string[] } {
+  productEvidence: string; competitors?: readonly Brand[] }): { blocking: string[]; notes: string[] } {
   const productEvidenceHash = sha256Hex(args.productEvidence);
   const blocking = readerVisibleIssues({ markdown: page.markdown, sources: args.sources.map((s) => ({ url: s.url, title: s.title, excerpt: s.excerpt,
     contentHash: s.contentHash })), productEvidenceSnapshot: args.productEvidence, productEvidenceHash });
@@ -121,6 +142,15 @@ export function checkDraftPage(page: DraftPage, args: { businessName: string; bu
   if (unknown.length) blocking.push(`The page cites [${unknown.join("], [")}], which is not one of its sources.`);
   const matcher = brandMatcher({ name: args.businessName, domain: args.businessDomain });
   if (matcher && matcher.test(page.markdown) < 0) blocking.push(`The page never names ${args.businessName}.`);
+  // A page on the business's own site never sends a buyer to a competitor: no competitor named, linked or cited.
+  for (const rival of args.competitors ?? []) {
+    const m = brandMatcher(rival, { caseSensitiveSingleWord: true });
+    if (m && m.test(page.markdown) >= 0) blocking.push(`The page names ${rival.name}, a competitor. Remove it: pages never send buyers to a competitor.`);
+    const host = rival.domain ? hostOf(rival.domain) : "";
+    const linked = host && ([...page.markdown.matchAll(/https?:\/\/[^\s)\]]+/g)].some((u) => { const h = hostOf(u[0]); return h === host || h.endsWith(`.${host}`); })
+      || args.sources.some((s) => { const h = hostOf(s.url); return h === host || h.endsWith(`.${host}`); }));
+    if (linked) blocking.push(`The page links to ${host}, a competitor's site. Remove the link.`);
+  }
   const firstParagraph = page.markdown.split(/\n\s*\n/).find((p) => p.trim() && !p.trim().startsWith("#")) ?? "";
   if (words(firstParagraph) > 90) notes.push("The first paragraph is long; the direct answer should come in two or three sentences.");
   if (!/^#{2,3}\s/m.test(page.markdown)) notes.push("The page has no subheadings.");

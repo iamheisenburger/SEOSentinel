@@ -363,7 +363,7 @@ export function botWall(html: string): boolean {
   const title = /<title[^>]*>([^<]*)/i.exec(html)?.[1]?.trim() ?? "";
   if (BOT_WALL_TITLE.test(title)) return true;
   const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-  return text.length < 1500 && /cf-browser-verification|challenge-platform|cf_chl_|_Incapsula_Resource|px-captcha|captcha-delivery\.com/i.test(html);
+  return text.length < 1500 && /cf-browser-verification|challenge-platform|cf_chl_|_Incapsula_Resource|px-captcha|captcha-delivery\.com|sgcaptcha/i.test(html);
 }
 
 /** A search that asks for something free, when the business has no free plan. */

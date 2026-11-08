@@ -6,7 +6,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { ConvexError, v } from "convex/values";
 import { answersAllows, answersEnabled } from "./lib/answersAccess";
 import { pageContentHash, uniqueSlug } from "./lib/answerPages";
-import { questionWords } from "./lib/answerEngine";
+import { namesCompetitor } from "./lib/answerEngine";
 import { businessOf, siteAnswersAccess } from "./answers";
 
 /** Pages a site may have written in a month on the plan (the free first hour writes five). */
@@ -27,8 +27,11 @@ export const pickDraftTargets = internalQuery({ args: { siteId: v.id("sites"), c
   const questions = await ctx.db.query("answer_questions").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "active")).take(200);
   const pages = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", siteId)).take(500);
   const covered = new Set(pages.filter((p) => LIVE_PAGE_STATUSES.has(p.status)).map((p) => p.questionId));
+  const skipped = new Set(pages.filter((p) => p.status === "not_written" && Date.now() - p.updatedAt < 30 * 86_400_000).map((p) => p.questionId));
+  const competitors = businessOf(site).competitors;
   return questions
-    .filter((q) => !covered.has(q._id) && q.opportunity && q.opportunity.status !== "covered" && (q.latest?.answered ?? 0) > 0)
+    .filter((q) => !covered.has(q._id) && !skipped.has(q._id) && !namesCompetitor(q.question, competitors) && q.opportunity &&
+      q.opportunity.status !== "covered" && (q.latest?.answered ?? 0) > 0)
     .sort((a, b) => Number(b.opportunity!.status === "winnable") - Number(a.opportunity!.status === "winnable") || b.opportunity!.score - a.opportunity!.score)
     .slice(0, Math.max(0, Math.min(10, Math.floor(count))))
     .map((q) => ({ questionId: q._id, question: q.question }));
@@ -46,7 +49,11 @@ export const startPage = internalMutation({ args: { siteId: v.id("sites"), quest
     const monthStart = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1);
     const writtenThisMonth = pages.filter((p) => p.createdAt >= monthStart).length;
     const limit = access === "free" ? 5 : ANSWER_PAGES_PER_MONTH;
-    if ((access === "free" ? pages.length : writtenThisMonth) >= limit) return null;
+    const written = pages.filter((p) => p.status !== "not_written");
+    const writtenThisMonthKept = written.filter((p) => p.createdAt >= monthStart).length;
+    // A page skipped because the business's own pages don't support it isn't counted; attempts are still bounded.
+    if ((access === "free" ? written.length : writtenThisMonthKept) >= limit) return null;
+    if ((access === "free" ? pages.length : writtenThisMonth) >= limit + 5) return null;
     const previous = rewriteOf ? await ctx.db.get(rewriteOf) : null;
     if (!previous && pages.some((p) => p.questionId === questionId && LIVE_PAGE_STATUSES.has(p.status))) return null;
     const slug = previous ? previous.slug : uniqueSlug(question.question, new Set(pages.map((p) => p.slug)));
@@ -76,16 +83,15 @@ export const writeContext = internalQuery({ args: { pageId: v.id("answer_pages")
     sourceCounts.set(s.url, row);
   }
   const business = businessOf(site);
-  const qWords = new Set(questionWords(question.question));
-  const mayName = business.competitors.map((c) => c.name).filter((name) => questionWords(name).some((w) => qWords.has(w)));
   const access = await siteAnswersAccess(ctx, site);
   return {
     page: { pageId, siteId: site._id, questionId: question._id, question: question.question, rewriteOf: page.rewriteOf ?? null },
     business: { name: business.name, domain: business.domain, summary: site.siteSummary ?? "", features: site.keyFeatures ?? [], pricing: site.pricingInfo ?? "",
-      ctaText: site.ctaText ?? "", ctaUrl: site.ctaUrl ?? "", market: site.targetCountry ?? business.country, language: site.language ?? "en" },
+      ctaText: site.ctaText ?? "", ctaUrl: site.ctaUrl ?? "", language: site.language ?? "en",
+      market: [site.answers?.local && site.answers.location ? site.answers.location : "", site.targetCountry ?? business.country].filter(Boolean).join(", ") },
+    competitors: business.competitors.map((c) => ({ name: c.name, ...(c.domain ? { domain: c.domain } : {}) })),
     landscape: answered.slice(0, 5).map((c) => ({ assistant: c.assistant, excerpt: c.excerpt, named: c.named, competitorsNamed: c.competitorsNamed })),
     sources: [...sourceCounts.values()].sort((a, b) => b.count - a.count).slice(0, 8),
-    mayName,
     autopublish: answersAllows(access).publish && site.answers?.autopublish !== false,
   };
 } });
@@ -101,6 +107,15 @@ const draftArgs = {
 
 /** The written page, checked: a draft (publishable), or "not written" with the reason when it failed the objective
  * checks twice (Pentra never publishes a page with an unsupported number). */
+/** When the site's first drafts are all written (or skipped), its "first hour ready" email goes out now, not on a timer. */
+async function readyEmailWhenDraftsDone(ctx: MutationCtx, siteId: Id<"sites">) {
+  const site = await ctx.db.get(siteId);
+  const runId = site?.answers?.lastSnapshotRunId;
+  if (!site?.answers || !runId || site.answers.snapshotEmailAt) return;
+  const writing = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "writing")).first();
+  if (!writing) await ctx.scheduler.runAfter(0, internal.actions.answerEmail.sendSnapshotReady, { siteId, runId });
+}
+
 export const saveDraft = internalMutation({ args: { ...draftArgs, blocked: v.boolean() }, handler: async (ctx, args) => {
   const page = await ctx.db.get(args.pageId);
   if (!page || page.status !== "writing") return null;
@@ -112,17 +127,22 @@ export const saveDraft = internalMutation({ args: { ...draftArgs, blocked: v.boo
     const question = await ctx.db.get(page.questionId);
     if (question?.pageId === pageId) await ctx.db.patch(question._id, { pageId: undefined });
   }
+  await readyEmailWhenDraftsDone(ctx, page.siteId);
   return { status: blocked ? "not_written" : "draft" };
 } });
 
 /** A page whose writing failed outright (the writer didn't answer): released so the next run can try again. */
-export const abandonPage = internalMutation({ args: { pageId: v.id("answer_pages"), reason: v.string(), costMicroUsd: v.number() },
-  handler: async (ctx, { pageId, reason, costMicroUsd }) => {
+export const abandonPage = internalMutation({ args: { pageId: v.id("answer_pages"), reason: v.string(), costMicroUsd: v.number(),
+  replace: v.optional(v.boolean()) },
+  handler: async (ctx, { pageId, reason, costMicroUsd, replace }) => {
     const page = await ctx.db.get(pageId);
     if (!page || page.status !== "writing") return;
     await ctx.db.patch(pageId, { status: "not_written", notWrittenReason: reason.slice(0, 300), costMicroUsd, updatedAt: Date.now() });
     const question = await ctx.db.get(page.questionId);
     if (question?.pageId === pageId) await ctx.db.patch(question._id, { pageId: undefined });
+    // A question the business's pages don't support: the next winnable question is written instead (caps still apply).
+    if (replace && !page.rewriteOf) await ctx.scheduler.runAfter(0, internal.actions.answerPages.draftTop, { siteId: page.siteId, count: 1 });
+    else await readyEmailWhenDraftsDone(ctx, page.siteId);
   } });
 
 /** Published pages that no assistant has cited after three weeks and at least three full runs: rewritten, two a week. */
