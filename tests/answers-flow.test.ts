@@ -230,7 +230,7 @@ test("Pentra's own sites: Answers by code with drafts first, then version 2 publ
   }
   await f.invoke("answersDispatch:dispatch", {});
   const d = f.get(dawnlist)!.answers, p = f.get(pentra)!.answers;
-  assert.equal(d.ownerVersion, 2);
+  assert.equal(d.ownerVersion, 3, "versions 2 and 3 apply in one pass");
   assert.equal(d.autopublish, true, "dawnlist publishes now that its drafts were read");
   assert.deepEqual(d.competitors, [{ name: "Copy.ai", domain: "copy.ai" }, { name: "Apollo", domain: "apollo.io" }]);
   const scheduled = f.tables._scheduled_functions.map((r) => r.name);
@@ -247,7 +247,7 @@ test("Pentra's own sites: Answers by code with drafts first, then version 2 publ
   assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answerPublish:publishPage").length, 1, "dawnlist's one draft, once");
   await f.invoke("answersDispatch:dispatch", {});
   assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answersSetup:readSite").length, 1, "a version applies once");
-  assert.equal(f.get(pentra)!.answers.ownerVersion, 2);
+  assert.equal(f.get(pentra)!.answers.ownerVersion, 3);
 });
 
 test("a new account's first hour: its address kept, a failed setup retried at once, the ready email with counts and drafts", async () => {
@@ -305,5 +305,48 @@ test("a new account's first hour: its address kept, a failed setup retried at on
   assert.ok(f.get(siteId)!.answers.snapshotEmailAt, "sent once");
   await f.invoke("actions/answerEmail:sendSnapshotReady", { siteId, runId: f.tables.answer_runs[0]._id });
   assert.equal(emails.length, 1, "never twice");
+  f.assertOffline();
+});
+
+test("version 3: LeadPilot's published answer files are written again with the field its blog needs; dawnlist gets suggested competitors", async () => {
+  const calls: Array<{ url: string; body?: Fields }> = [];
+  const base = network(calls);
+  const f = corePipelineFixture(async (url, init) => {
+    if (url.hostname === "dawnlist.io") return html("Dawnlist: daily lists of local businesses that need your service, with the proof attached. ".repeat(10));
+    if (url.hostname === "leadpilot.chat") return html("Best AI chatbot for a B2B SaaS site? LeadPilot answers every visitor. ".repeat(10));
+    return base(url, init);
+  }, { TREG_TOKEN: "synthetic-only" }, { syntheticHosts: ["api.github.com", "api.indexnow.org", "dawnlist.io", "leadpilot.chat"] });
+  const now = f.now();
+  const owner = { enabled: true, enabledAt: now, source: "owner", confirmedAt: now, autopublish: true, weeklyEmail: true, country: "US", ownerVersion: 2 };
+  const leadpilot = f.add("sites", { domain: "leadpilot.chat", userId: "owner", siteName: "LeadPilot", publishMethod: "github", githubToken: "synthetic-only",
+    repoOwner: "owner", repoName: "LeadPilot", repoDefaultBranch: "main", urlStructure: "/blog/[slug]", createdAt: now, updatedAt: now,
+    answers: { ...owner, competitors: [{ name: "Intercom", domain: "intercom.example" }], lastSnapshotRunId: "answer_runs:0", lastFullRunAt: now, lastRecheckAt: now } });
+  const dawnlist = f.add("sites", { domain: "dawnlist.io", userId: "owner", siteName: "Dawnlist", siteSummary: "Confirmed facts.", createdAt: now, updatedAt: now,
+    answers: { ...owner, competitors: [], lastSnapshotRunId: "answer_runs:1", lastFullRunAt: now, lastRecheckAt: now } });
+  const slug = "best-ai-chatbot-for-a-b2b-saas-site";
+  const questionId = f.add("answer_questions", { siteId: leadpilot, question: "Best AI chatbot for a B2B SaaS site?", key: "best ai chatbot b2b saas site", intent: "best",
+    source: "generated", status: "active", createdAt: now });
+  const pageId = f.add("answer_pages", { siteId: leadpilot, questionId, question: "Best AI chatbot for a B2B SaaS site?", status: "published",
+    title: "Best AI chatbot for a B2B SaaS site?", slug, metaDescription: "LeadPilot answers every visitor.", markdown: "LeadPilot answers every visitor.", facts: [],
+    sources: [], issues: [], version: 1, contentHash: "h", writerModel: "m", costMicroUsd: 1, createdAt: now, updatedAt: now, citations: 0,
+    publishedUrl: `https://leadpilot.chat/blog/${slug}`, publishedAt: now, publishTarget: "github",
+    publishReceipt: JSON.stringify({ method: "github", deliveryKey: "answer:p1:v1", path: `content/blog/${slug}.md`, sha: "old" }) });
+  f.setTime(now + 60_000);
+  await f.invoke("answersDispatch:dispatch", {});
+  assert.equal(f.get(leadpilot)!.answers.ownerVersion, 3);
+  assert.equal(f.get(dawnlist)!.answers.ownerVersion, 3);
+  await drain(f, 10 * 60_000);
+  const put = calls.find((c) => c.url.endsWith(`/contents/content/blog/${slug}.md`) && c.body?.content);
+  assert.ok(put, "the file is written again at its own path");
+  const file = Buffer.from(put!.body!.content, "base64").toString("utf8");
+  assert.match(file, /\nqualityGateVersion: 1\n/, "the field LeadPilot's blog requires");
+  assert.match(file, /pentraDeliveryKey: "answer:p1:v1"/, "the same delivery key");
+  assert.match(file, new RegExp(`date: "${new Date(now).toISOString()}"`), "the original date");
+  assert.equal(f.get(pageId)!.status, "published");
+  assert.ok(typeof f.get(pageId)!.liveAt === "number", "checked live again");
+  assert.ok(f.get(dawnlist)!.answers.competitors.some((c: Fields) => c.name === "Apollo"), "dawnlist's suggested competitors");
+  assert.equal(f.get(dawnlist)!.siteSummary, "Confirmed facts.", "its confirmed facts stay");
+  await f.invoke("answersDispatch:dispatch", {});
+  assert.equal(f.tables._scheduled_functions.filter((r) => r.name === "actions/answerPublish:refreshPublishedFile").length, 1, "a version applies once");
   f.assertOffline();
 });

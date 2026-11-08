@@ -15,9 +15,14 @@ const WEEK_MS = ANSWERS_WEEK_MS, RECHECK_GAP_MS = 22 * 3_600_000, SETUP_RETRY_MS
  * 2 (Nov 8 2026): competitor names re-derived ("copy.ai" is Copy.ai, never the word "Copy"); dawnlist and LeadPilot publish
  * automatically now that their first drafts were read; pentra.dev restarts its first hour for the new product (its
  * questions and drafts were written from the old article product's profile): set aside, re-read, asked again. */
-export const OWNER_SETTINGS_VERSION = 2;
+export const OWNER_SETTINGS_VERSION = 3;
 const OWNER_AUTOPUBLISH = new Set(["dawnlist.io", "leadpilot.chat"]);
 const OWNER_RESTART = new Set(["pentra.dev"]);
+/** 3 (Nov 8 2026): LeadPilot's published answer files are written again with qualityGateVersion (its blog hides a post
+ * without it: all five were 404); dawnlist gets suggested competitors from a fresh read of its homepage (it had none, so
+ * no answer could count who was named instead). Its confirmed facts are untouched. */
+const OWNER_REFRESH_FILES = new Set(["leadpilot.chat"]);
+const OWNER_FILL_COMPETITORS = new Set(["dawnlist.io"]);
 
 export const dispatch = internalMutation({ args: {}, handler: async (ctx) => {
   const now = Date.now();
@@ -48,6 +53,22 @@ export const dispatch = internalMutation({ args: {}, handler: async (ctx) => {
 } });
 
 async function applyOwnerVersion(ctx: MutationCtx, site: Doc<"sites">, domain: string, now: number) {
+  if ((site.answers?.ownerVersion ?? 1) < 2) await applyOwnerVersion2(ctx, site, domain, now);
+  const current = await ctx.db.get(site._id);
+  if (!current?.answers) return;
+  if (OWNER_REFRESH_FILES.has(domain)) {
+    const published = (await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", site._id).eq("status", "published")).take(50))
+      .filter((p) => p.publishTarget === "github");
+    let delay = 0;
+    for (const page of published) { await ctx.scheduler.runAfter(delay, internal.actions.answerPublish.refreshPublishedFile, { pageId: page._id }); delay += 20_000; }
+  }
+  if (OWNER_FILL_COMPETITORS.has(domain) && !current.answers.competitors?.length) {
+    await ctx.scheduler.runAfter(0, internal.actions.answersSetup.readSite, { siteId: site._id, force: true, competitorsOnly: true });
+  }
+  await ctx.db.patch(site._id, { answers: { ...current.answers, ownerVersion: OWNER_SETTINGS_VERSION } });
+}
+
+async function applyOwnerVersion2(ctx: MutationCtx, site: Doc<"sites">, domain: string, now: number) {
   const competitors = (site.competitors ?? []).map(competitorFromDomain).filter((c): c is { name: string; domain: string } => c !== null).slice(0, 8);
   const autopublish = OWNER_AUTOPUBLISH.has(domain);
   if (OWNER_RESTART.has(domain)) {
@@ -66,7 +87,7 @@ async function applyOwnerVersion(ctx: MutationCtx, site: Doc<"sites">, domain: s
     if (!(await ctx.db.query("answer_host_index").withIndex("by_host", (x) => x.eq("host", hostedDomain)).first())) {
       await ctx.db.insert("answer_host_index", { host: hostedDomain, siteId: site._id, createdAt: now });
     }
-    await ctx.db.patch(site._id, { answers: { ...settings, competitors, autopublish, ownerVersion: OWNER_SETTINGS_VERSION, snapshotRequestedAt: now + 3_600_000,
+    await ctx.db.patch(site._id, { answers: { ...settings, competitors, autopublish, ownerVersion: 2, snapshotRequestedAt: now + 3_600_000,
       publishing: { target: "hosted", hostedDomain, hostedStatus: "pending_dns" } } });
     await ctx.scheduler.runAfter(0, internal.actions.answerPublish.attachHostedDomain, { siteId: site._id });
     // The relaunched homepage is read once it has deployed, then the first hour runs again from it.
@@ -74,7 +95,7 @@ async function applyOwnerVersion(ctx: MutationCtx, site: Doc<"sites">, domain: s
     return;
   }
   // With publishing on, the hourly rule below publishes their drafts (dispatchSite).
-  await ctx.db.patch(site._id, { answers: { ...site.answers!, competitors, autopublish, ownerVersion: OWNER_SETTINGS_VERSION } });
+  await ctx.db.patch(site._id, { answers: { ...site.answers!, competitors, autopublish, ownerVersion: 2 } });
 }
 
 async function dispatchSite(ctx: MutationCtx, site: Doc<"sites">, now: number): Promise<number> {

@@ -37,6 +37,25 @@ export const publishPage = internalAction({ args: { pageId: v.id("answer_pages")
   }
 } });
 
+/** A published GitHub page's file written again at the same path with the same words (the current file format), then
+ * checked live and sent to search engines again. */
+export const refreshPublishedFile = internalAction({ args: { pageId: v.id("answer_pages") }, handler: async (ctx, { pageId }): Promise<{ refreshed: boolean; error?: string }> => {
+  const context = await ctx.runQuery(internal.answerPublish.refreshContext, { pageId });
+  if (!context) return { refreshed: false };
+  const { page, site, firstPublishedAt } = context;
+  const receipt = page.publishReceipt ? safeJson(page.publishReceipt) : null;
+  const deliveryKey = typeof receipt?.deliveryKey === "string" ? receipt.deliveryKey : answerDeliveryKey(page._id, page.version);
+  try {
+    const published = await publishToGithub(site, { title: page.title, slug: page.slug, metaDescription: page.metaDescription, markdown: page.markdown,
+      sources: page.sources, firstPublishedAt, deliveryKey }, receipt);
+    await ctx.runMutation(internal.answerPublish.recordRefresh, { pageId, receipt: JSON.stringify(published.receipt) });
+    await ctx.scheduler.runAfter(120_000, internal.actions.answerPublish.verifyAndIndex, { pageId, attempt: 0 });
+    return { refreshed: true };
+  } catch (error) {
+    return { refreshed: false, error: (error instanceof Error ? error.message : String(error)).slice(0, 200) };
+  }
+} });
+
 async function publishTo(site: Doc<"sites">, page: Doc<"answer_pages">, previous: Doc<"answer_pages"> | null): Promise<Published> {
   const deliveryKey = answerDeliveryKey(page._id, page.version);
   const firstPublishedAt = previous?.publishedAt ?? Date.now();

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 
 import {
   PENTRA_SALES_AGENT_EMBED_KEY,
+  PENTRA_SALES_AGENT_ON,
   isPentraSalesAgentRoute,
 } from "@/lib/pentra-sales-agent";
 
@@ -21,7 +22,7 @@ function destroyPentraSalesAgent() {
 
 export function PentraSalesAgent() {
   const pathname = usePathname();
-  const enabled = isPentraSalesAgentRoute(pathname);
+  const enabled = PENTRA_SALES_AGENT_ON && isPentraSalesAgentRoute(pathname);
 
   useEffect(() => {
     // Pentra's own site only: never on a customer's hosted answers address or custom-domain blog.

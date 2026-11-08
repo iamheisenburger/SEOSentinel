@@ -20,6 +20,23 @@ export const publishContext = internalQuery({ args: { pageId: v.id("answer_pages
   return { page, site, previous: previous && previous.status === "published" ? previous : null, business: businessOf(site) };
 } });
 
+/** A published page whose file Pentra writes again in place (same address, same words): files an older Pentra wrote
+ * without a field the site's blog needs. GitHub only. */
+export const refreshContext = internalQuery({ args: { pageId: v.id("answer_pages") }, handler: async (ctx, { pageId }) => {
+  const page = await ctx.db.get(pageId);
+  if (!page || page.status !== "published" || page.publishTarget !== "github" || !page.publishedAt) return null;
+  const site = await ctx.db.get(page.siteId);
+  if (!site || !answersEnabled(site)) return null;
+  const previous = page.rewriteOf ? await ctx.db.get(page.rewriteOf) : null;
+  return { page, site, firstPublishedAt: previous?.publishedAt ?? page.publishedAt };
+} });
+
+export const recordRefresh = internalMutation({ args: { pageId: v.id("answer_pages"), receipt: v.string() }, handler: async (ctx, { pageId, receipt }) => {
+  const page = await ctx.db.get(pageId);
+  if (!page || page.status !== "published") return;
+  await ctx.db.patch(pageId, { publishReceipt: receipt.slice(0, 2000), issues: page.issues.filter((i) => !i.startsWith("Not live yet")), updatedAt: Date.now() });
+} });
+
 export const markPublishing = internalMutation({ args: { pageId: v.id("answer_pages") }, handler: async (ctx, { pageId }) => {
   const page = await ctx.db.get(pageId);
   if (!page || !["draft", "publish_failed"].includes(page.status)) return false;

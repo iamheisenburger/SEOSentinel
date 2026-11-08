@@ -44,3 +44,9 @@ test("Pentra loads its dedicated LeadPilot agent and cleans it up on SPA navigat
   assert.match(component, /document\.getElementById\("leadpilot-widget"\)\?\.remove\(\)/);
   assert.match(config, new RegExp(PENTRA_SALES_AGENT_EMBED_KEY));
 });
+
+test("P386: the sales chat stays off until LeadPilot's agent is retrained on the Answers site", async () => {
+  const { PENTRA_SALES_AGENT_ON } = await import("../src/lib/pentra-sales-agent.ts");
+  assert.equal(PENTRA_SALES_AGENT_ON, false);
+  assert.match(readFileSync("src/components/pentra-sales-agent.tsx", "utf8"), /const enabled = PENTRA_SALES_AGENT_ON && isPentraSalesAgentRoute\(pathname\);/);
+});
