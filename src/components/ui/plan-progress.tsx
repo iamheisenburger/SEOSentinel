@@ -48,7 +48,7 @@ export function PlanProgress({ siteId }: { siteId: Id<"sites"> }) {
       {/* Progress bar */}
       <div className="mb-4 h-1 w-full rounded-full bg-white/[0.04]">
         <div
-          className="h-1 rounded-full bg-[#0EA5E9] transition-all duration-700 ease-out"
+          className="h-1 rounded-full bg-[#0EA5E9] transition-[width] duration-700 ease-out"
           style={{ width: `${(current / total) * 100}%` }}
         />
       </div>
