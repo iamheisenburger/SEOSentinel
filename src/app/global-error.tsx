@@ -17,11 +17,11 @@ export default function GlobalError({
 
   return (
     <html lang="en" className="dark">
-      <body>
+      <body className="bg-bg text-text antialiased">
         <BrandedErrorState
-          eyebrow="Pentra encountered an error"
-          title="The engine needs a restart."
-          description="Your workspace data is safe. Retry the application, or return to Pentra and begin again."
+          eyebrow="Something went wrong"
+          title="Pentra didn’t load."
+          description="Your data is safe. Try again, or reload Pentra from the start."
           onRetry={reset}
         />
       </body>

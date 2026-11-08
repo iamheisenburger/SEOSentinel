@@ -1,15 +1,14 @@
+import { cx } from "@/lib/cx";
+
+/** Skeletons match the final layout; a 1.4s shimmer from surface-2 to surface-3, static under reduced motion. */
 export function Skeleton({ className = "" }: { className?: string }) {
-  return (
-    <div
-      className={`animate-pulse rounded-lg bg-[#1E293B] ${className}`}
-    />
-  );
+  return <div aria-hidden="true" className={cx("skeleton rounded-control", className)} />;
 }
 
 export function CardSkeleton() {
   return (
-    <div className="rounded-2xl border border-[#1E293B] bg-[#111827] p-6">
-      <Skeleton className="mb-3 h-4 w-24" />
+    <div className="rounded-card border border-border bg-surface-1 p-5">
+      <Skeleton className="mb-3 h-3 w-24" />
       <Skeleton className="mb-2 h-6 w-40" />
       <Skeleton className="h-3 w-32" />
     </div>
@@ -18,37 +17,28 @@ export function CardSkeleton() {
 
 export function StatCardSkeleton() {
   return (
-    <div className="rounded-2xl border border-[#1E293B] bg-[#111827] p-5">
-      <div className="flex items-center gap-3">
-        <Skeleton className="h-10 w-10 rounded-xl" />
-        <div>
-          <Skeleton className="mb-2 h-3 w-16" />
-          <Skeleton className="h-6 w-12" />
-        </div>
-      </div>
-      <Skeleton className="mt-3 h-3 w-24" />
+    <div className="rounded-card border border-border bg-surface-1 p-5">
+      <Skeleton className="h-3 w-20" />
+      <Skeleton className="mt-3 h-8 w-16" />
+      <Skeleton className="mt-3 h-3 w-28" />
     </div>
   );
 }
 
 export function RowSkeleton() {
   return (
-    <div className="flex items-center gap-4 px-5 py-3.5">
-      <Skeleton className="h-8 w-8 rounded-lg" />
-      <div className="flex-1">
-        <Skeleton className="mb-1.5 h-4 w-48" />
-        <Skeleton className="h-3 w-32" />
-      </div>
-      <Skeleton className="h-5 w-16 rounded-full" />
+    <div className="flex h-11 items-center gap-4 px-5">
+      <Skeleton className="h-3.5 w-48" />
+      <Skeleton className="ml-auto h-5 w-16 rounded-full" />
     </div>
   );
 }
 
 export function PageSkeleton() {
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-8" aria-busy="true" aria-label="Loading">
       <div>
-        <Skeleton className="mb-2 h-8 w-48" />
+        <Skeleton className="mb-2 h-7 w-48" />
         <Skeleton className="h-4 w-72" />
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -57,7 +47,7 @@ export function PageSkeleton() {
         <StatCardSkeleton />
         <StatCardSkeleton />
       </div>
-      <div className="rounded-2xl border border-[#1E293B] bg-[#111827] divide-y divide-[#1E293B]">
+      <div className="divide-y divide-border rounded-card border border-border bg-surface-1">
         <RowSkeleton />
         <RowSkeleton />
         <RowSkeleton />

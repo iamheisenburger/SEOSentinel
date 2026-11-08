@@ -5,6 +5,7 @@ export function isPentraSalesAgentRoute(pathname: string): boolean {
     pathname === "/" ||
     pathname === "/pricing" ||
     pathname === "/contact" ||
+    pathname === "/method" ||
     pathname === "/blog" ||
     pathname.startsWith("/blog/") ||
     pathname.startsWith("/legal/")

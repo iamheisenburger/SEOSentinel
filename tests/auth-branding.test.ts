@@ -56,7 +56,11 @@ test("the branded auth pages exist and carry Pentra context", () => {
     "utf8",
   );
   assert.match(shell, /Pentra/);
-  assert.match(shell, /Autopilot SEO/);
+  // Nov 2026: the shell sells the AI-answer snapshot, from the shared product facts (never a hard-coded list).
+  assert.match(shell, /See what AI assistants say about your business\./);
+  assert.match(shell, /ASSISTANT_NAMES_SENTENCE/);
+  assert.match(shell, /HONESTY_LINE/);
+  assert.doesNotMatch(shell, /Autopilot SEO|More customers from Google/);
   assert.match(shell, /How Pentra works/);
   assert.match(shell, /AuthFormLoading/);
   assert.match(shell, /\/legal\/terms/);
@@ -128,7 +132,12 @@ test("post-auth redirects cannot leave Pentra or loop through auth", () => {
 test("every customer auth entry stays inside branded Pentra UI", () => {
   assert.doesNotMatch(landingNav, /SignInButton|SignUpButton|mode=["']modal/);
   assert.match(landingNav, /href=["']\/sign-in["']/);
-  assert.match(landingNav, /href=["']\/sign-up["']/);
+  // Nov 2026: account creation starts from the free snapshot: the nav's "Check my site" opens /start, and /start
+  // hands over to Pentra's own /sign-up (never Clerk's modal or hosted portal).
+  assert.match(landingNav, /href=["']\/start["']/);
+  const start = readFileSync(new URL("../src/app/start/page.tsx", import.meta.url), "utf8");
+  assert.match(start, /`\/sign-up\?redirect_url=\$\{encodeURIComponent\("\/dashboard"\)\}`/);
+  assert.doesNotMatch(start, /SignUpButton|SignInButton|mode=["']modal/);
   assert.match(landingNav, /userProfileMode=["']modal["']/);
   assert.match(sidebar, /userProfileMode=["']modal["']/);
   assert.match(layout, /afterSignOutUrl=["']\/["']/);

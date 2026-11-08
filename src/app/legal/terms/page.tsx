@@ -1,7 +1,8 @@
-import { Metadata } from "next";
-import { pageSocial } from "@/lib/page-social";
+import type { Metadata } from "next";
 import Link from "next/link";
-import { Radar, ArrowLeft } from "lucide-react";
+import { pageSocial } from "@/lib/page-social";
+import { LegalContact, LegalPage } from "@/components/marketing/legal-page";
+import { PENTRA_PLAN, formatUsd } from "@/lib/pricing";
 
 export const metadata: Metadata = {
   title: "Terms of Service",
@@ -12,99 +13,71 @@ export const metadata: Metadata = {
 
 export default function TermsOfServicePage() {
   return (
-    <div className="min-h-screen bg-[#08090A] text-[#F7F8F8]">
-      {/* Nav */}
-      <header className="border-b border-white/[0.06] bg-[#08090A]/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 max-w-4xl items-center justify-between px-6">
-          <Link href="/" className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#0EA5E9]/[0.1]">
-              <Radar className="h-4 w-4 text-[#0EA5E9]" />
-            </div>
-            <span className="text-[16px] font-bold tracking-tight">Pentra</span>
-          </Link>
-          <Link href="/" className="flex items-center gap-1.5 text-[14px] font-medium text-[#8A8F98] transition-colors hover:text-white">
-            <ArrowLeft className="h-3.5 w-3.5" /> Back
-          </Link>
-        </div>
-      </header>
+    <LegalPage title="Terms of Service" updated="November 7, 2026" other={{ label: "Privacy Policy", href: "/legal/privacy" }}>
+      <p>
+        These Terms of Service (&quot;Terms&quot;) govern your use of the Pentra platform operated by Pentra (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;) at pentra.dev. By using our service, you agree to these Terms.
+      </p>
 
-      <main className="mx-auto max-w-4xl px-6 py-16">
-        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Terms of Service</h1>
-        <p className="mt-2 text-sm text-[#8A8F98]">Last updated: August 24, 2026</p>
+      <h2>1. Service Description</h2>
+      <p>Pentra is a service for measuring and improving how AI assistants describe a business. It asks AI assistants the questions a business&apos;s buyers ask and records their full answers, shows which businesses they name and the sources they cite, and writes answer pages and articles from the business&apos;s own facts. On a paid plan it publishes those pages through supported adapters or hosts them on a subdomain the customer points to Pentra, and keeps measuring the answers. Bootstrap v1 supports verified GitHub publishing. WordPress, signed-webhook publishing, managed outreach, and automatic cold outreach remain beta capabilities unless your account expressly shows otherwise.</p>
 
-        <div className="mt-10 space-y-8 text-[#94A3B8] leading-relaxed [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-[#F7F8F8] [&_h2]:mt-10 [&_h2]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:space-y-1">
-          <p>
-            These Terms of Service (&quot;Terms&quot;) govern your use of the Pentra platform operated by Pentra (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;) at pentra.dev. By using our service, you agree to these Terms.
-          </p>
+      <h2>2. Account Registration</h2>
+      <p>You must create an account to use Pentra. You are responsible for maintaining the security of your account and for all activities under your account. You must provide accurate and complete information during registration.</p>
 
-          <h2>1. Service Description</h2>
-          <p>Pentra provides an AI-powered SEO content generation platform that researches, writes, fact-checks, and publishes blog articles through supported adapters. Bootstrap v1 supports verified GitHub publishing. WordPress, signed-webhook publishing, managed outreach, and automatic cold outreach remain beta capabilities unless your account expressly shows otherwise.</p>
+      <h2>3. Acceptable Use</h2>
+      <p>You agree not to use Pentra to:</p>
+      <ul>
+        <li>Violate any applicable laws or regulations</li>
+        <li>Generate content that is defamatory, obscene, or promotes illegal activity</li>
+        <li>Misrepresent AI-generated content as human-written where required by law</li>
+        <li>Spam search engines or engage in black-hat SEO practices</li>
+        <li>Transmit malware or malicious code</li>
+        <li>Attempt to reverse-engineer, decompile, or extract our AI models</li>
+        <li>Use the service to generate content for prohibited industries (gambling, weapons, illegal substances)</li>
+      </ul>
 
-          <h2>2. Account Registration</h2>
-          <p>You must create an account to use Pentra. You are responsible for maintaining the security of your account and for all activities under your account. You must provide accurate and complete information during registration.</p>
+      <h2>4. Subscription Plans &amp; Billing</h2>
+      <p>Pentra offers a free snapshot and one paid plan, priced at {formatUsd(PENTRA_PLAN.monthly)} per month or {formatUsd(PENTRA_PLAN.annual)} per year. Billing is processed monthly or annually, according to the billing period selected at checkout, through our payment provider (Stripe via Clerk). You may cancel your subscription at any time, and it will remain active until the end of the current billing period.</p>
+      <p>We reserve the right to change pricing with 30 days&apos; notice. The free snapshot is provided at no cost and requires no payment details.</p>
 
-          <h2>3. Acceptable Use</h2>
-          <p>You agree not to use Pentra to:</p>
-          <ul>
-            <li>Violate any applicable laws or regulations</li>
-            <li>Generate content that is defamatory, obscene, or promotes illegal activity</li>
-            <li>Misrepresent AI-generated content as human-written where required by law</li>
-            <li>Spam search engines or engage in black-hat SEO practices</li>
-            <li>Transmit malware or malicious code</li>
-            <li>Attempt to reverse-engineer, decompile, or extract our AI models</li>
-            <li>Use the service to generate content for prohibited industries (gambling, weapons, illegal substances)</li>
-          </ul>
+      <h2>5. AI-Generated Content</h2>
+      <p>Content generated by Pentra is produced by AI models and may contain inaccuracies despite our fact-checking process. While we strive for accuracy:</p>
+      <ul>
+        <li>You are responsible for reviewing all generated content before publishing</li>
+        <li>We do not guarantee that generated content is free from errors or omissions</li>
+        <li>Fact-check scores are estimates and not guarantees of accuracy</li>
+        <li>You should not rely solely on AI-generated content for medical, legal, or financial advice</li>
+      </ul>
 
-          <h2>4. Subscription Plans &amp; Billing</h2>
-          <p>Pentra offers multiple subscription tiers with varying article limits and site allowances. All plans include access to the full feature set. Billing is processed monthly or annually, according to the billing period selected at checkout, through our payment provider (Stripe via Clerk). You may cancel your subscription at any time, and it will remain active until the end of the current billing period.</p>
-          <p>We reserve the right to change pricing with 30 days&apos; notice. Free tier users receive limited article generation per month at no cost.</p>
+      <h2>6. Content Ownership &amp; Intellectual Property</h2>
+      <p>You retain ownership of all content generated through Pentra for your websites. We retain ownership of the Pentra platform, including its algorithms, code, and design. You grant us a limited license to process your website data solely for the purpose of providing our services.</p>
 
-          <h2>5. AI-Generated Content</h2>
-          <p>Content generated by Pentra is produced by AI models and may contain inaccuracies despite our fact-checking process. While we strive for accuracy:</p>
-          <ul>
-            <li>You are responsible for reviewing all generated content before publishing</li>
-            <li>We do not guarantee that generated content is free from errors or omissions</li>
-            <li>Fact-check scores are estimates and not guarantees of accuracy</li>
-            <li>You should not rely solely on AI-generated content for medical, legal, or financial advice</li>
-          </ul>
+      <h2>7. Data &amp; Privacy</h2>
+      <p>Your use of Pentra is also governed by our <Link href="/legal/privacy">Privacy Policy</Link>. By using Pentra, you acknowledge that your website data will be crawled and analyzed by our AI systems to generate content. If you publish content that involves personal data, you are responsible for compliance with applicable data protection laws (GDPR, CCPA, etc.).</p>
 
-          <h2>6. Content Ownership &amp; Intellectual Property</h2>
-          <p>You retain ownership of all content generated through Pentra for your websites. We retain ownership of the Pentra platform, including its algorithms, code, and design. You grant us a limited license to process your website data solely for the purpose of providing our services.</p>
+      <h2>8. Third-Party Integrations</h2>
+      <p>Pentra bootstrap v1 integrates with GitHub for publishing, Search Console for measurement, and a separately authorized customer-managed SMTP/IMAP outreach mailbox. WordPress, signed-webhook publishing, managed sending, and automatic cold outreach remain beta and are not part of bootstrap v1 general availability. Outreach remains approval-based: an owner approves and triggers each message. A reply, exact-recipient STOP request, hard bounce, verified link acquisition, tenant parking, consent withdrawal, or sender-configuration change cancels pending follow-ups.</p>
+      <p>After versioned tenant-level consent, the bounded sequence permits one verified initial outreach email and at most two timed follow-ups in the same provider thread. Bootstrap v1 still requires an owner to approve and trigger each individual message. Disabling outreach stops new delivery claims immediately; an external operation already claimed before disablement is allowed only to settle its immutable success, failure, or ambiguous-delivery receipt.</p>
+      <p>New Gmail connections request send access only. Gmail OAuth may be used only for recipients who affirmatively consented to receive the relevant commercial email; a public listing, discovered address, or owner approval is not consent. Pentra requires a current recipient-level opt-in receipt at drafting, approval, claim, and the final provider boundary. Revocation or expiration invalidates unsent Gmail messages. Gmail also cannot release prospect mail until an owner-triggered fixed-recipient canary proves current bounce routing for that mailbox; existing readonly connections may use bounded human-reply and exact-recipient opt-out monitoring until migration. The receiving-only relay sends Pentra signed, bodyless results for authenticated replies, structured hard bounces, and exact-recipient STOP requests; Pentra does not durably store the relayed message body or attachments. You are responsible for maintaining the underlying consent record, valid credentials, Google Workspace delivery-status routing, DNS, sender identity, mailing address, manual approvals or autonomous consent settings, permissions, and a lawful basis for outreach. We are not responsible for third-party outages, retention terms, routing failures, or service changes.</p>
 
-          <h2>7. Data &amp; Privacy</h2>
-          <p>Your use of Pentra is also governed by our <Link href="/legal/privacy" className="text-[#0EA5E9] hover:underline">Privacy Policy</Link>. By using Pentra, you acknowledge that your website data will be crawled and analyzed by our AI systems to generate content. If you publish content that involves personal data, you are responsible for compliance with applicable data protection laws (GDPR, CCPA, etc.).</p>
+      <h2>9. Service Availability</h2>
+      <p>While we strive for high uptime, we do not guarantee uninterrupted service. We may perform maintenance, updates, or experience outages. We will make reasonable efforts to notify you of planned downtime.</p>
 
-          <h2>8. Third-Party Integrations</h2>
-          <p>Pentra bootstrap v1 integrates with GitHub for publishing, Search Console for measurement, and a separately authorized customer-managed SMTP/IMAP outreach mailbox. WordPress, signed-webhook publishing, managed sending, and automatic cold outreach remain beta and are not part of bootstrap v1 general availability. Outreach remains approval-based: an owner approves and triggers each message. A reply, exact-recipient STOP request, hard bounce, verified link acquisition, tenant parking, consent withdrawal, or sender-configuration change cancels pending follow-ups.</p>
-          <p>After versioned tenant-level consent, the bounded sequence permits one verified initial outreach email and at most two timed follow-ups in the same provider thread. Bootstrap v1 still requires an owner to approve and trigger each individual message. Disabling outreach stops new delivery claims immediately; an external operation already claimed before disablement is allowed only to settle its immutable success, failure, or ambiguous-delivery receipt.</p>
-          <p>New Gmail connections request send access only. Gmail OAuth may be used only for recipients who affirmatively consented to receive the relevant commercial email; a public listing, discovered address, or owner approval is not consent. Pentra requires a current recipient-level opt-in receipt at drafting, approval, claim, and the final provider boundary. Revocation or expiration invalidates unsent Gmail messages. Gmail also cannot release prospect mail until an owner-triggered fixed-recipient canary proves current bounce routing for that mailbox; existing readonly connections may use bounded human-reply and exact-recipient opt-out monitoring until migration. The receiving-only relay sends Pentra signed, bodyless results for authenticated replies, structured hard bounces, and exact-recipient STOP requests; Pentra does not durably store the relayed message body or attachments. You are responsible for maintaining the underlying consent record, valid credentials, Google Workspace delivery-status routing, DNS, sender identity, mailing address, manual approvals or autonomous consent settings, permissions, and a lawful basis for outreach. We are not responsible for third-party outages, retention terms, routing failures, or service changes.</p>
+      <h2>10. Termination</h2>
+      <p>You may delete your account at any time. We may suspend or terminate accounts that violate these Terms. Ordinary site deletion preserves pseudonymous, account-wide outreach suppression and contact-cooldown records so that removing or recreating a site cannot cause duplicate contact or defeat a STOP request. A verified full-account deletion immediately stops automated execution, revokes stored publishing, search, and outreach credentials, and purges those account-wide suppression and contact-cooldown records through the bounded, resumable purge process after any already-claimed external operation settles. A non-reversible, global hashed sender reputation and pacing record may be unlinked from the account and retained for no more than 90 days across account deletion or sender transfer to prevent unsafe sending resets. We may also retain or pseudonymize only minimal billing, abuse-prevention, quota, and provider-spend receipts where required for legal, security, or accounting purposes; those records do not contain reusable credentials or retained site content.</p>
 
-          <h2>9. Service Availability</h2>
-          <p>While we strive for high uptime, we do not guarantee uninterrupted service. We may perform maintenance, updates, or experience outages. We will make reasonable efforts to notify you of planned downtime.</p>
+      <h2>11. Limitation of Liability</h2>
+      <p>To the maximum extent permitted by law, Pentra shall not be liable for any indirect, incidental, special, consequential, or punitive damages, including loss of profits, data, or business opportunities. Our total liability is limited to the amount you paid us in the 12 months preceding the claim.</p>
 
-          <h2>10. Termination</h2>
-          <p>You may delete your account at any time. We may suspend or terminate accounts that violate these Terms. Ordinary site deletion preserves pseudonymous, account-wide outreach suppression and contact-cooldown records so that removing or recreating a site cannot cause duplicate contact or defeat a STOP request. A verified full-account deletion immediately stops automated execution, revokes stored publishing, search, and outreach credentials, and purges those account-wide suppression and contact-cooldown records through the bounded, resumable purge process after any already-claimed external operation settles. A non-reversible, global hashed sender reputation and pacing record may be unlinked from the account and retained for no more than 90 days across account deletion or sender transfer to prevent unsafe sending resets. We may also retain or pseudonymize only minimal billing, abuse-prevention, quota, and provider-spend receipts where required for legal, security, or accounting purposes; those records do not contain reusable credentials or retained site content.</p>
+      <h2>12. Changes to Terms</h2>
+      <p>We may update these Terms from time to time. We will notify you of material changes via email or through the service. Continued use of the service after changes constitutes acceptance of the new Terms.</p>
 
-          <h2>11. Limitation of Liability</h2>
-          <p>To the maximum extent permitted by law, Pentra shall not be liable for any indirect, incidental, special, consequential, or punitive damages, including loss of profits, data, or business opportunities. Our total liability is limited to the amount you paid us in the 12 months preceding the claim.</p>
+      <h2>13. Governing Law</h2>
+      <p>These Terms are governed by the laws of Germany. Any disputes shall be resolved in the courts of Kerpen, Germany.</p>
 
-          <h2>12. Changes to Terms</h2>
-          <p>We may update these Terms from time to time. We will notify you of material changes via email or through the service. Continued use of the service after changes constitutes acceptance of the new Terms.</p>
-
-          <h2>13. Governing Law</h2>
-          <p>These Terms are governed by the laws of Germany. Any disputes shall be resolved in the courts of Kerpen, Germany.</p>
-
-          <h2>14. Contact Information</h2>
-          <p>If you have any questions about these Terms of Service, please contact us:</p>
-          <div className="rounded-lg border border-white/[0.06] bg-[#0E0F11] p-5 mt-3 text-[14px] space-y-1">
-            <p><strong className="text-[#F7F8F8]">Email:</strong> pentrahelp@gmail.com</p>
-            <p><strong className="text-[#F7F8F8]">Support:</strong> pentrahelp@gmail.com</p>
-            <p><strong className="text-[#F7F8F8]">Phone:</strong> +49 1520 9530880</p>
-            <p><strong className="text-[#F7F8F8]">Address:</strong> Pentra Legal Team</p>
-            <p>Kerpener Straße 6, 50170 Kerpen, Germany</p>
-          </div>
-        </div>
-      </main>
-    </div>
+      <h2>14. Contact Information</h2>
+      <p>If you have any questions about these Terms of Service, please contact us:</p>
+      <LegalContact />
+    </LegalPage>
   );
 }

@@ -19,8 +19,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const staticPages: MetadataRoute.Sitemap = [
     { url: baseUrl, changeFrequency: "weekly", priority: 1 },
     { url: `${baseUrl}/blog`, changeFrequency: "daily", priority: 0.9 },
-    // /pricing is a permanent redirect to /#pricing (P193): a sitemap lists only pages that answer 200.
-    { url: `${baseUrl}/check`, changeFrequency: "monthly", priority: 0.8 },
+    // Only pages that answer 200 (P193). Since Nov 2026 /pricing and /method are pages; /check and /beta redirect home.
+    { url: `${baseUrl}/pricing`, changeFrequency: "monthly", priority: 0.8 },
+    { url: `${baseUrl}/method`, changeFrequency: "monthly", priority: 0.7 },
     { url: `${baseUrl}/contact`, changeFrequency: "monthly", priority: 0.5 },
   ];
 

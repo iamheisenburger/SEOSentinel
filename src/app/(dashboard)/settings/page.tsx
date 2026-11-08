@@ -10,20 +10,13 @@ import { Button } from "@/components/ui/button";
 import { Trash2, Loader2, CreditCard, ArrowUpRight, Zap, User, Mail, Shield, ExternalLink, Upload, GitBranch, Globe, Webhook, Copy, KeyRound, Check } from "lucide-react";
 import { useState } from "react";
 import { usePlanLimits } from "@/hooks/usePlanLimits";
+import { planDisplayName } from "@/lib/pricing";
 import { useActiveSite } from "@/contexts/site-context";
 import { useUser, useClerk } from "@clerk/nextjs";
 import Link from "next/link";
 import { ContentWorkService } from "@/components/content-work-service";
 import { useVisibleQuery } from "@/hooks/useVisibleQuery";
 
-// Display names for the canonical plan tier resolved by usePlanLimits.
-const PLAN_NAMES: Record<string, string> = {
-  free: "Free",
-  starter: "Starter",
-  pro: "Pro",
-  scale: "Scale",
-  enterprise: "Enterprise",
-};
 
 type PublishingSettingsSite = {
   _id: Id<"sites">;
@@ -348,7 +341,8 @@ export default function SettingsPage() {
   );
 
   const siteCount = sites?.length ?? 0;
-  const planName = PLAN_NAMES[tier] ?? "Free";
+  // Display name for the plan tier resolved by usePlanLimits (the one plan lives in src/lib/pricing.ts).
+  const planName = planDisplayName(tier);
 
   // Growth-first sites are held to the published plan allowance of new
   // articles; older sites keep the account-wide immutable usage ledger.
