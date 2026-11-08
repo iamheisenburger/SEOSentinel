@@ -25,6 +25,9 @@ const MARKETING = [
   "src/components/auth/auth-shell.tsx",
   "src/components/layout/landing-nav.tsx",
   ...files("src/components/marketing"),
+  // The onboarding and the Answers dashboard (Nov 2026) are held to the same copy rules.
+  ...files("src/components/answers"),
+  "src/components/billing/pentra-plan-block.tsx",
 ];
 const marketing = MARKETING.map((path) => [path, read(path)] as const);
 
@@ -142,12 +145,17 @@ test("account-deletion copy matches immediate revocation and resumable purge sem
   assert.doesNotMatch(combined, /retained for 30 days|removed within 30 days/);
 });
 
-test("the upgrade screen never pretends URL parameters preselect Clerk checkout", () => {
+test("the upgrade screen never pretends URL parameters preselect Clerk checkout, and never lists the old tiers", () => {
   const upgrade = read("src/app/(dashboard)/upgrade/page.tsx");
-  // Checkout starts only from an explicit plan button (Clerk's CheckoutButton),
-  // and Clerk's own table remains the fallback so checkout always works.
+  // Checkout starts only from an explicit plan button (Clerk's CheckoutButton) for the "pentra" plan.
   assert.match(upgrade, /<CheckoutButton/);
-  assert.match(upgrade, /<PricingTable for="user" newSubscriptionRedirectUrl="\/dashboard"/);
+  // Without a "pentra" plan in Clerk (or when it can't be read), the same plan block shows a calm note and an email
+  // address. Clerk's own PricingTable is never the fallback: it lists every Clerk plan, the old tiers included.
+  assert.doesNotMatch(upgrade, /PricingTable/);
+  assert.match(upgrade, /<CheckoutSoonNote email=\{SUPPORT_EMAIL\} \/>/);
+  assert.match(read("src/components/billing/pentra-plan-block.tsx"), /Checkout opens shortly\. Email/);
+  // After checkout the dashboard confirms the plan and says the free hour's drafts publish within the hour.
+  assert.match(upgrade, /newSubscriptionRedirectUrl=\{AFTER_CHECKOUT\}/);
   assert.match(upgrade, /useState<BillingSubscriptionPlanPeriod>\("month"\)/);
   assert.doesNotMatch(upgrade, /Enterprise/i);
   assert.doesNotMatch(upgrade, /useSearchParams|PLAN_PRICES|PLAN_LABELS/);

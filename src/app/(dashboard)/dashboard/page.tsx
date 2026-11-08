@@ -33,7 +33,7 @@ import {
   Link2,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import { useRef, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import Link from "next/link";
 import { ArticleProgress } from "@/components/ui/article-progress";
 import { GrowthLoopStatus } from "@/components/growth-loop/growth-loop-status";
@@ -46,8 +46,9 @@ import {
   dashboardAutopilotRequiresAttention,
 } from "../../../../convex/lib/autopilotAlerts";
 import { useVisibleQuery } from "@/hooks/useVisibleQuery";
+import { DashboardSwitch } from "@/components/answers/dashboard/dashboard-route";
 
-export default function DashboardPage() {
+function LegacyDashboardPage() {
   const setupMode = typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("setup")
     : null;
@@ -746,4 +747,16 @@ function jobLabel(type: string): string {
     default:
       return type;
   }
+}
+
+/**
+ * Nov 2026: a site on Pentra Answers gets the Answers overview here; an articles site keeps the dashboard above,
+ * untouched, with a card offering the switch. A new account with no site starts at /start.
+ */
+export default function DashboardPage() {
+  return (
+    <Suspense>
+      <DashboardSwitch legacy={<LegacyDashboardPage />} />
+    </Suspense>
+  );
 }

@@ -24,6 +24,7 @@ import { useActiveSite } from "@/contexts/site-context";
 import { api } from "../../../convex/_generated/api";
 import { contentServiceStatus } from "../../lib/content-service-status";
 import { useVisibleQuery } from "@/hooks/useVisibleQuery";
+import { AnswersSidebarConnected } from "@/components/answers/dashboard/selection";
 
 const navSections = [
   {
@@ -51,7 +52,7 @@ const navSections = [
   },
 ];
 
-export function Sidebar() {
+function LegacySidebar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const { isFreePlan, isPlanLoaded } = usePlanLimits();
@@ -270,5 +271,26 @@ export function Sidebar() {
         </div>
       </aside>
     </>
+  );
+}
+
+/**
+ * Nov 2026: a site on Pentra Answers gets the Answers sidebar (Overview, Questions, Answer pages, Citations,
+ * Competitors, Settings, Billing); an articles site keeps the sidebar above, untouched.
+ */
+export function Sidebar() {
+  const { activeSite, answersSites, answersStatus } = useActiveSite();
+  if (answersStatus === "loading") return <SidebarPlaceholder />;
+  const entry = answersSites?.find((site) => site.siteId === activeSite?._id);
+  return entry?.answers ? <AnswersSidebarConnected /> : <LegacySidebar />;
+}
+
+/** While the account's sites load: the frame only, so neither sidebar flashes before the right one. */
+function SidebarPlaceholder() {
+  return (
+    <aside aria-hidden="true" className="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r border-border bg-surface-1 lg:flex">
+      <div className="mx-4 mt-5 h-5 w-24 rounded-control bg-surface-2" />
+      <div className="mx-3 mt-6 h-10 rounded-control bg-surface-2" />
+    </aside>
   );
 }
