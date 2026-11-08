@@ -158,6 +158,8 @@ export type OverviewPage = {
   words: number;
   sources: number;
   facts: number;
+  /** When Pentra saw the published page live on the site (null: not yet). Older backends omit it. */
+  liveAt?: number | null;
 };
 
 export type OverviewCitation = {
@@ -187,6 +189,8 @@ export type Overview = {
     publishing: Publishing | null;
     autopublish: boolean;
     weeklyEmail: boolean;
+    /** When the next full run is due (null: none scheduled, as on the free snapshot). Older backends omit it. */
+    nextRunAt?: number | null;
   };
   access: AnswersAccess;
   allows: AnswersAllows;
@@ -235,6 +239,8 @@ export type AnswerPage = {
   notWrittenReason: string | null;
   rewriteReason: string | null;
   history: { pageId: string; version: number; status: string; updatedAt: number; rewriteReason: string | null }[];
+  /** As on overview.pages (when the page query carries it). */
+  liveAt?: number | null;
   citationList: { checkId: string; assistant: string; at: number; url: string }[];
 };
 

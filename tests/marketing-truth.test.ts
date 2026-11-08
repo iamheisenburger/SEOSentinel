@@ -46,6 +46,11 @@ test("public Pentra copy sells only what the product delivers", () => {
   // The publisher supports these (coordinator, Nov 7 2026); the list is defined once and rendered from it.
   assert.deepEqual(PUBLISH_TARGETS.map((target) => target.id), ["wordpress", "webflow", "shopify", "ghost", "github", "webhook", "hosted"]);
   assert.match(read("src/components/marketing/publish-targets.tsx"), /PUBLISH_TARGETS\.map\(/);
+  // Wrong-fact findings aren't built (coordinator, Nov 8 2026): no page, the sign-in panel or the FAQ claims them.
+  for (const [path, text] of [...marketing, ["src/components/marketing/faq-data.ts", read("src/components/marketing/faq-data.ts")] as const]) {
+    assert.doesNotMatch(text, /wrong fact|what they get wrong|gets? (?:my|your) business wrong|states? incorrectly|kind: "wrong"|\{ wrong:/i, path);
+  }
+  assert.match(read("src/components/marketing/first-hour.tsx"), /title: "Shows who gets named instead"/);
   // Never name data suppliers in marketing copy.
   for (const [path, text] of marketing) assert.doesNotMatch(text, /DataForSEO|SerpApi|Bright ?Data/i, path);
 });

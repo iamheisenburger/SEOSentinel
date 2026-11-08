@@ -99,16 +99,26 @@ function AskFragment() {
   );
 }
 
-function WrongFragment() {
+function NamedInsteadFragment() {
+  const rows = [
+    { name: SAMPLE_BUSINESS.competitors[0], count: 41, you: false },
+    { name: SAMPLE_BUSINESS.competitors[1], count: 27, you: false },
+    { name: `${SAMPLE_BUSINESS.name} (you)`, count: 3, you: true },
+  ];
   return (
     <Fragment>
-      <StatusPill kind="wrong">Wrong fact</StatusPill>
-      <p className="mt-3 text-[13px] leading-[19px] text-text">
-        Perplexity says you close at 5pm. Your site says 7pm.
-      </p>
+      <FragmentLabel>Named instead</FragmentLabel>
+      <ul className="mt-2.5 space-y-1.5 text-[12.5px] leading-[18px]">
+        {rows.map((row) => (
+          <li key={row.name} className="flex items-center justify-between gap-3">
+            <span className={row.you ? "truncate text-text-2" : "hl-rival truncate"}>{row.name}</span>
+            <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-text">{row.count}</span>
+          </li>
+        ))}
+      </ul>
       <div className="mt-3 border-t border-border pt-2.5">
-        <FragmentLabel>Source it used</FragmentLabel>
-        <p className="mt-1 text-[12.5px] leading-[18px] text-text-3">A 2023 directory listing</p>
+        <FragmentLabel>Sources they cite</FragmentLabel>
+        <p className="mt-1 truncate text-[12.5px] leading-[18px] text-text-3">reddit.com · houzz.com · angi.com</p>
       </div>
     </Fragment>
   );
@@ -142,9 +152,9 @@ const STEPS: { title: string; body: string; fragment: ReactNode }[] = [
     fragment: <AskFragment />,
   },
   {
-    title: "Flags what they get wrong",
-    body: "Hours, prices or services an assistant states incorrectly.",
-    fragment: <WrongFragment />,
+    title: "Shows who gets named instead",
+    body: "The competitors the answers name, and the sources the assistants cite.",
+    fragment: <NamedInsteadFragment />,
   },
   {
     title: `Writes your first ${SNAPSHOT.draftPages} pages`,

@@ -21,7 +21,7 @@ import { cx } from "@/lib/cx";
 
 /* ─── Data shape: one recorded AI answer ─────────────────────────────────── */
 
-/** Answer text is plain strings plus marked spans: the business, competitors, a wrong fact, a quote, a citation. */
+/** Answer text is plain strings plus marked spans: the business, competitors, a flagged span, a quote, a citation. */
 export type Segment =
   | string
   | { you: string }

@@ -118,7 +118,7 @@ function SetupErrorNotice({ state }: { state: SetupState }) {
     setMessage(null);
     try {
       await actions.confirmSetup({ siteId: state.siteId, competitors: state.competitors, ...(state.country ? { country: state.country } : {}) });
-      setMessage("Asked again. If the questions still don't appear in a few minutes, Pentra retries by itself.");
+      setMessage("Started again. The questions appear here in a few minutes.");
     } catch (e) {
       setMessage(userErrorMessage(e, "Pentra couldn't restart the setup. Try again in a minute."));
     } finally {
@@ -129,7 +129,7 @@ function SetupErrorNotice({ state }: { state: SetupState }) {
     <InlineError className="mt-8" title="The first hour couldn't start"
       actions={<><Button variant="secondary" size="sm" onClick={retry} loading={busy} loadingLabel="Trying…">Try again</Button>
         <ButtonAnchor href={`mailto:${SUPPORT_EMAIL}`} variant="ghost" size="sm">Email us</ButtonAnchor></>}>
-      {state.setupError} Pentra also tries again by itself within six hours.{message && <span className="mt-1 block text-text">{message}</span>}
+      {state.setupError}{message && <span className="mt-1 block text-text">{message}</span>}
     </InlineError>
   );
 }
@@ -181,18 +181,29 @@ function AskingDetail({ run }: { run: RunProgress }) {
         </p>
       )}
       {run.perAssistant.length > 0 && (
-        <ul className="flex flex-col gap-2" aria-label="Questions per assistant">
+        <ul className="flex flex-col gap-3" aria-label="Questions per assistant">
           {run.perAssistant.map((a) => {
             const done = typeof a.done === "number" ? a.done : null;
+            const named = typeof a.named === "number" ? a.named : 0;
+            const answered = typeof a.answered === "number" ? a.answered : null;
+            const label = done !== null
+              ? `${assistantLabel(a.assistant)}: ${done} of ${a.total} asked${answered !== null ? `, ${answered} answered, named you in ${named}` : ""}.`
+              : `${assistantLabel(a.assistant)}: ${a.total} questions to ask.`;
             return (
-              <li key={a.assistant} className={cx("grid items-center gap-3", done !== null ? "grid-cols-[minmax(0,1fr)_72px_56px]" : "grid-cols-[minmax(0,1fr)_auto]")}>
-                {isAssistantId(a.assistant) ? <AssistantMark assistant={a.assistant} size="sm" showLabel labelClassName="truncate text-[12px] text-text-2" /> : <span className="text-[12px]">{assistantLabel(a.assistant)}</span>}
+              <li key={a.assistant} aria-label={label} className="flex flex-col gap-1.5">
+                <span className="flex items-center justify-between gap-3">
+                  {isAssistantId(a.assistant) ? <AssistantMark assistant={a.assistant} size="sm" showLabel labelClassName="truncate text-[12px] text-text-2" /> : <span className="text-[12px]">{assistantLabel(a.assistant)}</span>}
+                  <span className="shrink-0 text-right text-[12px] tabular-nums text-text-3">
+                    {done !== null ? <>{done} of {a.total} asked · <span className={named > 0 ? "text-you" : undefined}>named in {named}</span></> : plural(a.total, "question")}
+                  </span>
+                </span>
                 {done !== null && (
-                  <span className="block h-1 overflow-hidden rounded-full bg-surface-3" aria-hidden="true">
-                    <span className="block h-full rounded-full bg-text-3 transition-[width] duration-[var(--d-state)]" style={{ width: `${(done / Math.max(1, a.total)) * 100}%` }} />
+                  // Gray: asked so far. Blue, from the left: answers naming you (Signal Blue means "you").
+                  <span className="relative block h-1 overflow-hidden rounded-full bg-surface-3" aria-hidden="true">
+                    <span className="absolute inset-y-0 left-0 rounded-full bg-text-4 transition-[width] duration-[var(--d-state)]" style={{ width: `${(done / Math.max(1, a.total)) * 100}%` }} />
+                    {named > 0 && <span className="absolute inset-y-0 left-0 rounded-full bg-you transition-[width] duration-[var(--d-state)]" style={{ width: `${(named / Math.max(1, a.total)) * 100}%` }} />}
                   </span>
                 )}
-                <span className="text-right font-mono text-[11px] tabular-nums text-text-3">{done !== null ? `${done}/${a.total}` : plural(a.total, "question")}</span>
               </li>
             );
           })}

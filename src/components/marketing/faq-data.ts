@@ -27,16 +27,16 @@ export const LANDING_FAQ: { id: string; question: string; answer: string }[] = [
       "Not for the free snapshot: Pentra reads your public pages, the way a search engine does. To publish, you connect WordPress, Webflow, Shopify, Ghost or GitHub, use a signed webhook for any other CMS, or point answers.yourdomain.com at Pentra with one DNS record.",
   },
   {
-    id: "wrong-facts",
-    question: "What if an assistant gets my business wrong?",
+    id: "not-named",
+    question: "What do I see when an assistant names someone else?",
     answer:
-      "The snapshot shows it: what the assistant said, what your site says, and the source it relied on. Pentra's pages then state your correct facts with their sources, so assistants have something accurate to cite.",
+      "Every answer in full: the competitors it named, the sources it cited and the question it answered. The questions where you can win are the ones Pentra writes pages for first.",
   },
   {
     id: "page-accuracy",
     question: "Will the pages say things about me that aren't true?",
     answer:
-      "Pages are written from facts on your own site, and every fact keeps its source, so you can check each one. When your prices or hours change, the pages that state them are updated.",
+      "Pages are written from the facts you confirmed and your live site, and every fact keeps its source, so you can check each one. Published pages keep their words until Pentra rewrites them.",
   },
   {
     id: "cost",

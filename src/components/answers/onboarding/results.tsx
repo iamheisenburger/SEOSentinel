@@ -32,13 +32,14 @@ export function SnapshotResults({ state, view, pageId }: { state: SetupState; vi
   const name = state.name ?? state.domain;
   const base = `/start?site=${encodeURIComponent(state.siteId)}`;
   const free = state.access === "free";
-  const drafts = state.pages.filter((p) => p.status === "draft" || p.status === "writing" || p.status === "publish_failed");
+  // One count for the tab and the bar: the pages written and waiting as drafts.
+  const draftCount = state.pages.filter((p) => p.status === "draft").length;
 
   if (pageId) {
     return (
       <div className={cx("mx-auto max-w-[1180px] px-[var(--gutter)] py-10 sm:py-12", free && "pb-32")}>
         <AnswerPageDetail pageId={pageId} access={state.access} destination={null} back={{ href: `${base}&view=drafts`, label: "All draft pages" }} />
-        {free && <UpgradeBar count={drafts.length} />}
+        {free && <UpgradeBar count={draftCount} />}
       </div>
     );
   }
@@ -62,7 +63,7 @@ export function SnapshotResults({ state, view, pageId }: { state: SetupState; vi
         idPrefix="snapshot"
         active={view}
         onChange={(id) => router.replace(href(id === "drafts" ? `${base}&view=drafts` : base), { scroll: false })}
-        tabs={[{ id: "snapshot", label: "Snapshot" }, { id: "drafts", label: "Draft pages", count: state.pages.length }]}
+        tabs={[{ id: "snapshot", label: "Snapshot" }, { id: "drafts", label: "Draft pages", ...(draftCount ? { count: draftCount } : {}) }]}
       />
 
       <div id={`snapshot-panel-${view}`} role="tabpanel" aria-labelledby={`snapshot-tab-${view}`} className="mt-8">
@@ -84,7 +85,7 @@ export function SnapshotResults({ state, view, pageId }: { state: SetupState; vi
           <DraftList pages={state.pages} base={base} free={free} />
         )}
       </div>
-      {free && <UpgradeBar count={drafts.length} />}
+      {free && <UpgradeBar count={draftCount} />}
     </section>
   );
 }

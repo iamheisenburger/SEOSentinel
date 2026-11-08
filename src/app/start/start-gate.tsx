@@ -1,8 +1,9 @@
 "use client";
 
-import { UserButton, useAuth } from "@clerk/nextjs";
+import { UserButton, useAuth, useUser } from "@clerk/nextjs";
 import { useConvexAuth } from "convex/react";
 import { ToastProvider } from "@/components/ui/toast";
+import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { StartFlow, type StartAuth } from "@/components/answers/onboarding/start-flow";
 
 /**
@@ -12,12 +13,15 @@ import { StartFlow, type StartAuth } from "@/components/answers/onboarding/start
  */
 export function StartGate({ serverSignedIn }: { serverSignedIn: boolean }) {
   const { isLoaded, isSignedIn } = useAuth();
+  const { user } = useUser();
   const convex = useConvexAuth();
+  // POST /api/billing/sync-plan once signed in (again when the session's features change, as after checkout).
+  usePlanLimits();
   const signedIn = isLoaded ? Boolean(isSignedIn) : serverSignedIn;
   const auth: StartAuth = !signedIn ? "signed-out" : convex.isLoading || !isLoaded ? "loading" : convex.isAuthenticated ? "signed-in" : "session-error";
   return (
     <ToastProvider>
-      <StartFlow auth={auth} account={<UserButton userProfileMode="modal" />} />
+      <StartFlow auth={auth} email={user?.primaryEmailAddress?.emailAddress ?? null} account={<UserButton userProfileMode="modal" />} />
     </ToastProvider>
   );
 }

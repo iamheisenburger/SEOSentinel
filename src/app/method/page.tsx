@@ -50,17 +50,17 @@ const DEFINITIONS: { term: string; pill?: ReactNode; body: string }[] = [
   {
     term: "Not mentioned",
     pill: <StatusPill kind="none">Not mentioned</StatusPill>,
-    body: "The answer names other businesses and not yours. We record which ones.",
+    body: "The answer doesn't name your business.",
+  },
+  {
+    term: "Competitor named",
+    pill: <StatusPill kind="rival">Not mentioned · named Cedar Row Builders</StatusPill>,
+    body: "The answer names one of the competitors you confirmed and not you. We record which ones, how often, and the sources the answer cited.",
   },
   {
     term: "Cited",
     pill: <StatusPill kind="named">Cited your page</StatusPill>,
     body: "One of your pages appears among the sources the answer links to.",
-  },
-  {
-    term: "Wrong fact",
-    pill: <StatusPill kind="wrong">Wrong fact</StatusPill>,
-    body: "The answer states something about your business that your own site contradicts, such as hours, prices or services. We show both, and the source the assistant relied on.",
   },
 ];
 

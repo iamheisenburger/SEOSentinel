@@ -25,9 +25,11 @@ const MIN_TEXT = 200;
  * sources, where it published and what happened after, the citations it won, and its versions. Drafts can be edited
  * (the owner's words are kept exactly) and, on the plan, published.
  */
-export function AnswerPageDetail({ pageId, access, destination, back }: {
+export function AnswerPageDetail({ pageId, access, destination, back, liveAt }: {
   pageId: string;
   access: AnswersAccess;
+  /** From overview.pages when the page query doesn't carry it (undefined: unknown). */
+  liveAt?: number | null;
   /** Where pages publish now, e.g. "kettlewood/kettlewooddecks.com on GitHub" (null: nowhere yet). */
   destination: string | null;
   back: { href: string; label: string };
@@ -72,7 +74,7 @@ export function AnswerPageDetail({ pageId, access, destination, back }: {
             </div>
           )}
         </div>
-        <PageRail page={page} />
+        <PageRail page={page.liveAt === undefined && liveAt !== undefined ? { ...page, liveAt } : page} />
       </div>
     </div>
   );

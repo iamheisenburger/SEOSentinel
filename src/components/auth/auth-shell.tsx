@@ -6,7 +6,7 @@ import { ASSISTANT_NAMES_SENTENCE, HONESTY_LINE, SNAPSHOT } from "@/lib/product-
 const workflow = [
   { label: "Reads your site", detail: `Lists about ${SNAPSHOT.questions} questions your buyers ask AI assistants.` },
   { label: "Asks the assistants", detail: `${ASSISTANT_NAMES_SENTENCE}: about ${SNAPSHOT.answers} answers, each kept in full.` },
-  { label: "Shows the proof", detail: "Who they name instead of you and what they get wrong, with every answer." },
+  { label: "Shows the proof", detail: "Who they name instead of you, and the sources they cite, with every answer." },
   { label: "Writes the answers", detail: "Pages that answer those questions from your own facts, published on the plan." },
 ];
 

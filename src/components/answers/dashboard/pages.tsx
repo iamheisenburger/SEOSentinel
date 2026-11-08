@@ -169,5 +169,6 @@ export function AnswersPageScreen({ siteId, pageId }: { siteId: string; pageId: 
   if (overview === undefined) return <PanelSkeleton lines={12} />;
   if (overview === null) return <Notice>This page isn&apos;t available.</Notice>;
   const label = destination.kind === "site" || destination.kind === "hosted" ? destination.label : null;
-  return <AnswerPageDetail pageId={pageId} access={overview.access} destination={label} back={{ href: "/dashboard/pages", label: "Answer pages" }} />;
+  const liveAt = overview.pages.find((p) => p.pageId === pageId)?.liveAt;
+  return <AnswerPageDetail pageId={pageId} access={overview.access} destination={label} liveAt={liveAt} back={{ href: "/dashboard/pages", label: "Answer pages" }} />;
 }

@@ -203,7 +203,7 @@ function makeQuestions(site: SiteRow, createdAt: number): QuestionRow[] {
 
 function makePage(site: SiteRow, q: QuestionRow, args: { title: string; status: string; createdAt: number; updatedAt?: number; version?: number;
   publishedAt?: number | null; indexNow?: { at: number; status: string } | null; publishError?: string | null; notWrittenReason?: string | null;
-  rewriteReason?: string | null; issues?: string[]; markdown?: string; googleSitemapAt?: number | null; pageId?: string }): PageRow {
+  rewriteReason?: string | null; issues?: string[]; markdown?: string; googleSitemapAt?: number | null; pageId?: string; liveAt?: number | null }): PageRow {
   const slug = answerSlug(q.question);
   const publishedAt = args.publishedAt ?? null;
   const writing = args.status === "writing" || args.status === "not_written";
@@ -217,6 +217,8 @@ function makePage(site: SiteRow, q: QuestionRow, args: { title: string; status: 
     publishedUrl: publishedAt || args.status === "retired" ? `https://${site.domain}/blog/${slug}` : null, publishedAt,
     publishError: args.publishError ?? null, indexNow: args.indexNow ?? null, googleSitemapAt: args.googleSitemapAt ?? null, citations: 0, lastCitedAt: null,
     notWrittenReason: args.notWrittenReason ?? null, rewriteReason: args.rewriteReason ?? null,
+    // Seen live a few minutes after publishing, unless the scenario says the site hasn't shown it yet.
+    liveAt: args.liveAt !== undefined ? args.liveAt : publishedAt ? publishedAt + 6 * MIN : null,
   };
 }
 
@@ -322,7 +324,7 @@ export function seed(options: HarnessOptions): Db {
     makePage(site, q(2), { pageId: "p_2_v2", title: PAGE_TITLES[2]!, status: "published", version: 2, createdAt: day(10, 2, 8), publishedAt: day(10, 2, 9), indexNow: { at: day(10, 2, 9) + 8 * MIN, status: "submitted" }, googleSitemapAt: day(10, 2, 10), rewriteReason: "Not cited by any assistant yet" }),
     makePage(site, q(19), { title: PAGE_TITLES[19]!, status: "published", createdAt: day(9, 24, 15), publishedAt: day(9, 25, 10), indexNow: { at: day(9, 25, 10) + 7 * MIN, status: "submitted" }, googleSitemapAt: day(9, 25, 11) }),
     makePage(site, q(13), { title: PAGE_TITLES[13]!, status: "published", createdAt: day(9, 31, 15), publishedAt: day(10, 1, 10), indexNow: { at: day(10, 1, 10) + 7 * MIN, status: "submitted" }, googleSitemapAt: day(10, 1, 11) }),
-    makePage(site, q(23), { title: PAGE_TITLES[23]!, status: "published", createdAt: day(10, 3, 15), publishedAt: day(10, 4, 10), issues: [] }),
+    makePage(site, q(23), { title: PAGE_TITLES[23]!, status: "published", createdAt: day(10, 3, 15), publishedAt: day(10, 4, 10), issues: [], liveAt: null }),
     makePage(site, q(3), { title: PAGE_TITLES[3]!, status: "draft", createdAt: day(10, 7, 12), updatedAt: day(10, 7, 12) + 6 * MIN }),
     makePage(site, q(9), { title: PAGE_TITLES[9]!, status: "draft", createdAt: day(10, 7, 12), updatedAt: day(10, 7, 12) + 8 * MIN, issues: ["Edited by you"] }),
     makePage(site, q(5), { title: PAGE_TITLES[5]!, status: "publish_failed", createdAt: day(10, 6, 12), updatedAt: day(10, 6, 13),
@@ -377,6 +379,12 @@ const PAGE_TITLES: Record<number, string> = {
   23: "What a deck permit costs in Travis County",
 };
 
+/** The dispatcher starts the next full run seven days after the last one finished. */
+function nextRunOf(runs: RunRow[]): number | null {
+  const last = runs.filter((r) => r.run.status === "done" && r.run.kind !== "recheck").sort((a, b) => (b.run.finishedAt ?? 0) - (a.run.finishedAt ?? 0))[0];
+  return last?.run.finishedAt ? last.run.finishedAt + 7 * DAY : null;
+}
+
 /* ─── The store ────────────────────────────────────────────────────────── */
 
 const publicPage = (p: PageRow) => {
@@ -430,7 +438,8 @@ export function createSyntheticStore(options: HarnessOptions): SyntheticStore {
       const runs = db.runs.filter((r) => r.siteId === siteId).sort((a, b) => b.run.createdAt - a.run.createdAt).slice(0, 13);
       return {
         site: { siteId, domain: site.domain, name: site.name ?? site.domain, country: site.country ?? "US", competitors: site.competitors,
-          confirmedAt: site.confirmedAt, setupError: site.setupError, publishing: site.publishing, autopublish: site.autopublish, weeklyEmail: site.weeklyEmail },
+          confirmedAt: site.confirmedAt, setupError: site.setupError, publishing: site.publishing, autopublish: site.autopublish, weeklyEmail: site.weeklyEmail,
+          nextRunAt: allows(site.access).weekly ? nextRunOf(runs) : null },
         access: site.access, allows: allows(site.access),
         runs: runs.map(publicRun),
         trend: runs.filter((r) => r.run.status === "done" && r.run.kind !== "recheck").reverse().map((r) => ({ at: r.run.finishedAt ?? r.run.createdAt,
@@ -440,7 +449,7 @@ export function createSyntheticStore(options: HarnessOptions): SyntheticStore {
         pages: db.pages.filter((p) => p.siteId === siteId).map((p) => ({ pageId: p.pageId, questionId: p.questionId, question: p.question, status: p.status,
           title: p.title, slug: p.slug, publishedUrl: p.publishedUrl, publishedAt: p.publishedAt, indexNow: p.indexNow, citations: p.citations,
           lastCitedAt: p.lastCitedAt, updatedAt: p.updatedAt, issues: p.issues, publishError: p.publishError,
-          words: p.markdown.split(/\s+/).filter(Boolean).length, sources: p.sources.length, facts: p.facts.length })),
+          words: p.markdown.split(/\s+/).filter(Boolean).length, sources: p.sources.length, facts: p.facts.length, liveAt: p.liveAt ?? null })),
         citations: db.citations.filter((c) => c.siteId === siteId).sort((a, b) => b.at - a.at).slice(0, 20).map((c) => {
           const rest: Partial<typeof c> = { ...c };
           delete rest.siteId;
@@ -451,7 +460,12 @@ export function createSyntheticStore(options: HarnessOptions): SyntheticStore {
     runProgress: ({ runId }) => {
       const row = db.runs.find((r) => r.run.runId === runId);
       if (!row) return null;
-      return { ...publicRun(row), perAssistant: ASSISTANT_IDS.map((assistant) => ({ assistant, total: row.jobs.filter((j) => j.assistant === assistant).length })),
+      return { ...publicRun(row), perAssistant: ASSISTANT_IDS.map((assistant) => {
+          const mine = row.checks.filter((c) => c.assistant === assistant);
+          const answered = mine.filter((c) => c.status === "answered");
+          return { assistant, total: row.jobs.filter((j) => j.assistant === assistant).length, done: mine.length, answered: answered.length,
+            named: answered.filter((c) => c.named).length };
+        }),
         feed: [...row.checks].sort((a, b) => b.askedAt - a.askedAt).slice(0, 12) };
     },
     questionEvidence: ({ questionId, limit }) => {
@@ -519,6 +533,7 @@ export function createSyntheticStore(options: HarnessOptions): SyntheticStore {
 
   const actions: AnswersActions = {
     async createSite({ domain }) {
+      // The email (when given) is for the "ready" email; the harness has no mail to send.
       const host = domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split(/[/?#]/)[0] ?? "";
       if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host)) fail("Enter your website's address, like yourbusiness.com.");
       const existing = db.sites.find((s) => s.domain === host);
@@ -616,6 +631,7 @@ export function createSyntheticStore(options: HarnessOptions): SyntheticStore {
         }
         page.status = "published";
         page.publishedAt = Date.now();
+        page.liveAt = Date.now();
         page.publishedUrl = hosted ? `https://${site.publishing!.hostedDomain}/${page.slug}` : `https://${site.domain}/blog/${page.slug}`;
       });
       return { ok: true };

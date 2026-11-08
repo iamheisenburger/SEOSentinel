@@ -4,6 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 import { UserButton } from "@clerk/nextjs";
 import { useActiveSite, type AnswersSiteEntry } from "@/contexts/site-context";
+import { usePlanLimits } from "@/hooks/usePlanLimits";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AnswersSidebar } from "@/components/answers/dashboard/answers-sidebar";
 import { SwitchToAnswersCard } from "@/components/answers/dashboard/switch-card";
@@ -79,6 +80,9 @@ export function AnswersRoute({ children }: { children: (site: MySite) => ReactNo
 /** The app's sidebar for an Answers site: the legacy context selects the site; overview says the plan. */
 export function AnswersSidebarConnected() {
   const { setActiveSiteId, answersSites, activeSite } = useActiveSite();
+  // Syncs the Clerk plan to Pentra on load and whenever the session's features change (after checkout), so a paid
+  // account's access shows without waiting for the billing webhook.
+  usePlanLimits();
   const pathname = usePathname();
   const siteId = activeSite?._id ?? null;
   return (

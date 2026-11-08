@@ -133,10 +133,24 @@ export type IndexingState = { label: string; detail: string; pill: PillKind };
  * What happened after publishing, stated from the page's own record: checked live, then sent to IndexNow and
  * Google's sitemap (convex/actions/answerPublish.ts verifyAndIndex). Nothing here claims the page is in a search index.
  */
+export const WAITING_FOR_PAGE = "Waiting for the page to appear on your site";
+
 export function indexingState(page: { status: string; publishedUrl: string | null; indexNow: IndexNow | null; issues: string[];
-  googleSitemapAt?: number | null; publishedAt?: number | null }, now?: number): IndexingState | null {
+  googleSitemapAt?: number | null; publishedAt?: number | null; liveAt?: number | null }, now?: number): IndexingState | null {
   if (page.status !== "published" || !page.publishedUrl) return null;
   const notLive = page.issues.find((issue) => issue.startsWith("Not live yet"));
+  if (page.liveAt !== undefined) {
+    // The backend says when it saw the page live: "Live" only then.
+    if (page.liveAt === null) {
+      const late = notLive || (now !== undefined && page.publishedAt && now - page.publishedAt > 2 * 3_600_000);
+      return late
+        ? { label: "Waiting", detail: notLive ? `${WAITING_FOR_PAGE}. ${notLive}` : `${WAITING_FOR_PAGE}. Sites that rebuild after a publish can take a while; Pentra keeps checking.`, pill: "failed" }
+        : { label: "Checking", detail: "Pentra is checking the page is live before it tells search engines. Sites that rebuild can take a few minutes.", pill: "indexing" };
+    }
+    const told = page.indexNow?.status === "submitted" ? ` Sent to IndexNow ${shortDate(page.indexNow.at)}.` : "";
+    const sitemap = page.googleSitemapAt ? ` Sitemap sent to Google ${shortDate(page.googleSitemapAt)}.` : "";
+    return { label: "Live", detail: `Live since ${shortDate(page.liveAt)}.${told}${sitemap}`, pill: "published" };
+  }
   if (notLive) return { label: "Not live yet", detail: notLive, pill: "failed" };
   const status = page.indexNow?.status ?? null;
   const sitemap = page.googleSitemapAt ? ` Sitemap sent to Google ${shortDate(page.googleSitemapAt)}.` : "";

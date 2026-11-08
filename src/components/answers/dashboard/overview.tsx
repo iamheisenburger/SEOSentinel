@@ -54,7 +54,8 @@ function OverviewBody({ overview }: { overview: Overview }) {
   const run = latestFullRun(overview.runs);
   const asking = overview.runs.find((r) => r.status === "asking") ?? null;
   const delta = weeklyDelta(overview.trend);
-  const next = allows.weekly ? nextFullRunAt(overview.trend) : null;
+  // The backend's own schedule when it says (null: nothing scheduled); otherwise the dispatcher's weekly rule.
+  const next = site.nextRunAt !== undefined ? site.nextRunAt : allows.weekly ? nextFullRunAt(overview.trend) : null;
   const fullRuns = overview.runs.filter((r) => r.status === "done" && r.kind !== "recheck").sort((a, b) => a.createdAt - b.createdAt);
   const log = weekLog(overview, now);
   const pageTitle = new Map(overview.pages.map((p) => [p.pageId, p.title]));
@@ -63,7 +64,7 @@ function OverviewBody({ overview }: { overview: Overview }) {
   const meta = [
     site.domain,
     lastAsked ? `last asked ${timeAgo(lastAsked, now)}` : null,
-    next ? `next run around ${shortDate(next)} (${timeUntil(next, now)})` : access === "free" ? "free snapshot" : null,
+    next ? (next - now < 3_600_000 ? "next run within the hour" : `next run around ${shortDate(next)} (${timeUntil(next, now)})`) : access === "free" ? "free snapshot" : null,
   ].filter(Boolean).join(" · ");
 
   return (
@@ -71,7 +72,7 @@ function OverviewBody({ overview }: { overview: Overview }) {
       <ScreenHeader title={site.name} meta={meta} actions={allows.recheck ? <AskAgain siteId={site.siteId} /> : null} />
       <UpgradedNotice overview={overview} />
       {!upgraded && <PublishPrompt overview={overview} />}
-      {site.setupError && !run && <InlineError title="The first hour couldn't start">{site.setupError} Pentra tries again by itself within six hours.</InlineError>}
+      {site.setupError && !run && <SetupRetry overview={overview} />}
       {asking && (
         <Notice tone="you" actions={asking.kind === "snapshot" ? <ButtonLink href={href(`/start?site=${encodeURIComponent(site.siteId)}`)} variant="secondary" size="sm">Watch it live</ButtonLink> : undefined}>
           <span className="inline-flex items-center gap-2"><LiveDot />Asking the assistants now: {asking.done} of {plural(asking.total, "answer")} in. Counts update when the run finishes.</span>
@@ -104,7 +105,7 @@ function OverviewBody({ overview }: { overview: Overview }) {
             </Panel>
           </div>
         </>
-      ) : !asking ? (
+      ) : !asking && !site.setupError ? (
         <Notice actions={<ButtonLink href={href(`/start?site=${encodeURIComponent(site.siteId)}`)} size="sm">Open setup</ButtonLink>}>
           No finished run yet. Your snapshot appears here when the first hour is done.
         </Notice>
@@ -143,6 +144,32 @@ function OverviewBody({ overview }: { overview: Overview }) {
         )}
       </Panel>
     </>
+  );
+}
+
+/** The first hour couldn't start: what happened, and a Try again that starts it over (confirmSetup). */
+function SetupRetry({ overview }: { overview: Overview }) {
+  const actions = useAnswersActions();
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const retry = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await actions.confirmSetup({ siteId: overview.site.siteId, competitors: overview.site.competitors, country: overview.site.country });
+      toast("Started again. The questions appear in a few minutes.", "success");
+    } catch (e) {
+      setError(userErrorMessage(e, "Pentra couldn't start again. Try in a minute."));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <InlineError title="The first hour couldn't start"
+      actions={<Button variant="secondary" size="sm" onClick={retry} loading={busy} loadingLabel="Starting…">Try again</Button>}>
+      {overview.site.setupError}{error && <span className="mt-1 block text-text">{error}</span>}
+    </InlineError>
   );
 }
 

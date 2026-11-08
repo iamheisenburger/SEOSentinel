@@ -12,6 +12,7 @@ import { InlineError, ScreenErrorBoundary } from "@/components/answers/ui";
 import { SiteSetup } from "@/components/answers/onboarding/site-setup";
 import { useAnswersActions, useAnswersQuery, useAppHref } from "@/lib/answers/backend";
 import { DOMAIN_ERROR, normalizeDomain, startAuthHref, startHref } from "@/lib/domain-input";
+import { createSiteWithEmail } from "@/lib/answers/create-site";
 import { HONESTY_LINE, SNAPSHOT } from "@/lib/product-facts";
 import { userErrorMessage } from "@/lib/user-error";
 import { cx } from "@/lib/cx";
@@ -43,7 +44,7 @@ function useRemembered(): string | null {
  * read, the owner confirms what Pentra understood, the first hour runs live, and the snapshot, drafts and upgrade
  * follow. Each step reads the backend's own state, so a refresh or an emailed link lands on the right one.
  */
-export function StartFlow({ auth, account }: { auth: StartAuth; account?: ReactNode }) {
+export function StartFlow({ auth, account, email }: { auth: StartAuth; account?: ReactNode; email?: string | null }) {
   const params = useSearchParams();
   const domainParam = params.get("domain");
   const siteParam = params.get("site");
@@ -54,7 +55,7 @@ export function StartFlow({ auth, account }: { auth: StartAuth; account?: ReactN
   else if (auth === "session-error") body = <SessionError />;
   else if (auth === "signed-out") body = <SignedOut requested={domainParam} />;
   else if (siteParam) body = <SiteSetup siteId={siteParam} onStep={setStep} />;
-  else if (domainParam) body = <CreateSite requested={domainParam} />;
+  else if (domainParam) body = <CreateSite requested={domainParam} email={email ?? null} />;
   else body = <SignedInEntry />;
 
   const shownStep: StartStep = auth === "signed-out" ? (normalizeDomain(domainParam) ? 1 : 0) : auth !== "signed-in" ? 1 : siteParam ? step : 2;
@@ -191,7 +192,7 @@ function SignedOut({ requested }: { requested: string | null }) {
 }
 
 /** Signed in with a domain: the site is created (once) and the page moves to its setup. */
-function CreateSite({ requested }: { requested: string }) {
+function CreateSite({ requested, email }: { requested: string; email: string | null }) {
   const domain = normalizeDomain(requested);
   const actions = useAnswersActions();
   const router = useRouter();
@@ -201,10 +202,11 @@ function CreateSite({ requested }: { requested: string }) {
   useEffect(() => {
     if (!domain || started.current) return;
     started.current = true;
-    actions.createSite({ domain })
+    // The owner's email goes with the site, so the first hour's "ready" email reaches them.
+    createSiteWithEmail(actions.createSite, domain, email)
       .then(({ siteId }) => { forget(); router.replace(href(`/start?site=${encodeURIComponent(siteId)}`)); })
       .catch((e) => setError(userErrorMessage(e, `Pentra couldn't add ${domain}. Check the address and try again.`)));
-  }, [domain, actions, router, href]);
+  }, [domain, email, actions, router, href]);
   if (error) {
     const alreadyTracking = /already tracks/i.test(error);
     return (

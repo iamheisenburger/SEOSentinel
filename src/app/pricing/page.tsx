@@ -23,7 +23,7 @@ const SNAPSHOT_ITEMS: { prefix: string | null; value: string | null; label: stri
   { prefix: "about", value: String(SNAPSHOT.questions), label: "questions your buyers ask AI assistants" },
   { prefix: null, value: String(SNAPSHOT.assistants), label: "assistants asked every question" },
   { prefix: "about", value: String(SNAPSHOT.answers), label: "answers, each stored in full" },
-  { prefix: null, value: null, label: "what they get wrong about you, with the source each assistant used" },
+  { prefix: null, value: null, label: "who gets named instead of you, and the sources each assistant cites" },
   { prefix: null, value: String(SNAPSHOT.draftPages), label: "draft answer pages for questions you can win" },
 ];
 
@@ -93,7 +93,7 @@ export default function PricingPage() {
                 <span className="type-number text-text">{item.value}</span>
               ) : (
                 <span className="flex h-11 items-center">
-                  <StatusPill kind="wrong">Wrong fact</StatusPill>
+                  <StatusPill kind="rival">Competitor named</StatusPill>
                 </span>
               )}
               <span className="mt-3 text-[14px] leading-[22px] text-text-2 [text-wrap:pretty]">{item.label}</span>

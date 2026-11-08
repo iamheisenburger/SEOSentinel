@@ -3,7 +3,7 @@ import { cx } from "@/lib/cx";
 
 /**
  * Status pills: 20px, pill radius, 12px/500, a tint background with a solid 6px dot and a --text label.
- * Green, amber and red appear here only as evidence outcomes: named you, a competitor named, a wrong fact.
+ * Green and amber appear here only as evidence outcomes (named you, a competitor named); red marks a failure.
  */
 export type PillKind =
   | "named"

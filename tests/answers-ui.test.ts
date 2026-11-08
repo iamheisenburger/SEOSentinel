@@ -14,7 +14,9 @@ import { getFunctionName } from "convex/server";
 import { runTotals } from "../convex/lib/answerEngine.ts";
 import { checkOutcomes, checkToEvidence, highlight, textToBlocks } from "../src/lib/answers/evidence.ts";
 import { deltaText, describeDestination, headline, latestFullRun, nextFullRunAt, weekLog, weeklyDelta, winnable, WEEK_MS } from "../src/lib/answers/derive.ts";
-import { elapsed, indexingState, listSentence, pageStatus, plural, timeAgo, utcStamp } from "../src/lib/answers/format.ts";
+import { elapsed, indexingState, listSentence, pageStatus, plural, timeAgo, utcStamp, WAITING_FOR_PAGE } from "../src/lib/answers/format.ts";
+import { createSiteWithEmail } from "../src/lib/answers/create-site.ts";
+import { ConvexError } from "convex/values";
 import { createSyntheticStore, type HarnessOptions } from "../src/lib/answers/synthetic.ts";
 import { SYNTHETIC_NOW } from "../src/lib/answers/synthetic-data.ts";
 import type { Check, Overview, Run } from "../src/lib/answers/types.ts";
@@ -97,6 +99,15 @@ test("indexing is stated from the page's record, never as 'indexed by Google'", 
   assert.equal(indexingState({ ...base, indexNow: null, issues: ["Not live yet at https://x.com/a. Check that your site rebuilt after Pentra's publish."] })!.label, "Not live yet");
   assert.equal(indexingState({ ...base, indexNow: { at: 1, status: "refused_403" } })!.detail, "Live. IndexNow refused the submission (403).");
   assert.equal(indexingState({ ...base, status: "draft", indexNow: null }), null);
+  // With the backend's liveAt: "Live" only once the page was seen on the site; after two hours, waiting is said plainly.
+  const published = Date.UTC(2026, 10, 7, 9);
+  const live = indexingState({ ...base, publishedAt: published, liveAt: published + 360_000, indexNow: { at: published + 600_000, status: "submitted" } }, published + 3_600_000)!;
+  assert.deepEqual([live.label, live.detail], ["Live", "Live since Nov 7. Sent to IndexNow Nov 7."]);
+  const waiting = indexingState({ ...base, publishedAt: published, liveAt: null, indexNow: null }, published + 3 * 3_600_000)!;
+  assert.equal(waiting.label, "Waiting");
+  assert.ok(waiting.detail.startsWith(`${WAITING_FOR_PAGE}.`));
+  assert.equal(indexingState({ ...base, publishedAt: published, liveAt: null, indexNow: { at: 1, status: "submitted" } }, published + 1_800_000)!.label, "Checking",
+    "never 'Live' before the page was seen, even when IndexNow answered");
   for (const path of ["src/lib/answers/format.ts", "src/components/answers/page-detail.tsx", "src/components/answers/dashboard/pages.tsx"]) {
     assert.doesNotMatch(read(path), /indexed by Google|Google indexed/i, path);
   }
@@ -109,6 +120,30 @@ test("where pages publish is said from the hosted address or the site's own conn
   assert.equal((describeDestination(null, { _id: "s", domain: "x.com", publishMethod: "github", repoOwner: "acme", repoName: "site" }) as { label: string }).label, "acme/site on GitHub");
   assert.equal(describeDestination(null, { _id: "s", domain: "x.com", publishMethod: "manual" }).kind, "none");
   assert.equal(describeDestination(null, undefined).kind, "loading");
+});
+
+test("a new site is created with the owner's email; an older backend without it still creates the site", async () => {
+  type Args = { domain: string; email?: string };
+  const recorder = (strict = false) => {
+    const calls: Args[] = [];
+    const call = async (args: Args) => {
+      calls.push(args);
+      if (strict && args.email) throw new Error("ArgumentValidationError: Object contains extra field `email`");
+      return { siteId: "s1", created: true };
+    };
+    return { calls, call };
+  };
+  const withEmail = recorder();
+  await createSiteWithEmail(withEmail.call, "kettlewooddecks.com", " owner@kettlewooddecks.com ");
+  assert.equal(JSON.stringify(withEmail.calls), JSON.stringify([{ domain: "kettlewooddecks.com", email: "owner@kettlewooddecks.com" }]));
+  const noEmail = recorder();
+  await createSiteWithEmail(noEmail.call, "kettlewooddecks.com", null);
+  assert.equal(JSON.stringify(noEmail.calls), JSON.stringify([{ domain: "kettlewooddecks.com" }]));
+  const older = recorder(true);
+  assert.equal(JSON.stringify(await createSiteWithEmail(older.call, "kettlewooddecks.com", "owner@kettlewooddecks.com")), JSON.stringify({ siteId: "s1", created: true }));
+  assert.equal(older.calls.length, 2, "retried once without the email");
+  const refused = async () => { throw new ConvexError("Your account already tracks kettlewooddecks.com. One website per account for now; contact us to add another."); };
+  await assert.rejects(createSiteWithEmail(refused, "another.com", "owner@kettlewooddecks.com"), /already tracks/, "a sentence for the owner is never retried away");
 });
 
 /* ─── The harness's synthetic data obeys the backend's rules ───────────── */
@@ -209,8 +244,17 @@ test("/start's first hour: honest counts as they arrive, partial failures said, 
   assert.match(page, /Safe to close this tab\. We'll email you when it's ready\./);
   assert.match(page, /1 answer failed; counts show what Pentra has/);
   assert.match(page, /Showing the newest 12 of 62/);
+  // Per-assistant progress from the backend's counts (asked, answered, named), never estimated.
+  const progress = s.get("runProgress", { runId: run.runId })!;
+  const chatgpt = progress.perAssistant.find((a) => a.assistant === "chatgpt")!;
+  assert.match(harness("first-hour~free", "start?site=site_kettlewood").html,
+    new RegExp(`aria-label="ChatGPT: ${chatgpt.done} of ${chatgpt.total} asked, ${chatgpt.answered} answered, named you in ${chatgpt.named}\\."`));
+  assert.match(page, new RegExp(`ChatGPT ${chatgpt.done} of ${chatgpt.total} asked · named in ${chatgpt.named}`));
   assert.doesNotMatch(page, /\d+%/, "no percentage");
-  assert.match(text(harness("setup-error~free", "start?site=site_kettlewood").html), /The first hour couldn't start.*tries again by itself within six hours/);
+  const setupError = text(harness("setup-error~free", "start?site=site_kettlewood").html);
+  assert.match(setupError, /The first hour couldn't start/);
+  assert.match(setupError, /Try again/);
+  assert.match(text(harness("setup-error~free", "dashboard").html), /The first hour couldn't start.*Try again/, "the dashboard offers the same retry");
   assert.match(text(harness("run-failed~free", "start?site=site_kettlewood").html), /The run stopped before it finished/);
 });
 
@@ -221,6 +265,8 @@ test("/start's snapshot and drafts: the count sentence, drafts marked not publis
   assert.match(snapshot, /4 searches showed no AI Overview and 2 answers failed ; listed, not counted\./);
   assert.match(snapshot, /Questions you can win now/);
   assert.match(snapshot, new RegExp(`Publish these 4 pages and keep tracking\\. ${formatUsd(PENTRA_PLAN.monthly).replace("$", "\\$")}/mo`));
+  const draftCount = store({ scenario: "drafts", access: "free" }).get("setupState", { siteId: SITE })!.pages.filter((p) => p.status === "draft").length;
+  assert.match(snapshot, new RegExp(`Draft pages ${draftCount} `), "the tab counts what the bar counts: pages written as drafts");
   const drafts = text(harness("drafts~free", "start?site=site_kettlewood&view=drafts").html);
   assert.equal(drafts.match(/Draft · not published/g)?.length, 4, "each draft row says so");
   assert.match(drafts, /Drafts · not published\. Read them, edit them, and publish them on the plan\./);
@@ -260,13 +306,15 @@ test("questions, pages, citations, competitors, settings and billing render from
   assert.match(questions, /32 of 40 tracked/);
   assert.match(questions, /Winnable/);
   assert.match(questions, /New this week/);
+  const published = text(harness("dashboard~paid", "dashboard/pages").html);
+  assert.match(published, /Waiting/, "a page published days ago and not yet seen on the site says so");
   const pages = harness("dashboard~paid", "dashboard/pages?tab=drafts").html;
   assert.match(text(pages), /GitHub refused the commit \(403\)/);
   assert.match(text(pages), /Retry publish/);
   const detail = text(harness("dashboard~paid", "dashboard/pages/p_0_v1").html);
   assert.match(detail, /Facts used · 5/);
   assert.match(detail, /Sources · 3/);
-  assert.match(detail, /Live, and sent to IndexNow Oct 18\./);
+  assert.match(detail, /Live since Oct 18\. Sent to IndexNow Oct 18\./);
   const cited = overviewOf().citations;
   const citations = text(harness("dashboard~paid", "dashboard/citations").html);
   assert.match(citations, new RegExp(`${cited.length} citations · ${new Set(cited.map((c) => c.pageId).filter(Boolean)).size} pages cited`));
@@ -353,4 +401,37 @@ test("the harness is dev-only: 404 in production builds and on every host but th
     "answerPublish.setHostedDomain", "answerPublish.usePublishingConnection", "answerPublish.retryFailed", "sites.updateSite", "sites.upsert",
     "publisher.verifyPublicationDestination", "publisher.listGithubRepositories"]);
   assert.deepEqual(used.filter((fn) => !allowed.has(fn)), []);
+});
+
+test("the old article routes send a site on Pentra Answers to its dashboard, before any article screen renders", () => {
+  for (const route of ["articles", "plan", "jobs", "analytics", "backlinks"]) {
+    assert.match(read(`src/app/(dashboard)/${route}/layout.tsx`), /<ArticlesOnly>\{children\}<\/ArticlesOnly>/, route);
+  }
+  assert.match(read("src/components/answers/dashboard/articles-only.tsx"), /router\.replace\("\/dashboard"\)/);
+  const code = buildSync({ entryPoints: ["src/components/answers/dashboard/articles-only.tsx"], bundle: true, platform: "node", format: "cjs",
+    packages: "external", write: false, external: ["@/contexts/site-context"], alias: { "next/navigation": "./tests/helpers/next-navigation-stub.ts" } }).outputFiles[0]!.text;
+  const render = (context: Record<string, unknown>) => {
+    const actual = createRequire(import.meta.url);
+    const runtime = { exports: {} as { ArticlesOnly: (props: { children: ReactNode }) => ReactNode } };
+    runInNewContext(code, { module: runtime, exports: runtime.exports, require: (name: string) => {
+      if (name === "@/contexts/site-context") return { useActiveSite: () => context };
+      if (name === "@clerk/nextjs") return { UserButton: () => null };
+      return actual(name);
+    } });
+    return renderToStaticMarkup(createElement(runtime.exports.ArticlesOnly, null, createElement("p", null, "Article screen")));
+  };
+  const site = { _id: "s1", domain: "kettlewooddecks.com" };
+  const answers = render({ sites: [site], activeSite: site, answersStatus: "ready", answersSites: [{ siteId: "s1", domain: site.domain, name: null, answers: true, confirmed: true }] });
+  assert.doesNotMatch(answers, /Article screen/);
+  assert.match(answers, /aria-busy="true"/);
+  const legacy = render({ sites: [site], activeSite: site, answersStatus: "ready", answersSites: [{ siteId: "s1", domain: site.domain, name: null, answers: false, confirmed: false }] });
+  assert.match(legacy, /Article screen/);
+  assert.doesNotMatch(render({ sites: [site], activeSite: site, answersStatus: "loading" }), /Article screen/, "nothing of the article screen flashes while sites load");
+});
+
+test("the plan is synced after sign-in on /start and on the Answers dashboard, so a paid account's access shows", () => {
+  assert.match(read("src/app/start/start-gate.tsx"), /usePlanLimits\(\);/);
+  assert.match(read("src/components/answers/dashboard/selection.tsx"), /usePlanLimits\(\);/);
+  assert.match(read("src/hooks/usePlanLimits.ts"), /fetch\("\/api\/billing\/sync-plan"/);
+  assert.match(read("src/app/start/start-gate.tsx"), /email=\{user\?\.primaryEmailAddress\?\.emailAddress \?\? null\}/);
 });

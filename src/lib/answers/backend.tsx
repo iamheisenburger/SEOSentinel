@@ -37,7 +37,8 @@ export type ConnectionInput =
   | { siteId: string; domain: string; publishMethod: "webflow" | "shopify" | "ghost"; cmsEndpoint?: string; cmsClientId?: string; cmsSecret?: string; cmsCollection?: string };
 
 export type AnswersActions = {
-  createSite(args: { domain: string }): Promise<{ siteId: string; created: boolean }>;
+  /** `email` (the Clerk user's primary address) lets the first hour's "ready" email reach the owner. */
+  createSite(args: { domain: string; email?: string }): Promise<{ siteId: string; created: boolean }>;
   updateBusiness(args: { siteId: string; name: string; sells: string; buyers: string; offerings: string[] }): Promise<unknown>;
   confirmSetup(args: { siteId: string; name?: string; competitors: Competitor[]; country?: string }): Promise<unknown>;
   addQuestion(args: { siteId: string; question: string }): Promise<{ questionId: string }>;
@@ -110,7 +111,7 @@ function useLiveActions(): AnswersActions {
   const verify = useAction(api.publisher.verifyPublicationDestination);
   const listRepos = useAction(api.publisher.listGithubRepositories);
   return useMemo<AnswersActions>(() => ({
-    createSite: (args) => createSite(args) as Promise<{ siteId: string; created: boolean }>,
+    createSite: (args) => createSite(args as any) as Promise<{ siteId: string; created: boolean }>,
     updateBusiness: (args) => updateBusiness(args as any),
     confirmSetup: (args) => confirmSetup(args as any),
     addQuestion: (args) => addQuestion(args as any) as Promise<{ questionId: string }>,

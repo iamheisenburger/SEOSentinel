@@ -47,10 +47,10 @@ const organizationSchema = {
   featureList: [
     `Answers from ${ASSISTANTS.map((assistant) => assistant.name).join(", ")}`,
     "Every count opens to the full recorded answers",
-    "Wrong facts about your business, with the source each assistant used",
+    "Who gets named instead of you, and the sources each assistant cites",
     "Answer pages written from your site's facts, with sources",
     "Publishing to WordPress, Webflow, Shopify, Ghost, GitHub, a signed webhook, or a hosted subdomain",
-    "IndexNow for hosted pages, and sitemaps sent to Google through the customer's own Search Console",
+    "Tells search engines when each page goes live: IndexNow, and the sitemap to Google Search Console when connected",
     "Weekly email with what changed",
   ],
 };

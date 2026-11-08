@@ -19,7 +19,7 @@ const PLAN_WORK = [
   },
   { title: "Adds questions every week", body: "New questions your buyers ask join the list, so the snapshot never goes stale." },
   { title: "Rewrites pages that aren't cited", body: "A page the assistants keep passing over gets rewritten." },
-  { title: "Keeps your facts current", body: "When a price, address or opening time changes, every page that states it is updated." },
+  { title: "Writes from your confirmed facts", body: "Every page is written from the facts you confirmed and your live site, with the source of each one." },
   { title: "Emails you every week", body: "What was asked, who was named, what was published and what changed." },
 ];
 
