@@ -4,6 +4,16 @@ import { ASSISTANTS, type AssistantId } from "../product-facts.ts";
 import type { IndexNow, PageStatus } from "./types.ts";
 import type { PillKind } from "../../components/ui/status-pill.tsx";
 
+/** A source's quote as words, never page code: drafts written before Nov 9 2026 stored the first 1,200 characters of a
+ * page's raw HTML ("<!DOCTYPE html>…", Cowork's test 2). At most ~360 characters, cut on a word; "" when nothing readable. */
+export function sourceQuote(excerpt: string, max = 360): string {
+  const markup = /<\/?[a-z!][^>]*>/i.test(excerpt);
+  const text = (markup ? excerpt.replace(/<(script|style|noscript|svg|head)\b[\s\S]*?<\/\1\s*>/gi, " ").replace(/<head[\s\S]*$/i, " ").replace(/<[^>]*>?/g, " ") : excerpt)
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&#0?39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ").trim();
+  if (markup && text.length < 40) return "";
+  return text.length > max ? `${text.slice(0, max - 1).replace(/\s+\S*$/, "")}…` : text;
+}
+
 export function isAssistantId(value: string): value is AssistantId {
   return ASSISTANTS.some((assistant) => assistant.id === value);
 }

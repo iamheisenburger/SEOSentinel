@@ -8,7 +8,7 @@ import type { UserIdentity } from "convex/server";
 import { plausibleEmail } from "./lib/customerEmail";
 import { accountDeletionKey } from "./lib/accountDeletion";
 import {
-  ANSWER_ASSISTANTS, ANSWER_QUESTION_INTENTS, cleanQuestion, isAnswerAssistant, questionKey, questionOpportunity, runTotals, spendMonth, hostOf,
+  ANSWER_ASSISTANTS, ANSWER_QUESTION_INTENTS, cleanQuestion, isAnswerAssistant, questionKey, questionOpportunity, rankOpportunities, runTotals, spendMonth, hostOf,
 } from "./lib/answerEngine";
 import {
   answersAccess, answersAllows, answersEnabled, answersFleetDailyCap, competitorFromDomain, isAnswersOwnerDomain, nameFromDomainOnly, properCompetitorName,
@@ -295,13 +295,16 @@ export const finishRun = internalMutation({ args: { runId: v.id("answer_runs") }
     noAnswer: totals.noAnswer });
   const byQuestion = new Map<string, Doc<"answer_checks">[]>();
   for (const c of checks) byQuestion.set(c.questionId, [...(byQuestion.get(c.questionId) ?? []), c]);
+  const judged: Array<{ question: Doc<"answer_questions">; list: Doc<"answer_checks">[]; opportunity: ReturnType<typeof questionOpportunity> }> = [];
   for (const [questionId, list] of byQuestion) {
     const question = await ctx.db.get(questionId as Id<"answer_questions">);
-    if (!question) continue;
+    if (question) judged.push({ question, list, opportunity: questionOpportunity(question.question, list) });
+  }
+  // "Winnable" is the short list of the strongest openings (a third of the questions at most), not every unnamed question.
+  for (const { question, list, opportunity } of rankOpportunities(judged)) {
     const answered = list.filter((c) => c.status === "answered");
     const rivalCounts = new Map<string, number>();
     for (const c of answered) for (const name of new Set(c.competitorsNamed)) rivalCounts.set(name, (rivalCounts.get(name) ?? 0) + 1);
-    const opportunity = questionOpportunity(question.question, list);
     await ctx.db.patch(question._id, {
       latest: { runId, at: now, answered: answered.length, named: answered.filter((c) => c.named).length, cited: answered.filter((c) => c.cited).length,
         assistantsNamed: [...new Set(answered.filter((c) => c.named).map((c) => c.assistant))],

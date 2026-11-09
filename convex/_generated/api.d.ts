@@ -191,6 +191,7 @@ import type * as lib_outreachTargetLive from "../lib/outreachTargetLive.js";
 import type * as lib_ownerSearch from "../lib/ownerSearch.js";
 import type * as lib_pageCrawl from "../lib/pageCrawl.js";
 import type * as lib_pageOne from "../lib/pageOne.js";
+import type * as lib_pageText from "../lib/pageText.js";
 import type * as lib_pastedPublication from "../lib/pastedPublication.js";
 import type * as lib_pentraConsolidation from "../lib/pentraConsolidation.js";
 import type * as lib_plainReviewNotes from "../lib/plainReviewNotes.js";
@@ -475,6 +476,7 @@ declare const fullApi: ApiFromModules<{
   "lib/ownerSearch": typeof lib_ownerSearch;
   "lib/pageCrawl": typeof lib_pageCrawl;
   "lib/pageOne": typeof lib_pageOne;
+  "lib/pageText": typeof lib_pageText;
   "lib/pastedPublication": typeof lib_pastedPublication;
   "lib/pentraConsolidation": typeof lib_pentraConsolidation;
   "lib/plainReviewNotes": typeof lib_plainReviewNotes;

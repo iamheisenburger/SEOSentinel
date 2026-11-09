@@ -31,7 +31,7 @@ function network(calls: Array<{ url: string; body?: Fields }>) {
       if (endpoint === "cloro.ai-search.chatgpt.scrape") return json({ success: true, result: { text: "Agencies often use Apollo to find leads. A lead guide explains more.",
         sources: [{ label: "Lead guide", url: "https://leads.example/guide?utm_source=chatgpt.com" }] } }, 2800);
       if (endpoint === "perplexity.web.answer.fast") return json({ output: [{ type: "message", content: [{ type: "output_text",
-        text: "Acme Leads finds local businesses with slow websites [1].", annotations: [{ type: "url_citation", url: "https://acme.example/blog/older-post", title: "Acme" }] }] }] }, 1300);
+        text: "Leadfinder Pro and Acme Leads find local businesses with slow websites; Brightlist is another option [1].", annotations: [{ type: "url_citation", url: "https://acme.example/blog/older-post", title: "Acme" }] }] }] }, 1300);
       if (endpoint === "cloro.ai-search.gemini.scrape") return json({ success: true, result: { text: "Hunter and Apollo are common choices.",
         sources: [{ url: "https://leads.example/guide", label: "Lead guide" }] } }, 2400);
       if (endpoint === "cloro.google.serp.ai_mode") return json({ success: true, result: { text: "Try a lead list built for agencies.", sources: [] } }, 2400);
@@ -45,8 +45,14 @@ function network(calls: Array<{ url: string; body?: Fields }>) {
           buyers: "Web design agencies", offerings: ["Daily lead lists", "Verified emails"], country: "US", local: false, location: "",
           competitors: [{ name: "Apollo", domain: "apollo.example" }, { name: "Newco", domain: "newco.example" }] } }], usage: { input_tokens: 3000, output_tokens: 300 } });
       if (tool === "submit_named_businesses") return json({ id: "msg_n", type: "message", role: "assistant", model: body.model, stop_reason: "tool_use",
-        stop_sequence: null, content: [{ type: "tool_use", id: "tool_n", name: tool, input: { businesses: ["Leadfinder Pro", "Acme Leads", "Apollo"] } }],
+        stop_sequence: null, content: [{ type: "tool_use", id: "tool_n", name: tool, input: { businesses: ["Leadfinder Pro", "Acme Leads", "Brightlist"] } }],
         usage: { input_tokens: 500, output_tokens: 20 } });
+      // P394: the sources are sorted (references only) and the page's statements about the business checked against its pages.
+      if (tool === "submit_source_kinds") return json({ id: "msg_k", type: "message", role: "assistant", model: body.model, stop_reason: "tool_use", stop_sequence: null,
+        content: [{ type: "tool_use", id: "tool_k", name: tool, input: { pages: [...String(body.messages[0].content).matchAll(/^\[(\d+)\]/gm)]
+          .map((m) => ({ n: Number(m[1]), kind: "reference" })) } }], usage: { input_tokens: 900, output_tokens: 60 } });
+      if (tool === "submit_business_claims") return json({ id: "msg_c", type: "message", role: "assistant", model: body.model, stop_reason: "tool_use", stop_sequence: null,
+        content: [{ type: "tool_use", id: "tool_c", name: tool, input: { problems: [] } }], usage: { input_tokens: 3000, output_tokens: 40 } });
       const input = tool === "submit_buyer_questions"
         ? { questions: QUESTIONS.map((question) => ({ question, intent: "how_to" })) }
         : { title: "How do I find local businesses that need a new website?", metaDescription: "Look for measured signs like slow mobile pages.", markdown: PAGE_BODY,

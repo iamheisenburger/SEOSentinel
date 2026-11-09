@@ -4,7 +4,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ArrowUpRight } from "lucide-react";
 import { SourceGlyph } from "@/components/ui/evidence-card";
-import { hostOf, shortDate } from "@/lib/answers/format";
+import { hostOf, shortDate, sourceQuote } from "@/lib/answers/format";
 import type { PageFact, PageSource } from "@/lib/answers/types";
 import { cx } from "@/lib/cx";
 
@@ -116,7 +116,9 @@ export function SourcesList({ sources, idPrefix = "" }: { sources: PageSource[];
                 <ArrowUpRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-text-4 group-hover:text-text-2" strokeWidth={1.5} />
               </span>
               <span className="mt-0.5 block text-[12px] leading-4 text-text-3">{hostOf(source.url)} · retrieved {shortDate(source.retrievedAt)}</span>
-              {source.excerpt && <span className="mt-1.5 block border-l-2 border-border-strong pl-2.5 text-[12px] leading-[18px] text-text-2">&ldquo;{source.excerpt}&rdquo;</span>}
+              {source.excerpt && sourceQuote(source.excerpt) && (
+                <span className="mt-1.5 block min-w-0 border-l-2 border-border-strong pl-2.5 text-[12px] leading-[18px] text-text-2 [overflow-wrap:anywhere]">&ldquo;{sourceQuote(source.excerpt)}&rdquo;</span>
+              )}
             </span>
           </a>
         </li>

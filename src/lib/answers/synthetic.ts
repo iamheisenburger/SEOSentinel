@@ -5,7 +5,7 @@
  * backend's rules and messages. Never used outside /e2e-acceptance (which returns 404 in production).
  */
 import { ConvexError } from "convex/values";
-import { answerSlug, cleanQuestion, judgeAnswer, questionKey, questionOpportunity, runTotals } from "../../../convex/lib/answerEngine.ts";
+import { answerSlug, cleanQuestion, judgeAnswer, questionKey, questionOpportunity, rankOpportunities, runTotals } from "../../../convex/lib/answerEngine.ts";
 import { ASSISTANTS } from "../product-facts.ts";
 import type { AnswersActions, ConnectionInput, QueryMap, QueryName } from "./backend.tsx";
 import {
@@ -172,16 +172,19 @@ function finish(db: Db, row: RunRow) {
   const byQuestion = new Map<string, Check[]>();
   for (const c of row.checks) byQuestion.set(c.questionId, [...(byQuestion.get(c.questionId) ?? []), c]);
   const at = row.run.finishedAt ?? row.run.createdAt;
+  const judged: Array<{ q: QuestionRow; list: Check[]; opportunity: ReturnType<typeof questionOpportunity> }> = [];
   for (const [questionId, list] of byQuestion) {
     const q = db.questions.find((x) => x.questionId === questionId);
-    if (!q) continue;
+    if (q) judged.push({ q, list, opportunity: questionOpportunity(q.question, list) });
+  }
+  for (const { q, list, opportunity } of rankOpportunities(judged)) {
     const answered = list.filter((c) => c.status === "answered");
     const rivalCounts = new Map<string, number>();
     for (const c of answered) for (const name of new Set(c.competitorsNamed)) rivalCounts.set(name, (rivalCounts.get(name) ?? 0) + 1);
     q.latest = { runId: row.run.runId, at, answered: answered.length, named: answered.filter((c) => c.named).length, cited: answered.filter((c) => c.cited).length,
       assistantsNamed: [...new Set(answered.filter((c) => c.named).map((c) => c.assistant))],
       competitorsNamed: [...rivalCounts].map(([name, answers]) => ({ name, answers })).sort((a, b) => b.answers - a.answers).slice(0, 6) };
-    q.opportunity = { ...questionOpportunity(q.question, list), at };
+    q.opportunity = { ...opportunity, at };
   }
   const norm = (url: string) => url.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
   const published = db.pages.filter((p) => p.siteId === row.siteId && p.status === "published" && p.publishedUrl && (p.publishedAt ?? 0) <= at);

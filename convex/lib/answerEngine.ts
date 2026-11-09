@@ -202,14 +202,23 @@ export function judgeAnswer(answer: { text: string; sources: readonly AnswerSour
     .filter((r) => { const k = r.name.toLowerCase(); if (seenRival.has(k)) return false; seenRival.add(k); return true; })
     .sort((a, b) => a.at - b.at);
   const order = [...(businessAt >= 0 ? [{ name: "__business__", at: businessAt }] : []), ...rivalHits].sort((a, b) => a.at - b.at);
-  // Every business the answer names, in its order (listed by a small model call): the business's place among all of them,
-  // not only among the competitors the owner confirmed. Without that list, the confirmed names are the fallback.
+  // Every business the answer names (listed by a small model call), each placed where the answer first names it, so the
+  // business's place and the total count the same businesses in the answer's own order ("3rd of 7"; test 2 found a place
+  // counted among recommended tools over a total of every name). Without that list, the confirmed names are the fallback.
   const listed = (context.namedOrder ?? []).filter((n) => n.trim().length > 1).slice(0, 30);
-  const listedAt = businessMatcher && listed.length ? listed.findIndex((n) => businessMatcher.test(n) >= 0 || (own !== "" && hostOf(n) === own)) : -1;
-  const position = businessAt < 0 ? null : listed.length ? (listedAt >= 0 ? listedAt + 1 : null) : order.findIndex((o) => o.name === "__business__") + 1;
+  const placed: Array<{ name: string; at: number; business: boolean }> = [];
+  for (const name of listed) {
+    const isBusiness = Boolean(businessMatcher && (businessMatcher.test(name) >= 0 || (own !== "" && hostOf(name) === own)));
+    const at = isBusiness ? businessAt : brandMatcher({ name }, { caseSensitiveSingleWord: true })?.test(answer.text) ?? -1;
+    if (at < 0 || placed.some((p) => p.at === at || (p.business && isBusiness))) continue;
+    placed.push({ name, at, business: isBusiness });
+  }
+  if (listed.length && businessAt >= 0 && !placed.some((p) => p.business)) placed.push({ name: business.name, at: businessAt, business: true });
+  placed.sort((a, b) => a.at - b.at);
+  const position = businessAt < 0 ? null : placed.length ? placed.findIndex((p) => p.business) + 1 : order.findIndex((o) => o.name === "__business__") + 1;
   const cited = citedPageUrls.length > 0;
   return {
-    named: businessAt >= 0 || cited, cited, position, brandsNamed: listed.length ? Math.max(listed.length, position ?? 0) : order.length,
+    named: businessAt >= 0 || cited, cited, position, brandsNamed: placed.length ? placed.length : order.length,
     competitorsNamed: rivalHits.map((r) => r.name).slice(0, 12), citedPageUrls: citedPageUrls.slice(0, 10), sources: sources.slice(0, 20),
     excerpt: excerptAround(answer.text, businessAt >= 0 ? businessAt : rivalHits[0]?.at ?? 0),
   };
@@ -258,7 +267,7 @@ export function runTotals(checks: readonly CheckSummary[]) {
 
 /** Sites an assistant leans on whatever the question (encyclopedias, forums, video, marketplaces, big publishers). A
  * question answered only from these is hard to enter with one page; one answered from small, partial pages is not. */
-const ENTRENCHED = /(^|\.)(wikipedia\.org|reddit\.com|youtube\.com|quora\.com|amazon\.[a-z.]+|linkedin\.com|forbes\.com|g2\.com|capterra\.com|trustpilot\.com|yelp\.com|nytimes\.com|investopedia\.com|hubspot\.com|medium\.com|facebook\.com|tripadvisor\.[a-z.]+|indeed\.com|glassdoor\.com|apple\.com|microsoft\.com)$/i;
+const ENTRENCHED = /(^|\.)(wikipedia\.org|reddit\.com|youtube\.com|quora\.com|amazon\.[a-z.]+|linkedin\.com|forbes\.com|g2\.com|capterra\.com|trustpilot\.com|yelp\.com|nytimes\.com|investopedia\.com|hubspot\.com|medium\.com|facebook\.com|instagram\.com|x\.com|twitter\.com|tiktok\.com|pinterest\.com|tripadvisor\.[a-z.]+|indeed\.com|glassdoor\.com|apple\.com|microsoft\.com|github\.com|producthunt\.com|alternativeto\.net|getapp\.com|softwareadvice\.com|trustradius\.com|gartner\.com|healthgrades\.com|zocdoc\.com|opencare\.com|vitals\.com|webmd\.com|ratemds\.com|yellowpages\.com|bbb\.org|angi\.com|homeadvisor\.com|thumbtack\.com|houzz\.com|nextdoor\.com|mapquest\.com|birdeye\.com|expertise\.com|threebestrated\.com|superpages\.com|manta\.com|foursquare\.com|care\.com)$/i;
 const STOP = new Set(["a", "an", "and", "are", "as", "at", "be", "best", "can", "do", "does", "for", "from", "get", "how", "i", "in", "is", "it", "my",
   "of", "on", "or", "should", "the", "to", "what", "when", "where", "which", "who", "why", "with", "you", "your", "me", "there", "that", "this"]);
 export const questionWords = (text: string) => [...new Set(text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)))];
@@ -304,10 +313,22 @@ export function questionOpportunity(question: string, checks: QuestionChecks): O
     if (domains.length > 0 && entrenched.length / domains.length <= 0.3) { score += 5; reasons.push("The answers cite small and mid-size sites, which a precise page can join."); }
   }
   if (words.length >= 6) { score += 5; reasons.push("It is a specific question, so fewer pages compete for it."); }
+  if (!domains.length) { score -= 20; reasons.splice(1, 0, "The answers cite no web pages yet, so there is no page to join."); }
   score = Math.max(0, Math.min(100, score));
-  // Winnable means an opening, not just "not named yet": 80+ needs the business unnamed and either no precise page yet or
-  // competitors recommended from small sites (Cowork, Nov 8 2026: 28 of 30 "winnable" said nothing).
-  return { score, status: score >= ANSWERS_WINNABLE_SCORE ? "winnable" : "monitoring", reasons: reasons.slice(0, 4) };
+  // Winnable means an opening, as the site describes it: no answer names the business yet (test 2 found questions where
+  // it was already named marked winnable), the answers cite web pages, and the sources are thin or small (80+).
+  return { score, status: score >= ANSWERS_WINNABLE_SCORE && named === 0 && domains.length > 0 && !bigSitesOnly ? "winnable" : "monitoring", reasons: reasons.slice(0, 4) };
+}
+
+/** The strongest openings first, at most a third of the answered questions (at least three): "questions you can win now"
+ * is a short list worth writing for (test 2: 26 of 30 "winnable" for a local dentist said nothing). The rest stay open
+ * and say so. */
+export function rankOpportunities<T extends { opportunity: Opportunity }>(items: readonly T[]): T[] {
+  const winnable = items.filter((i) => i.opportunity.status === "winnable").sort((a, b) => b.opportunity.score - a.opportunity.score);
+  const answeredCount = items.filter((i) => !/^No assistant answered/.test(i.opportunity.reasons[0] ?? "")).length;
+  const keep = new Set(winnable.slice(0, Math.max(3, Math.floor(answeredCount / 3))));
+  return items.map((i) => i.opportunity.status !== "winnable" || keep.has(i) ? i
+    : { ...i, opportunity: { ...i.opportunity, status: "monitoring", reasons: [...i.opportunity.reasons.slice(0, 3), "Open too: Pentra writes for the strongest openings first."] } });
 }
 
 // ── Questions and pages ──

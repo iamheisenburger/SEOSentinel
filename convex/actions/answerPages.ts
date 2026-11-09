@@ -6,20 +6,25 @@ import Anthropic from "@anthropic-ai/sdk";
 import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { v } from "convex/values";
-import { fetchPublicTextRendered } from "../lib/tregFetch";
-import { fetchPage } from "../lib/fetchPage";
+import { fetchReadable, sitemapLinks } from "../lib/tregFetch";
 import { firstPartyProductEvidence } from "../lib/productEvidence";
-import { relevantLinks, siteLinks } from "../lib/siteLinks";
+import { keyLinks, relevantLinks } from "../lib/siteLinks";
+import { mergeLinks } from "../lib/pageText";
 import { hostOf } from "../lib/answerEngine";
 import {
-  ANSWER_PAGE_HOLD_MICRO_USD, ANSWER_PAGE_TOOL, ANSWER_WRITER_MAX_TOKENS, ANSWER_WRITER_MODEL, answerPageRequest, checkDraftPage, finalizeDraftPage,
-  pageSource, parseDraftPage, writerCostMicroUsd, type DraftPage, type PageSource,
+  ANSWER_PAGE_HOLD_MICRO_USD, ANSWER_PAGE_TOOL, ANSWER_WRITER_MAX_TOKENS, ANSWER_WRITER_MODEL, answerPageRequest, checkDraftPage, citedPassage, editedDraft,
+  finalizeDraftPage, OWN_FACTS_TOOL, ownFactsIssue, ownFactsRequest, PAGE_CHECK_MAX_TOKENS, PAGE_CHECK_MODEL, pageCheckCostMicroUsd, pageSentences, pageSource,
+  parseDraftPage, parseOwnFacts, parseSourceKinds, referenceByAddress, SOURCE_KINDS_TOOL, sourceKindsRequest, writerCostMicroUsd, type DraftPage,
+  type OwnFactsProblem, type SourceCandidate,
 } from "../lib/answerPages";
 import { structuredToolChoice } from "../lib/toolChoice";
 import { spendRefusal } from "./answers";
 
 const anthropic = () => new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 2, timeout: 300_000, fetch });
+const checker = () => new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 120_000, fetch });
 const SOURCES_PER_PAGE = 5;
+/** A page's work stops starting new model calls after this long (Convex actions end at 10 minutes). */
+const PAGE_TIME_BUDGET_MS = 7 * 60_000;
 
 /** After a snapshot: the top questions each get a page, written in parallel. */
 export const draftTop = internalAction({ args: { siteId: v.id("sites"), count: v.number() }, handler: async (ctx, { siteId, count }) => {
@@ -42,15 +47,27 @@ export const writePage = internalAction({ args: { pageId: v.id("answer_pages") }
   const hold = await ctx.runMutation(internal.answers.holdSpend, { siteId: context.page.siteId, pageId, purpose: "draft", microUsd: ANSWER_PAGE_HOLD_MICRO_USD });
   if (!hold.ok) { await ctx.runMutation(internal.answerPages.abandonPage, { pageId, reason: spendRefusal(hold.reason), costMicroUsd: 0 }); return; }
   let cost = 0, sent = false;
+  const started = Date.now();
   try {
+    const business = context.business;
     // Competitors' own sites are never a page's sources (a page on the business's site never sends buyers to them).
     const avoid = context.competitors.map((c) => c.domain).filter((d): d is string => Boolean(d)).map(hostOf);
-    const [sources, productEvidence] = await Promise.all([readSources(context.sources, avoid), businessEvidence(context.business, context.page.question)]);
-    const base = { question: context.page.question, businessName: context.business.name, productEvidence, market: context.business.market,
-      language: context.business.language, landscape: context.landscape, sources, competitorNames: context.competitors.map((c) => c.name) };
+    const [candidates, productEvidence] = await Promise.all([readCandidates(context.sources, [...avoid, hostOf(business.domain)]),
+      businessEvidence(business, context.page.question)]);
+    // Only references are sources: never a business that sells what this one sells, never a listing of them (test 2: a
+    // competing Boise practice's page, its phone number in the quote).
+    const sorted = await referenceSources(candidates, { businessName: business.name, sells: business.summary, market: business.market });
+    cost += sorted.cost;
+    const sources = sorted.keep.slice(0, SOURCES_PER_PAGE).map((c, i) => pageSource(i + 1, c.url, c.title, c.text, Date.now()));
+    const base = { question: context.page.question, businessName: business.name, productEvidence, market: business.market,
+      language: business.language, landscape: context.landscape, sources, competitorNames: context.competitors.map((c) => c.name) };
+    const checkArgs = { businessName: business.name, businessDomain: business.domain, sources, productEvidence, competitors: context.competitors };
     let draft: DraftPage | null = null, checked = { blocking: ["The writer didn't return a page."], notes: [] as string[] };
+    let own: OwnFactsProblem[] = [];
     for (let attempt = 0; attempt < 2; attempt++) {
-      const request = answerPageRequest(attempt === 0 || !draft ? base : { ...base, revision: { markdown: draft.markdown, issues: checked.blocking } });
+      if (attempt > 0 && Date.now() - started > PAGE_TIME_BUDGET_MS) break;
+      const issues = [...checked.blocking, ...own.map((p) => ownFactsIssue(business.name, p))];
+      const request = answerPageRequest(attempt === 0 || !draft ? base : { ...base, revision: { markdown: draft.markdown, issues } });
       sent = true;
       const response = await anthropic().messages.create({ model: ANSWER_WRITER_MODEL, max_tokens: ANSWER_WRITER_MAX_TOKENS, system: request.system,
         messages: [{ role: "user", content: request.userMessage }],
@@ -61,21 +78,28 @@ export const writePage = internalAction({ args: { pageId: v.id("answer_pages") }
       const parsed = parseDraftPage(tool && tool.type === "tool_use" ? tool.input : null, sources);
       if (!parsed) continue;
       draft = parsed;
-      checked = checkDraftPage(parsed, { businessName: context.business.name, businessDomain: context.business.domain, sources, productEvidence,
-        competitors: context.competitors });
-      if (!checked.blocking.length) break;
+      checked = checkDraftPage(parsed, checkArgs);
+      if (parsed.fit === "none") break;
+      const factCheck = Date.now() - started < PAGE_TIME_BUDGET_MS ? await ownFactsProblems(business.name, productEvidence, parsed.markdown) : { problems: [], cost: 0 };
+      cost += factCheck.cost;
+      own = factCheck.problems;
+      if (!checked.blocking.length && !own.length) break;
     }
     if (!draft) { await ctx.runMutation(internal.answerPages.abandonPage, { pageId, reason: "The page couldn't be written. Pentra will try again next week.", costMicroUsd: cost }); return; }
     // The business's own pages don't show it offers this: no page that sends buyers elsewhere; the next question instead.
     if (draft.fit === "none") {
       await ctx.runMutation(internal.answerPages.abandonPage, { pageId, costMicroUsd: cost, replace: true,
-        reason: `${context.business.name}'s own pages don't show it offers this${draft.fitReason ? ` (${draft.fitReason})` : ""}, so Pentra skipped it rather than write a page that sends buyers elsewhere.` });
+        reason: `${business.name}'s own pages don't show it offers this${draft.fitReason ? ` (${draft.fitReason})` : ""}, so Pentra skipped it rather than write a page that sends buyers elsewhere.` });
       return;
     }
+    // The edit pass (rule 2a): what is still wrong about the business after the revision is taken out, never published.
+    draft = editedDraft(draft, { businessName: business.name, businessDomain: business.domain, productEvidence, ownProblems: own });
+    checked = checkDraftPage(draft, checkArgs);
     const final = finalizeDraftPage(draft, sources);
+    const quotes = final.sources.map((s) => citedPassage(s.excerpt, pageSentences(final.page.markdown).filter((line) => line.includes(`[${s.n}]`))));
     const saved = await ctx.runMutation(internal.answerPages.saveDraft, { pageId, title: final.page.title, metaDescription: final.page.metaDescription,
-      markdown: final.page.markdown, facts: final.page.facts, sources: final.sources.map((s) => ({ n: s.n, url: s.url, ...(s.title ? { title: s.title } : {}),
-        excerpt: s.excerpt.slice(0, 1200), contentHash: s.contentHash, retrievedAt: s.retrievedAt })),
+      markdown: final.page.markdown, facts: final.page.facts, sources: final.sources.map((s, i) => ({ n: s.n, url: s.url, ...(s.title ? { title: s.title } : {}),
+        excerpt: quotes[i] || s.excerpt.slice(0, 360), contentHash: s.contentHash, retrievedAt: s.retrievedAt })),
       issues: checked.blocking.length ? checked.blocking : checked.notes, writerModel: ANSWER_WRITER_MODEL, costMicroUsd: cost, blocked: checked.blocking.length > 0 });
     if (saved?.status === "draft" && context.autopublish) await ctx.scheduler.runAfter(0, internal.actions.answerPublish.publishPage, { pageId });
   } catch (error) {
@@ -85,39 +109,65 @@ export const writePage = internalAction({ args: { pageId: v.id("answer_pages") }
   }
 } });
 
-/** The sources the assistants cite for this question, read live (rendered when needed), numbered in order; never a
- * competitor's site. A source whose title is only a generic label is titled by its site. */
-async function readSources(candidates: ReadonlyArray<{ url: string; title?: string }>, avoidHosts: readonly string[] = []): Promise<PageSource[]> {
+/** The pages the assistants cite for this question, read as text (rendered when needed); never a competitor's site or the
+ * business's own. A page whose title is only a generic label is titled by its site. */
+async function readCandidates(candidates: ReadonlyArray<{ url: string; title?: string }>, avoidHosts: readonly string[]): Promise<SourceCandidate[]> {
   const allowed = candidates.filter((c) => { const h = hostOf(c.url); return !avoidHosts.some((a) => h === a || h.endsWith(`.${a}`)); })
     .map((c) => ({ ...c, title: c.title && !/^\s*(?:[\w\s-]{0,40}\b)?(website|site|homepage|home page|page)\s*$/i.test(c.title) ? c.title : hostOf(c.url) }));
   const read = await Promise.all(allowed.slice(0, SOURCES_PER_PAGE + 3).map(async (c) => {
     try {
-      const page = await Promise.race([fetchPublicTextRendered(c.url, 800), new Promise<null>((r) => setTimeout(() => r(null), 50_000))]);
+      const page = await Promise.race([fetchReadable(c.url, 800), new Promise<null>((r) => setTimeout(() => r(null), 50_000))]);
       return page && page.text.length >= 600 ? { url: c.url, title: c.title, text: page.text } : null;
     } catch { return null; }
   }));
-  const now = Date.now();
-  return read.filter((r): r is { url: string; title: string; text: string } => r !== null).slice(0, SOURCES_PER_PAGE)
-    .map((r, i) => pageSource(i + 1, r.url, r.title, r.text, now));
+  return read.filter((r): r is { url: string; title: string; text: string } => r !== null).map((r, i) => ({ n: i + 1, ...r }));
 }
 
-/** What the page may say about the business: the confirmed profile, its homepage and pricing page, and its own pages about
- * the question's subject (a dentist's "Sleep Apnea" page for a sleep apnea question), all read now. */
+/** The candidates that are references (one Sonnet call); without it, only public institutions and reference works. */
+async function referenceSources(candidates: readonly SourceCandidate[], business: { businessName: string; sells: string; market: string }) {
+  if (!candidates.length) return { keep: [] as SourceCandidate[], cost: 0 };
+  const fallback = { keep: candidates.filter((c) => referenceByAddress(c.url)), cost: 0 };
+  try {
+    const request = sourceKindsRequest({ ...business, candidates });
+    const response = await checker().messages.create({ model: PAGE_CHECK_MODEL, max_tokens: PAGE_CHECK_MAX_TOKENS, system: request.system,
+      messages: [{ role: "user", content: request.userMessage }],
+      tools: [{ name: SOURCE_KINDS_TOOL, description: "Record each page's kind.", input_schema: request.inputSchema }],
+      tool_choice: structuredToolChoice(PAGE_CHECK_MODEL, SOURCE_KINDS_TOOL) });
+    const tool = response.content.find((b) => b.type === "tool_use" && b.name === SOURCE_KINDS_TOOL);
+    const keep = parseSourceKinds(tool && tool.type === "tool_use" ? tool.input : null, candidates);
+    const cost = pageCheckCostMicroUsd(response.usage);
+    return keep ? { keep: candidates.filter((c) => keep.includes(c.n)), cost } : { ...fallback, cost };
+  } catch { return fallback; }
+}
+
+/** What the page says about the business that its own pages contradict or don't support (one Sonnet call; none on failure). */
+async function ownFactsProblems(businessName: string, productEvidence: string, markdown: string): Promise<{ problems: OwnFactsProblem[]; cost: number }> {
+  try {
+    const request = ownFactsRequest({ businessName, productEvidence, markdown });
+    const response = await checker().messages.create({ model: PAGE_CHECK_MODEL, max_tokens: PAGE_CHECK_MAX_TOKENS, system: request.system,
+      messages: [{ role: "user", content: request.userMessage }],
+      tools: [{ name: OWN_FACTS_TOOL, description: "Record the sentences about the business its own pages don't support.", input_schema: request.inputSchema }],
+      tool_choice: structuredToolChoice(PAGE_CHECK_MODEL, OWN_FACTS_TOOL) });
+    const tool = response.content.find((b) => b.type === "tool_use" && b.name === OWN_FACTS_TOOL);
+    return { problems: parseOwnFacts(tool && tool.type === "tool_use" ? tool.input : null) ?? [], cost: pageCheckCostMicroUsd(response.usage) };
+  } catch { return { problems: [], cost: 0 }; }
+}
+
+/** What the page may say about the business: the confirmed profile, its homepage, its key pages (what it offers, prices,
+ * about, questions) and its pages about the question's subject (a dentist's "Sleep Apnea" page for a sleep apnea
+ * question), found from its links and its sitemap and read now as text. */
 async function businessEvidence(business: { name: string; domain: string; summary: string; features: string[]; pricing: string; ctaText: string; ctaUrl: string },
   question: string) {
   const origin = `https://${business.domain}`;
-  const [homepage, pricing, home] = await Promise.all([
-    fetchPublicTextRendered(origin, 400).then((p) => p.text).catch(() => ""),
-    fetchPublicTextRendered(`${origin}/pricing`, 300).then((p) => p.text).catch(() => ""),
-    fetchPage(`${origin}/`, { maxBytes: 3_000_000 }).catch(() => null),
-  ]);
-  const subject = home?.html ? relevantLinks(siteLinks(home.html, business.domain), question, 2) : [];
-  const pages = (await Promise.all(subject.map((link) => fetchPublicTextRendered(link.url, 300).then((p) => ({ url: link.url, text: p.text })).catch(() => null))))
+  const [home, mapped] = await Promise.all([fetchReadable(`${origin}/`, 400, business.domain).catch(() => null), sitemapLinks(business.domain).catch(() => [])]);
+  const links = mergeLinks(home?.links ?? [], mapped);
+  const chosen = mergeLinks(relevantLinks(links, question, 3), keyLinks(links, 4)).filter((l) => l.url !== origin).slice(0, 6);
+  const pages = (await Promise.all(chosen.map((link) => fetchReadable(link.url, 300, business.domain).then((p) => ({ url: link.url, text: p.text })).catch(() => null))))
     .filter((p): p is { url: string; text: string } => p !== null && p.text.length >= 200);
   return firstPartyProductEvidence({ productName: business.name,
     site: { domain: business.domain, siteSummary: business.summary, keyFeatures: business.features, pricingInfo: business.pricing,
       ...(business.ctaText ? { ctaText: business.ctaText } : {}), ...(business.ctaUrl ? { ctaUrl: business.ctaUrl } : {}) },
-    crawled: { homepage, pricing, pages } });
+    crawled: { homepage: home?.text ?? "", pages } });
 }
 
 /** The plan's weekly loop, after each weekly run: a few new questions, rewrites of pages no assistant cites after three
