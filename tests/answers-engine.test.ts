@@ -77,7 +77,9 @@ test("a question is winnable from its answers, covered when most name the busine
     ({ status: "answered", named: false, cited: false, competitorsNamed: rivals, sources: [{ domain, own: false, title }] });
   const winnable = questionOpportunity("How do I find local businesses that need a new website?", [notNamed(["Apollo"]), notNamed([]), notNamed(["Hunter"])]);
   assert.equal(winnable.status, "winnable");
-  assert.ok(winnable.reasons[0].startsWith("Not named in any of 3 answers"));
+  // P395 (Cowork's test 3: one template for every question): the reasons name who is named instead and what is cited.
+  assert.equal(winnable.reasons[0], "Apollo is named in 1 of 3 answers, Hunter in 1; you in none.");
+  assert.equal(winnable.reasons[1], "They cite smallblog.example; none of those pages answers this exact question.");
   const covered = questionOpportunity("Best lead tool?", [{ ...notNamed([]), named: true }, { ...notNamed([]), named: true }, notNamed([])]);
   assert.equal(covered.status, "covered");
   const big = questionOpportunity("What is a CRM?", [notNamed([], "wikipedia.org"), notNamed([], "hubspot.com"), notNamed([], "reddit.com")]);

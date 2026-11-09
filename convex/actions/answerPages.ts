@@ -14,8 +14,8 @@ import { hostOf } from "../lib/answerEngine";
 import {
   ANSWER_PAGE_HOLD_MICRO_USD, ANSWER_PAGE_TOOL, ANSWER_WRITER_MAX_TOKENS, ANSWER_WRITER_MODEL, answerPageRequest, checkDraftPage, citedPassage, editedDraft,
   finalizeDraftPage, OWN_FACTS_TOOL, ownFactsIssue, ownFactsRequest, PAGE_CHECK_MAX_TOKENS, PAGE_CHECK_MODEL, pageCheckCostMicroUsd, pageSentences, pageSource,
-  parseDraftPage, parseOwnFacts, parseSourceKinds, referenceByAddress, SOURCE_KINDS_TOOL, sourceKindsRequest, writerCostMicroUsd, type DraftPage,
-  type OwnFactsProblem, type SourceCandidate,
+  parseDraftPage, parseOwnFacts, parseSourceKinds, repeatedContent, repeatedIssues, SOURCE_KINDS_TOOL, sourceKindsRequest, writerCostMicroUsd,
+  type DraftPage, type OwnFactsProblem, type SourceCandidate,
 } from "../lib/answerPages";
 import { structuredToolChoice } from "../lib/toolChoice";
 import { spendRefusal } from "./answers";
@@ -60,13 +60,17 @@ export const writePage = internalAction({ args: { pageId: v.id("answer_pages") }
     cost += sorted.cost;
     const sources = sorted.keep.slice(0, SOURCES_PER_PAGE).map((c, i) => pageSource(i + 1, c.url, c.title, c.text, Date.now()));
     const base = { question: context.page.question, businessName: business.name, productEvidence, market: business.market,
-      language: business.language, landscape: context.landscape, sources, competitorNames: context.competitors.map((c) => c.name) };
+      language: business.language, landscape: context.landscape, sources, competitorNames: context.competitors.map((c) => c.name),
+      otherQuestions: context.siblings.map((s) => s.question) };
     const checkArgs = { businessName: business.name, businessDomain: business.domain, sources, productEvidence, competitors: context.competitors };
     let draft: DraftPage | null = null, checked = { blocking: ["The writer didn't return a page."], notes: [] as string[] };
     let own: OwnFactsProblem[] = [];
+    let copied: string[] = [];
+    // The site's other pages as they are now (the first five are written side by side: a page finished meanwhile counts).
+    const otherPages = async () => (await ctx.runQuery(internal.answerPages.siblingPages, { pageId })) ?? context.siblings;
     for (let attempt = 0; attempt < 2; attempt++) {
       if (attempt > 0 && Date.now() - started > PAGE_TIME_BUDGET_MS) break;
-      const issues = [...checked.blocking, ...own.map((p) => ownFactsIssue(business.name, p))];
+      const issues = [...checked.blocking, ...own.map((p) => ownFactsIssue(business.name, p)), ...copied];
       const request = answerPageRequest(attempt === 0 || !draft ? base : { ...base, revision: { markdown: draft.markdown, issues } });
       sent = true;
       const response = await anthropic().messages.create({ model: ANSWER_WRITER_MODEL, max_tokens: ANSWER_WRITER_MAX_TOKENS, system: request.system,
@@ -83,7 +87,11 @@ export const writePage = internalAction({ args: { pageId: v.id("answer_pages") }
       const factCheck = Date.now() - started < PAGE_TIME_BUDGET_MS ? await ownFactsProblems(business.name, productEvidence, parsed.markdown) : { problems: [], cost: 0 };
       cost += factCheck.cost;
       own = factCheck.problems;
-      if (!checked.blocking.length && !own.length) break;
+      // Blocks copied from the business's other pages are revised too (a heading, or three sentences or more); a stray
+      // shared sentence is simply taken out after.
+      const repeated = repeatedContent(parsed.markdown, await otherPages());
+      copied = repeated.headings.length || repeated.sentences.length >= 3 ? repeatedIssues(repeated) : [];
+      if (!checked.blocking.length && !own.length && !copied.length) break;
     }
     if (!draft) { await ctx.runMutation(internal.answerPages.abandonPage, { pageId, reason: "The page couldn't be written. Pentra will try again next week.", costMicroUsd: cost }); return; }
     // The business's own pages don't show it offers this: no page that sends buyers elsewhere; the next question instead.
@@ -93,7 +101,7 @@ export const writePage = internalAction({ args: { pageId: v.id("answer_pages") }
       return;
     }
     // The edit pass (rule 2a): what is still wrong about the business after the revision is taken out, never published.
-    draft = editedDraft(draft, { businessName: business.name, businessDomain: business.domain, productEvidence, ownProblems: own });
+    draft = editedDraft(draft, { businessName: business.name, businessDomain: business.domain, productEvidence, ownProblems: own, otherPages: await otherPages() });
     checked = checkDraftPage(draft, checkArgs);
     const final = finalizeDraftPage(draft, sources);
     const quotes = final.sources.map((s) => citedPassage(s.excerpt, pageSentences(final.page.markdown).filter((line) => line.includes(`[${s.n}]`))));
@@ -123,21 +131,26 @@ async function readCandidates(candidates: ReadonlyArray<{ url: string; title?: s
   return read.filter((r): r is { url: string; title: string; text: string } => r !== null).map((r, i) => ({ n: i + 1, ...r }));
 }
 
-/** The candidates that are references (one Sonnet call); without it, only public institutions and reference works. */
+/** The candidates that are references (one Sonnet call, tried twice). When the sorting can't be done, no outside page is
+ * used: the page is written from the business's own pages with general guidance, the same in every country (no list of
+ * sites or address endings guessed at). */
 async function referenceSources(candidates: readonly SourceCandidate[], business: { businessName: string; sells: string; market: string }) {
   if (!candidates.length) return { keep: [] as SourceCandidate[], cost: 0 };
-  const fallback = { keep: candidates.filter((c) => referenceByAddress(c.url)), cost: 0 };
-  try {
-    const request = sourceKindsRequest({ ...business, candidates });
-    const response = await checker().messages.create({ model: PAGE_CHECK_MODEL, max_tokens: PAGE_CHECK_MAX_TOKENS, system: request.system,
-      messages: [{ role: "user", content: request.userMessage }],
-      tools: [{ name: SOURCE_KINDS_TOOL, description: "Record each page's kind.", input_schema: request.inputSchema }],
-      tool_choice: structuredToolChoice(PAGE_CHECK_MODEL, SOURCE_KINDS_TOOL) });
-    const tool = response.content.find((b) => b.type === "tool_use" && b.name === SOURCE_KINDS_TOOL);
-    const keep = parseSourceKinds(tool && tool.type === "tool_use" ? tool.input : null, candidates);
-    const cost = pageCheckCostMicroUsd(response.usage);
-    return keep ? { keep: candidates.filter((c) => keep.includes(c.n)), cost } : { ...fallback, cost };
-  } catch { return fallback; }
+  const request = sourceKindsRequest({ ...business, candidates });
+  let cost = 0;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await checker().messages.create({ model: PAGE_CHECK_MODEL, max_tokens: PAGE_CHECK_MAX_TOKENS, system: request.system,
+        messages: [{ role: "user", content: request.userMessage }],
+        tools: [{ name: SOURCE_KINDS_TOOL, description: "Record each page's kind.", input_schema: request.inputSchema }],
+        tool_choice: structuredToolChoice(PAGE_CHECK_MODEL, SOURCE_KINDS_TOOL) });
+      cost += pageCheckCostMicroUsd(response.usage);
+      const tool = response.content.find((b) => b.type === "tool_use" && b.name === SOURCE_KINDS_TOOL);
+      const keep = parseSourceKinds(tool && tool.type === "tool_use" ? tool.input : null, candidates);
+      if (keep) return { keep: candidates.filter((c) => keep.includes(c.n)), cost };
+    } catch { /* tried once more */ }
+  }
+  return { keep: [] as SourceCandidate[], cost };
 }
 
 /** What the page says about the business that its own pages contradict or don't support (one Sonnet call; none on failure). */

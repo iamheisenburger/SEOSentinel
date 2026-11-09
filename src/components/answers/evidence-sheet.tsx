@@ -280,6 +280,17 @@ function FullAnswer({ checkId, business, onPush }: { checkId: string; business: 
         <span>{plural(data.textChars, "character")}</span>
       </div>
       <EvidenceCard answer={checkToEvidence(data, business, { full: true })} clampLines={400} />
+      {data.named && data.businessesNamed && data.businessesNamed.length > 1 && (
+        <p className="text-[13px] leading-5 text-text-3">
+          Counted in the answer&apos;s order:{" "}
+          {data.businessesNamed.map((name, i) => (
+            <span key={`${name}-${i}`}>
+              {i > 0 && <span className="text-text-4"> · </span>}
+              <span className={name === business.name ? "font-medium text-you" : "text-text-2"}>{name}{name === business.name ? " (you)" : ""}</span>
+            </span>
+          ))}
+        </p>
+      )}
       <div className="flex flex-wrap gap-2">
         {data.text && (
           <Button variant="secondary" size="sm" onClick={copy} icon={copied ? <CheckIcon className="h-3.5 w-3.5" strokeWidth={1.5} /> : <Copy className="h-3.5 w-3.5" strokeWidth={1.5} />}>

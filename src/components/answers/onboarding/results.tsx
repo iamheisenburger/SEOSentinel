@@ -74,7 +74,7 @@ export function SnapshotResults({ state, view, pageId }: { state: SetupState; vi
               <AssistantPanel run={run} log={log} />
               <RivalsPanel run={run} businessName={name} />
             </div>
-            <Panel title="Questions you can win now" description="Where no answer names you yet and the sources assistants use are thin or small. Each opens its answers.">
+            <Panel title="Your strongest openings" description="Up to a third of your questions: no answer names you yet and the sources assistants use are thinnest. Pentra writes for these first. Each opens its answers.">
               {overview === undefined ? <Skeleton className="h-24 w-full" /> : <WinnableQuestions questions={overview ? winnable(overview.questions) : []} />}
             </Panel>
             <Panel title="Every answer" description={`All ${plural(run.done, "answer")} from this run, exactly as recorded.`}>

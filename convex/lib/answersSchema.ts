@@ -115,6 +115,8 @@ export const answersTables = {
     cited: v.boolean(),
     position: v.optional(v.number()),
     brandsNamed: v.number(),
+    /** The businesses counted in "Nth of M", in the answer's order (Nov 9 2026; answers naming the business only). */
+    businessesNamed: v.optional(v.array(v.string())),
     competitorsNamed: v.array(v.string()),
     sources: v.array(v.object({ url: v.string(), title: v.optional(v.string()), domain: v.string(), own: v.boolean() })),
     citedPageUrls: v.array(v.string()),

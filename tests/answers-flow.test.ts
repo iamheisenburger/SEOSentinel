@@ -503,8 +503,9 @@ test("Cowork's dentist, end to end: a host's hidden bot check read through a rea
     if (url.hostname === "api.anthropic.com" && typeof init.body === "string") {
       const body = JSON.parse(init.body);
       if (body.tools?.[0]?.name === "submit_business_read") readMessages.push(String(body.messages?.[0]?.content ?? ""));
-      // The page writer says the business's pages don't show it offers what one question asks.
-      if (body.tools?.[0]?.name === "submit_answer_page" && /cost per month/.test(String(body.messages?.[0]?.content ?? ""))) {
+      // The page writer says the business's pages don't show it offers what one question asks (its own question line: the
+      // prompt also lists the site's other questions).
+      if (body.tools?.[0]?.name === "submit_answer_page" && /^Question: [^\n]*cost per month/m.test(String(body.messages?.[0]?.content ?? ""))) {
         return json({ id: "msg_fit", type: "message", role: "assistant", model: body.model, stop_reason: "tool_use", stop_sequence: null,
           content: [{ type: "tool_use", id: "tool_fit", name: "submit_answer_page", input: { title: "t", metaDescription: "m", markdown: "Short.", facts: [],
             fit: "none", fitReason: "Its pages list no prices" } }], usage: { input_tokens: 3000, output_tokens: 200 } });

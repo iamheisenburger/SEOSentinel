@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useState, type Dispatch, type FormEvent, type KeyboardEvent, type ReactNode, type SetStateAction } from "react";
 import { ArrowRight, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea, fieldStyles } from "@/components/ui/input";
@@ -13,9 +13,31 @@ import { SNAPSHOT, TIMING } from "@/lib/product-facts";
 import { placeFrom, updateBusinessWithPlace } from "@/lib/answers/update-business";
 import { userErrorMessage } from "@/lib/user-error";
 import { cx } from "@/lib/cx";
+import { nameFromDomainOnly } from "../../../../convex/lib/answersAccess.ts";
 
 const MAX_COMPETITORS = 8;
 const MAX_OFFERINGS = 10;
+
+/**
+ * A competitor typed as an address gets its real name as soon as the lookup answers (its homepage, else its Google Maps
+ * listing), never its run-together domain label; meanwhile its chip shows the address being looked up.
+ */
+export function useCompetitorLookup(siteId: string, setList: Dispatch<SetStateAction<Competitor[]>>) {
+  const actions = useAnswersActions();
+  const [pending, setPending] = useState<string[]>([]);
+  const lookup = useCallback((competitor: Competitor) => {
+    const domain = competitor.domain;
+    // Only a run-together label is looked up: a short brand label is already the name answers write, and a site's longer
+    // formal name would stop matching answers that use the short one.
+    if (!domain || !nameFromDomainOnly(competitor.name, domain)) return;
+    setPending((list) => [...list, domain]);
+    actions.lookupCompetitor({ siteId, domain })
+      .then((found) => { if (found?.name) setList((list) => list.map((c) => c.domain === domain && c.name === competitor.name ? { ...c, name: found.name } : c)); })
+      .catch(() => { /* the name typed stays; Pentra names it again after saving */ })
+      .finally(() => setPending((list) => list.filter((d) => d !== domain)));
+  }, [actions, siteId, setList]);
+  return { pending, lookup };
+}
 
 /** "apollo.io" → { name: "Apollo", domain: "apollo.io" }; anything else is a name. */
 export function parseCompetitor(raw: string): Competitor | null {
@@ -121,6 +143,7 @@ function UnderstoodForm({ state }: { state: SetupState }) {
   // Filled in only when the read found a local business; an empty field means "not local".
   const [location, setLocation] = useState(state.local ? state.location ?? "" : "");
   const [competitors, setCompetitors] = useState<Competitor[]>(state.competitors.slice(0, MAX_COMPETITORS));
+  const { pending: lookingUp, lookup } = useCompetitorLookup(state.siteId, setCompetitors);
   const [touched, setTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,6 +155,7 @@ function UnderstoodForm({ state }: { state: SetupState }) {
     if (!parsed || competitors.length >= MAX_COMPETITORS) return false;
     if (competitors.some((c) => c.name.toLowerCase() === parsed.name.toLowerCase() || (parsed.domain && c.domain === parsed.domain))) return true;
     setCompetitors((list) => [...list, parsed]);
+    lookup(parsed);
     return true;
   };
   const addOffering = (raw: string) => {
@@ -199,8 +223,10 @@ function UnderstoodForm({ state }: { state: SetupState }) {
               {competitors.length > 0 ? (
                 <ul className="flex flex-wrap gap-1.5" aria-label="Competitors">
                   {competitors.map((c) => (
-                    <Chip key={`${c.name}-${c.domain ?? ""}`} label={c.name} onRemove={() => setCompetitors((list) => list.filter((x) => x !== c))}>
-                      {c.name}{c.domain && <span className="ml-1.5 font-mono text-[11px] text-text-3">{c.domain}</span>}
+                    <Chip key={c.domain ?? c.name} label={c.name} onRemove={() => setCompetitors((list) => list.filter((x) => x !== c))}>
+                      {c.domain && lookingUp.includes(c.domain)
+                        ? <><span className="font-mono text-[12px]">{c.domain}</span><span className="ml-1.5 text-text-3">finding the name…</span></>
+                        : <>{c.name}{c.domain && <span className="ml-1.5 font-mono text-[11px] text-text-3">{c.domain}</span>}</>}
                     </Chip>
                   ))}
                 </ul>

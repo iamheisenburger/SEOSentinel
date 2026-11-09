@@ -66,6 +66,23 @@ export const startPage = internalMutation({ args: { siteId: v.id("sites"), quest
     return pageId;
   } });
 
+/** The business's other answer pages (the newest of each kind): their questions, so a page keeps to its own, and their
+ * text, so nothing is copied from one page to the next (Cowork's test 3: the same blocks on every page). */
+async function siblingsOf(ctx: QueryCtx, page: Doc<"answer_pages">): Promise<Array<{ question: string; markdown: string }>> {
+  const others: Doc<"answer_pages">[] = [];
+  for (const status of ["published", "draft", "publishing", "publish_failed", "writing"]) {
+    others.push(...await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", page.siteId).eq("status", status)).order("desc").take(8));
+  }
+  return others.filter((p) => p._id !== page._id && p._id !== page.rewriteOf && p.questionId !== page.questionId).slice(0, 16)
+    .map((p) => ({ question: p.question, markdown: p.markdown.slice(0, 12_000) }));
+}
+
+/** The other pages again, as they are now (a page written side by side may have finished meanwhile). */
+export const siblingPages = internalQuery({ args: { pageId: v.id("answer_pages") }, handler: async (ctx, { pageId }) => {
+  const page = await ctx.db.get(pageId);
+  return page ? await siblingsOf(ctx, page) : null;
+} });
+
 /** What the writer needs for one page: the business's facts, what the assistants answer today, and the sources they cite
  * (most-cited first, the business's own pages left out). */
 export const writeContext = internalQuery({ args: { pageId: v.id("answer_pages") }, handler: async (ctx, { pageId }) => {
@@ -84,8 +101,10 @@ export const writeContext = internalQuery({ args: { pageId: v.id("answer_pages")
   }
   const business = businessOf(site);
   const access = await siteAnswersAccess(ctx, site);
+  const siblings = await siblingsOf(ctx, page);
   return {
     page: { pageId, siteId: site._id, questionId: question._id, question: question.question, rewriteOf: page.rewriteOf ?? null },
+    siblings,
     business: { name: business.name, domain: business.domain, summary: site.siteSummary ?? "", features: site.keyFeatures ?? [], pricing: site.pricingInfo ?? "",
       ctaText: site.ctaText ?? "", ctaUrl: site.ctaUrl ?? "", language: site.language ?? "en",
       market: [site.answers?.local && site.answers.location ? site.answers.location : "", site.targetCountry ?? business.country].filter(Boolean).join(", ") },

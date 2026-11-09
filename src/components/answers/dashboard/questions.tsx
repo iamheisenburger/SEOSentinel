@@ -21,7 +21,7 @@ const MAX_ACTIVE = 40;
 
 const FILTERS: { id: QuestionFilter; label: string }[] = [
   { id: "all", label: "All" },
-  { id: "winnable", label: "Winnable" },
+  { id: "winnable", label: "Strongest openings" },
   { id: "not_named", label: "Not named" },
   { id: "named", label: "Named you" },
   { id: "covered", label: "Covered" },
@@ -31,7 +31,7 @@ const FILTERS: { id: QuestionFilter; label: string }[] = [
 ];
 
 const OPPORTUNITY: Record<string, { label: string; pill: "named" | "you" | "none" }> = {
-  winnable: { label: "Winnable", pill: "you" },
+  winnable: { label: "Strongest opening", pill: "you" },
   covered: { label: "Covered", pill: "named" },
   monitoring: { label: "Monitoring", pill: "none" },
 };

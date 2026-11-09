@@ -365,7 +365,8 @@ test("/start's snapshot and drafts: the count sentence, drafts marked not publis
   const snapshot = text(harness("drafts~free", "start?site=site_kettlewood").html);
   assert.match(snapshot, new RegExp(`Named in ${run.named} of ${run.answered} answers\\.`));
   assert.match(snapshot, /4 searches showed no AI Overview and 2 answers failed ; listed, not counted\./);
-  assert.match(snapshot, /Questions you can win now/);
+  assert.match(snapshot, /Your strongest openings/);
+  assert.match(snapshot, /Up to a third of your questions/, "the label says the list is the strongest third, not every question you could win");
   assert.match(snapshot, new RegExp(`Publish these 4 pages and keep tracking\\. ${formatUsd(PENTRA_PLAN.monthly).replace("$", "\\$")}/mo`));
   const draftCount = store({ scenario: "drafts", access: "free" }).get("setupState", { siteId: SITE })!.pages.filter((p) => p.status === "draft").length;
   assert.match(snapshot, new RegExp(`Draft pages ${draftCount} `), "the tab counts what the bar counts: pages written as drafts");
@@ -407,7 +408,7 @@ test("questions, pages, citations, competitors, settings and billing render from
   const questions = text(harness("dashboard~paid", "dashboard/questions").html);
   assert.match(questions, /32 questions tracked · 1 paused/);
   assert.doesNotMatch(questions, /of 40 tracked/);
-  assert.match(questions, /Winnable/);
+  assert.match(questions, /Strongest openings/);
   assert.match(questions, /New this week/);
   const published = text(harness("dashboard~paid", "dashboard/pages").html);
   assert.match(published, /Waiting/, "a page published days ago and not yet seen on the site says so");
@@ -505,8 +506,10 @@ test("the harness is dev-only: 404 in production builds and on every host but th
     "answers.answerText", "answerPages.page", "sites.get", "answers.createSite", "answers.updateBusiness", "answers.confirmSetup", "answers.addQuestion",
     "answers.setQuestionStatus", "answers.setPreferences", "answers.runNow", "answers.switchToAnswers", "answerPages.editDraft", "answerPages.publishDraft",
     "answerPublish.setHostedDomain", "answerPublish.usePublishingConnection", "answerPublish.retryFailed", "sites.updateSite", "sites.upsert",
-    "publisher.verifyPublicationDestination", "publisher.listGithubRepositories"]);
+    "publisher.verifyPublicationDestination", "publisher.listGithubRepositories", "actions.answersSetup"]);
   assert.deepEqual(used.filter((fn) => !allowed.has(fn)), []);
+  // P395: from the setup actions, only the competitor-name lookup (an owner's typed address, held against its spend).
+  assert.deepEqual([...backend.matchAll(/api\.actions\.answersSetup\.([a-zA-Z]+)/g)].map((m) => m[1]), ["lookupCompetitor"]);
 });
 
 test("the old article routes send a site on Pentra Answers to its dashboard, before any article screen renders", () => {

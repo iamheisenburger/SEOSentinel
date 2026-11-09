@@ -151,6 +151,7 @@ import type * as lib_linkOpportunities from "../lib/linkOpportunities.js";
 import type * as lib_linkOutreach from "../lib/linkOutreach.js";
 import type * as lib_linkReceipts from "../lib/linkReceipts.js";
 import type * as lib_linkRelevance from "../lib/linkRelevance.js";
+import type * as lib_localCompetitors from "../lib/localCompetitors.js";
 import type * as lib_managedOutreachMailbox from "../lib/managedOutreachMailbox.js";
 import type * as lib_managedSes from "../lib/managedSes.js";
 import type * as lib_managedSesPacing from "../lib/managedSesPacing.js";
@@ -436,6 +437,7 @@ declare const fullApi: ApiFromModules<{
   "lib/linkOutreach": typeof lib_linkOutreach;
   "lib/linkReceipts": typeof lib_linkReceipts;
   "lib/linkRelevance": typeof lib_linkRelevance;
+  "lib/localCompetitors": typeof lib_localCompetitors;
   "lib/managedOutreachMailbox": typeof lib_managedOutreachMailbox;
   "lib/managedSes": typeof lib_managedSes;
   "lib/managedSesPacing": typeof lib_managedSesPacing;

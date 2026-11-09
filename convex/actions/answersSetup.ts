@@ -2,16 +2,18 @@
 /** Pentra Answers (Nov 2026): reading a new site's homepage for the owner to confirm (one bounded fetch, one small model
  * call). A site Pentra can't open or read says so plainly; the owner can still fill the details in. */
 import Anthropic from "@anthropic-ai/sdk";
-import { internalAction } from "../_generated/server";
+import { action, internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { v } from "convex/values";
-import { fetchPage } from "../lib/fetchPage";
+import { ConvexError, v } from "convex/values";
 import { extractBusinessPrefill } from "../lib/sitePrefill";
-import { parseSetupRead, SETUP_READ_HOLD_MICRO_USD, SETUP_READ_MAX_TOKENS, SETUP_READ_MODEL, SETUP_READ_TOOL, setupReadCost, setupReadRequest } from "../lib/answersSetup";
+import {
+  normalizeNewDomain, parseSetupRead, SETUP_READ_HOLD_MICRO_USD, SETUP_READ_MAX_TOKENS, SETUP_READ_MODEL, SETUP_READ_TOOL, setupReadCost, setupReadRequest, sitePageNames,
+} from "../lib/answersSetup";
 import { structuredToolChoice } from "../lib/toolChoice";
-import { fetchReadable, sitemapLinks } from "../lib/tregFetch";
+import { competitorName, fetchReadable, mapsSearch, sitemapLinks } from "../lib/tregFetch";
 import { keyLinks } from "../lib/siteLinks";
 import { htmlToText, mergeLinks } from "../lib/pageText";
+import { localCompetitors, LOOKUP_HOLD_MICRO_USD, mapsQuery, mergeCompetitors } from "../lib/localCompetitors";
 
 const anthropic = () => new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 2, timeout: 90_000, fetch });
 /** A missing page a renderer still returns ("Page not found"), never read as the business's words. */
@@ -39,7 +41,8 @@ export const readSite = internalAction({ args: { siteId: v.id("sites"), force: v
   }
   // The pages that say what the business does (services, prices, about, questions), found from the homepage's links and
   // the sitemap (a dentist's service pages are often only in its menu and sitemap): a homepage alone is often a slogan.
-  const found = keyLinks(mergeLinks(page.links, await sitemapLinks(site.domain).catch(() => [])), 4);
+  const allLinks = mergeLinks(page.links, await sitemapLinks(site.domain).catch(() => []));
+  const found = keyLinks(allLinks, 4);
   // Nothing to follow (a blocked host's renderer copy without links, no readable sitemap): the usual addresses are tried.
   const links = found.length ? found : ["/services", "/about", "/pricing"].map((path) => ({ url: `https://${site.domain}${path}`, text: path }));
   const more = await Promise.all(links.map((link) => fetchReadable(link.url, 300, site.domain)
@@ -64,7 +67,7 @@ export const readSite = internalAction({ args: { siteId: v.id("sites"), force: v
   }
   let cost = 0, sent = false;
   try {
-    const request = setupReadRequest({ domain: site.domain, title, description, headings, text, nameHint: prefill.name ?? "" });
+    const request = setupReadRequest({ domain: site.domain, title, description, headings, text, nameHint: prefill.name ?? "", sitePages: sitePageNames(allLinks) });
     sent = true;
     const response = await anthropic().messages.create({ model: SETUP_READ_MODEL, max_tokens: SETUP_READ_MAX_TOKENS, system: request.system,
       messages: [{ role: "user", content: request.userMessage }],
@@ -72,7 +75,19 @@ export const readSite = internalAction({ args: { siteId: v.id("sites"), force: v
       tool_choice: structuredToolChoice(SETUP_READ_MODEL, SETUP_READ_TOOL) });
     cost = setupReadCost(response.usage);
     const tool = response.content.find((b) => b.type === "tool_use" && b.name === SETUP_READ_TOOL);
-    const read = parseSetupRead(tool && tool.type === "tool_use" ? tool.input : null, site.domain);
+    const parsed = parseSetupRead(tool && tool.type === "tool_use" ? tool.input : null, site.domain);
+    // What the owner confirms (the Maps search term is used here only).
+    let read = parsed ? { name: parsed.name, sells: parsed.sells, buyers: parsed.buyers, offerings: parsed.offerings, country: parsed.country, local: parsed.local,
+      location: parsed.location, competitors: parsed.competitors } : null;
+    // A local business's competitors are the businesses Google Maps lists for what its buyers search in its city (the
+    // model's memory rarely knows one city's businesses, so a local snapshot often counted nobody named instead of it).
+    const query = parsed?.local && parsed.searchTerm ? mapsQuery(parsed.searchTerm, parsed.location, parsed.country) : null;
+    if (read && query) {
+      const maps = await mapsSearch(query, parsed?.country || "us");
+      cost += maps.costMicroUsd;
+      const local = localCompetitors(maps.places, { name: read.name, domain: site.domain });
+      if (local.length) read = { ...read, competitors: mergeCompetitors(local, read.competitors) };
+    }
     await ctx.runMutation(internal.answers.saveSetupRead, read ? { siteId, force, then, competitorsOnly, read }
       : { siteId, force, then, competitorsOnly, read: { name: prefill.name || site.domain, sells: description || title, buyers: "", offerings: [], country: "", local: false, location: "", competitors: [] } });
   } catch {
@@ -83,18 +98,34 @@ export const readSite = internalAction({ args: { siteId: v.id("sites"), force: v
   }
 } });
 
-/** Competitors the owner entered as a bare domain get the name their own site uses (og:site_name, else the title's first
- * part), so answers are matched by the name assistants actually write ("Riverview Dental", not "Boiseriverviewdental"). */
+/** Competitors saved with a run-together domain label as their name get the name their own site or Maps listing uses, so
+ * answers are matched by the name assistants actually write. The setup screen looks names up as they're typed
+ * (lookupCompetitor); this is the backstop for a list saved before a lookup came back. */
 export const nameCompetitors = internalAction({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const competitors = await ctx.runQuery(internal.answers.competitorsToName, { siteId });
   for (const c of competitors) {
-    const page = await fetchPage(`https://${c.domain}/`, { maxBytes: 2_000_000 }).catch(() => null);
-    const html = page?.html ?? "";
-    const raw = /<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']{2,80})["']/i.exec(html)?.[1]
-      ?? /<title[^>]*>([^<]{2,200})<\/title>/i.exec(html)?.[1]?.split(/\s[|–—-]\s|:\s/)[0];
-    const name = raw?.replace(/&amp;/g, "&").replace(/&#0?39;|&apos;/g, "'").replace(/\s+/g, " ").trim();
-    if (name && name.length >= 2 && name.length <= 60 && !/^(home|welcome|index)$/i.test(name)) {
-      await ctx.runMutation(internal.answers.renameCompetitor, { siteId, domain: c.domain, name });
-    }
+    const found = await competitorName(c.domain);
+    if (found.name) await ctx.runMutation(internal.answers.renameCompetitor, { siteId, domain: c.domain, name: found.name, verified: true });
+  }
+} });
+
+/** The owner typed a competitor's address whose label runs several words together: its real name, from its homepage or
+ * its Google Maps listing. The screens ask only for run-together labels (a short brand label is already the name answers
+ * write). `null` when neither says. Held against the account's spend like every paid call (at most a Maps search, $0.005). */
+export const lookupCompetitor = action({ args: { siteId: v.id("sites"), domain: v.string() }, handler: async (ctx, { siteId, domain }): Promise<{ name: string; domain: string } | null> => {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new ConvexError("Sign in first.");
+  const host = normalizeNewDomain(domain);
+  if (!host) return null;
+  if (!(await ctx.runQuery(internal.answers.ownsAnswersSite, { siteId, userId: identity.subject }))) throw new ConvexError("Site not found.");
+  const hold = await ctx.runMutation(internal.answers.holdSpend, { siteId, purpose: "lookup", microUsd: LOOKUP_HOLD_MICRO_USD });
+  if (!hold.ok) return null;
+  let cost = 0;
+  try {
+    const found = await competitorName(host);
+    cost = found.costMicroUsd;
+    return found.name ? { name: found.name, domain: host } : null;
+  } finally {
+    await ctx.runMutation(internal.answers.settleSpend, { spendId: hold.spendId, actualMicroUsd: cost, sent: cost > 0 });
   }
 } });

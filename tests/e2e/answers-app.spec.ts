@@ -19,6 +19,11 @@ test("a new account confirms what Pentra read, watches the first hour and lands 
   await page.getByPlaceholder("Name or website", { exact: true }).fill("greenline.com");
   await page.getByPlaceholder("Name or website", { exact: true }).press("Enter");
   await expect(page.getByRole("list", { name: "Competitors" })).toContainText("Greenline");
+  // P395: a run-together address gets the business's real name (its homepage or Maps listing), never "Austinoutdoorliving".
+  await page.getByPlaceholder("Name or website", { exact: true }).fill("austinoutdoorliving.com");
+  await page.getByPlaceholder("Name or website", { exact: true }).press("Enter");
+  await expect(page.getByRole("list", { name: "Competitors" })).toContainText("Austin Outdoor Living");
+  await expect(page.getByRole("list", { name: "Competitors" })).not.toContainText("Austinoutdoorliving");
   // A local business: the read's city is filled in and can be changed.
   await expect(page.getByLabel("City or area")).toHaveValue("Austin, TX");
   await page.getByLabel("City or area").fill("Round Rock, TX");
@@ -78,7 +83,7 @@ test("the dashboard: questions open their evidence, drafts publish, failures ret
   await page.getByLabel("A question your buyers ask").fill("Do composite decks fade in the Texas sun?");
   await page.getByRole("button", { name: "Add question" }).click();
   await expect(page.getByText("Added. Pentra asks it in the next run.")).toBeVisible();
-  await page.getByRole("radio", { name: /Winnable/ }).click();
+  await page.getByRole("radio", { name: /Strongest openings/ }).click();
   await page.getByRole("button", { name: "Pressure-treated pine or cedar for a deck in Austin?", exact: true }).click();
   await expect(page.getByRole("dialog").getByText("Every answer to this question")).toBeVisible();
   await openSheetAndClose(page);

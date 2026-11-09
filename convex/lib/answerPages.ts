@@ -41,16 +41,19 @@ export function pageSource(n: number, url: string, title: string | undefined, te
 }
 
 export function answerPageRequest(args: { question: string; businessName: string; productEvidence: string; market: string; language: string;
-  landscape: AnswerLandscape; sources: readonly PageSource[]; competitorNames: readonly string[]; revision?: { markdown: string; issues: readonly string[] } }) {
+  landscape: AnswerLandscape; sources: readonly PageSource[]; competitorNames: readonly string[]; revision?: { markdown: string; issues: readonly string[] };
+  otherQuestions?: readonly string[] }) {
   const system = [
     `You write one answer page for ${args.businessName}'s website. It answers a single question that buyers ask AI assistants (ChatGPT, Perplexity, Gemini, Google), so that an assistant can quote it and a buyer can trust it.`,
     "Rules:",
     "1. The first paragraph answers the question directly in two or three sentences (at most 60 words): the answer a buyer needs, no preamble.",
     "2. Then the substance: what matters, how to do it, what it costs, what to watch out for. Be specific and practical. Use numbers only from the business facts or the numbered sources.",
-    `3. Present ${args.businessName} as the answer where its facts show it fits: what it offers for this, who it is for, what it costs, using ONLY the business facts and its own crawled pages. Include one section whose heading says how ${args.businessName} handles this. Never invent features, prices, customers, results, reviews, quotes or personal experience. When the configured facts and the crawled live pages disagree (a price, an offer, a guarantee, a number), trust the live pages and leave the conflicting claim out.`,
+    `3. Present ${args.businessName} as the answer where its facts show it fits: what it offers for this exact question and who it suits, using ONLY the business facts and its own crawled pages. Include one section about ${args.businessName}, headed by what it does for this question in plain words, not a generic heading. Never invent features, prices, customers, results, reviews, quotes or personal experience. When the configured facts and the crawled live pages disagree (a price, an offer, a guarantee, a number), trust the live pages and leave the conflicting claim out.`,
+    // Nov 9 2026: one site's pages repeated each other's blocks; nothing told the writer what its other pages already cover.
+    `3c. This page is one of several on ${args.businessName}'s site, each answering its own question (the others are listed below when there are any). Write only what this question needs: material that would read the same on any of its pages belongs only on the page whose question asks for it.`,
     `3b. Every fact about ${args.businessName} (what it offers, how it works, where it is, its prices, plans, policies, data handling, staff) comes from the business facts below and nowhere else. The assistants' answers and the numbered sources are often wrong or out of date about ${args.businessName}: never take a fact about ${args.businessName} from them, and never put a source's citation marker on a sentence about ${args.businessName}.`,
-    `4. Never say or imply that ${args.businessName} does not offer, do or include something unless its own pages say so in those words. If its pages don't mention something, say nothing about it. Never write that its site or pages don't mention, list or say something, and never write that something couldn't be found, confirmed or verified: leave it out.`,
-    `5. Never name, link to or recommend another business, never give another business's phone number, address or website, and never send the reader to one${args.competitorNames.length ? ` (in particular: ${args.competitorNames.join(", ")})` : ""}. Where a buyer needs something ${args.businessName} doesn't show it offers, describe the kind of help to look for in general terms only. Product or brand names the business facts themselves use (a treatment, tool or partner of ${args.businessName}) are fine. The only links in the body are ${args.businessName}'s own pages.`,
+    `4. Never say or imply that ${args.businessName} does not offer, do or include something unless its own pages say so in those words. If its pages don't mention something, say nothing about it.`,
+    `5. Never name, link to or recommend another business, and never send the reader to one${args.competitorNames.length ? ` (in particular: ${args.competitorNames.join(", ")})` : ""}. Where a buyer needs something ${args.businessName} doesn't show it offers, describe the kind of help to look for in general terms only. Product or brand names the business facts themselves use (a treatment, tool or partner of ${args.businessName}) are fine. The only links in the body are ${args.businessName}'s own pages.`,
     "5b. Every statistic or claim that comes from outside the business facts carries a citation marker like [2] matching the numbered sources. If no source supports a claim, leave the claim out.",
     "6. Subheadings are the buyer's follow-up questions in plain words. Short paragraphs. End with a short FAQ: three or four questions, each answered in one to three sentences.",
     `7. Length: ${ANSWER_PAGE_MIN_WORDS}-1100 words in the body. Plain, confident English (or the market's language if it isn't English: ${args.language}). No filler, no hype words, no "in today's fast-paced world".`,
@@ -70,6 +73,9 @@ export function answerPageRequest(args: { question: string; businessName: string
     args.sources.length
       ? `Numbered sources (cite as [n]):\n${args.sources.map((s) => `[${s.n}] ${s.title ?? s.url} — ${s.url}\n${s.excerpt}`).join("\n\n")}`
       : "No outside sources were readable: state only the business facts and general, unquantified guidance.",
+    args.otherQuestions?.length
+      ? `${args.businessName}'s other answer pages answer these questions (leave their material to them):\n${args.otherQuestions.slice(0, 12).map((q) => `- ${q}`).join("\n")}`
+      : "",
     args.revision ? `Your previous draft had these problems. Fix every one and resubmit the whole page:\n${args.revision.issues.map((i) => `- ${i}`).join("\n")}\n\nPrevious draft:\n${args.revision.markdown}` : "",
   ].filter(Boolean).join("\n\n");
   const inputSchema = {
@@ -140,25 +146,6 @@ export function pageSentences(markdown: string): string[] {
     .map((s) => s.trim()).filter((s) => s.length > 3);
 }
 
-/** Text about the page's own research, never the buyer's answer: "Fathom's site doesn't mention weekly emails" (its features
- * page did), "this couldn't be confirmed". Leaving a thing out is right; saying the site lacks it is a false claim. */
-const SITE_SILENCE = [
-  /\b(?:web\s*site|site|homepage|home page|pages?|materials|listing)\s+(?:does\s*n[o']t|do\s*n[o']t|did\s*n[o']t|does not|do not|did not|never)\s+(?:explicitly\s+|clearly\s+|currently\s+)?(?:mention|say|list|show|state|specify|publish|include|describe|detail|confirm|indicate|address|cover)\b/i,
-  /\b(?:does\s*n['’]t|does not|do not|don['’]t)\s+(?:explicitly\s+|publicly\s+)?(?:mention|list|publish|state|specify|advertise|disclose)\b[^.!?]{0,80}\b(?:on|in)\s+(?:its|their|the)\s+(?:own\s+)?(?:web\s*site|site|pages?|homepage)\b/i,
-  /\b(?:is|are|was|were)\s+not\s+(?:mentioned|listed|stated|specified|shown|published|confirmed|detailed|disclosed)\b|\b(?:is|are|was|were)n['’]t\s+(?:mentioned|listed|stated|specified|shown|published|confirmed|detailed|disclosed)\b/i,
-  /\bno\s+(?:mention|indication|information)\s+(?:of|about|on)\b|\b(?:could|can)(?:\s*not|n['’]t)\s+(?:find|confirm|verify)\b|\b(?:was|were)\s+unable\s+to\s+(?:find|confirm|verify)\b/i,
-];
-export const siteSilenceSentences = (markdown: string) => pageSentences(markdown).filter((s) => SITE_SILENCE.some((re) => re.test(s)));
-
-const PHONE = /(?:\+?1[\s.-]?)?\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]\d{4}\b|\+\d{1,3}[\s.-]?\(?\d{1,4}\)?(?:[\s.-]?\d{2,4}){2,4}\b/g;
-const digits = (s: string) => s.replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
-/** Sentences that print a phone number the business's own facts don't have: another business's number (test 2's sources
- * box showed "Call Bristol Heights Dental at (208) 938-9912"). */
-export function foreignPhoneSentences(markdown: string, productEvidence: string): string[] {
-  const own = new Set([...productEvidence.matchAll(PHONE)].map((m) => digits(m[0])));
-  return pageSentences(markdown).filter((s) => [...s.matchAll(PHONE)].some((m) => digits(m[0]).length >= 10 && !own.has(digits(m[0]))));
-}
-
 /** Hosts the body links to that are neither the business's own site nor in its facts (its configured booking link). */
 export function outsideLinkHosts(markdown: string, businessDomain: string, productEvidence: string): string[] {
   const own = hostOf(businessDomain);
@@ -183,6 +170,38 @@ export function businessCitedSentences(markdown: string, business: Brand): strin
   return pageSentences(markdown).filter((s) => /\[\d+\]/.test(s) && matcher.test(s.replace(/\[\d+\]/g, "")) >= 0);
 }
 
+/** A sentence or heading as two pages are compared by: its words, lowercase, without citation markers, links or emphasis. */
+const sentenceKey = (s: string) => s.replace(/\[\d+\]/g, " ").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[*_`>#]/g, " ").toLowerCase()
+  .replace(/[^a-z0-9%$]+/g, " ").trim();
+/** Section headings of four words or more (a one-word "FAQ" every page has by design is not a copied block). */
+const headingsOf = (markdown: string) => [...markdown.matchAll(/^#{2,3}\s+(.+)$/gm)].map((m) => m[1].trim()).filter((h) => sentenceKey(h).split(" ").length >= 4);
+
+/** What this page shares word for word with the business's other answer pages (Cowork's test 3: the same blocks on every
+ * page): sentences of eight words or more and section headings of four words or more. */
+export function repeatedContent(markdown: string, otherPages: ReadonlyArray<{ question: string; markdown: string }>): {
+  sentences: Array<{ text: string; question: string }>; headings: Array<{ text: string; question: string }> } {
+  const sentenceSeen = new Map<string, string>(), headingSeen = new Map<string, string>();
+  for (const page of otherPages) {
+    if (!page.markdown) continue;
+    for (const s of pageSentences(page.markdown)) {
+      const key = sentenceKey(s);
+      if (key.split(" ").length >= 8 && !sentenceSeen.has(key)) sentenceSeen.set(key, page.question);
+    }
+    for (const h of headingsOf(page.markdown)) { const key = sentenceKey(h); if (key && !headingSeen.has(key)) headingSeen.set(key, page.question); }
+  }
+  const sentences = pageSentences(markdown).flatMap((s) => { const q = sentenceSeen.get(sentenceKey(s)); return q ? [{ text: s, question: q }] : []; });
+  const headings = headingsOf(markdown).flatMap((h) => { const q = headingSeen.get(sentenceKey(h)); return q ? [{ text: h, question: q }] : []; });
+  return { sentences, headings };
+}
+
+/** The revision's instructions for what a page repeats from the business's other pages. */
+export function repeatedIssues(repeated: ReturnType<typeof repeatedContent>): string[] {
+  return [
+    ...repeated.headings.slice(0, 4).map((h) => `The heading "${h.text.slice(0, 120)}" is also on the page for "${h.question.slice(0, 120)}". Give this section a heading about this question, or leave it out if this question doesn't need it.`),
+    ...repeated.sentences.slice(0, 8).map((s) => `"${s.text.slice(0, 200)}" is word for word on the page for "${s.question.slice(0, 120)}". Say only what this question needs, in this page's own words, or leave it out.`),
+  ];
+}
+
 const flexible = (sentence: string) => sentence.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
 /** The page with these sentences taken out (the edit pass: what is wrong about the business never goes out). A sentence
  * not found as written is reported, never guessed at. */
@@ -198,16 +217,39 @@ export function removeSentences(markdown: string, sentences: readonly string[]):
   return { markdown: out, removed, missed };
 }
 
+/** The page without headings left with nothing under them (after sentences were taken out): a heading is empty when the
+ * next line with words is a heading of its level or higher, or the page ends. */
+export function dropEmptySections(markdown: string): string {
+  const lines = markdown.split("\n");
+  const keep = lines.map(() => true);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const heading = /^(#{1,6})\s+\S/.exec(lines[i]);
+    if (!heading) continue;
+    let next = -1;
+    for (let j = i + 1; j < lines.length; j++) if (keep[j] && lines[j].trim()) { next = j; break; }
+    const nextHeading = next >= 0 ? /^(#{1,6})\s+\S/.exec(lines[next]) : null;
+    if (next < 0 || (nextHeading && nextHeading[1].length <= heading[1].length)) keep[i] = false;
+  }
+  return lines.filter((_, i) => keep[i]).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 /** After the writer's one revision (the edit pass, rule 2a): sentences the business's own pages contradict or don't
  * support, sentences about what its site "doesn't mention", other businesses' phone numbers and sentences about the
  * business cited to someone else's page are removed; links out become plain words. */
 export function editedDraft(draft: DraftPage, args: { businessName: string; businessDomain: string; productEvidence: string;
-  ownProblems: ReadonlyArray<{ sentence: string }> }): DraftPage {
+  ownProblems: ReadonlyArray<{ sentence: string }>; otherPages?: ReadonlyArray<{ question: string; markdown: string }> }): DraftPage {
   const hosts = outsideLinkHosts(draft.markdown, args.businessDomain, args.productEvidence);
   const unlinked = unlinkHosts(draft.markdown, hosts);
-  const wrong = [...args.ownProblems.map((p) => unlinkHosts(p.sentence, hosts)), ...siteSilenceSentences(unlinked), ...foreignPhoneSentences(unlinked, args.productEvidence),
-    ...businessCitedSentences(unlinked, { name: args.businessName, domain: args.businessDomain })];
-  const { markdown, removed } = removeSentences(unlinked, wrong);
+  const wrong = [...args.ownProblems.map((p) => unlinkHosts(p.sentence, hosts)), ...businessCitedSentences(unlinked, { name: args.businessName, domain: args.businessDomain })];
+  let { markdown, removed } = removeSentences(unlinked, wrong);
+  // Still word for word on another of the business's pages after the revision: taken out (an assistant quotes the page
+  // that says it first; a copy adds nothing), unless that would leave the page too thin to help.
+  const copied = args.otherPages?.length ? repeatedContent(markdown, args.otherPages).sentences.map((s) => s.text) : [];
+  if (copied.length) {
+    const without = removeSentences(markdown, copied);
+    if (words(dropEmptySections(without.markdown)) >= ANSWER_PAGE_MIN_WORDS) { markdown = without.markdown; removed = [...removed, ...without.removed]; }
+  }
+  markdown = dropEmptySections(markdown);
   // A fact goes with the sentence that stated it: most of its words are in a removed sentence.
   const wordsOf = (s: string) => s.toLowerCase().replace(/\[\d+\]/g, " ").split(/[^a-z0-9%$]+/).filter((w) => w.length > 2);
   const gone = removed.map((s) => new Set(wordsOf(s)));
@@ -270,8 +312,6 @@ export function checkDraftPage(page: DraftPage, args: { businessName: string; bu
   }
   // Cowork's test 2: what a business's site "doesn't mention", another business's phone number, links out, and facts about
   // the business taken from someone else's page. The writer fixes them once; whatever is left is taken out (writePage).
-  for (const s of siteSilenceSentences(page.markdown)) blocking.push(`Remove "${s.slice(0, 160)}": never say what ${args.businessName}'s site doesn't mention or what couldn't be confirmed; leave out what its facts don't cover.`);
-  for (const s of foreignPhoneSentences(page.markdown, args.productEvidence)) blocking.push(`Remove "${s.slice(0, 160)}": it gives a phone number that isn't ${args.businessName}'s.`);
   for (const host of outsideLinkHosts(page.markdown, args.businessDomain, args.productEvidence)) blocking.push(`Remove the link to ${host}: the body links only to ${args.businessName}'s own pages (sources are cited by number).`);
   for (const s of businessCitedSentences(page.markdown, { name: args.businessName, domain: args.businessDomain })) {
     blocking.push(`"${s.slice(0, 160)}" states something about ${args.businessName} with a source's citation: facts about ${args.businessName} come only from its own pages. Keep the claim only if the business facts say it, without the citation; otherwise remove it.`);
@@ -330,12 +370,6 @@ export function parseSourceKinds(raw: unknown, candidates: readonly SourceCandid
   }
   // A page the reply left out is not a reference.
   return candidates.filter((c) => kinds.get(c.n) === "reference").map((c) => c.n);
-}
-
-/** Without the sorting call: only pages from public institutions and reference works (never a business's site). */
-export function referenceByAddress(url: string): boolean {
-  return /(?:^|\.)(?:gov|mil|edu|int)(?:\.[a-z]{2})?$|(?:^|\.)(?:ac|gov|nhs)\.[a-z]{2}$|(?:^|\.)(?:wikipedia\.org|who\.int|europa\.eu|nih\.gov|cdc\.gov|mayoclinic\.org|clevelandclinic\.org|britannica\.com|ada\.org|mouthhealthy\.org)$/i
-    .test(hostOf(url));
 }
 
 export const OWN_FACTS_TOOL = "submit_business_claims";

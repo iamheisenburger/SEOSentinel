@@ -56,6 +56,8 @@ export type AnswersActions = {
   saveConnection(args: ConnectionInput): Promise<unknown>;
   verifyConnection(args: { siteId: string }): Promise<unknown>;
   listGithubRepositories(args: { siteId: string }): Promise<GithubRepository[]>;
+  /** A competitor's real name from its address (its homepage, else its Google Maps listing); null when neither says. */
+  lookupCompetitor(args: { siteId: string; domain: string }): Promise<{ name: string; domain: string } | null>;
 };
 
 export type AnswersBackend = {
@@ -110,6 +112,7 @@ function useLiveActions(): AnswersActions {
   const upsert = useMutation(api.sites.upsert);
   const verify = useAction(api.publisher.verifyPublicationDestination);
   const listRepos = useAction(api.publisher.listGithubRepositories);
+  const lookupCompetitor = useAction(api.actions.answersSetup.lookupCompetitor);
   return useMemo<AnswersActions>(() => ({
     createSite: (args) => createSite(args) as Promise<{ siteId: string; created: boolean }>,
     updateBusiness: (args) => updateBusiness(args as any),
@@ -135,8 +138,9 @@ function useLiveActions(): AnswersActions {
     },
     verifyConnection: (args) => verify(args as any),
     listGithubRepositories: (args) => listRepos(args as any) as Promise<GithubRepository[]>,
+    lookupCompetitor: (args) => lookupCompetitor(args as any) as Promise<{ name: string; domain: string } | null>,
   }), [createSite, updateBusiness, confirmSetup, addQuestion, setQuestionStatus, setPreferences, runNow, switchToAnswers, editDraft,
-    publishDraft, setHostedDomain, usePublishingConnection, retryFailed, updateSite, upsert, verify, listRepos]);
+    publishDraft, setHostedDomain, usePublishingConnection, retryFailed, updateSite, upsert, verify, listRepos, lookupCompetitor]);
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 

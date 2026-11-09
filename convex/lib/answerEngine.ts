@@ -145,7 +145,7 @@ export type BrandMatcher = { name: string; domain: string | null; test: (text: s
 
 /** Where a brand is first named in a text (-1 when it isn't): by its address, or by its name. A one-word name that is also
  * an everyday word ("Instantly", "Apollo") must be written capitalised; "LeadPilot" also matches "Lead Pilot". */
-export function brandMatcher(brand: Brand, options: { caseSensitiveSingleWord?: boolean } = {}): BrandMatcher | null {
+export function brandMatcher(brand: Brand, options: { caseSensitiveSingleWord?: boolean; exactCase?: boolean } = {}): BrandMatcher | null {
   const domain = brand.domain ? hostOf(brand.domain) : null;
   const words = brand.name.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/).filter(Boolean);
   const joined = words.join("").toLowerCase();
@@ -154,9 +154,12 @@ export function brandMatcher(brand: Brand, options: { caseSensitiveSingleWord?: 
     // Words may be joined by up to three non-letters: "Deck & Fence", "Lowe's", "Lowe’s", "Hub-Spot".
     const body = words.map((w) => escapeRegex(w)).join("[^A-Za-z0-9]{0,3}");
     const single = words.length === 1 && /^[A-Za-z]+$/.test(words[0]) && words[0] === words[0][0].toUpperCase() + words[0].slice(1).toLowerCase();
-    pattern = single && options.caseSensitiveSingleWord
-      ? new RegExp(`(?<![A-Za-z0-9])${escapeRegex(words[0][0].toUpperCase())}${escapeRegex(words[0].slice(1))}(?![A-Za-z0-9])`)
-      : new RegExp(`(?<![A-Za-z0-9])${body}(?![A-Za-z0-9])`, "i");
+    // `exactCase`: a name as an answer wrote it ("Simple Analytics") never matches the everyday words ("simple analytics").
+    pattern = options.exactCase
+      ? new RegExp(`(?<![A-Za-z0-9])${body}(?![A-Za-z0-9])`)
+      : single && options.caseSensitiveSingleWord
+        ? new RegExp(`(?<![A-Za-z0-9])${escapeRegex(words[0][0].toUpperCase())}${escapeRegex(words[0].slice(1))}(?![A-Za-z0-9])`)
+        : new RegExp(`(?<![A-Za-z0-9])${body}(?![A-Za-z0-9])`, "i");
   }
   if (!pattern && !domain) return null;
   return {
@@ -175,6 +178,8 @@ export type AnswerJudgement = {
   /** The business's place among the brands the answer names, in order of first mention (1 = named first). */
   position: number | null;
   brandsNamed: number;
+  /** The businesses counted in `brandsNamed`, in the answer's order (the business itself by its own name). */
+  namedOrder: string[];
   competitorsNamed: string[];
   /** The business's own pages among the sources. */
   citedPageUrls: string[];
@@ -201,27 +206,69 @@ export function judgeAnswer(answer: { text: string; sources: readonly AnswerSour
   const rivalHits = rivals.map((m) => ({ name: m.name, at: m.test(answer.text) })).filter((r) => r.at >= 0)
     .filter((r) => { const k = r.name.toLowerCase(); if (seenRival.has(k)) return false; seenRival.add(k); return true; })
     .sort((a, b) => a.at - b.at);
-  const order = [...(businessAt >= 0 ? [{ name: "__business__", at: businessAt }] : []), ...rivalHits].sort((a, b) => a.at - b.at);
-  // Every business the answer names (listed by a small model call), each placed where the answer first names it, so the
-  // business's place and the total count the same businesses in the answer's own order ("3rd of 7"; test 2 found a place
-  // counted among recommended tools over a total of every name). Without that list, the confirmed names are the fallback.
-  const listed = (context.namedOrder ?? []).filter((n) => n.trim().length > 1).slice(0, 30);
-  const placed: Array<{ name: string; at: number; business: boolean }> = [];
-  for (const name of listed) {
-    const isBusiness = Boolean(businessMatcher && (businessMatcher.test(name) >= 0 || (own !== "" && hostOf(name) === own)));
-    const at = isBusiness ? businessAt : brandMatcher({ name }, { caseSensitiveSingleWord: true })?.test(answer.text) ?? -1;
-    if (at < 0 || placed.some((p) => p.at === at || (p.business && isBusiness))) continue;
-    placed.push({ name, at, business: isBusiness });
-  }
-  if (listed.length && businessAt >= 0 && !placed.some((p) => p.business)) placed.push({ name: business.name, at: businessAt, business: true });
-  placed.sort((a, b) => a.at - b.at);
-  const position = businessAt < 0 ? null : placed.length ? placed.findIndex((p) => p.business) + 1 : order.findIndex((o) => o.name === "__business__") + 1;
+  // Every business the answer names (listed by a small model call) and every confirmed competitor it names, each placed
+  // where the answer first names it, so the business's place and the total count the same businesses in the answer's own
+  // order ("3rd of 7"). A name the question itself asks about is never counted (it is the question echoed back).
+  const placement = placeNamed(answer.text, { businessAt, businessName: business.name, isBusiness: (name) => isBusinessName(name, businessMatcher, own),
+    names: (context.namedOrder ?? []).slice(0, 30), rivalHits, ...(context.question ? { question: context.question } : {}) });
   const cited = citedPageUrls.length > 0;
   return {
-    named: businessAt >= 0 || cited, cited, position, brandsNamed: placed.length ? placed.length : order.length,
+    named: businessAt >= 0 || cited, cited, position: placement.position, brandsNamed: placement.order.length, namedOrder: placement.order,
     competitorsNamed: rivalHits.map((r) => r.name).slice(0, 12), citedPageUrls: citedPageUrls.slice(0, 10), sources: sources.slice(0, 20),
     excerpt: excerptAround(answer.text, businessAt >= 0 ? businessAt : rivalHits[0]?.at ?? 0),
   };
+}
+
+const isBusinessName = (name: string, businessMatcher: BrandMatcher | null, own: string) =>
+  Boolean(businessMatcher && (businessMatcher.test(name) >= 0 || (own !== "" && hostOf(name) === own)));
+
+/** A name the question itself asks about ("alternatives to Google Analytics"): the question echoed, never an option. */
+const askedAbout = (name: string, question: string) => (brandMatcher({ name }, { caseSensitiveSingleWord: true })?.test(question) ?? -1) >= 0;
+
+/** Where an answer first names a business: by the name exactly as written ("Simple Analytics", never "simple analytics"),
+ * or, for a name listed from this very answer, as the listing wrote it in any case. */
+function firstMention(text: string, name: string, listedHere: boolean): number {
+  const exact = brandMatcher({ name }, { exactCase: true })?.test(text) ?? -1;
+  if (exact >= 0 || !listedHere) return exact;
+  return brandMatcher({ name }, { caseSensitiveSingleWord: true })?.test(text) ?? -1;
+}
+
+/** The businesses an answer names, in its own order, and the business's place among them: the listed names (the answer's
+ * own `names`, and `alsoNames` other answers to the same question were counted with), the confirmed competitors it names,
+ * the business itself; never a name the question asks about, never one name twice. */
+export function placeNamed(text: string, args: { businessAt: number; businessName: string; isBusiness: (name: string) => boolean;
+  names: readonly string[]; alsoNames?: readonly string[]; rivalHits: ReadonlyArray<{ name: string; at: number }>; question?: string }): { position: number | null; order: string[] } {
+  const placed: Array<{ name: string; at: number; business: boolean }> = [];
+  const add = (name: string, at: number, business: boolean) => {
+    if (at < 0 || placed.some((p) => p.at === at || (p.business && business) || p.name.toLowerCase() === name.toLowerCase())) return;
+    placed.push({ name, at, business });
+  };
+  if (args.businessAt >= 0) add(args.businessName, args.businessAt, true);
+  const consider = (name: string, listedHere: boolean) => {
+    const clean = name.replace(/\s+/g, " ").trim();
+    if (clean.length < 2 || args.isBusiness(clean) || (args.question && askedAbout(clean, args.question))) return;
+    add(clean, firstMention(text, clean, listedHere), false);
+  };
+  for (const name of args.names) consider(name, true);
+  for (const name of args.alsoNames ?? []) consider(name, false);
+  for (const hit of args.rivalHits) if (!args.question || !askedAbout(hit.name, args.question)) add(hit.name, hit.at, false);
+  placed.sort((a, b) => a.at - b.at);
+  return { position: args.businessAt < 0 ? null : placed.findIndex((p) => p.business) + 1, order: placed.map((p) => p.name) };
+}
+
+/** One answer's place recounted over every business the answers to its question were counted with (Cowork's test 3:
+ * Google Analytics counted in one answer and skipped in another answer to the same question). */
+export function recountPlacement(text: string, business: Brand & { domain: string }, competitors: readonly Brand[], question: string,
+  ownNames: readonly string[], questionNames: readonly string[]): { position: number | null; brandsNamed: number; namedOrder: string[] } {
+  const businessMatcher = brandMatcher(business);
+  const businessAt = businessMatcher ? businessMatcher.test(text) : -1;
+  const own = hostOf(business.domain);
+  const rivalHits = competitors.map((c) => brandMatcher(c, { caseSensitiveSingleWord: true }))
+    .filter((m): m is BrandMatcher => m !== null && (!m.domain || (m.domain !== own && !m.domain.endsWith(`.${own}`))))
+    .map((m) => ({ name: m.name, at: m.test(text) })).filter((r) => r.at >= 0);
+  const placement = placeNamed(text, { businessAt, businessName: business.name, isBusiness: (name) => isBusinessName(name, businessMatcher, own),
+    names: ownNames, alsoNames: questionNames, rivalHits, question });
+  return { position: placement.position, brandsNamed: placement.order.length, namedOrder: placement.order };
 }
 
 /** About 600 characters of the answer around a point (the first mention), on word boundaries, marked with ellipses. */
@@ -267,7 +314,7 @@ export function runTotals(checks: readonly CheckSummary[]) {
 
 /** Sites an assistant leans on whatever the question (encyclopedias, forums, video, marketplaces, big publishers). A
  * question answered only from these is hard to enter with one page; one answered from small, partial pages is not. */
-const ENTRENCHED = /(^|\.)(wikipedia\.org|reddit\.com|youtube\.com|quora\.com|amazon\.[a-z.]+|linkedin\.com|forbes\.com|g2\.com|capterra\.com|trustpilot\.com|yelp\.com|nytimes\.com|investopedia\.com|hubspot\.com|medium\.com|facebook\.com|instagram\.com|x\.com|twitter\.com|tiktok\.com|pinterest\.com|tripadvisor\.[a-z.]+|indeed\.com|glassdoor\.com|apple\.com|microsoft\.com|github\.com|producthunt\.com|alternativeto\.net|getapp\.com|softwareadvice\.com|trustradius\.com|gartner\.com|healthgrades\.com|zocdoc\.com|opencare\.com|vitals\.com|webmd\.com|ratemds\.com|yellowpages\.com|bbb\.org|angi\.com|homeadvisor\.com|thumbtack\.com|houzz\.com|nextdoor\.com|mapquest\.com|birdeye\.com|expertise\.com|threebestrated\.com|superpages\.com|manta\.com|foursquare\.com|care\.com)$/i;
+const ENTRENCHED = /(^|\.)(wikipedia\.org|reddit\.com|youtube\.com|quora\.com|amazon\.[a-z.]+|linkedin\.com|forbes\.com|g2\.com|capterra\.com|trustpilot\.com|yelp\.com|nytimes\.com|investopedia\.com|hubspot\.com|medium\.com|facebook\.com|tripadvisor\.[a-z.]+|indeed\.com|glassdoor\.com|apple\.com|microsoft\.com)$/i;
 const STOP = new Set(["a", "an", "and", "are", "as", "at", "be", "best", "can", "do", "does", "for", "from", "get", "how", "i", "in", "is", "it", "my",
   "of", "on", "or", "should", "the", "to", "what", "when", "where", "which", "who", "why", "with", "you", "your", "me", "there", "that", "this"]);
 export const questionWords = (text: string) => [...new Set(text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)))];
@@ -298,19 +345,39 @@ export function questionOpportunity(question: string, checks: QuestionChecks): O
     return words.length > 0 && words.filter((w) => titleWords.has(w)).length / words.length >= 0.6;
   });
   const rivalAnswers = answered.filter((c) => c.competitorsNamed.length > 0).length;
+  // Each reason says what this question's answers show (Cowork's test 3: every winnable question read the same template):
+  // who they name instead, and the sites they cite.
+  const rivalCounts = new Map<string, number>();
+  for (const c of answered) for (const name of new Set(c.competitorsNamed)) rivalCounts.set(name, (rivalCounts.get(name) ?? 0) + 1);
+  const rivals = [...rivalCounts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const domainCounts = new Map<string, number>();
+  for (const c of answered) for (const d of new Set(c.sources.filter((s) => !s.own).map((s) => s.domain))) domainCounts.set(d, (domainCounts.get(d) ?? 0) + 1);
+  const cited = [...domainCounts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([d]) => d);
+  const citedList = cited.length <= 2 ? cited.join(" and ") : `${cited.slice(0, 2).join(", ")} and ${cited.length - 2} more`;
+  const youIn = named === 0 ? "you in none" : `you in ${named}`;
   const reasons: string[] = [];
   let score = 50;
-  if (named === 0) { score += 15; reasons.push(`Not named in any of ${answered.length} answers.`); }
-  else reasons.push(`Named in ${named} of ${answered.length} answers.`);
-  if (rivalAnswers > 0) { score += 10; reasons.push(`Competitors are named in ${rivalAnswers} of ${answered.length}: buyers get a recommendation here.`); }
+  if (named === 0) score += 15;
+  if (rivals.length) {
+    reasons.push(`${rivals[0][0]} is named in ${rivals[0][1]} of ${answered.length} answers${rivals[1] ? `, ${rivals[1][0]} in ${rivals[1][1]}` : ""}; ${youIn}.`);
+  } else {
+    reasons.push(named === 0 ? `None of the ${answered.length} answers names you or a competitor you track.` : `Named in ${named} of ${answered.length} answers; no competitor you track is.`);
+  }
+  if (rivalAnswers > 0) score += 10;
   const preciseDomains = new Set(precise.map((s) => s.domain)).size;
   const bigSitesOnly = domains.length > 0 && entrenched.length / domains.length >= 0.7;
   // Large sites answer broad questions whatever their page titles say, so a missing exact page is no opening there.
-  if (bigSitesOnly) { score -= 25; reasons.push("The answers lean on large sites only."); }
+  if (bigSitesOnly) { score -= 25; reasons.push(`The answers lean on large sites only (${citedList}).`); }
   else {
-    if (preciseDomains <= 1) { score += 15; reasons.push(preciseDomains === 0 ? "No cited page answers this exact question." : "Only one cited page answers this exact question."); }
-    else if (preciseDomains >= 4) { score -= 10; reasons.push(`${preciseDomains} cited pages already answer it directly.`); }
-    if (domains.length > 0 && entrenched.length / domains.length <= 0.3) { score += 5; reasons.push("The answers cite small and mid-size sites, which a precise page can join."); }
+    if (preciseDomains <= 1) {
+      score += 15;
+      if (domains.length) reasons.push(preciseDomains === 0 ? `They cite ${citedList}; none of those pages answers this exact question.`
+        : `They cite ${citedList}; only one page answers this exact question.`);
+    } else {
+      if (preciseDomains >= 4) score -= 10;
+      reasons.push(`They cite ${citedList}; ${preciseDomains} of those pages answer it directly.`);
+    }
+    if (domains.length > 0 && entrenched.length / domains.length <= 0.3) { score += 5; reasons.push("Those are small and mid-size sites, which a precise page can join."); }
   }
   if (words.length >= 6) { score += 5; reasons.push("It is a specific question, so fewer pages compete for it."); }
   if (!domains.length) { score -= 20; reasons.splice(1, 0, "The answers cite no web pages yet, so there is no page to join."); }

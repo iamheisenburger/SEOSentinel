@@ -9,10 +9,8 @@ const STOP = new Set(["the", "and", "for", "with", "your", "you", "our", "are", 
   "can", "should", "need", "that", "this", "from", "into", "about", "will", "have", "get", "does", "much", "cost", "costs", "price", "is", "a", "an",
   "to", "of", "in", "on", "my", "me", "do", "i", "it", "or", "be", "by", "at", "as", "vs", "than", "more", "most", "there", "any", "find"]);
 
-/** Short words that still say what a page is about ("Which analytics tools keep data in the EU?"). */
-const SHORT_MEANINGFUL = new Set(["eu", "uk", "usa", "api", "seo", "crm", "vat", "tax", "ada", "tmj", "ivf", "spa", "gym", "app"]);
 export const meaningfulWords = (text: string) => text.toLowerCase().replace(/['’®™]/g, "").split(/[^a-z0-9]+/)
-  .filter((w) => (w.length >= 4 && !STOP.has(w)) || SHORT_MEANINGFUL.has(w));
+  .filter((w) => w.length >= 4 && !STOP.has(w));
 
 /** The internal links of a page: absolute same-site addresses with their visible text, once each, no files or anchors. */
 export function siteLinks(html: string, domain: string): SiteLink[] {
@@ -53,8 +51,8 @@ export function profileLinks(links: readonly SiteLink[], limit = 3): SiteLink[] 
 export function keyLinks(links: readonly SiteLink[], limit = 4): SiteLink[] {
   const kinds = [
     /(^|[\s/-])(services?|treatments?|solutions?|products?|features?|what-we-do|offerings?|menu|shop|collections?|how-it-works)([\s/-]|$)/,
-    /(^|[\s/-])(pricing|prices?|plans?|fees|rates|cost|insurance|membership|loyalty)([\s/-]|$)/,
-    /(^|[\s/-])(about|about-us|who-we-are|our-story|team|company|meet)([\s/-]|$)/,
+    /(^|[\s/-])(pricing|prices?|plans?|fees|rates|cost)([\s/-]|$)/,
+    /(^|[\s/-])(about|about-us|who-we-are|our-story|team|company)([\s/-]|$)/,
     /(^|[\s/-])(faqs?|questions|help|support)([\s/-]|$)/,
   ];
   const chosen: SiteLink[] = [];

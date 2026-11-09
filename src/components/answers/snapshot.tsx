@@ -99,7 +99,7 @@ export function RivalsPanel({ run, businessName, title = "Named instead" }: { ru
   );
 }
 
-/* ─── Questions you can win now ────────────────────────────────────────── */
+/* ─── The strongest openings (up to a third of the questions) ─────────── */
 
 export function WinnableQuestions({ questions, limit = 5, emptyText }: { questions: OverviewQuestion[]; limit?: number; emptyText?: string }) {
   const open = useEvidence();

@@ -110,7 +110,7 @@ export const askBatch = internalAction({ args: { runId: v.id("answer_runs") }, h
 } });
 
 type AskedCheck = { assistant: string; status: string; error?: string; excerpt: string; textChars: number; named: boolean; cited: boolean;
-  position?: number; brandsNamed: number; competitorsNamed: string[]; sources: Array<{ url: string; title?: string; domain: string; own: boolean }>;
+  position?: number; brandsNamed: number; businessesNamed?: string[]; competitorsNamed: string[]; sources: Array<{ url: string; title?: string; domain: string; own: boolean }>;
   citedPageUrls: string[]; endpoint: string; costMicroUsd: number };
 
 /** One question to one assistant: its answer judged, or why there was none. A call that failed fast (or was rate
@@ -164,8 +164,8 @@ export async function askOne(assistant: AnswerAssistant, question: string, count
       const judged = judgeAnswer(parsed, business, competitors, { question, ...(namedOrder ? { namedOrder } : {}) });
       return { sent, text: parsed.text, check: { assistant, status: "answered", excerpt: judged.excerpt || excerptAround(parsed.text, 0),
         textChars: parsed.text.length, named: judged.named, cited: judged.cited, ...(judged.position !== null ? { position: judged.position } : {}),
-        brandsNamed: judged.brandsNamed, competitorsNamed: judged.competitorsNamed, sources: judged.sources, citedPageUrls: judged.citedPageUrls,
-        endpoint, costMicroUsd: cost } };
+        brandsNamed: judged.brandsNamed, ...(judged.position !== null ? { businessesNamed: judged.namedOrder } : {}), competitorsNamed: judged.competitorsNamed,
+        sources: judged.sources, citedPageUrls: judged.citedPageUrls, endpoint, costMicroUsd: cost } };
     } catch (error) {
       const timedOut = error instanceof Error && error.name === "TimeoutError";
       if (timedOut) cost += ANSWER_CALL_MAX_MICRO_USD;

@@ -60,6 +60,8 @@ export type Check = {
   /** 1 = named first among the brands the answer names. */
   position: number | null;
   brandsNamed: number;
+  /** The businesses counted in "Nth of M", in the answer's order (answers that name the business; null before Nov 9 2026). */
+  businessesNamed?: string[] | null;
   competitorsNamed: string[];
   sources: CheckSource[];
   citedPageUrls: string[];

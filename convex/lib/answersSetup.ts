@@ -24,25 +24,33 @@ export function normalizeNewDomain(raw: string): string | null {
   return host;
 }
 
-export function setupReadRequest(args: { domain: string; title: string; description: string; headings: readonly string[]; text: string; nameHint: string }) {
+/** The offerings the owner confirms (the setup screen holds ten). */
+export const SETUP_READ_MAX_OFFERINGS = 10;
+
+export function setupReadRequest(args: { domain: string; title: string; description: string; headings: readonly string[]; text: string; nameHint: string;
+  sitePages?: readonly string[] }) {
   const system = [
     "You read a business's homepage and describe it plainly for its owner to confirm.",
-    "Rules: use only what the page shows, except competitors. `sells`: one or two plain sentences on what it offers and the outcome for the customer. `buyers`: who pays for it. `offerings`: up to 8 short phrases.",
+    `Rules: use only what the pages show, except competitors. \`sells\`: one or two plain sentences on what it offers and the outcome for the customer. \`buyers\`: who pays for it. \`offerings\`: up to ${SETUP_READ_MAX_OFFERINGS} short phrases, its main products or services; a service the site gives its own page (listed under "Pages on the site") is one of them.`,
     "`country`: the two-letter code of the market it serves if the page makes it clear, else empty. `local`: true only if it serves one city or region in person; then `location` names it.",
+    "`searchTerm`: for a local business, the words a buyer types into a map search to find this kind of business, in the page's language, without the place; else empty.",
     "`competitors`: up to 5 real companies a buyer would compare it with, that you are confident exist, each with its real website domain. Leave the list empty rather than guess.",
     ...(forcedToolChoiceSupported(SETUP_READ_MODEL) ? [] : [toolOnlyInstruction(SETUP_READ_TOOL)]),
   ].join("\n");
   const userMessage = [
     `Domain: ${args.domain}`, args.nameHint ? `Name on the page: ${args.nameHint}` : "", args.title ? `Title: ${args.title}` : "",
     args.description ? `Description: ${args.description}` : "", args.headings.length ? `Headings: ${args.headings.slice(0, 25).join(" | ")}` : "",
+    // Nov 9 2026 (Cowork's test 3): the dentist's menu lists "Sleep Apnea", which no homepage paragraph mentions; its own
+    // pages' names say what it offers.
+    args.sitePages?.length ? `Pages on the site (its menu and sitemap): ${args.sitePages.slice(0, 80).join(" | ")}` : "",
     `Page text:\n${args.text.slice(0, 16000)}`,
   ].filter(Boolean).join("\n");
   const inputSchema = {
-    type: "object" as const, additionalProperties: false, required: ["name", "sells", "buyers", "offerings", "country", "local", "location", "competitors"],
+    type: "object" as const, additionalProperties: false, required: ["name", "sells", "buyers", "offerings", "country", "local", "location", "searchTerm", "competitors"],
     properties: {
       name: { type: "string" as const }, sells: { type: "string" as const }, buyers: { type: "string" as const },
       offerings: { type: "array" as const, items: { type: "string" as const } }, country: { type: "string" as const }, local: { type: "boolean" as const },
-      location: { type: "string" as const },
+      location: { type: "string" as const }, searchTerm: { type: "string" as const },
       competitors: { type: "array" as const, items: { type: "object" as const, additionalProperties: false, required: ["name", "domain"],
         properties: { name: { type: "string" as const }, domain: { type: "string" as const } } } },
     },
@@ -51,7 +59,7 @@ export function setupReadRequest(args: { domain: string; title: string; descript
 }
 
 export type SetupRead = { name: string; sells: string; buyers: string; offerings: string[]; country: string; local: boolean; location: string;
-  competitors: Array<{ name: string; domain: string }> };
+  competitors: Array<{ name: string; domain?: string }>; searchTerm?: string };
 
 export function parseSetupRead(raw: unknown, domain: string): SetupRead | null {
   const r = raw as Partial<Record<keyof SetupRead, unknown>> | null;
@@ -68,7 +76,31 @@ export function parseSetupRead(raw: unknown, domain: string): SetupRead | null {
   return {
     name: typeof r.name === "string" && r.name.trim() ? r.name.trim().slice(0, 80) : own,
     sells: r.sells.trim().slice(0, 500), buyers: typeof r.buyers === "string" ? r.buyers.trim().slice(0, 300) : "",
-    offerings: (Array.isArray(r.offerings) ? r.offerings : []).filter((o): o is string => typeof o === "string" && o.trim().length > 1).map((o) => o.trim().slice(0, 120)).slice(0, 8),
+    offerings: (Array.isArray(r.offerings) ? r.offerings : []).filter((o): o is string => typeof o === "string" && o.trim().length > 1).map((o) => o.trim().slice(0, 120))
+      .slice(0, SETUP_READ_MAX_OFFERINGS),
     country, local: r.local === true, location: typeof r.location === "string" ? r.location.trim().slice(0, 80) : "", competitors,
+    ...(typeof r.searchTerm === "string" && r.searchTerm.trim().length >= 3 ? { searchTerm: r.searchTerm.replace(/\s+/g, " ").trim().slice(0, 60) } : {}),
   };
+}
+
+/** The names of a site's own pages, for the read (a service listed only in its menu or sitemap): the link text, else the
+ * address's last part in words. Once each. */
+export function sitePageNames(links: ReadonlyArray<{ url: string; text: string }>, limit = 80): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const link of links) {
+    let path = "";
+    try { path = decodeURIComponent(new URL(link.url).pathname); } catch { continue; }
+    const last = path.split("/").filter(Boolean).pop() ?? "";
+    const fromPath = last.replace(/\.(?:html?|php|aspx?)$/i, "").replace(/[-_]+/g, " ").trim();
+    const text = link.text.replace(/\s+/g, " ").trim();
+    const name = text.length >= 3 && text.length <= 60 ? text : fromPath;
+    if (name.length < 3) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(name.slice(0, 60));
+    if (out.length >= limit) break;
+  }
+  return out;
 }

@@ -11,6 +11,7 @@
 import { safeFetchPublicText } from "./safeOutbound.ts";
 import { siteLinks, type SiteLink } from "./siteLinks.ts";
 import { challengeText, htmlToText, looksLikeMarkup, markdownLinks, markdownToText, mergeLinks, preferredSitemaps, sitemapEntries } from "./pageText.ts";
+import { MAPS_ENDPOINT, MAPS_MAX_COST_MICRO_USD, nameFromMaps, pageTitle, parseMapsPlaces, siteNameFromHtml, type MapsPlace } from "./localCompetitors.ts";
 
 const TEXT_KEYS = ["markdown", "content", "text", "extracted_content", "cleaned_content"];
 const CONTAINER_KEYS = ["output", "pages", "data", "result", "items", "raw"];
@@ -91,6 +92,42 @@ export async function fetchReadable(url: string, minChars = 400, domain?: string
     }
   }
   return direct.text ? direct : { ...direct, blocked: direct.blocked || Boolean(markdown) };
+}
+
+/** A Google Maps search through treg: the places with a website of their own, and what the call cost. Never throws. */
+export async function mapsSearch(q: string, country = "us"): Promise<{ places: MapsPlace[]; costMicroUsd: number }> {
+  const token = process.env.TREG_TOKEN;
+  if (!token || q.trim().length < 3) return { places: [], costMicroUsd: 0 };
+  try {
+    const response = await fetch(`https://treg.to/call/${MAPS_ENDPOINT}`, { method: "POST", signal: AbortSignal.timeout(30_000),
+      headers: { "Content-Type": "application/json", "X-Treg-Token": token, "X-Treg-Route-Max-Cost": String(MAPS_MAX_COST_MICRO_USD / 1e6),
+        "X-Treg-Meta": "feature=pentra-competitors" },
+      body: JSON.stringify({ q: q.trim().slice(0, 160), country: (country || "us").toLowerCase() }) });
+    const charged = Number(response.headers.get("X-Treg-Cost-Micro"));
+    const costMicroUsd = response.headers.has("X-Treg-Cost-Micro") && Number.isSafeInteger(charged) && charged >= 0 ? charged : response.ok ? MAPS_MAX_COST_MICRO_USD : 0;
+    return { places: response.ok ? parseMapsPlaces(await response.json()) : [], costMicroUsd };
+  } catch { return { places: [], costMicroUsd: 0 }; }
+}
+
+/** A competitor's real name: one its homepage gives that matches its address (direct read: og:site_name, structured
+ * data, the title), else the name of the Google Maps listing whose website is this address, searched by the page's own
+ * title (Maps finds a business by its words, rarely by its address), else null: the name the owner typed stays. */
+export async function competitorName(domain: string): Promise<{ name: string | null; costMicroUsd: number }> {
+  const host = new URL(`https://${domain}/`).hostname.replace(/^www\./, "");
+  let title = "";
+  for (const url of [`https://${host}/`, `https://www.${host}/`]) {
+    try {
+      const page = await safeFetchPublicText(url, { sameHostRedirects: true, maxBytes: 2_000_000 });
+      if (!challengeText(page.text) && looksLikeMarkup(page.text)) {
+        const name = siteNameFromHtml(page.text, host);
+        if (name) return { name, costMicroUsd: 0 };
+        title = pageTitle(page.text);
+        break;
+      }
+    } catch { /* unreachable or refused: the next address, then its Maps listing */ }
+  }
+  const maps = await mapsSearch(title.length >= 3 ? title : host);
+  return { name: nameFromMaps(maps.places, host), costMicroUsd: maps.costMicroUsd };
 }
 
 /** The pages a business's sitemap lists (its service and product pages are often not linked from the homepage text):

@@ -13,7 +13,7 @@ import { challengeText, htmlToText, markdownLinks, markdownToText, preferredSite
 import { keyLinks, relevantLinks } from "../convex/lib/siteLinks.ts";
 import {
   answerPageRequest, checkDraftPage, citedPassage, editedDraft, ownFactsRequest, pageSource, parseDraftPage, parseOwnFacts, parseSourceKinds,
-  referenceByAddress, removeSentences, sourceKindsRequest,
+  removeSentences, sourceKindsRequest,
 } from "../convex/lib/answerPages.ts";
 import { judgeAnswer, questionOpportunity, rankOpportunities, type Opportunity } from "../convex/lib/answerEngine.ts";
 import { sourceQuote } from "../src/lib/answers/format.ts";
@@ -64,7 +64,9 @@ test("a business's service pages are found from its sitemap, and the right ones 
     [`https://${DENTIST}/page-sitemap.xml`, `https://${DENTIST}/post-sitemap.xml`]);
   assert.ok(relevantLinks(pages, "Which Boise dentist offers sedation for anxious patients?", 3).some((l) => l.url === `https://${DENTIST}/dental-services/sedation-dentistry`),
     "the sedation question reads the practice's own sedation page (test 2's draft cited another practice's)");
-  assert.deepEqual(keyLinks(pages).map((l) => new URL(l.url).pathname), ["/dental-services", "/loyalty-program", "/team"], "services, plans, about: one of each");
+  // One of each kind found by common page names (P395 cleanup: no words taken from one site, so a loyalty programme is no
+  // pricing page); this site has no pricing page.
+  assert.deepEqual(keyLinks(pages).map((l) => new URL(l.url).pathname), ["/dental-services", "/team"], "services and about: one of each found");
 });
 
 test("a short sitemap reply is kept, and a large site's own page about the question beats its blog posts", async () => {
@@ -112,29 +114,34 @@ test("the sources box never shows page code and never scrolls sideways on a phon
 const fathom = { name: "Fathom Analytics", domain: "usefathom.com" };
 const fathomEvidence = "Name: Fathom Analytics\nDomain: usefathom.com\nCrawled page https://usefathom.com/features:\nGet weekly or monthly emails with your site's stats.\nCrawled page https://usefathom.com/data:\nAnonymized analytics data is stored in the US.";
 
-test("a page never says what the business's site doesn't mention, never gives another business's number or links out, and never cites someone else for a fact about the business", () => {
+test("a page's links go only to the business's own pages, a source never backs a fact about the business, and what its own pages don't support is taken out", () => {
+  // P395 cleanup: the wording patches (a regex for "the site doesn't mention", a phone-number regex) are gone. A claim
+  // about the business that its own pages don't support, an absence claim included, is found by the own-pages check
+  // (any wording, any language) and taken out by the edit pass; links out and third-party citations stay structural rules.
   const sources = [1, 2].map((n) => pageSource(n, `https://ref${n}.example/a`, `Ref ${n}`, "Privacy-first analytics tools avoid cookies and personal data. ".repeat(20), 1));
   const body = ["Fathom Analytics is a privacy-first analytics tool that doesn't use cookies.", "",
     "## Does it email reports?", "", "Fathom's site doesn't mention a weekly email schedule.", "",
     "## Where is data kept?", "", "Fathom Analytics keeps data only on EU servers [2].", "",
-    "For a second opinion, call Bristol Heights Dental at (208) 938-9912 or see [their guide](https://bristolheightsdental.example/osa).", "",
+    "For more, see [this guide](https://otherguide.example/osa).", "",
     ...Array.from({ length: 70 }, (_, i) => `Practical point ${i + 1} for site owners.`)].join("\n");
   const draft = parseDraftPage({ title: "Privacy-first analytics with email reports", metaDescription: "m", markdown: body,
     facts: [{ text: "Fathom keeps data only on EU servers", source: "source", sourceNumber: 2 }], fit: "strong" }, sources)!;
   const args = { businessName: fathom.name, businessDomain: fathom.domain, sources, productEvidence: fathomEvidence };
   const blocking = checkDraftPage(draft, args).blocking.join("\n");
-  assert.match(blocking, /never say what Fathom Analytics's site doesn't mention/);
-  assert.match(blocking, /phone number that isn't Fathom Analytics's/);
-  assert.match(blocking, /Remove the link to bristolheightsdental\.example/);
+  assert.match(blocking, /Remove the link to otherguide\.example/);
   assert.match(blocking, /states something about Fathom Analytics with a source's citation/);
-  // After the one revision, what is still wrong is taken out (the edit pass), including what the own-pages check found.
+  assert.doesNotMatch(blocking, /doesn't mention|phone number/, "no wording rules: the own-pages check judges what a sentence claims");
+  // The own-pages check reports the unsupported claims (the cookie claim and the absence claim); the edit pass removes them.
   const edited = editedDraft(draft, { businessName: fathom.name, businessDomain: fathom.domain, productEvidence: fathomEvidence,
-    ownProblems: [{ sentence: "Fathom Analytics is a privacy-first analytics tool that doesn't use cookies." }] });
-  assert.doesNotMatch(edited.markdown, /doesn't mention|EU servers|938-9912|bristolheightsdental|doesn't use cookies/);
-  assert.match(edited.markdown, /## Does it email reports\?\n\n## Where is data kept\?/);
+    ownProblems: [{ sentence: "Fathom Analytics is a privacy-first analytics tool that doesn't use cookies." }, { sentence: "Fathom's site doesn't mention a weekly email schedule." }] });
+  assert.doesNotMatch(edited.markdown, /doesn't mention|EU servers|otherguide|doesn't use cookies/);
+  assert.match(edited.markdown, /For more, see this guide\./, "a link out becomes its words");
+  // A heading left with nothing under it goes with its sentence (a bare heading is a defect a reader sees).
+  assert.doesNotMatch(edited.markdown, /## Does it email reports\?/);
+  assert.match(edited.markdown, /## Where is data kept\?/);
   assert.deepEqual(edited.facts, [], "the removed claim's fact goes with it");
   const clean = checkDraftPage(edited, args).blocking.join("\n");
-  assert.doesNotMatch(clean, /doesn't mention|phone number|link to|citation/);
+  assert.doesNotMatch(clean, /link to|citation/);
   const missed = removeSentences("One line.\n\nAnother  line here.", ["Another line here.", "Not in the page."]);
   assert.deepEqual([missed.markdown, missed.missed], ["One line.", ["Not in the page."]], "whitespace differences still match; a sentence not found is reported");
 });
@@ -143,7 +150,7 @@ test("facts about the business come from its own pages: the writer is told so, a
   const request = answerPageRequest({ question: "Which analytics tools keep data in the EU?", businessName: fathom.name, productEvidence: fathomEvidence, market: "US",
     language: "en", landscape: [{ assistant: "chatgpt", excerpt: "Fathom keeps EU data in the EU.", named: true, competitorsNamed: [] }], sources: [], competitorNames: [] });
   assert.match(request.system, /3b\. Every fact about Fathom Analytics .* comes from the business facts below and nowhere else/);
-  assert.match(request.system, /never write that its site or pages don't mention/i);
+  assert.match(request.system, /4\. Never say or imply that Fathom Analytics does not offer, do or include something unless its own pages say so in those words\./);
   assert.match(request.userMessage, /never trust what they say about Fathom Analytics/);
   const check = ownFactsRequest({ businessName: fathom.name, productEvidence: fathomEvidence, markdown: "Fathom keeps data only on EU servers." });
   assert.match(check.userMessage, /stored in the US/);
@@ -165,10 +172,12 @@ test("a source is a reference, never another business that sells the same thing 
   assert.deepEqual(parseSourceKinds({ pages: [{ n: 1, kind: "seller" }, { n: 2, kind: "reference" }, { n: 3, kind: "listing" }] }, candidates), [2]);
   assert.deepEqual(parseSourceKinds({ pages: [{ n: 2, kind: "reference" }] }, candidates), [2], "a page the reply leaves out is not kept");
   assert.equal(parseSourceKinds("not json", candidates), null);
-  assert.equal(referenceByAddress("https://www.nhlbi.nih.gov/health/sleep-apnea"), true);
-  assert.equal(referenceByAddress("https://www.bristolheightsdental.com/sleep-apnea"), false, "without the sorting call, a business's site is never kept");
   const action = readFileSync("convex/actions/answerPages.ts", "utf8");
   assert.match(action, /const sorted = await referenceSources\(candidates,/);
+  // P395 cleanup: when the sorting call fails twice, no outside page is used (no list of sites or address endings, which
+  // differ by country); the writer then writes from the business's own pages with general guidance.
+  assert.match(action, /for \(let attempt = 0; attempt < 2; attempt\+\+\)[\s\S]*?if \(keep\) return[\s\S]*?return \{ keep: \[\] as SourceCandidate\[\], cost \};/);
+  assert.doesNotMatch(action, /referenceByAddress/);
   assert.match(action, /const factCheck = .*await ownFactsProblems\(business\.name, productEvidence, parsed\.markdown\)/);
   assert.match(action, /draft = editedDraft\(draft, \{/);
 });

@@ -687,6 +687,12 @@ export function createSyntheticStore(options: HarnessOptions): SyntheticStore {
         { owner: "kettlewood", name: "brand-assets", private: true },
       ];
     },
+    async lookupCompetitor({ domain }) {
+      // The harness's stand-in for a competitor's homepage name: known addresses only, as the live lookup's Maps listing.
+      const known: Record<string, string> = { "austinoutdoorliving.com": "Austin Outdoor Living" };
+      const host = domain.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split(/[/?#]/)[0] ?? "";
+      return known[host] ? { name: known[host], domain: host } : null;
+    },
   };
 
   return {

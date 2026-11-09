@@ -8,7 +8,8 @@ import type { UserIdentity } from "convex/server";
 import { plausibleEmail } from "./lib/customerEmail";
 import { accountDeletionKey } from "./lib/accountDeletion";
 import {
-  ANSWER_ASSISTANTS, ANSWER_QUESTION_INTENTS, cleanQuestion, isAnswerAssistant, questionKey, questionOpportunity, rankOpportunities, runTotals, spendMonth, hostOf,
+  ANSWER_ASSISTANTS, ANSWER_QUESTION_INTENTS, cleanQuestion, isAnswerAssistant, questionKey, questionOpportunity, rankOpportunities, recountPlacement, runTotals,
+  spendMonth, hostOf,
 } from "./lib/answerEngine";
 import {
   answersAccess, answersAllows, answersEnabled, answersFleetDailyCap, competitorFromDomain, isAnswersOwnerDomain, nameFromDomainOnly, properCompetitorName,
@@ -227,7 +228,7 @@ export const claimBatch = internalMutation({ args: { runId: v.id("answer_runs") 
 const checkInput = v.object({
   questionId: v.id("answer_questions"), question: v.string(), assistant: v.string(), status: v.string(), error: v.optional(v.string()),
   excerpt: v.string(), textChars: v.number(), named: v.boolean(), cited: v.boolean(), position: v.optional(v.number()), brandsNamed: v.number(),
-  competitorsNamed: v.array(v.string()),
+  businessesNamed: v.optional(v.array(v.string())), competitorsNamed: v.array(v.string()),
   sources: v.array(v.object({ url: v.string(), title: v.optional(v.string()), domain: v.string(), own: v.boolean() })),
   citedPageUrls: v.array(v.string()), endpoint: v.string(), costMicroUsd: v.number(),
 });
@@ -239,7 +240,7 @@ export const recordCheck = internalMutation({ args: { runId: v.id("answer_runs")
     if (!run || run.status !== "asking" || !isAnswerAssistant(check.assistant)) return null;
     const checkId = await ctx.db.insert("answer_checks", { siteId: run.siteId, runId, askedAt: Date.now(), country: run.country, ...check,
       excerpt: check.excerpt.slice(0, 900), competitorsNamed: check.competitorsNamed.slice(0, 12), sources: check.sources.slice(0, 20),
-      citedPageUrls: check.citedPageUrls.slice(0, 10) });
+      citedPageUrls: check.citedPageUrls.slice(0, 10), ...(check.businessesNamed ? { businessesNamed: check.businessesNamed.slice(0, 31).map((n) => n.slice(0, 80)) } : {}) });
     if (text && check.status === "answered") await ctx.db.insert("answer_texts", { siteId: run.siteId, checkId, text: text.slice(0, 40_000) });
     const answered = check.status === "answered";
     const progress = (run.progress ?? run.assistants.map((assistant) => ({ assistant, done: 0, answered: 0, named: 0 })))
@@ -299,6 +300,25 @@ export const finishRun = internalMutation({ args: { runId: v.id("answer_runs") }
   for (const [questionId, list] of byQuestion) {
     const question = await ctx.db.get(questionId as Id<"answer_questions">);
     if (question) judged.push({ question, list, opportunity: questionOpportunity(question.question, list) });
+  }
+  // One count per question (Cowork's test 3): each answer naming the business is recounted over every business any answer
+  // to the same question was counted with, so "Nth of M" never counts a business in one answer and skips it in another.
+  const runSite = await ctx.db.get(run.siteId);
+  if (runSite) {
+    const business = businessOf(runSite);
+    for (const { question, list } of judged) {
+      const placedChecks = list.filter((c) => c.status === "answered" && c.position !== undefined && c.businessesNamed);
+      const union = [...new Set(placedChecks.flatMap((c) => c.businessesNamed ?? []))];
+      if (placedChecks.length < 2 || !union.length) continue;
+      for (const c of placedChecks) {
+        const text = (await ctx.db.query("answer_texts").withIndex("by_check", (q) => q.eq("checkId", c._id)).first())?.text;
+        if (!text) continue;
+        const again = recountPlacement(text, business, business.competitors, question.question, c.businessesNamed ?? [], union);
+        if (again.position !== null && (again.position !== c.position || again.brandsNamed !== c.brandsNamed)) {
+          await ctx.db.patch(c._id, { position: again.position, brandsNamed: again.brandsNamed, businessesNamed: again.namedOrder.slice(0, 31) });
+        }
+      }
+    }
   }
   // "Winnable" is the short list of the strongest openings (a third of the questions at most), not every unnamed question.
   for (const { question, list, opportunity } of rankOpportunities(judged)) {
@@ -413,7 +433,7 @@ export const runProgress = query({ args: { runId: v.id("answer_runs") }, handler
 const publicCheck = (c: Doc<"answer_checks">) => ({
   checkId: c._id, questionId: c.questionId, question: c.question, assistant: c.assistant, askedAt: c.askedAt, country: c.country, status: c.status,
   error: c.error ?? null, excerpt: c.excerpt, textChars: c.textChars, named: c.named, cited: c.cited, position: c.position ?? null,
-  brandsNamed: c.brandsNamed, competitorsNamed: c.competitorsNamed, sources: c.sources, citedPageUrls: c.citedPageUrls,
+  brandsNamed: c.brandsNamed, businessesNamed: c.businessesNamed ?? null, competitorsNamed: c.competitorsNamed, sources: c.sources, citedPageUrls: c.citedPageUrls,
 });
 
 /** Every answer one question got (newest first, across runs): the evidence behind its counts. */
@@ -469,12 +489,14 @@ export const confirmSetup = mutation({
   },
 });
 
-/** A competitor's proper name, found on its own site; never replaces a name the owner typed. */
-export const renameCompetitor = internalMutation({ args: { siteId: v.id("sites"), domain: v.string(), name: v.string() },
-  handler: async (ctx, { siteId, domain, name }) => {
+/** A competitor's proper name, found on its own site or its Maps listing (`verified`: the site declares it, or the listing's
+ * website is this address); never replaces a name the owner typed. */
+export const renameCompetitor = internalMutation({ args: { siteId: v.id("sites"), domain: v.string(), name: v.string(), verified: v.optional(v.boolean()) },
+  handler: async (ctx, { siteId, domain, name, verified }) => {
     const site = await ctx.db.get(siteId);
     if (!site?.answers?.competitors) return;
-    const proper = properCompetitorName(name, domain);
+    const trimmed = name.replace(/\s+/g, " ").trim();
+    const proper = verified && trimmed.length >= 2 && trimmed.length <= 60 ? trimmed : properCompetitorName(name, domain);
     if (!proper) return;
     const competitors = site.answers.competitors.map((c) => c.domain && hostOf(c.domain) === hostOf(domain) && nameFromDomainOnly(c.name, c.domain)
       ? { ...c, name: proper } : c);
@@ -570,6 +592,12 @@ async function recordFirstContact(ctx: MutationCtx, identity: UserIdentity, pass
   await ctx.db.insert("account_contacts", { userId: identity.subject, email, emailUpdates: true, updatedAt: Date.now() });
 }
 
+/** Whether this signed-in user owns the site and it runs Answers (an action's check before a paid lookup). */
+export const ownsAnswersSite = internalQuery({ args: { siteId: v.id("sites"), userId: v.string() }, handler: async (ctx, { siteId, userId }) => {
+  const site = await ctx.db.get(siteId);
+  return Boolean(site && site.userId === userId && !site.deletionStatus && answersEnabled(site));
+} });
+
 export const competitorsToName = internalQuery({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await ctx.db.get(siteId);
   return (site?.answers?.competitors ?? []).flatMap((c) => c.domain && nameFromDomainOnly(c.name, c.domain) ? [{ domain: hostOf(c.domain) }] : []).slice(0, 8);
@@ -584,7 +612,7 @@ export const saveSetupRead = internalMutation({
   args: { siteId: v.id("sites"), error: v.optional(v.string()), force: v.optional(v.boolean()), then: v.optional(v.literal("snapshot")),
     competitorsOnly: v.optional(v.boolean()),
     read: v.optional(v.object({ name: v.string(), sells: v.string(), buyers: v.string(), offerings: v.array(v.string()), country: v.string(), local: v.boolean(),
-      location: v.string(), competitors: v.array(v.object({ name: v.string(), domain: v.string() })) })) },
+      location: v.string(), competitors: v.array(v.object({ name: v.string(), domain: v.optional(v.string()) })) })) },
   handler: async (ctx, { siteId, read, error, force, then, competitorsOnly }) => {
     const site = await ctx.db.get(siteId);
     if (!site?.answers) return;

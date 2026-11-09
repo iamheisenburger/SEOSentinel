@@ -8,7 +8,7 @@ import { useToast } from "@/components/ui/toast";
 import { useEvidence } from "@/components/answers/evidence-sheet";
 import { useRunLog } from "@/components/answers/snapshot";
 import { ChipScroller, InlineError, Notice, Panel, PanelSkeleton, ScreenHeader, ScrollX } from "@/components/answers/ui";
-import { parseCompetitor } from "@/components/answers/onboarding/understood";
+import { parseCompetitor, useCompetitorLookup } from "@/components/answers/onboarding/understood";
 import { useAnswersActions, useAnswersQuery } from "@/lib/answers/backend";
 import { latestFullRun, rivalOnlyQuestions } from "@/lib/answers/derive";
 import { assistantLabel, num, plural, shortDate } from "@/lib/answers/format";
@@ -143,6 +143,7 @@ function EditCompetitors({ overview }: { overview: Overview }) {
   const actions = useAnswersActions();
   const { toast } = useToast();
   const [list, setList] = useState<Competitor[]>(overview.site.competitors);
+  const { pending: lookingUp, lookup } = useCompetitorLookup(overview.site.siteId, setList);
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -150,7 +151,10 @@ function EditCompetitors({ overview }: { overview: Overview }) {
   const add = () => {
     const parsed = parseCompetitor(value);
     if (!parsed || list.length >= 8) return;
-    if (!list.some((c) => c.name.toLowerCase() === parsed.name.toLowerCase())) setList((l) => [...l, parsed]);
+    if (!list.some((c) => c.name.toLowerCase() === parsed.name.toLowerCase() || (parsed.domain && c.domain === parsed.domain))) {
+      setList((l) => [...l, parsed]);
+      lookup(parsed);
+    }
     setValue("");
   };
   const onKey = (event: KeyboardEvent<HTMLInputElement>) => { if (event.key === "Enter") { event.preventDefault(); add(); } };
@@ -172,8 +176,10 @@ function EditCompetitors({ overview }: { overview: Overview }) {
         {list.length ? (
           <ul className="flex flex-wrap gap-1.5" aria-label="Competitors">
             {list.map((c) => (
-              <li key={`${c.name}-${c.domain ?? ""}`} className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border-strong bg-surface-2 pl-3 pr-1 text-[13px] text-text">
-                {c.name}{c.domain && <span className="font-mono text-[11px] text-text-3">{c.domain}</span>}
+              <li key={c.domain ?? c.name} className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-full border border-border-strong bg-surface-2 pl-3 pr-1 text-[13px] text-text">
+                {c.domain && lookingUp.includes(c.domain)
+                  ? <span className="min-w-0 truncate"><span className="font-mono text-[12px]">{c.domain}</span><span className="ml-1.5 text-text-3">finding the name…</span></span>
+                  : <span className="min-w-0 truncate">{c.name}{c.domain && <span className="ml-1.5 font-mono text-[11px] text-text-3">{c.domain}</span>}</span>}
                 <button type="button" onClick={() => setList((l) => l.filter((x) => x !== c))} aria-label={`Remove ${c.name}`}
                   className="inline-flex h-6 w-6 items-center justify-center rounded-full text-text-3 transition-colors hover:bg-surface-3 hover:text-text">
                   <X aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={1.5} />
