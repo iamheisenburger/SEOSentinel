@@ -13,6 +13,7 @@ import { publishedArticlePageUrl } from "./lib/searchPerformance";
 import { encryptOutreachCredentials, outreachCredentialKeyConfig } from "./lib/outreachCredentialEncryption";
 import { imapPresetForSmtpHost, SMTP_PRESETS } from "./lib/outreachSmtp";
 import { editorialSite, followUpDue, LINK_FOLLOW_UP_DAYS, LINK_PAGES_PER_WEEK, recipientCountryAllowed } from "./lib/linkOutreach";
+import { citedPagesFromAnswers, rivalDomainsFromAnswers } from "./lib/linkOpportunities";
 import { ConvexError } from "convex/values";
 import { onNewSystem } from "./siteDiagnosis";
 
@@ -324,7 +325,15 @@ export const findContext = internalQuery({ args: { siteId: v.id("sites") }, hand
   const site = await ctx.db.get(siteId);
   if (!site || site.deletionStatus || !site.linkOutreach) return null;
   const latest = await ctx.db.query("site_diagnoses").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).order("desc").first();
-  return { domain: site.domain, profileCompetitors: site.competitors ?? [], pageOne: latest?.pageOne ?? [], aiPages: (latest?.aiAnswers?.checks ?? []).flatMap((c) => c.pages ?? []) };
+  // P396: the Answers engine's own answers (every question, every assistant, the last two weeks) are the fuller record of
+  // what the assistants read and whom they name; the weekly diagnosis's few AI checks come after them.
+  const answers = site.answers?.enabled
+    ? await ctx.db.query("answer_checks").withIndex("by_site_asked", (q) => q.eq("siteId", siteId).gte("askedAt", Date.now() - 14 * 86_400_000)).take(800)
+    : [];
+  const confirmed = (site.answers?.competitors ?? []).flatMap((c) => c.domain ? [c.domain] : []);
+  return { domain: site.domain, pageOne: latest?.pageOne ?? [],
+    profileCompetitors: [...(site.competitors ?? []), ...confirmed, ...rivalDomainsFromAnswers(answers, site.domain)],
+    aiPages: [...citedPagesFromAnswers(answers), ...(latest?.aiAnswers?.checks ?? []).flatMap((c) => c.pages ?? [])] };
 } });
 
 /** For the weekly email: what the week's link work did. */

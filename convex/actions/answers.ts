@@ -8,7 +8,7 @@ import { internal } from "../_generated/api";
 import { v } from "convex/values";
 import type { Id } from "../_generated/dataModel";
 import {
-  ANSWER_CALL_ESTIMATE_MICRO_USD, ANSWER_CALL_MAX_MICRO_USD, assistantRequest, brandMatcher, excerptAround, isAnswerAssistant, judgeAnswer,
+  ANSWER_CALL_ESTIMATE_MICRO_USD, ANSWER_CALL_MAX_MICRO_USD, assistantRequest, excerptAround, isAnswerAssistant, judgeAnswer,
   NAMED_MODEL, NAMED_TOOL, namedBusinessesRequest, namedCostMicroUsd, parseAssistantReply, parseNamedBusinesses, type AnswerAssistant, type Brand,
 } from "../lib/answerEngine";
 import { parseQuestions, QUESTION_HOLD_MICRO_USD, QUESTION_MAX_TOKENS, QUESTION_MODEL, QUESTION_TOOL, questionsRequest } from "../lib/answerQuestions";
@@ -146,10 +146,11 @@ export async function askOne(assistant: AnswerAssistant, question: string, count
         return empty("error", "The assistant's reply couldn't be read.", cost, sent);
       }
       if (parsed.kind === "none") return empty("no_answer", parsed.reason, cost, sent);
-      // When the answer names the business, every business it names is listed in order, so its place is "3rd of 7" among
-      // all of them, not among the confirmed competitors only. A failed listing falls back to the confirmed names.
+      // Every business the answer names is listed in order: its place is "3rd of 7" among all of them when it is named, and
+      // when it isn't, the list is who the assistant recommends instead (P396: listing only answers that named the business
+      // left a business named nowhere with no record of who wins). A failed listing falls back to the confirmed names.
       let namedOrder: string[] | undefined;
-      if (process.env.ANTHROPIC_API_KEY && (brandMatcher(business)?.test(parsed.text) ?? -1) >= 0) {
+      if (process.env.ANTHROPIC_API_KEY) {
         try {
           const req = namedBusinessesRequest(question, parsed.text);
           const listed = await anthropic().messages.create({ model: NAMED_MODEL, max_tokens: 1_200, system: req.system,
@@ -164,7 +165,7 @@ export async function askOne(assistant: AnswerAssistant, question: string, count
       const judged = judgeAnswer(parsed, business, competitors, { question, ...(namedOrder ? { namedOrder } : {}) });
       return { sent, text: parsed.text, check: { assistant, status: "answered", excerpt: judged.excerpt || excerptAround(parsed.text, 0),
         textChars: parsed.text.length, named: judged.named, cited: judged.cited, ...(judged.position !== null ? { position: judged.position } : {}),
-        brandsNamed: judged.brandsNamed, ...(judged.position !== null ? { businessesNamed: judged.namedOrder } : {}), competitorsNamed: judged.competitorsNamed,
+        brandsNamed: judged.brandsNamed, ...(judged.namedOrder.length ? { businessesNamed: judged.namedOrder } : {}), competitorsNamed: judged.competitorsNamed,
         sources: judged.sources, citedPageUrls: judged.citedPageUrls, endpoint, costMicroUsd: cost } };
     } catch (error) {
       const timedOut = error instanceof Error && error.name === "TimeoutError";

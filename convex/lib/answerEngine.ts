@@ -187,8 +187,9 @@ export type AnswerJudgement = {
   excerpt: string;
 };
 
-/** One answer, judged. "Named" means the answer's words name the business or it cites the business's site; "cited" means
- * one of its sources is on the business's site (or its hosted answers address). */
+/** One answer, judged. "Named" means the answer's words name the business: a recommendation. "Cited" means one of its
+ * sources is on the business's site (or its hosted answers address): a page the assistant read, which never counts as
+ * named on its own (P396: LeadPilot read "named in 5 of 24" when its words named it once). */
 export function judgeAnswer(answer: { text: string; sources: readonly AnswerSource[] }, business: Brand & { domain: string; extraHosts?: string[] },
   competitors: readonly Brand[], context: { question?: string; namedOrder?: readonly string[] } = {}): AnswerJudgement {
   const ownHosts = [hostOf(business.domain), ...(business.extraHosts ?? []).map(hostOf)].filter(Boolean);
@@ -213,7 +214,7 @@ export function judgeAnswer(answer: { text: string; sources: readonly AnswerSour
     names: (context.namedOrder ?? []).slice(0, 30), rivalHits, ...(context.question ? { question: context.question } : {}) });
   const cited = citedPageUrls.length > 0;
   return {
-    named: businessAt >= 0 || cited, cited, position: placement.position, brandsNamed: placement.order.length, namedOrder: placement.order,
+    named: businessAt >= 0, cited, position: placement.position, brandsNamed: placement.order.length, namedOrder: placement.order,
     competitorsNamed: rivalHits.map((r) => r.name).slice(0, 12), citedPageUrls: citedPageUrls.slice(0, 10), sources: sources.slice(0, 20),
     excerpt: excerptAround(answer.text, businessAt >= 0 ? businessAt : rivalHits[0]?.at ?? 0),
   };
@@ -287,11 +288,36 @@ export function excerptAround(text: string, at: number, size = 600): string {
 // ── Totals, honestly counted ──
 
 export type CheckSummary = { assistant: string; status: string; named: boolean; cited: boolean; competitorsNamed: readonly string[];
+  /** Every business the answer names, in order (P396: listed for every answer, not only the ones naming the business). */
+  businessesNamed?: readonly string[] | null;
   sources: ReadonlyArray<{ domain: string; own: boolean }> };
+
+/** Who the assistants recommend across a set of answers, confirmed competitor or not: each business with the number of
+ * answers naming it, most first. The business itself is left out. Names are counted once per answer, case-insensitively,
+ * under the spelling seen first. */
+export function recommendedInstead(checks: readonly CheckSummary[], business?: Brand, limit = 15): Array<{ name: string; answers: number }> {
+  const matcher = business ? brandMatcher(business) : null;
+  const own = business?.domain ? hostOf(business.domain) : "";
+  const counts = new Map<string, { name: string; answers: number }>();
+  for (const c of checks) {
+    if (c.status !== "answered") continue;
+    const seen = new Set<string>();
+    for (const raw of c.businessesNamed ?? []) {
+      const name = raw.replace(/\s+/g, " ").trim();
+      const key = name.toLowerCase();
+      if (name.length < 2 || seen.has(key) || isBusinessName(name, matcher, own)) continue;
+      seen.add(key);
+      const entry = counts.get(key) ?? { name, answers: 0 };
+      entry.answers++;
+      counts.set(key, entry);
+    }
+  }
+  return [...counts.values()].sort((a, b) => b.answers - a.answers || a.name.localeCompare(b.name)).slice(0, limit);
+}
 
 /** A run's counts: answers are only the ones an assistant gave (no-answers and errors are listed, never counted as "not
  * named"); every count keeps its denominator. */
-export function runTotals(checks: readonly CheckSummary[]) {
+export function runTotals(checks: readonly CheckSummary[], business?: Brand) {
   const answered = checks.filter((c) => c.status === "answered");
   const byAssistant = ANSWER_ASSISTANTS.map((assistant) => {
     const mine = checks.filter((c) => c.assistant === assistant), got = mine.filter((c) => c.status === "answered");
@@ -306,6 +332,7 @@ export function runTotals(checks: readonly CheckSummary[]) {
     failed: checks.filter((c) => c.status === "error").length, noAnswer: checks.filter((c) => c.status === "no_answer").length,
     byAssistant,
     competitors: [...rivalCounts].map(([name, named]) => ({ name, named })).sort((a, b) => b.named - a.named || a.name.localeCompare(b.name)).slice(0, 12),
+    recommended: recommendedInstead(checks, business),
     topSources: [...sourceCounts].map(([domain, answers]) => ({ domain, answers })).sort((a, b) => b.answers - a.answers || a.domain.localeCompare(b.domain)).slice(0, 15),
   };
 }

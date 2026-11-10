@@ -146,8 +146,10 @@ test("the first hour and the plan, end to end: questions, five assistants, proof
   const spend = f.tables.answer_spend;
   assert.ok(spend.length > 0 && spend.every((r) => r.state === "settled"), "every hold settled");
   const asked = spend.filter((r) => r.purpose === "ask").reduce((sum, r) => sum + r.actualMicroUsd, 0);
-  // Each answer naming Acme Leads (Perplexity's) also lists every business it names: 500 in + 20 out tokens of Haiku = 60 micro-USD.
-  assert.equal(asked, QUESTIONS.length * (2800 + 1300 + 2400 + 2400 + 2000) + QUESTIONS.length * 60, "settled at the providers' reported cost");
+  // P396: every answer (not only those naming Acme Leads) also lists every business it names, so who wins instead is on
+  // record: 500 in + 20 out tokens of Haiku = 60 micro-USD per answer given.
+  const answeredChecks = f.tables.answer_checks.filter((c) => c.status === "answered").length;
+  assert.equal(asked, QUESTIONS.length * (2800 + 1300 + 2400 + 2400 + 2000) + answeredChecks * 60, "settled at the providers' reported cost");
   const perplexity = f.tables.answer_checks.find((c) => c.assistant === "perplexity")!;
   assert.equal(perplexity.position, 2, "2nd of the 3 businesses the answer names, not 1st of the confirmed names");
   assert.equal(perplexity.brandsNamed, 3);

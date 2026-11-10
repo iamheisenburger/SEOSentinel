@@ -129,7 +129,8 @@ test("AI answers: buyer questions that never name the business, each assistant's
   assert.equal(ai.mentionsBusiness("A lead piloting program.", business), false);
   assert.equal(ai.mentionsBusiness("Pentra and others", { name: "Pentra", domain: "pentra.dev" }), true);
   assert.equal(ai.mentionsBusiness("Pentrax is different", { name: "Pentra", domain: "pentra.dev" }), false);
-  assert.deepEqual(ai.judgeAnswer({ text: "Consider Drift or Qualified.", sources: ["https://www.leadpilot.chat/blog/x"] }, business), { named: true, cited: true });
+  // P396: a cited page is a source, not a recommendation; only the answer's words name the business.
+  assert.deepEqual(ai.judgeAnswer({ text: "Consider Drift or Qualified.", sources: ["https://www.leadpilot.chat/blog/x"] }, business), { named: false, cited: true });
   const chatgpt = ai.parseAssistantAnswer("chatgpt", { rows: [{ answer_text: "I'd start with Crawl4AI.", citations: [{ url: "https://crawl4ai.com" }], sources: [] }] });
   assert.deepEqual(chatgpt, { text: "I'd start with Crawl4AI.", sources: ["https://crawl4ai.com"] });
   // Nov 8 2026: ChatGPT is asked through cloro (crawl4ai succeeded 3.9% of the time); its shape is read too.

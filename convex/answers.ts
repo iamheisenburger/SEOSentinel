@@ -289,10 +289,11 @@ export const finishRun = internalMutation({ args: { runId: v.id("answer_runs") }
   const run = await ctx.db.get(runId);
   if (!run || run.status !== "asking") return null;
   const checks = await ctx.db.query("answer_checks").withIndex("by_run", (q) => q.eq("runId", runId)).take(2000);
-  const totals = runTotals(checks);
+  const runSite = await ctx.db.get(run.siteId);
+  const totals = runTotals(checks, runSite ? businessOf(runSite) : undefined);
   const now = Date.now();
   await ctx.db.patch(runId, { status: "done", finishedAt: now, leaseUntil: 0, byAssistant: totals.byAssistant, competitors: totals.competitors,
-    topSources: totals.topSources, done: checks.length, answered: totals.answered, named: totals.named, cited: totals.cited, failed: totals.failed,
+    recommended: totals.recommended, topSources: totals.topSources, done: checks.length, answered: totals.answered, named: totals.named, cited: totals.cited, failed: totals.failed,
     noAnswer: totals.noAnswer });
   const byQuestion = new Map<string, Doc<"answer_checks">[]>();
   for (const c of checks) byQuestion.set(c.questionId, [...(byQuestion.get(c.questionId) ?? []), c]);
@@ -303,7 +304,6 @@ export const finishRun = internalMutation({ args: { runId: v.id("answer_runs") }
   }
   // One count per question (Cowork's test 3): each answer naming the business is recounted over every business any answer
   // to the same question was counted with, so "Nth of M" never counts a business in one answer and skips it in another.
-  const runSite = await ctx.db.get(run.siteId);
   if (runSite) {
     const business = businessOf(runSite);
     for (const { question, list } of judged) {
@@ -379,7 +379,7 @@ export const resumeStalledRuns = internalMutation({ args: {}, handler: async (ct
 const publicRun = (run: Doc<"answer_runs">) => ({
   runId: run._id, kind: run.kind, status: run.status, createdAt: run.createdAt, finishedAt: run.finishedAt ?? null, country: run.country,
   total: run.jobs.length, done: run.done, answered: run.answered, named: run.named, cited: run.cited, failed: run.failed, noAnswer: run.noAnswer,
-  byAssistant: run.byAssistant ?? null, competitors: run.competitors ?? null, topSources: run.topSources ?? null, error: run.error ?? null,
+  byAssistant: run.byAssistant ?? null, competitors: run.competitors ?? null, recommended: run.recommended ?? null, topSources: run.topSources ?? null, error: run.error ?? null,
 });
 
 /** Everything the dashboard's overview needs, bounded: the latest runs, the questions with their latest result, the pages,

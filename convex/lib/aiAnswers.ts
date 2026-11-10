@@ -109,11 +109,12 @@ export function mentionsBusiness(text: string, business: Pick<Business, "name" |
   return pattern ? pattern.test(text) : false;
 }
 
-/** Whether one answer names the business (in its words) or cites its site (among its sources). */
+/** Whether one answer names the business in its words, and, separately, whether it cites the business's site among its
+ * sources. A cited page is a source the assistant read, not a recommendation (P396), so it never counts as named. */
 export function judgeAnswer(answer: { text: string; sources: readonly string[] }, business: Pick<Business, "name" | "domain">): { named: boolean; cited: boolean } {
   const host = bareHost(business.domain);
   const cited = answer.sources.some((url) => { const h = bareHost(url); return h === host || h.endsWith(`.${host}`); });
-  return { named: mentionsBusiness(answer.text, business) || cited, cited };
+  return { named: mentionsBusiness(answer.text, business), cited };
 }
 
 /** The answer text and source addresses from each provider's reply (treg relays the provider's own body). */

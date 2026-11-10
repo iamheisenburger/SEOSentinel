@@ -87,6 +87,8 @@ export const answersTables = {
     noAnswer: v.number(),
     byAssistant: v.optional(v.array(v.object({ assistant: v.string(), asked: v.number(), answered: v.number(), named: v.number(), cited: v.number() }))),
     competitors: v.optional(v.array(v.object({ name: v.string(), named: v.number() }))),
+    /** Who the assistants named, confirmed competitor or not, with the number of answers naming each (P396). */
+    recommended: v.optional(v.array(v.object({ name: v.string(), answers: v.number() }))),
     topSources: v.optional(v.array(v.object({ domain: v.string(), answers: v.number() }))),
     costMicroUsd: v.number(),
     /** Live counts per assistant while the run asks (the first hour's progress bars). */
