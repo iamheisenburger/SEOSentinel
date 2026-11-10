@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { domainWidthEm } from "@/lib/answers/format";
 import { cx } from "@/lib/cx";
 import { useEdgeFade } from "@/lib/use-edge-fade";
+import { isVersionSkew, reloadForUpdate } from "@/lib/answers/version-skew";
 
 /** Up to ~40 characters a domain stays on one line at 16px or more, even in a phone's 358px column. */
 const FIT_MAX_EM = 22;
@@ -178,6 +179,8 @@ export class ScreenErrorBoundary extends Component<BoundaryProps, BoundaryState>
   }
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("Pentra Answers screen failed", error, info.componentStack);
+    // P402: a tab opened before an update asks for functions the server no longer has; only a reload recovers.
+    if (isVersionSkew(error)) reloadForUpdate();
   }
   render() {
     if (!this.state.error) return <div key={this.state.attempt} className="contents">{this.props.children}</div>;
