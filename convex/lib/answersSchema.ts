@@ -143,6 +143,8 @@ export const answersTables = {
     draft: v.string(),
     fits: v.boolean(),
     threadRead: v.boolean(),
+    /** "cited" (the answers cite the thread) or "search" (found by searching the question, P398). */
+    found: v.optional(v.string()),
     status: v.string(), // todo | posted | skipped
     postedUrl: v.optional(v.string()),
     createdAt: v.number(),
@@ -151,6 +153,56 @@ export const answersTables = {
   })
     .index("by_site", ["siteId"])
     .index("by_site_url", ["siteId", "url"]),
+
+  /** Get named (P398): one short answer video. Pentra writes the script and makes the voice and a screenshot; the owner's
+   * browser assembles the video and the owner uploads it to YouTube. */
+  answer_videos: defineTable({
+    siteId: v.id("sites"),
+    question: v.string(),
+    status: v.string(), // writing | ready | uploaded | skipped | failed
+    title: v.optional(v.string()),
+    description: v.optional(v.string()),
+    tags: v.optional(v.array(v.string())),
+    segments: v.optional(v.array(v.object({ heading: v.string(), lines: v.array(v.string()), narration: v.string() }))),
+    productSegment: v.optional(v.number()),
+    audioId: v.optional(v.id("_storage")),
+    screenshotId: v.optional(v.id("_storage")),
+    durationMs: v.optional(v.number()),
+    youtubeUrl: v.optional(v.string()),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    costMicroUsd: v.number(),
+  }).index("by_site", ["siteId"]),
+
+  /** Get named (P398): the business's directory listing, written once from its own facts. */
+  answer_listing_kits: defineTable({
+    siteId: v.id("sites"),
+    status: v.string(), // writing | ready | failed
+    kind: v.optional(v.string()),
+    tagline: v.optional(v.string()),
+    shortDescription: v.optional(v.string()),
+    longDescription: v.optional(v.string()),
+    categories: v.optional(v.array(v.string())),
+    features: v.optional(v.array(v.string())),
+    useCases: v.optional(v.array(v.string())),
+    pricing: v.optional(v.string()),
+    audience: v.optional(v.string()),
+    faqs: v.optional(v.array(v.object({ q: v.string(), a: v.string() }))),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    costMicroUsd: v.number(),
+  }).index("by_site", ["siteId"]),
+
+  /** Get named (P398): where the owner has listed the business, directory by directory. */
+  answer_listings: defineTable({
+    siteId: v.id("sites"),
+    domain: v.string(),
+    name: v.string(),
+    status: v.string(), // todo | submitted | live | skipped
+    liveUrl: v.optional(v.string()),
+    updatedAt: v.number(),
+  }).index("by_site", ["siteId"]).index("by_site_domain", ["siteId", "domain"]),
 
   answer_texts: defineTable({
     siteId: v.id("sites"),
@@ -191,6 +243,8 @@ export const answersTables = {
     rewriteOf: v.optional(v.id("answer_pages")),
     rewriteReason: v.optional(v.string()),
     notWrittenReason: v.optional(v.string()),
+    /** A comparison page (P398): the business beside this rival, which the answers name. Its question is never asked. */
+    comparisonWith: v.optional(v.object({ name: v.string(), domain: v.string() })),
   })
     .index("by_site_status", ["siteId", "status"])
     .index("by_question", ["questionId"])

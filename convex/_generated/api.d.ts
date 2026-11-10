@@ -10,6 +10,7 @@
 
 import type * as actions_answerEmail from "../actions/answerEmail.js";
 import type * as actions_answerGrowth from "../actions/answerGrowth.js";
+import type * as actions_answerGrowthKit from "../actions/answerGrowthKit.js";
 import type * as actions_answerPages from "../actions/answerPages.js";
 import type * as actions_answerPublish from "../actions/answerPublish.js";
 import type * as actions_answers from "../actions/answers.js";
@@ -46,6 +47,7 @@ import type * as actions_smartlead from "../actions/smartlead.js";
 import type * as actions_syndication from "../actions/syndication.js";
 import type * as actions_underfilledPlanRecovery from "../actions/underfilledPlanRecovery.js";
 import type * as answerGrowth from "../answerGrowth.js";
+import type * as answerGrowthKit from "../answerGrowthKit.js";
 import type * as answerPages from "../answerPages.js";
 import type * as answerPublish from "../answerPublish.js";
 import type * as answers from "../answers.js";
@@ -141,6 +143,7 @@ import type * as lib_finalArticleReview from "../lib/finalArticleReview.js";
 import type * as lib_githubBlogState from "../lib/githubBlogState.js";
 import type * as lib_githubLayout from "../lib/githubLayout.js";
 import type * as lib_githubRepositories from "../lib/githubRepositories.js";
+import type * as lib_growthKit from "../lib/growthKit.js";
 import type * as lib_growthLoopContracts from "../lib/growthLoopContracts.js";
 import type * as lib_growthScorecard from "../lib/growthScorecard.js";
 import type * as lib_growthStatusArticleMetrics from "../lib/growthStatusArticleMetrics.js";
@@ -258,6 +261,7 @@ import type * as lib_topicVerdict from "../lib/topicVerdict.js";
 import type * as lib_tregFetch from "../lib/tregFetch.js";
 import type * as lib_userError from "../lib/userError.js";
 import type * as lib_vercelRedirects from "../lib/vercelRedirects.js";
+import type * as lib_videoTiming from "../lib/videoTiming.js";
 import type * as lib_winnableDiscovery from "../lib/winnableDiscovery.js";
 import type * as lib_wordpressConditional from "../lib/wordpressConditional.js";
 import type * as linkOpportunities from "../linkOpportunities.js";
@@ -300,6 +304,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   "actions/answerEmail": typeof actions_answerEmail;
   "actions/answerGrowth": typeof actions_answerGrowth;
+  "actions/answerGrowthKit": typeof actions_answerGrowthKit;
   "actions/answerPages": typeof actions_answerPages;
   "actions/answerPublish": typeof actions_answerPublish;
   "actions/answers": typeof actions_answers;
@@ -336,6 +341,7 @@ declare const fullApi: ApiFromModules<{
   "actions/syndication": typeof actions_syndication;
   "actions/underfilledPlanRecovery": typeof actions_underfilledPlanRecovery;
   answerGrowth: typeof answerGrowth;
+  answerGrowthKit: typeof answerGrowthKit;
   answerPages: typeof answerPages;
   answerPublish: typeof answerPublish;
   answers: typeof answers;
@@ -431,6 +437,7 @@ declare const fullApi: ApiFromModules<{
   "lib/githubBlogState": typeof lib_githubBlogState;
   "lib/githubLayout": typeof lib_githubLayout;
   "lib/githubRepositories": typeof lib_githubRepositories;
+  "lib/growthKit": typeof lib_growthKit;
   "lib/growthLoopContracts": typeof lib_growthLoopContracts;
   "lib/growthScorecard": typeof lib_growthScorecard;
   "lib/growthStatusArticleMetrics": typeof lib_growthStatusArticleMetrics;
@@ -548,6 +555,7 @@ declare const fullApi: ApiFromModules<{
   "lib/tregFetch": typeof lib_tregFetch;
   "lib/userError": typeof lib_userError;
   "lib/vercelRedirects": typeof lib_vercelRedirects;
+  "lib/videoTiming": typeof lib_videoTiming;
   "lib/winnableDiscovery": typeof lib_winnableDiscovery;
   "lib/wordpressConditional": typeof lib_wordpressConditional;
   linkOpportunities: typeof linkOpportunities;

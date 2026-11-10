@@ -9,6 +9,7 @@ import { internal } from "../_generated/api";
 import { v } from "convex/values";
 import { NAMED_MODEL, NAMED_TOOL, namedBusinessesRequest, namedCostMicroUsd, parseNamedBusinesses } from "../lib/answerEngine";
 import { parsePostDraft, POST_HOLD_MICRO_USD, POST_MODEL, POST_TOOL, postCostMicroUsd, postDraftRequest, redditThreadText } from "../lib/answerGrowth";
+import { parseThreadResults, THREAD_SEARCH_ENDPOINT, THREAD_SEARCH_MAX_MICRO_USD, THREAD_SEARCH_QUESTIONS, threadSearchRequest } from "../lib/growthKit";
 import { safeFetchPublicText } from "../lib/safeOutbound";
 import { structuredToolChoice } from "../lib/toolChoice";
 
@@ -61,9 +62,36 @@ export const prepare = internalAction({ args: { siteId: v.id("sites") }, handler
   // 2) Pages to pitch, with the rivals the answers now show.
   if (context.linkOn) await ctx.scheduler.runAfter(0, internal.actions.linkOutreach.findNow, { siteId });
 
-  // 3) One reply per cited thread.
+  // 3) Threads asking the questions, found by search (P398): the answers cite only a few threads, and every thread a buyer
+  // reads is a place to be named. Searched for the questions in order, once each preparation.
+  const found: Array<{ url: string; title: string | null; questions: string[]; answers: number }> = [];
+  const known = new Set([...context.drafted, ...context.threads.map((t) => t.url)]);
+  const searchHold = await ctx.runMutation(internal.answers.holdSpend, { siteId, purpose: "growth_search", microUsd: THREAD_SEARCH_QUESTIONS * THREAD_SEARCH_MAX_MICRO_USD });
+  if (searchHold.ok && process.env.TREG_TOKEN) {
+    let spent = 0, sent = false;
+    await Promise.all(context.questions.slice(0, THREAD_SEARCH_QUESTIONS).map(async (question) => {
+      try {
+        sent = true;
+        const response = await fetch(`https://treg.to/call/${THREAD_SEARCH_ENDPOINT}`, { method: "POST", signal: AbortSignal.timeout(60_000),
+          headers: { "Content-Type": "application/json", "X-Treg-Token": process.env.TREG_TOKEN!, "X-Treg-Route-Max-Cost": String(THREAD_SEARCH_MAX_MICRO_USD / 1e6),
+            "X-Treg-Meta": `site=${siteId}, feature=pentra-get-named` }, body: JSON.stringify(threadSearchRequest(question, context.country)) });
+        const charged = Number(response.headers.get("X-Treg-Cost-Micro"));
+        spent += response.headers.has("X-Treg-Cost-Micro") && Number.isSafeInteger(charged) && charged >= 0 ? charged : response.ok ? THREAD_SEARCH_MAX_MICRO_USD : 0;
+        if (!response.ok) return;
+        for (const t of parseThreadResults(await response.json()).slice(0, 3)) {
+          if (known.has(t.url)) continue;
+          known.add(t.url);
+          found.push({ url: t.url, title: t.title, questions: [question], answers: 0 });
+        }
+      } catch { /* searched next time */ }
+    }));
+    await ctx.runMutation(internal.answers.settleSpend, { spendId: searchHold.spendId, actualMicroUsd: spent, sent });
+  } else if (searchHold.ok) await ctx.runMutation(internal.answers.settleSpend, { spendId: searchHold.spendId, actualMicroUsd: 0, sent: false });
+
+  // 4) One reply per thread: the cited ones first, then the ones found by search (at most twelve a preparation).
   let drafted = 0;
-  for (const thread of context.threads) {
+  const toDraft = [...context.threads.map((t) => ({ ...t, foundBy: "cited" as const })), ...found.map((t) => ({ ...t, foundBy: "search" as const }))].slice(0, 12);
+  for (const thread of toDraft) {
     const hold = await ctx.runMutation(internal.answers.holdSpend, { siteId, purpose: "growth_post", microUsd: POST_HOLD_MICRO_USD });
     if (!hold.ok) break;
     let cost = 0, sent = false;
@@ -78,7 +106,7 @@ export const prepare = internalAction({ args: { siteId: v.id("sites") }, handler
       const draft = parsePostDraft(tool && tool.type === "tool_use" ? tool.input : null);
       if (draft) {
         await ctx.runMutation(internal.answerGrowth.savePost, { siteId, url: thread.url, ...(thread.title ? { title: thread.title.slice(0, 300) } : {}),
-          questions: thread.questions, answers: thread.answers, draft: draft.reply, fits: draft.fits, threadRead: text !== null, costMicroUsd: cost });
+          questions: thread.questions, answers: thread.answers, draft: draft.reply, fits: draft.fits, threadRead: text !== null, costMicroUsd: cost, found: thread.foundBy });
         drafted++;
       }
     } catch { /* drafted next time */ }

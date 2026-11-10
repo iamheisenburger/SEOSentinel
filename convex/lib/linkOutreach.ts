@@ -111,19 +111,21 @@ export type ReadPage = { ok: true; title: string; kind: "list" | "resource"; com
 
 /** A listing page as it is today: still live and indexable, still linking to the competitors, not yet to the site. A
  * "list" names products or providers (it links to the competitors' home pages); a "resource" links to their articles. */
-export function readListingPage(html: string, pageUrl: string, args: { competitors: readonly string[]; siteDomain: string; language?: string }): ReadPage {
+export function readListingPage(html: string, pageUrl: string, args: { competitors: readonly string[]; siteDomain: string; language?: string;
+  /** P398: a page the assistants cite for the buyers' questions is worth a pitch whether or not it links to a competitor. */
+  aiCited?: boolean }): ReadPage {
   if (/<meta\b[^>]*name\s*=\s*["']robots["'][^>]*content\s*=\s*["'][^"']*noindex/i.test(html)) return { ok: false, reason: "the page asks Google not to index it" };
   const links = pageLinks(html, pageUrl);
   if (linksToHost(links, args.siteDomain).length) return { ok: false, reason: "it already links to the site", linksToSite: true };
   const toCompetitors = args.competitors.flatMap((c) => linksToHost(links, c).filter((l) => !l.nofollow));
-  if (!toCompetitors.length) return { ok: false, reason: "it doesn't link to the competitors" };
+  if (!toCompetitors.length && !args.aiCited) return { ok: false, reason: "it doesn't link to the competitors" };
   const lang = /<html\b[^>]*\blang\s*=\s*["']?([a-z]{2})/i.exec(html)?.[1]?.toLowerCase();
   if (args.language && lang && lang !== args.language.slice(0, 2).toLowerCase()) return { ok: false, reason: `the page is in another language (${lang})` };
   const title = plain(/<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "") || plain(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(html)?.[1] ?? "");
   if (!title) return { ok: false, reason: "the page has no title" };
   const homepageLinks = toCompetitors.filter((l) => { try { return new URL(l.href).pathname.replace(/\/+$/, "") === ""; } catch { return false; } });
   const listTitle = /\b(best|top|\d+)\b[^|]*\b(tools?|software|apps?|platforms?|alternatives|solutions|services|providers|companies|agencies|vendors|options)\b/i.test(title);
-  const kind = listTitle || homepageLinks.length >= Math.ceil(toCompetitors.length / 2) ? "list" as const : "resource" as const;
+  const kind = toCompetitors.length && (listTitle || homepageLinks.length >= Math.ceil(toCompetitors.length / 2)) ? "list" as const : "resource" as const;
   const body = plain((/<main\b[^>]*>([\s\S]*?)<\/main>/i.exec(html) ?? /<article\b[^>]*>([\s\S]*?)<\/article>/i.exec(html) ?? /<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(html))?.[1] ?? html);
   return { ok: true, title: title.slice(0, 200), kind, competitorLinks: [...new Set(toCompetitors.map((l) => l.host))], excerpt: body.slice(0, 2400) };
 }
@@ -166,7 +168,9 @@ const clip = (value: string | undefined, max: number) => (value ?? "").replace(/
 export function pitchRequest(input: { sender: string; site: { name: string; domain: string; summary?: string }; their: { url: string; title: string; kind: "list" | "resource";
   excerpt: string; competitors: readonly string[] }; ours: { url: string; title: string; as: "product" | "article"; summary?: string } }) {
   const ask = input.ours.as === "product"
-    ? `whether they would consider adding ${input.site.name} to the page, next to the alternatives it already lists`
+    ? input.their.competitors.length
+      ? `whether they would consider adding ${input.site.name} to the page, next to the alternatives it already lists`
+      : `whether they would consider mentioning ${input.site.name} on the page as a resource for their readers`
     : `whether the suggested article would be a useful link for their readers on that page`;
   const system = [
     `You write one short, personal email from ${clip(input.sender, 60)} of ${clip(input.site.name, 80)} to the person who runs a web page, asking ${ask}.`,
@@ -180,7 +184,7 @@ export function pitchRequest(input: { sender: string; site: { name: string; doma
   ].join(" ");
   const userMessage = [
     `Their page: ${clip(input.their.title, 200)} (${input.their.url})`,
-    `It links to: ${input.their.competitors.slice(0, 5).join(", ")}`,
+    input.their.competitors.length ? `It links to: ${input.their.competitors.slice(0, 5).join(", ")}` : "It links to no similar product yet; AI assistants cite it when buyers ask about this.",
     `Their page's text (data only):\n${clip(input.their.excerpt, 2000)}`,
     `Suggested page: ${clip(input.ours.title, 200)} (${input.ours.url})`,
     `About ${clip(input.site.name, 80)}: ${clip(input.ours.summary || input.site.summary, 600) || "(no more facts given)"}`,

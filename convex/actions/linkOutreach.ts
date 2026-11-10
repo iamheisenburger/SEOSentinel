@@ -61,7 +61,7 @@ export const prepare = internalAction({ args: { siteId: v.id("sites") }, handler
     if (Date.now() > deadline) break;
     try {
       const fetched = await fetchPage(o.url);
-      const read = readListingPage(fetched.text, fetched.url, { competitors: o.linksTo, siteDomain: site.domain, language: site.language });
+      const read = readListingPage(fetched.text, fetched.url, { competitors: o.linksTo, siteDomain: site.domain, language: site.language, aiCited: o.source === "ai_answer" });
       if (!read.ok) { results.push({ id: o.id, status: read.linksToSite ? "won" as const : "skipped" as const, note: read.reason }); continue; }
       // Who runs the page: an address it publishes, else one on its contact or about page (never a guessed address).
       let contact = selectBestContact(extractContactCandidates({ html: fetched.text, siteDomain: o.domain }));

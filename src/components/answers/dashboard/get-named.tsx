@@ -9,6 +9,7 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { ChipScroller, Notice, Panel, PanelSkeleton, ScreenHeader } from "@/components/answers/ui";
+import { GetNamedKit } from "@/components/answers/dashboard/get-named-kit";
 import { plural } from "@/lib/answers/format";
 import { userErrorMessage } from "@/lib/user-error";
 import { cx } from "@/lib/cx";
@@ -64,6 +65,7 @@ function Body({ siteId, plan }: { siteId: string; plan: Plan }) {
       <SourcesPanel plan={plan} />
       <Posts plan={plan} />
       <Pitches siteId={siteId} />
+      <GetNamedKit siteId={siteId} />
     </>
   );
 }
@@ -149,7 +151,7 @@ function Posts({ plan }: { plan: Plan }) {
                   <a href={p.url} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1.5 text-[14px] font-medium text-text hover:underline">
                     <span className="truncate">{p.title || p.url}</span><ExternalLink aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-text-4" strokeWidth={1.5} />
                   </a>
-                  <p className="mt-0.5 text-[12px] text-text-3">{p.platform} · cited in {plural(p.answers, "answer")}{p.threadRead ? "" : " · written from the title (the thread couldn't be read)"}{p.fits ? "" : " · doesn't name you: it didn't fit"}</p>
+                  <p className="mt-0.5 text-[12px] text-text-3">{p.platform} · {p.found === "search" ? `found by searching "${p.questions[0] ?? ""}"` : `cited in ${plural(p.answers, "answer")}`}{p.threadRead ? "" : " · written from the title (the thread couldn't be read)"}{p.fits ? "" : " · doesn't name you: it didn't fit"}</p>
                 </div>
               </div>
               <p className="mt-3 whitespace-pre-wrap text-[14px] leading-[22px] text-text-2">{p.draft}</p>

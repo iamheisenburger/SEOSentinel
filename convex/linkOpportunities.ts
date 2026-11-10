@@ -40,6 +40,12 @@ export const record = internalMutation({ args: { siteId: v.id("sites"), pages: v
   for (const p of pages.slice(0, 100)) {
     const existing = await ctx.db.query("link_opportunities").withIndex("by_site_domain", (q) => q.eq("siteId", siteId).eq("domain", p.domain)).first();
     if (existing) {
+      // P398: an AI-cited page set aside only because it linked to no competitor is read again (AI-cited pages no longer need one).
+      if (p.source === "ai_answer" && existing.status === "skipped" && existing.note === "it doesn't link to the competitors") {
+        await ctx.db.patch(existing._id, { status: "new", note: undefined, source: "ai_answer", url: p.url, seenAt: now });
+        added++;
+        continue;
+      }
       const fresh = existing.status === "new" && (!existing.url || p.rank > existing.rank);
       await ctx.db.patch(existing._id, { seenAt: now, ...(fresh ? { url: p.url, title: p.title, rank: p.rank, linksTo: p.linksTo.slice(0, 5) } : {}) });
       continue;
@@ -72,7 +78,7 @@ export const prepareContext = internalQuery({ args: { siteId: v.id("sites") }, h
     // The pages AI assistants cite come first (being listed there also gets the site named in those answers), then by strength.
     fresh: all.filter((o) => o.status === "new" && o.url && recipientCountryAllowed(o.domain) && editorialSite(o.domain))
       .sort((a, b) => Number(b.source === "ai_answer") - Number(a.source === "ai_answer") || b.rank - a.rank).slice(0, LINK_PAGES_PER_WEEK)
-      .map((o) => ({ id: o._id, url: o.url!, domain: o.domain, title: o.title ?? "", linksTo: o.linksTo })),
+      .map((o) => ({ id: o._id, url: o.url!, domain: o.domain, title: o.title ?? "", linksTo: o.linksTo, source: o.source ?? "competitor_links" })),
     toCheck: all.filter((o) => ["sent", "replied", "won"].includes(o.status) && o.url && now - (o.checkedAt ?? 0) >= 6 * DAY)
       .slice(0, 40).map((o) => ({ id: o._id, url: o.url!, status: o.status })) };
 } });

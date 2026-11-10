@@ -9,7 +9,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { answersEnabled } from "./lib/answersAccess";
 import { recommendedInstead } from "./lib/answerEngine";
 import { rivalDomainsFromAnswers } from "./lib/linkOpportunities";
-import { kindTotals, platformOf, postCandidates, sourceMap } from "./lib/answerGrowth";
+import { kindTotals, platformOf, postCandidates, SOURCE_KINDS, sourceMap } from "./lib/answerGrowth";
 import { businessOf } from "./answers";
 
 const WINDOW_MS = 14 * 86_400_000;
@@ -39,7 +39,10 @@ export const plan = query({ args: { siteId: v.id("sites") }, handler: async (ctx
   const answered = checks.filter((c) => c.status === "answered");
   const business = businessOf(site);
   const rivals = rivalsOf(site, checks);
-  const sources = sourceMap(checks, rivals, 60);
+  // Every page counted first, then up to 25 of each kind kept (P398: a forum's threads are cited once each, so a single
+  // top-60 cut by page left Reddit out of the map though it was the most-cited site).
+  const all = sourceMap(checks, rivals, 2000);
+  const sources = SOURCE_KINDS.flatMap((k) => all.filter((s) => s.kind === k).slice(0, 25)).sort((a, b) => b.answers - a.answers || a.url.localeCompare(b.url));
   const posts = await ctx.db.query("answer_posts").withIndex("by_site", (q) => q.eq("siteId", siteId)).order("desc").take(60);
   const listed = answered.filter((c) => c.businessesNamed !== undefined).length;
   return {
@@ -51,9 +54,9 @@ export const plan = query({ args: { siteId: v.id("sites") }, handler: async (ctx
     recommended: recommendedInstead(answered, business, 20),
     rivals,
     sources,
-    kinds: kindTotals(sources),
+    kinds: kindTotals(all),
     posts: posts.map((p) => ({ postId: p._id, url: p.url, platform: p.platform, title: p.title ?? null, questions: p.questions, answers: p.answers,
-      draft: p.draft, fits: p.fits, threadRead: p.threadRead, status: p.status, postedUrl: p.postedUrl ?? null, createdAt: p.createdAt })),
+      draft: p.draft, fits: p.fits, threadRead: p.threadRead, status: p.status, postedUrl: p.postedUrl ?? null, createdAt: p.createdAt, found: p.found ?? "cited" })),
     linkMode: site.linkOutreach ?? "off",
     preparedAt: site.answers?.growthPreparedAt ?? null,
     nextPrepareAt: site.answers?.growthPreparedAt ? site.answers.growthPreparedAt + PREPARE_EVERY_MS : null,
@@ -88,10 +91,15 @@ export const prepareContext = internalQuery({ args: { siteId: v.id("sites") }, h
   const checks = await recentChecks(ctx, siteId);
   const business = businessOf(site);
   const unlisted = checks.filter((c) => c.status === "answered" && c.businessesNamed === undefined).slice(0, 300).map((c) => ({ checkId: c._id, question: c.question }));
-  const drafted = new Set((await ctx.db.query("answer_posts").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(500)).map((p) => p.url));
-  const threads = postCandidates(sourceMap(checks, rivalsOf(site, checks), 200), drafted, 8);
+  const drafted = [...new Set((await ctx.db.query("answer_posts").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(1000)).map((p) => p.url))];
+  const threads = postCandidates(sourceMap(checks, rivalsOf(site, checks), 200), new Set(drafted), 8);
+  // P398: the questions to search threads for: those asking which product or provider to use first (where a reply can
+  // name the business), then the rest, newest-answered first.
+  const questions = (await ctx.db.query("answer_questions").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "active")).take(60))
+    .sort((a, b) => Number(b.intent === "recommendation") - Number(a.intent === "recommendation") || (b.latest?.at ?? 0) - (a.latest?.at ?? 0))
+    .map((q) => q.question);
   return { business: { name: business.name, domain: business.domain, summary: site.siteSummary, features: site.keyFeatures, pricing: site.pricingInfo,
-    audience: site.targetAudienceSummary }, unlisted, threads, linkOn: Boolean(site.linkOutreach) };
+    audience: site.targetAudienceSummary }, unlisted, threads, drafted, questions, country: business.country ?? "US", linkOn: Boolean(site.linkOutreach) };
 } });
 
 export const checkText = internalQuery({ args: { checkId: v.id("answer_checks") }, handler: async (ctx, { checkId }) =>
@@ -104,7 +112,7 @@ export const saveBusinesses = internalMutation({ args: { checkId: v.id("answer_c
 } });
 
 export const savePost = internalMutation({ args: { siteId: v.id("sites"), url: v.string(), title: v.optional(v.string()), questions: v.array(v.string()),
-  answers: v.number(), draft: v.string(), fits: v.boolean(), threadRead: v.boolean(), costMicroUsd: v.number() }, handler: async (ctx, args) => {
+  answers: v.number(), draft: v.string(), fits: v.boolean(), threadRead: v.boolean(), costMicroUsd: v.number(), found: v.optional(v.string()) }, handler: async (ctx, args) => {
   const existing = await ctx.db.query("answer_posts").withIndex("by_site_url", (q) => q.eq("siteId", args.siteId).eq("url", args.url)).first();
   if (existing) return;
   const now = Date.now();

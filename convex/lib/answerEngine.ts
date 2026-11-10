@@ -304,7 +304,8 @@ export function recommendedInstead(checks: readonly CheckSummary[], business?: B
     const seen = new Set<string>();
     for (const raw of c.businessesNamed ?? []) {
       const name = raw.replace(/\s+/g, " ").trim();
-      const key = name.toLowerCase();
+      // One business under its two spellings ("Apollo", "Apollo.io") is counted once (P398).
+      const key = name.toLowerCase().replace(/\.(com|io|ai|co|app|net|org)$/, "").replace(/[^a-z0-9]/g, "") || name.toLowerCase();
       if (name.length < 2 || seen.has(key) || isBusinessName(name, matcher, own)) continue;
       seen.add(key);
       const entry = counts.get(key) ?? { name, answers: 0 };

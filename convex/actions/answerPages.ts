@@ -169,7 +169,7 @@ async function ownFactsProblems(businessName: string, productEvidence: string, m
 /** What the page may say about the business: the confirmed profile, its homepage, its key pages (what it offers, prices,
  * about, questions) and its pages about the question's subject (a dentist's "Sleep Apnea" page for a sleep apnea
  * question), found from its links and its sitemap and read now as text. */
-async function businessEvidence(business: { name: string; domain: string; summary: string; features: string[]; pricing: string; ctaText: string; ctaUrl: string },
+export async function businessEvidence(business: { name: string; domain: string; summary: string; features: string[]; pricing: string; ctaText: string; ctaUrl: string },
   question: string) {
   const origin = `https://${business.domain}`;
   const [home, mapped] = await Promise.all([fetchReadable(`${origin}/`, 400, business.domain).catch(() => null), sitemapLinks(business.domain).catch(() => [])]);

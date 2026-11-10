@@ -169,7 +169,8 @@ export const uncitedPages = internalQuery({ args: { siteId: v.id("sites") }, han
   const now = Date.now();
   const published = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", siteId).eq("status", "published")).take(500);
   const runs = await ctx.db.query("answer_runs").withIndex("by_site_created", (q) => q.eq("siteId", siteId)).order("desc").take(20);
-  return published.filter((p) => p.citations === 0 && p.publishedAt && now - p.publishedAt >= 21 * 86_400_000 &&
+  // A comparison page (P398) answers no tracked question, so "never cited for its question" says nothing about it.
+  return published.filter((p) => !p.comparisonWith && p.citations === 0 && p.publishedAt && now - p.publishedAt >= 21 * 86_400_000 &&
     runs.filter((r) => r.status === "done" && r.kind !== "snapshot" && r.createdAt > p.publishedAt!).length >= 3)
     .sort((a, b) => (a.publishedAt ?? 0) - (b.publishedAt ?? 0)).slice(0, 2).map((p) => ({ pageId: p._id, questionId: p.questionId }));
 } });
