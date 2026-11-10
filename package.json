@@ -30,7 +30,7 @@
     "@remotion/transitions": "4.0.542",
     "@remotion/vercel": "4.0.542",
     "@types/nodemailer": "^8.0.1",
-    "@vercel/sandbox": "3.9.1",
+    "@vercel/sandbox": "1.6.0",
     "convex": "^1.30.0",
     "date-fns": "^4.1.0",
     "imapflow": "^1.7.6",

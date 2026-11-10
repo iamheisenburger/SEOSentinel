@@ -31,6 +31,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "The render machine didn't start." }, { status: 502 });
   }
   try {
+    // The bundle copy creates its sub-folders but not the bundle's own folder (P401: "cannot create directory
+    // remotion-bundle/public" on the first render), so that folder is made first; it is harmless when it exists.
+    await sandbox.mkDir("remotion-bundle").catch(() => {});
     await addBundleToSandbox({ sandbox, bundleDir: ".remotion" });
     const rendered = await renderMediaOnVercel({ sandbox, compositionId: job.compositionId, inputProps: job.inputProps, codec: "h264", crf: 20,
       imageFormat: "jpeg", outputFile: "/tmp/video.mp4", timeoutInMilliseconds: 120_000 });
