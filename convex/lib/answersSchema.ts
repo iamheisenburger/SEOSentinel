@@ -179,6 +179,9 @@ export const answersTables = {
     scenes: v.optional(v.array(v.object({ kind: v.string(), heading: v.string(), items: v.array(v.string()), emphasis: v.array(v.string()),
       narration: v.string(), audioId: v.id("_storage"), audioMs: v.number() }))),
     accent: v.optional(v.string()),
+    /** P405: the business's look read from its own site (background, text, accent, font), so the video is in its colours. */
+    theme: v.optional(v.object({ mode: v.string(), background: v.string(), text: v.string(), muted: v.string(), surface: v.string(), line: v.string(),
+      accent: v.string(), accentInk: v.string(), emphasis: v.string(), font: v.string() })),
     /** P400: the rendered MP4s: 16:9 for YouTube, 9:16 for Shorts. */
     landscapeId: v.optional(v.id("_storage")),
     verticalId: v.optional(v.id("_storage")),

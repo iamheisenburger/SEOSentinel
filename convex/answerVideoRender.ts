@@ -34,7 +34,8 @@ export const claim = mutation({ args: { ticket: v.string() }, handler: async (ct
   await ctx.db.patch(row._id, { status: "rendering", claimedAt: Date.now() });
   return {
     compositionId: RENDER_COMPOSITIONS[row.format] ?? "AnswerVideo",
-    inputProps: { brand: { name: business.name, domain: business.domain, accent: video.accent ?? FALLBACK_ACCENT },
+    inputProps: { brand: { name: business.name, domain: business.domain, accent: video.theme?.accent ?? video.accent ?? FALLBACK_ACCENT,
+      ...(video.theme ? { theme: video.theme } : {}) },
       screenshotSrc: video.screenshotId ? await ctx.storage.getUrl(video.screenshotId) : null, scenes },
     uploadUrl: await ctx.storage.generateUploadUrl(),
   };

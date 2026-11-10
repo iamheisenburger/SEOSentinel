@@ -31,6 +31,10 @@ async function requireSite(ctx: QueryCtx, siteId: Id<"sites">) {
 }
 const monthStart = () => Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1);
 
+/** P405: a video's look (the business's background, text, accent and font). */
+const themeValue = v.object({ mode: v.string(), background: v.string(), text: v.string(), muted: v.string(), surface: v.string(), line: v.string(),
+  accent: v.string(), accentInk: v.string(), emphasis: v.string(), font: v.string() });
+
 /** The rivals the answers recommend whose own site they cite, most-named first. */
 function rivalsFrom(site: Doc<"sites">, checks: readonly Doc<"answer_checks">[]) {
   const answered = checks.filter((c) => c.status === "answered");
@@ -222,12 +226,35 @@ export const retryVideo = mutation({ args: { videoId: v.id("answer_videos") }, h
 
 export const saveVideoScenes = internalMutation({ args: { videoId: v.id("answer_videos"), title: v.string(), description: v.string(), tags: v.array(v.string()),
   scenes: v.array(v.object({ kind: v.string(), heading: v.string(), items: v.array(v.string()), emphasis: v.array(v.string()), narration: v.string(),
-    audioId: v.id("_storage"), audioMs: v.number() })), screenshotId: v.optional(v.id("_storage")), accent: v.optional(v.string()), costMicroUsd: v.number() },
+    audioId: v.id("_storage"), audioMs: v.number() })), screenshotId: v.optional(v.id("_storage")), accent: v.optional(v.string()), theme: v.optional(themeValue),
+  costMicroUsd: v.number() },
   handler: async (ctx, { videoId, ...kit }) => {
     const video = await ctx.db.get(videoId);
     if (!video || video.status !== "writing") return;
     await ctx.db.patch(videoId, { ...kit, version: 2, status: "rendering", updatedAt: Date.now() });
   } });
+
+export const videoLookState = internalQuery({ args: { videoId: v.id("answer_videos") }, handler: async (ctx, { videoId }) => {
+  const video = await ctx.db.get(videoId);
+  const site = video ? await ctx.db.get(video.siteId) : null;
+  if (!video || !site) return null;
+  return { domain: hostOf(site.domain), screenshotId: video.screenshotId ?? null, hasTheme: Boolean(video.theme) };
+} });
+
+export const saveVideoLook = internalMutation({ args: { videoId: v.id("answer_videos"), theme: themeValue }, handler: async (ctx, { videoId, theme }) => {
+  const video = await ctx.db.get(videoId);
+  if (video) await ctx.db.patch(videoId, { theme, accent: theme.accent, updatedAt: Date.now() });
+} });
+
+/** P405: a made video rendered again in the business's look as its site shows it now (both formats it has). */
+export const rerenderVideo = mutation({ args: { videoId: v.id("answer_videos") }, handler: async (ctx, { videoId }) => {
+  const video = await ctx.db.get(videoId);
+  if (!video || !(await ownedSite(ctx, video.siteId))) throw new ConvexError("This video isn't yours.");
+  if (video.version !== 2 || !video.scenes?.length || !["ready", "uploaded", "skipped"].includes(video.status)) throw new ConvexError("This video can't be rendered again yet.");
+  await ctx.db.patch(videoId, { status: "rendering", updatedAt: Date.now() });
+  await ctx.scheduler.runAfter(0, internal.actions.answerGrowthKit.rerender, { videoId, vertical: Boolean(video.verticalId) });
+  return { ok: true };
+} });
 
 export const renderFailed = internalMutation({ args: { videoId: v.id("answer_videos"), format: v.string(), error: v.string() }, handler: async (ctx, { videoId, format, error }) => {
   const video = await ctx.db.get(videoId);

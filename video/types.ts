@@ -1,6 +1,8 @@
 /** Answer videos (P400): what one video is made of. Pentra writes the scenes from the business's own facts, voices each
  * scene separately (so every scene's length is its voice's length) and times the captions inside each scene; Remotion
  * draws and renders the video from these props. Pure. */
+import type { VideoTheme } from "./theme";
+
 /** A file the video uses: a web address as given, or a name in the render's public folder (local renders). */
 export const isRemote = (src: string) => /^(https?:|data:|blob:)/.test(src);
 
@@ -25,7 +27,9 @@ export type VideoScene = {
 };
 
 export type AnswerVideoProps = {
-  brand: { name: string; domain: string; accent: string };
+  /** P405: the business's look (its background, text, accent and font, read from its own site); videos rendered before
+   * it have only an accent and are drawn on the dark default. */
+  brand: { name: string; domain: string; accent: string; theme?: VideoTheme };
   /** The business's homepage, captured full-page (the product scene shows its top). */
   screenshotSrc: string | null;
   scenes: VideoScene[];

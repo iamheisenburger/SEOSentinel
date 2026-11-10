@@ -123,6 +123,7 @@ function VideoRow({ video }: { video: Extras["videos"][number] }) {
   const setVideo = useMutation(api.answerGrowthKit.setVideo);
   const makeVertical = useMutation(api.answerGrowthKit.makeVertical);
   const retry = useMutation(api.answerGrowthKit.retryVideo);
+  const rerender = useMutation(api.answerGrowthKit.rerenderVideo);
   const act = useAct();
   const [open, setOpen] = useState(video.status === "ready");
   const [url, setUrl] = useState("");
@@ -154,6 +155,9 @@ function VideoRow({ video }: { video: Extras["videos"][number] }) {
               : video.verticalState === "queued" || video.verticalState === "rendering" ? <span className="text-[12px] text-text-3">Rendering the Shorts version…</span>
               : <Button size="sm" variant="secondary" onClick={() => act(() => makeVertical({ videoId: video.videoId }), "Rendering the Shorts version: about two minutes.")}>Make the Shorts version</Button>}
             {video.verticalError && !video.verticalUrl && <span className="text-[12px] text-[#F2994A]">{video.verticalError}</span>}
+            <Button size="sm" variant="ghost" onClick={() => act(() => rerender({ videoId: video.videoId }), "Rendering it again in your site's current colours: about three minutes.")}>
+              Render again in my site&apos;s colours
+            </Button>
           </div>
           <div className="flex flex-wrap gap-2">
             <CopyButton text={video.title ?? video.question} label="Copy title" />

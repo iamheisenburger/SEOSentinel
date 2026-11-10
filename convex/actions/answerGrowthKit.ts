@@ -11,6 +11,8 @@ import { randomBytes } from "node:crypto";
 import { fetchReadable } from "../lib/tregFetch";
 import { safeFetchPublicText } from "../lib/safeOutbound";
 import { FPS, sceneFrames, TRANSITION_FRAMES } from "../../video/types";
+import { pageColors, siteFont, videoTheme, type VideoFont, type VideoTheme } from "../../video/theme";
+import { PNG } from "pngjs";
 import {
   ANSWER_PAGE_HOLD_MICRO_USD, ANSWER_WRITER_MAX_TOKENS, ANSWER_WRITER_MODEL, checkDraftPage, finalizeDraftPage, pageSource, parseDraftPage, writerCostMicroUsd,
   type DraftPage, type PageSource,
@@ -111,8 +113,8 @@ export const writeComparison = internalAction({ args: { pageId: v.id("answer_pag
 /** Where Pentra's app (and its render route) is served. */
 const APP_URL = () => (process.env.PENTRA_APP_URL ?? "https://pentra.dev").replace(/\/+$/, "");
 
-/** The brand's colour from its homepage and up to three of its stylesheets (null when none is a strong colour). */
-async function siteAccent(domain: string): Promise<string | null> {
+/** The brand's accent and font from its homepage and up to three of its stylesheets (null when it has none). */
+async function siteLook(domain: string): Promise<{ accent: string | null; font: VideoFont | null }> {
   try {
     const home = await safeFetchPublicText(`https://${domain}/`, { timeoutMs: 12_000, maxBytes: 800_000, allowedContentTypes: [/^text\/html/i] });
     const sheets = [...home.text.matchAll(/<link[^>]+rel=["']?stylesheet["']?[^>]*>/gi)].flatMap((m) => {
@@ -121,8 +123,24 @@ async function siteAccent(domain: string): Promise<string | null> {
     }).filter((u) => { try { return new URL(u).hostname.endsWith(domain); } catch { return false; } }).slice(0, 3);
     const css = await Promise.all(sheets.map((u) => safeFetchPublicText(u, { timeoutMs: 10_000, maxBytes: 1_500_000, allowedContentTypes: [/^text\/css/i] })
       .then((r) => r.text).catch(() => "")));
-    return brandAccent([home.text, ...css]);
+    return { accent: brandAccent([home.text, ...css]), font: siteFont([home.text, ...css]) };
+  } catch { return { accent: null, font: null }; }
+}
+
+/** The page's background and text colours from its screenshot (PNG); null when it can't be read. */
+function screenshotColors(bytes: Uint8Array | null): { background: string; text: string | null } | null {
+  if (!bytes) return null;
+  try {
+    const png = PNG.sync.read(Buffer.from(bytes));
+    return pageColors(png.data, png.width, png.height);
   } catch { return null; }
+}
+
+/** P405: the business's look for its videos: its page's background and text (from the screenshot), its accent and font
+ * (from its stylesheets). */
+async function lookFor(domain: string, screenshot: Uint8Array | null): Promise<VideoTheme> {
+  const [{ accent, font }, colors] = [await siteLook(domain), screenshotColors(screenshot)];
+  return videoTheme({ background: colors?.background ?? null, text: colors?.text ?? null, accent, font });
 }
 
 /** One render on Pentra's render route (it claims the ticket, renders in a Vercel Sandbox and uploads the MP4). */
@@ -172,8 +190,8 @@ export const makeVideoKit = internalAction({ args: { videoId: v.id("answer_video
     if (voices.some((x) => x === null)) { await fail("The voice couldn't be made for every scene. Try again.", cost); return; }
     // The business's homepage as it looks today, for the scene that shows it, and the brand's colour.
     let screenshotId: Id<"_storage"> | undefined;
-    const [shot, accent] = await Promise.all([treg(SCREENSHOT_ENDPOINT, { url: `https://${business.domain}/`, viewportWidth: 1280 }, SCREENSHOT_MAX_MICRO_USD).catch(() => null),
-      siteAccent(business.domain)]);
+    let screenshot: Uint8Array | null = null;
+    const shot = await treg(SCREENSHOT_ENDPOINT, { url: `https://${business.domain}/`, viewportWidth: 1280 }, SCREENSHOT_MAX_MICRO_USD).catch(() => null);
     if (shot) {
       cost += shot.costMicroUsd;
       const image = shot.ok ? parseScreenshot(shot.json) : null;
@@ -182,17 +200,18 @@ export const makeVideoKit = internalAction({ args: { videoId: v.id("answer_video
           const response = await fetch(image, { signal: AbortSignal.timeout(30_000) });
           const type = response.headers.get("content-type") ?? "";
           const data = response.ok && /^image\//.test(type) ? new Uint8Array(await response.arrayBuffer()) : null;
-          if (data && data.length > 2_000 && data.length < 15_000_000) screenshotId = await ctx.storage.store(new Blob([data], { type }));
+          if (data && data.length > 2_000 && data.length < 15_000_000) { screenshotId = await ctx.storage.store(new Blob([data], { type })); screenshot = data; }
         } catch { /* the product scene shows its points without the page */ }
       }
     }
+    const theme = await lookFor(business.domain, screenshot);
     const scenes = script.scenes.map((s, i) => ({ ...s, audioId: voices[i]!.audioId, audioMs: voices[i]!.audioMs }));
     // YouTube chapters from where each scene starts.
     let at = 0;
     const marks = scenes.map((s, i) => { const start = at; at += sceneFrames(s) - (i < scenes.length - 1 ? TRANSITION_FRAMES : 0); return { start, heading: s.heading }; });
     const chapterLines = marks.map((m) => { const sec = Math.floor(m.start / FPS); return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")} ${m.heading}`; }).join("\n");
     await ctx.runMutation(internal.answerGrowthKit.saveVideoScenes, { videoId, title: script.title, description: `${script.description}\n\nChapters:\n${chapterLines}`,
-      tags: script.tags, scenes, ...(screenshotId ? { screenshotId } : {}), accent: accent ?? undefined, costMicroUsd: cost });
+      tags: script.tags, scenes, ...(screenshotId ? { screenshotId } : {}), accent: theme.accent, theme, costMicroUsd: cost });
     saved = true;
   } catch (error) {
     await fail(`The video couldn't be made (${String(error).slice(0, 120)}). Try again.`, cost);
@@ -203,11 +222,33 @@ export const makeVideoKit = internalAction({ args: { videoId: v.id("answer_video
 } });
 
 /** Renders one format of a made video; a failed 16:9 render marks the video failed (its scenes are kept for a retry). */
-export const renderFormat = internalAction({ args: { videoId: v.id("answer_videos"), format: v.union(v.literal("landscape"), v.literal("vertical")) },
-  handler: async (ctx, { videoId, format }) => {
+export const renderFormat = internalAction({ args: { videoId: v.id("answer_videos"), format: v.union(v.literal("landscape"), v.literal("vertical")),
+  freshLook: v.optional(v.boolean()) },
+  handler: async (ctx, { videoId, format, freshLook }) => {
+    await ensureLook(ctx, videoId, freshLook === true);
     const result = await renderOn(ctx, videoId, format);
     if (!result.ok) await ctx.runMutation(internal.answerGrowthKit.renderFailed, { videoId, format, error: result.error ?? "The render failed." });
   } });
+
+/** A video's look, read from its business's site when it has none yet (videos made before P405) or when asked again. */
+async function ensureLook(ctx: ActionCtx, videoId: Id<"answer_videos">, fresh: boolean) {
+  const state = await ctx.runQuery(internal.answerGrowthKit.videoLookState, { videoId });
+  if (!state || (state.hasTheme && !fresh)) return;
+  let screenshot: Uint8Array | null = null;
+  if (state.screenshotId) {
+    try { const blob = await ctx.storage.get(state.screenshotId); screenshot = blob ? new Uint8Array(await blob.arrayBuffer()) : null; } catch { screenshot = null; }
+  }
+  const theme = await lookFor(state.domain, screenshot);
+  await ctx.runMutation(internal.answerGrowthKit.saveVideoLook, { videoId, theme });
+}
+
+/** A made video rendered again in the business's current look: 16:9, then 9:16 when it had one. */
+export const rerender = internalAction({ args: { videoId: v.id("answer_videos"), vertical: v.boolean() }, handler: async (ctx, { videoId, vertical }) => {
+  await ensureLook(ctx, videoId, true);
+  const wide = await renderOn(ctx, videoId, "landscape");
+  if (!wide.ok) { await ctx.runMutation(internal.answerGrowthKit.renderFailed, { videoId, format: "landscape", error: wide.error ?? "The render failed." }); return; }
+  if (vertical) await renderOn(ctx, videoId, "vertical");
+} });
 
 // ── The directory listing ──
 
