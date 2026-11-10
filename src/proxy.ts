@@ -9,6 +9,8 @@ const PUBLIC_EXACT_ROUTES = new Set([
   "/", "/pricing", "/contact", "/beta", "/method", "/start", "/x-reply", "/api/webhooks/clerk-billing", "/api/check",
   "/api/github/callback", "/api/gsc/callback",
   "/api/outreach/gmail/callback", "/sitemap.xml", "/robots.txt",
+  // P400: Pentra's backend calls this with a single-use render ticket that Convex checks (no session).
+  "/api/video-render",
 ]);
 const PUBLIC_ROUTE_PREFIXES = [
   "/legal", "/sign-in", "/sign-up", "/unsubscribe", "/blog", "/check", "/hosted-answers",

@@ -15,6 +15,8 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/blog/*": ["./content/blog/**/*"],
     "/sitemap.xml": ["./content/blog/**/*"],
+    // P400: the render route uploads the Remotion bundle (built before next build) to its Vercel Sandbox.
+    "/api/video-render": ["./.remotion/**/*"],
   },
   // P296 (Nov 3 2026): the pages bots read most are served from Vercel's CDN for 5 minutes (stale up to a day while one
   // refresh runs), not a server render and a Convex read per request. A new article's address is never cached before its

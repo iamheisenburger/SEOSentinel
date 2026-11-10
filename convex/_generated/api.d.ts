@@ -50,6 +50,7 @@ import type * as answerGrowth from "../answerGrowth.js";
 import type * as answerGrowthKit from "../answerGrowthKit.js";
 import type * as answerPages from "../answerPages.js";
 import type * as answerPublish from "../answerPublish.js";
+import type * as answerVideoRender from "../answerVideoRender.js";
 import type * as answers from "../answers.js";
 import type * as answersDispatch from "../answersDispatch.js";
 import type * as articleImages from "../articleImages.js";
@@ -344,6 +345,7 @@ declare const fullApi: ApiFromModules<{
   answerGrowthKit: typeof answerGrowthKit;
   answerPages: typeof answerPages;
   answerPublish: typeof answerPublish;
+  answerVideoRender: typeof answerVideoRender;
   answers: typeof answers;
   answersDispatch: typeof answersDispatch;
   articleImages: typeof articleImages;

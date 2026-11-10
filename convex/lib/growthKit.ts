@@ -172,15 +172,19 @@ export function parseListingKit(raw: unknown): ListingKit | null {
 
 export const VIDEO_MODEL = "claude-sonnet-5-5";
 export const VIDEO_TOOL = "submit_video_script";
-export const VIDEO_HOLD_MICRO_USD = 120_000;
+export const VIDEO_HOLD_MICRO_USD = 250_000;
 export const TTS_ENDPOINT = "google-ai.voice-gen.gemini-3-8-flash-tts";
 export const TTS_MODEL = "gemini-3.8-flash-tts";
 export const TTS_MAX_MICRO_USD = 60_000;
 export const SCREENSHOT_ENDPOINT = "anyapi.web.screenshot";
 export const SCREENSHOT_MAX_MICRO_USD = 6_000;
 
+export type VideoSceneKind = "hook" | "statement" | "steps" | "checklist" | "product" | "cta";
+const SCENE_KINDS: readonly VideoSceneKind[] = ["hook", "statement", "steps", "checklist", "product", "cta"];
+export type VideoSceneScript = { kind: VideoSceneKind; heading: string; items: string[]; emphasis: string[]; narration: string };
+export type VideoScript = { title: string; description: string; tags: string[]; scenes: VideoSceneScript[] };
+/** Kept for the first videos (Nov 10 2026), made before scenes: a heading, lines and the narration. */
 export type VideoSegment = { heading: string; lines: string[]; narration: string };
-export type VideoScript = { title: string; description: string; tags: string[]; segments: VideoSegment[]; productSegment: number };
 
 /** The questions worth a video: the ones whose answers cite videos (most first), then the most-answered ones. */
 export function videoQuestions(checks: ReadonlyArray<{ status: string; question: string; sources: ReadonlyArray<{ domain: string }> }>, limit = 6): Array<{ question: string; videoAnswers: number }> {
@@ -196,49 +200,102 @@ export function videoQuestions(checks: ReadonlyArray<{ status: string; question:
     .slice(0, limit).map(([question, r]) => ({ question, videoAnswers: r.videoAnswers }));
 }
 
-/** A one-minute answer video's script: useful on its own, the business shown once where it fits, every fact about it
- * from its own facts. The title and description are what YouTube and the assistants read. */
-export function videoScriptRequest(args: { question: string; businessName: string; domain: string; productEvidence: string }) {
+/** A one-minute animated answer video, scene by scene (P400): useful on its own, the business shown once where it fits,
+ * every fact about it from its own facts. The title and description are what YouTube and the assistants read. */
+export function videoScenesRequest(args: { question: string; businessName: string; domain: string; productEvidence: string }) {
   return {
     system: [
-      `You write the script for a short answer video (about 60 to 80 seconds) that ${args.businessName} posts on YouTube. It answers one question buyers ask; assistants read the title, description and spoken words.`,
-      "Make it genuinely useful: concrete steps or criteria a viewer can act on today. Plain spoken English, short sentences, no hype, no emoji, no greetings, no \"like and subscribe\".",
-      `Show ${args.businessName} once, in the segment where it truly answers part of the question (productSegment, its index), with what it does in plain words; if it doesn't fit, productSegment is -1. Every fact about ${args.businessName} comes from its own facts below; never invent a feature, price, number, customer or result.`,
-      "segments: 5 to 7. The first segment's heading is the question as a viewer would search it. Each segment: a heading under 60 characters, 0 to 3 on-screen lines under 60 characters each (the key points, not the narration), and the narration (one to three sentences). All narration together: 120 to 190 words.",
-      `title: under 90 characters, the question answered (it can start with "How to"). description: 400 to 900 characters: the answer in two or three sentences, then the steps as short lines, then "${args.businessName}: https://${args.domain}". tags: 5 to 10 search phrases.`,
+      `You write the scenes of a short animated answer video (60 to 80 seconds) that ${args.businessName} posts on YouTube. It answers one question buyers ask; assistants read the title, description and spoken words.`,
+      "Make it genuinely useful: concrete steps or criteria a viewer can act on today. Spoken English: short sentences, no hype, no emoji, no greetings, no \"like and subscribe\".",
+      "Scenes, in order, 5 to 7 of them. kind is one of:",
+      "- hook: always first. heading = the question as a viewer would search it (under 10 words). narration asks it and promises the short answer.",
+      "- statement: one key idea. heading under 9 words; items 0 to 2 short contrasts (under 8 words each).",
+      "- steps: an ordered how-to. heading under 7 words; items 3 to 4 steps, each under 7 words, in the order the narration says them.",
+      "- checklist: things to look for. heading under 8 words; items 3 to 4, each under 6 words, in the order the narration says them.",
+      `- product: at most one, only where ${args.businessName} truly answers part of the question. heading names ${args.businessName} and what it does for this question (under 7 words); items 2 to 3 of its facts (under 9 words each).`,
+      `- cta: always last. heading = one short line from ${args.businessName}'s own facts (for example its offer); narration names ${args.businessName} and says its address as spoken words ("example dot com").`,
+      "emphasis: one or two words copied exactly from that scene's heading, to colour. narration: one to three sentences per scene, matching what is on screen. All narration together: 130 to 190 words.",
+      `Every fact about ${args.businessName} comes from its own facts below: never invent a feature, price, number, customer or result.`,
+      `title: under 90 characters, the question answered (it can start with "How to"). description: 300 to 800 characters: the answer in two or three sentences, then the steps as short lines, then "${args.businessName}: https://${args.domain}". tags: 5 to 10 search phrases.`,
       toolOnlyInstruction(VIDEO_TOOL),
     ].join("\n"),
     userMessage: [`Question: ${args.question}`, `${args.businessName}'s own facts (the only facts about it you may state):\n${args.productEvidence.slice(0, 12_000)}`].join("\n\n"),
-    inputSchema: { type: "object" as const, additionalProperties: false, required: ["title", "description", "tags", "segments", "productSegment"],
+    inputSchema: { type: "object" as const, additionalProperties: false, required: ["title", "description", "tags", "scenes"],
       properties: {
         title: { type: "string" as const }, description: { type: "string" as const }, tags: { type: "array" as const, items: { type: "string" as const } },
-        productSegment: { type: "integer" as const },
-        segments: { type: "array" as const, items: { type: "object" as const, additionalProperties: false, required: ["heading", "lines", "narration"],
-          properties: { heading: { type: "string" as const }, lines: { type: "array" as const, items: { type: "string" as const } }, narration: { type: "string" as const } } } },
+        scenes: { type: "array" as const, items: { type: "object" as const, additionalProperties: false, required: ["kind", "heading", "items", "emphasis", "narration"],
+          properties: { kind: { type: "string" as const, enum: [...SCENE_KINDS] }, heading: { type: "string" as const }, items: { type: "array" as const, items: { type: "string" as const } },
+            emphasis: { type: "array" as const, items: { type: "string" as const } }, narration: { type: "string" as const } } } },
       } },
   };
 }
 
-export function parseVideoScript(raw: unknown): VideoScript | null {
+/** The scenes, checked: a hook first and a call to action last, at most one product scene, lists of a readable size,
+ * emphasis only on words the heading has, and narration of a minute or so in total. */
+export function parseVideoScenes(raw: unknown): VideoScript | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
-  if (typeof r.title !== "string" || typeof r.description !== "string" || !Array.isArray(r.segments)) return null;
-  const segments = (r.segments as unknown[]).flatMap((s) => {
-    const x = s as { heading?: unknown; lines?: unknown; narration?: unknown };
-    return typeof x.heading === "string" && typeof x.narration === "string" && x.narration.trim()
-      ? [{ heading: x.heading.trim().slice(0, 80), lines: strings(x.lines, 3, 80), narration: x.narration.trim().slice(0, 600) }] : [];
+  if (typeof r.title !== "string" || typeof r.description !== "string" || !Array.isArray(r.scenes)) return null;
+  let products = 0;
+  const scenes = (r.scenes as unknown[]).flatMap((x): VideoSceneScript[] => {
+    const s = x as { kind?: unknown; heading?: unknown; items?: unknown; emphasis?: unknown; narration?: unknown };
+    if (!SCENE_KINDS.includes(s.kind as VideoSceneKind) || typeof s.heading !== "string" || typeof s.narration !== "string" || !s.heading.trim() || !s.narration.trim()) return [];
+    const kind = s.kind as VideoSceneKind;
+    if (kind === "product" && ++products > 1) return [];
+    const heading = s.heading.replace(/\s+/g, " ").trim().slice(0, 90);
+    const max = kind === "steps" || kind === "checklist" ? 4 : kind === "product" ? 3 : kind === "statement" ? 2 : 0;
+    const words = new Set(heading.toLowerCase().split(/\s+/).map((w) => w.replace(/[^\p{L}\p{N}'-]/gu, "")));
+    return [{ kind, heading, items: strings(s.items, max, 70), narration: s.narration.replace(/\s+/g, " ").trim().slice(0, 600),
+      emphasis: strings(s.emphasis, 2, 40).filter((e) => words.has(e.toLowerCase().replace(/[^\p{L}\p{N}'-]/gu, ""))) }];
   }).slice(0, 8);
-  const words = segments.reduce((n, s) => n + s.narration.split(/\s+/).filter(Boolean).length, 0);
-  if (segments.length < 3 || words < 60 || words > 320) return null;
-  const product = typeof r.productSegment === "number" && Number.isInteger(r.productSegment) && r.productSegment >= 0 && r.productSegment < segments.length ? r.productSegment : -1;
-  return { title: r.title.trim().slice(0, 100), description: r.description.trim().slice(0, 4_500), tags: strings(r.tags, 12, 60), segments, productSegment: product };
+  if (scenes.length < 4 || scenes[0].kind !== "hook" || scenes[scenes.length - 1].kind !== "cta") return null;
+  const words = scenes.reduce((n, s) => n + s.narration.split(/\s+/).filter(Boolean).length, 0);
+  if (words < 80 || words > 260) return null;
+  return { title: r.title.trim().slice(0, 100), description: r.description.trim().slice(0, 4_000), tags: strings(r.tags, 12, 60), scenes };
+}
+
+// ── The brand's colour ──
+
+const hexOf = (r: number, g: number, b: number) => `#${[r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+function oklchToHex(l: number, c: number, hDeg: number): string {
+  const h = (hDeg * Math.PI) / 180, a = c * Math.cos(h), b = c * Math.sin(h);
+  const l_ = l + 0.3963377774 * a + 0.2158037573 * b, m_ = l - 0.1055613458 * a - 0.0638541728 * b, s_ = l - 0.0894841775 * a - 1.291485548 * b;
+  const L = l_ ** 3, M = m_ ** 3, S = s_ ** 3;
+  const lin = [4.0767416621 * L - 3.3077115913 * M + 0.2309699292 * S, -1.2684380046 * L + 2.6097574011 * M - 0.3413193965 * S,
+    -0.0041960863 * L - 0.7034186147 * M + 1.707614701 * S];
+  const gamma = (x: number) => (x <= 0.0031308 ? 12.92 * x : 1.055 * x ** (1 / 2.4) - 0.055) * 255;
+  return hexOf(gamma(lin[0]), gamma(lin[1]), gamma(lin[2]));
+}
+function hsl(hex: string): { s: number; l: number } {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2;
+  const s = max === min ? 0 : l > 0.5 ? (max - min) / (2 - max - min) : (max - min) / (max + min);
+  return { s, l };
+}
+
+/** The brand's colour from its own page and stylesheets: the strong colour (saturated, neither near-white nor near-black)
+ * written most often, in hex, rgb() or oklch(). Null when the site uses none (a black-and-white site). */
+export function brandAccent(texts: readonly string[]): string | null {
+  const counts = new Map<string, number>();
+  const add = (hex: string) => { const { s, l } = hsl(hex); if (s >= 0.45 && l >= 0.28 && l <= 0.72) counts.set(hex, (counts.get(hex) ?? 0) + 1); };
+  for (const text of texts) {
+    for (const m of text.matchAll(/#([0-9a-fA-F]{6})\b/g)) add(`#${m[1].toUpperCase()}`);
+    for (const m of text.matchAll(/#([0-9a-fA-F]{3})\b(?![0-9a-fA-F])/g)) add(`#${[...m[1]].map((c) => c + c).join("").toUpperCase()}`);
+    for (const m of text.matchAll(/rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})/g)) add(hexOf(Number(m[1]), Number(m[2]), Number(m[3])));
+    for (const m of text.matchAll(/oklch\(\s*([\d.]+)(%?)\s+([\d.]+)\s+([\d.]+)/g)) {
+      const l = Number(m[1]) / (m[2] ? 100 : 1);
+      add(oklchToHex(l, Number(m[3]), Number(m[4])));
+    }
+  }
+  const best = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+  return best ? best[0] : null;
 }
 
 /** The words the voice reads: every segment's narration, a paragraph each. */
 export const narrationText = (segments: readonly VideoSegment[]) => segments.map((s) => s.narration).join("\n\n");
 
 export function ttsRequest(text: string, voice = "Charon") {
-  return { contents: [{ parts: [{ text: text.slice(0, 4_000), speechMetadata: { style: "calm, clear, friendly explainer" } }] }],
+  return { contents: [{ parts: [{ text: text.slice(0, 4_000), speechMetadata: { style: "warm, clear, confident explainer" } }] }],
     generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } } };
 }
 

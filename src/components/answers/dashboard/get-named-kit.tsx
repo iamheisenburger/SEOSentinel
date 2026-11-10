@@ -10,13 +10,10 @@ import { Button } from "@/components/ui/button";
 import { fieldStyles } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { Panel, PanelSkeleton } from "@/components/answers/ui";
-import { chapters, segmentAt, segmentTimings } from "../../../../convex/lib/videoTiming";
-import { drawFrame, VIDEO_H as H, VIDEO_W as W } from "@/lib/answers/video-frame";
 import { userErrorMessage } from "@/lib/user-error";
 import { cx } from "@/lib/cx";
 
 type Extras = NonNullable<FunctionReturnType<typeof api.answerGrowthKit.extras>>;
-type Kit = NonNullable<FunctionReturnType<typeof api.answerGrowthKit.videoKit>>;
 
 /** Get named, part two: comparison pages, answer videos and directory listings. */
 export function GetNamedKit({ siteId }: { siteId: string }) {
@@ -90,9 +87,9 @@ function Videos({ siteId, extras }: { siteId: string; extras: Extras }) {
   const act = useAct();
   const [busy, setBusy] = useState<string | null>(null);
   const [custom, setCustom] = useState("");
-  const start = async (question: string) => { setBusy(question); await act(() => make({ siteId: siteId as Id<"sites">, question }), "Making it: the script, voice and screenshot take about a minute."); setBusy(null); };
+  const start = async (question: string) => { setBusy(question); await act(() => make({ siteId: siteId as Id<"sites">, question }), "Making it: about three minutes, start to finish."); setBusy(null); };
   return (
-    <Panel title="Videos to upload" description="The assistants read YouTube for these questions. Pentra writes a one-minute answer, makes the voice and a screenshot of your site; your browser puts the video together and you upload it with the title and description below. YouTube doesn't allow uploads by tools like this, so you press upload.">
+    <Panel title="Videos to upload" description="The assistants read YouTube for these questions. Pentra writes a one-minute animated answer in your brand's colour, voices it, shows your real site and renders the finished video. YouTube doesn't allow uploads by tools like this, so you download it and upload it with the title and description below.">
       {extras.videoSuggestions.length > 0 && (
         <ul className="mb-4 flex flex-col divide-y divide-border">
           {extras.videoSuggestions.map((s) => (
@@ -118,27 +115,58 @@ function Videos({ siteId, extras }: { siteId: string; extras: Extras }) {
   );
 }
 
+function DownloadButton({ url, name, label }: { url: string; name: string; label: string }) {
+  const [busy, setBusy] = useState(false);
+  const download = async () => {
+    setBusy(true);
+    try {
+      // The file is on another address, so the browser's download attribute alone would open it instead of saving it.
+      const blob = await (await fetch(url)).blob();
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = href; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(href), 10_000);
+    } catch { window.open(url, "_blank", "noopener"); } finally { setBusy(false); }
+  };
+  return <Button size="sm" onClick={download} loading={busy} loadingLabel="Downloading…" icon={<Download className="h-3.5 w-3.5" strokeWidth={1.5} />}>{label}</Button>;
+}
+
 function VideoRow({ video }: { video: Extras["videos"][number] }) {
   const setVideo = useMutation(api.answerGrowthKit.setVideo);
+  const makeVertical = useMutation(api.answerGrowthKit.makeVertical);
+  const retry = useMutation(api.answerGrowthKit.retryVideo);
   const act = useAct();
   const [open, setOpen] = useState(video.status === "ready");
   const [url, setUrl] = useState("");
+  const legacy = video.version !== 2;
+  const done = !legacy && (video.status === "ready" || video.status === "uploaded" || video.status === "skipped") && video.landscapeUrl;
+  const slug = (video.title ?? video.question).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "answer-video";
+  const status = legacy ? "Made with the first video maker (a slideshow). Make it again for the animated version."
+    : video.status === "writing" ? "Writing the scenes and recording the voice…"
+    : video.status === "rendering" ? "Rendering the video: about two minutes…"
+    : video.status === "failed" ? `Not made: ${video.error ?? ""}`
+    : video.status === "uploaded" ? "Uploaded" : video.status === "skipped" ? "Skipped" : `Ready · ${Math.round((video.durationMs ?? 0) / 1000)} seconds of voice`;
   return (
     <li className="rounded-card border border-border bg-surface-2/40 p-4">
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-[14px] font-medium text-text">{video.title ?? video.question}</p>
-          <p className="mt-0.5 text-[12px] text-text-3">
-            {video.status === "writing" ? "Making the script, voice and screenshot…" : video.status === "failed" ? `Not made: ${video.error ?? ""}`
-              : video.status === "uploaded" ? "Uploaded" : video.status === "skipped" ? "Skipped" : `Ready · ${Math.round((video.durationMs ?? 0) / 1000)} seconds`}
-            {video.youtubeUrl && <> · <a href={video.youtubeUrl} target="_blank" rel="noreferrer" className="underline">on YouTube</a></>}
-          </p>
+          <p className="mt-0.5 text-[12px] text-text-3">{status}
+            {video.youtubeUrl && <> · <a href={video.youtubeUrl} target="_blank" rel="noreferrer" className="underline">on YouTube</a></>}</p>
         </div>
-        {video.status === "ready" && <Button size="sm" variant="ghost" onClick={() => setOpen(!open)}>{open ? "Hide" : "Open"}</Button>}
+        {(legacy || video.status === "failed") && <Button size="sm" variant="secondary" onClick={() => act(() => retry({ videoId: video.videoId }), "Making it again.")}>{legacy ? "Make it again" : "Try again"}</Button>}
+        {done && <Button size="sm" variant="ghost" onClick={() => setOpen(!open)}>{open ? "Hide" : "Open"}</Button>}
       </div>
-      {open && video.status === "ready" && (
+      {done && open && video.landscapeUrl && (
         <div className="mt-3 flex flex-col gap-3">
-          <VideoMaker videoId={video.videoId} />
+          <video src={video.landscapeUrl} controls preload="metadata" className="w-full max-w-[720px] rounded-[10px] border border-border bg-black" />
+          <div className="flex flex-wrap items-center gap-2">
+            <DownloadButton url={video.landscapeUrl} name={`${slug}.mp4`} label="Download for YouTube (16:9)" />
+            {video.verticalUrl ? <DownloadButton url={video.verticalUrl} name={`${slug}-shorts.mp4`} label="Download for Shorts (9:16)" />
+              : video.verticalState === "queued" || video.verticalState === "rendering" ? <span className="text-[12px] text-text-3">Rendering the Shorts version…</span>
+              : <Button size="sm" variant="secondary" onClick={() => act(() => makeVertical({ videoId: video.videoId }), "Rendering the Shorts version: about two minutes.")}>Make the Shorts version</Button>}
+            {video.verticalError && !video.verticalUrl && <span className="text-[12px] text-[#F2994A]">{video.verticalError}</span>}
+          </div>
           <div className="flex flex-wrap gap-2">
             <CopyButton text={video.title ?? video.question} label="Copy title" />
             <CopyButton text={video.description ?? ""} label="Copy description" />
@@ -153,104 +181,6 @@ function VideoRow({ video }: { video: Extras["videos"][number] }) {
         </div>
       )}
     </li>
-  );
-}
-
-async function blobUrl(url: string): Promise<string> {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error("A video part couldn't be loaded.");
-  return URL.createObjectURL(await response.blob());
-}
-
-/** Puts one video together in this browser: the voice plays into a recorder while each segment is drawn in time. */
-function VideoMaker({ videoId }: { videoId: string }) {
-  const kit = useQuery(api.answerGrowthKit.videoKit, { videoId: videoId as Id<"answer_videos"> });
-  const [state, setState] = useState<"idle" | "recording" | "done" | "error">("idle");
-  const [progress, setProgress] = useState(0);
-  const [file, setFile] = useState<{ url: string; name: string; type: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  if (kit === undefined) return <p className="text-[13px] text-text-3">Loading the video&apos;s parts…</p>;
-  if (kit === null) return <p className="text-[13px] text-text-3">This video&apos;s parts aren&apos;t ready.</p>;
-
-  const record = async () => {
-    setState("recording"); setError(null); setProgress(0);
-    try {
-      if (typeof MediaRecorder === "undefined") throw new Error("This browser can't record video. Use Chrome, Edge or Firefox.");
-      const audioCtx = new AudioContext();
-      const buffer = await audioCtx.decodeAudioData(await (await fetch(await blobUrl(kit.audioUrl!))).arrayBuffer());
-      let shot: HTMLImageElement | null = null;
-      if (kit.screenshotUrl) {
-        shot = await new Promise<HTMLImageElement | null>(async (resolve) => {
-          try { const img = new Image(); img.onload = () => resolve(img); img.onerror = () => resolve(null); img.src = await blobUrl(kit.screenshotUrl!); } catch { resolve(null); }
-        });
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = W; canvas.height = H;
-      const ctx = canvas.getContext("2d")!;
-      const durationMs = buffer.duration * 1000;
-      const timings = segmentTimings(kit.segments.map((s) => s.narration), durationMs);
-      drawFrame(ctx, kit, 0, 0, shot);
-      const video = canvas.captureStream(30);
-      const dest = audioCtx.createMediaStreamDestination();
-      const source = audioCtx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(dest);
-      const stream = new MediaStream([...video.getVideoTracks(), ...dest.stream.getAudioTracks()]);
-      const type = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"].find((t) => MediaRecorder.isTypeSupported(t)) ?? "";
-      const recorder = new MediaRecorder(stream, { ...(type ? { mimeType: type } : {}), videoBitsPerSecond: 3_000_000 });
-      const chunks: Blob[] = [];
-      recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
-      const stopped = new Promise<void>((resolve) => { recorder.onstop = () => resolve(); });
-      recorder.start(500);
-      const startAt = audioCtx.currentTime + 0.4;
-      source.start(startAt);
-      await new Promise<void>((resolve) => {
-        const tick = () => {
-          const ms = Math.max(0, (audioCtx.currentTime - startAt) * 1000);
-          drawFrame(ctx, kit, segmentAt(timings, ms), ms / durationMs, shot);
-          setProgress(Math.min(1, ms / durationMs));
-          if (ms >= durationMs + 600) resolve(); else window.setTimeout(tick, 33);
-        };
-        tick();
-      });
-      recorder.stop();
-      await stopped;
-      await audioCtx.close();
-      const mime = recorder.mimeType || type || "video/webm";
-      const blob = new Blob(chunks, { type: mime });
-      const slug = kit.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "answer-video";
-      setFile({ url: URL.createObjectURL(blob), name: `${slug}.${mime.includes("mp4") ? "mp4" : "webm"}`, type: mime });
-      setState("done");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "The video couldn't be put together.");
-      setState("error");
-    }
-  };
-
-  const description = kit.durationMs ? `${kit.description}\n\n${chapters(kit.segments.map((s) => s.heading), segmentTimings(kit.segments.map((s) => s.narration), kit.durationMs))}` : kit.description;
-  return (
-    <div className="rounded-card border border-border p-3">
-      {state === "done" && file ? (
-        <div className="flex flex-col gap-2">
-          <video src={file.url} controls className="w-full max-w-[640px] rounded-[8px] border border-border" />
-          <div className="flex flex-wrap gap-2">
-            <a href={file.url} download={file.name} className="inline-flex h-8 items-center gap-1.5 rounded-control bg-white px-3 text-[13px] font-medium text-black">
-              <Download className="h-3.5 w-3.5" strokeWidth={1.5} />Download video
-            </a>
-            <CopyButton text={description} label="Copy description with chapters" />
-            <Button size="sm" variant="ghost" onClick={() => setState("idle")}>Make it again</Button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-wrap items-center gap-3">
-          <Button size="sm" onClick={record} disabled={state === "recording"} icon={<Film className="h-3.5 w-3.5" strokeWidth={1.5} />}>
-            {state === "recording" ? `Putting it together… ${Math.round(progress * 100)}%` : "Put the video together"}
-          </Button>
-          <span className="text-[12px] text-text-3">{state === "recording" ? "Keep this tab open: it records in real time." : `About ${Math.round((kit.durationMs ?? 60_000) / 1000)} seconds. Keep this tab open while it records.`}</span>
-          {error && <span className="text-[12px] text-[#F2994A]">{error}</span>}
-        </div>
-      )}
-    </div>
   );
 }
 

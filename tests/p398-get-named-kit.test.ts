@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  cleanThreadUrl, comparisonRequest, directoryPlan, DIRECTORIES, narrationText, parseListingKit, parseScreenshot, parseThreadResults, parseTtsAudio, parseVideoScript,
+  cleanThreadUrl, comparisonRequest, directoryPlan, DIRECTORIES, parseListingKit, parseScreenshot, parseThreadResults, parseTtsAudio,
   rivalNumberIssues, rivalPairs, threadSearchRequest, videoQuestions, wavDurationMs,
 } from "../convex/lib/growthKit.ts";
 import { chapters, segmentAt, segmentTimings } from "../convex/lib/videoTiming.ts";
@@ -56,18 +56,11 @@ test("the listing is kept only when it is complete and within each directory's l
   assert.equal(parseListingKit({ ...kit!, kind: "spaceship" })!.kind, "other");
 });
 
-test("videos: the questions whose answers cite videos first; the script is checked; the voice and screenshot are read", () => {
+test("videos: the questions whose answers cite videos first; the voice and screenshot are read", () => {
   const check = (question: string, domains: string[], status = "answered") => ({ status, question, sources: domains.map((domain) => ({ domain })) });
   assert.deepEqual(videoQuestions([check("How to unblock a drain?", ["youtube.com", "a.com"]), check("How to unblock a drain?", ["www.youtube.com"]),
     check("Plumber cost in Ohio?", ["b.com"]), check("Plumber cost in Ohio?", ["b.com"]), check("Plumber cost in Ohio?", ["b.com"]), check("x", ["youtube.com"], "error")]),
     [{ question: "How to unblock a drain?", videoAnswers: 2 }, { question: "Plumber cost in Ohio?", videoAnswers: 0 }]);
-  const seg = (n: number) => ({ heading: `Step ${n}`, lines: ["Turn off the water", 7, ""], narration: "Turn off the water first and check the trap under the sink for a blockage before calling anyone." });
-  const script = parseVideoScript({ title: "How to unblock a drain", description: "d", tags: ["drain"], productSegment: 9, segments: [seg(1), seg(2), seg(3), seg(4)] });
-  assert.ok(script);
-  assert.equal(script!.productSegment, -1, "an index outside the segments shows no product");
-  assert.deepEqual(script!.segments[0].lines, ["Turn off the water"]);
-  assert.match(narrationText(script!.segments), /\n\n/);
-  assert.equal(parseVideoScript({ title: "t", description: "d", segments: [seg(1)] }), null, "too short to be a video");
   assert.deepEqual(parseTtsAudio({ candidates: [{ content: { parts: [{ text: "x" }, { inlineData: { mimeType: "audio/wav", data: "UklGRg==" } }] } }] }), { mimeType: "audio/wav", base64: "UklGRg==" });
   assert.equal(parseTtsAudio({}), null);
   assert.equal(parseScreenshot({ output: { data: { items: [{ image: "https://media.example.com/shot.png" }] } } }), "https://media.example.com/shot.png");

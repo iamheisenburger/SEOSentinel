@@ -46,3 +46,6 @@ function_spec_*.json
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Remotion bundle (built before next build; P400)
+/.remotion

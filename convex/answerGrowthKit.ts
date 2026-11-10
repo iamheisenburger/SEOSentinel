@@ -56,8 +56,15 @@ export const extras = query({ args: { siteId: v.id("sites") }, handler: async (c
     business: { name: business.name, domain: business.domain },
     comparisons,
     videoSuggestions: videoQuestions(answered, 10).filter((q) => !made.has(q.question)).slice(0, 5),
-    videos: videos.map((x) => ({ videoId: x._id, question: x.question, status: x.status, title: x.title ?? null, description: x.description ?? null, tags: x.tags ?? [],
-      youtubeUrl: x.youtubeUrl ?? null, error: x.error ?? null, durationMs: x.durationMs ?? null, createdAt: x.createdAt })),
+    videos: await Promise.all(videos.map(async (x) => {
+      const renders = x.version === 2 ? await ctx.db.query("answer_video_renders").withIndex("by_video", (q) => q.eq("videoId", x._id)).order("desc").take(6) : [];
+      const vertical = renders.find((r) => r.format === "vertical");
+      return { videoId: x._id, question: x.question, status: x.status, version: x.version ?? 1, title: x.title ?? null, description: x.description ?? null,
+        tags: x.tags ?? [], youtubeUrl: x.youtubeUrl ?? null, error: x.error ?? null, createdAt: x.createdAt,
+        durationMs: x.scenes ? x.scenes.reduce((n, sc) => n + sc.audioMs, 0) : x.durationMs ?? null,
+        landscapeUrl: x.landscapeId ? await ctx.storage.getUrl(x.landscapeId) : null, verticalUrl: x.verticalId ? await ctx.storage.getUrl(x.verticalId) : null,
+        verticalState: x.verticalId ? "done" : vertical?.status ?? null, verticalError: vertical?.status === "failed" ? vertical.error ?? null : null };
+    })),
     listing: {
       kit: kit ? { status: kit.status, error: kit.error ?? null, kind: kit.kind ?? null, fields: kit.status === "ready" ? {
         tagline: kit.tagline ?? "", shortDescription: kit.shortDescription ?? "", longDescription: kit.longDescription ?? "", categories: kit.categories ?? [],
@@ -115,10 +122,10 @@ export const makeVideo = mutation({ args: { siteId: v.id("sites"), question: v.s
   const q = question.replace(/\s+/g, " ").trim().slice(0, 200);
   if (q.length < 8) throw new ConvexError("Pick a question for the video.");
   const videos = await ctx.db.query("answer_videos").withIndex("by_site", (x) => x.eq("siteId", siteId)).take(400);
-  if (videos.filter((x) => x.status === "writing").length >= 3) throw new ConvexError("Three videos are being made. Start another when one is ready.");
+  if (videos.filter((x) => x.status === "writing" || x.status === "rendering").length >= 3) throw new ConvexError("Three videos are being made. Start another when one is ready.");
   if (videos.filter((x) => x.createdAt >= monthStart()).length >= VIDEOS_PER_MONTH) throw new ConvexError(`This month's ${VIDEOS_PER_MONTH} videos are made. More next month.`);
   const now = Date.now();
-  const videoId = await ctx.db.insert("answer_videos", { siteId, question: q, status: "writing", createdAt: now, updatedAt: now, costMicroUsd: 0 });
+  const videoId = await ctx.db.insert("answer_videos", { siteId, question: q, status: "writing", version: 2, createdAt: now, updatedAt: now, costMicroUsd: 0 });
   await ctx.scheduler.runAfter(0, internal.actions.answerGrowthKit.makeVideoKit, { videoId });
   return { videoId };
 } });
@@ -127,22 +134,53 @@ export const setVideo = mutation({ args: { videoId: v.id("answer_videos"), statu
   youtubeUrl: v.optional(v.string()) }, handler: async (ctx, { videoId, status, youtubeUrl }) => {
   const video = await ctx.db.get(videoId);
   if (!video || !(await ownedSite(ctx, video.siteId))) throw new ConvexError("This video isn't yours.");
-  if (video.status === "writing" || video.status === "failed") throw new ConvexError("This video isn't made yet.");
+  if (video.status === "writing" || video.status === "rendering" || video.status === "failed") throw new ConvexError("This video isn't made yet.");
   const url = youtubeUrl?.trim();
   if (url && !/^https:\/\/(www\.|m\.)?(youtube\.com|youtu\.be)\/\S+$/.test(url)) throw new ConvexError("Paste the video's YouTube address.");
   await ctx.db.patch(videoId, { status, updatedAt: Date.now(), ...(status === "uploaded" && url ? { youtubeUrl: url.slice(0, 300) } : {}) });
 } });
 
-/** Everything the owner's browser needs to assemble one video: the script, the voice and the screenshot. */
-export const videoKit = query({ args: { videoId: v.id("answer_videos") }, handler: async (ctx, { videoId }) => {
+/** The vertical cut for Shorts and Reels, rendered on request (each render uses Pentra's render allowance). */
+export const makeVertical = mutation({ args: { videoId: v.id("answer_videos") }, handler: async (ctx, { videoId }) => {
   const video = await ctx.db.get(videoId);
-  const site = video ? await ownedSite(ctx, video.siteId) : null;
-  if (!video || !site || !video.segments || !video.audioId) return null;
-  const business = businessOf(site);
-  return { videoId, question: video.question, title: video.title ?? video.question, description: video.description ?? "", tags: video.tags ?? [],
-    segments: video.segments, productSegment: video.productSegment ?? -1, durationMs: video.durationMs ?? null,
-    audioUrl: await ctx.storage.getUrl(video.audioId), screenshotUrl: video.screenshotId ? await ctx.storage.getUrl(video.screenshotId) : null,
-    business: { name: business.name, domain: business.domain } };
+  if (!video || !(await ownedSite(ctx, video.siteId))) throw new ConvexError("This video isn't yours.");
+  if (video.version !== 2 || !video.landscapeId) throw new ConvexError("Make the video first.");
+  if (video.verticalId) return { ok: true };
+  const recent = await ctx.db.query("answer_video_renders").withIndex("by_video", (q) => q.eq("videoId", videoId)).order("desc").first();
+  if (recent && recent.format === "vertical" && (recent.status === "queued" || recent.status === "rendering")) throw new ConvexError("The Shorts version is rendering.");
+  await ctx.scheduler.runAfter(0, internal.actions.answerGrowthKit.renderFormat, { videoId, format: "vertical" });
+  return { ok: true };
+} });
+
+/** A video that failed: rendered again from its scenes, or made again from the start when it has none. */
+export const retryVideo = mutation({ args: { videoId: v.id("answer_videos") }, handler: async (ctx, { videoId }) => {
+  const video = await ctx.db.get(videoId);
+  if (!video || !(await ownedSite(ctx, video.siteId))) throw new ConvexError("This video isn't yours.");
+  if (video.status !== "failed" && video.version === 2) throw new ConvexError("This video isn't failed.");
+  const now = Date.now();
+  if (video.version === 2 && video.scenes?.length) {
+    await ctx.db.patch(videoId, { status: "rendering", error: undefined, updatedAt: now });
+    await ctx.scheduler.runAfter(0, internal.actions.answerGrowthKit.renderFormat, { videoId, format: "landscape" });
+  } else {
+    await ctx.db.patch(videoId, { status: "writing", version: 2, error: undefined, updatedAt: now });
+    await ctx.scheduler.runAfter(0, internal.actions.answerGrowthKit.makeVideoKit, { videoId });
+  }
+  return { ok: true };
+} });
+
+export const saveVideoScenes = internalMutation({ args: { videoId: v.id("answer_videos"), title: v.string(), description: v.string(), tags: v.array(v.string()),
+  scenes: v.array(v.object({ kind: v.string(), heading: v.string(), items: v.array(v.string()), emphasis: v.array(v.string()), narration: v.string(),
+    audioId: v.id("_storage"), audioMs: v.number() })), screenshotId: v.optional(v.id("_storage")), accent: v.optional(v.string()), costMicroUsd: v.number() },
+  handler: async (ctx, { videoId, ...kit }) => {
+    const video = await ctx.db.get(videoId);
+    if (!video || video.status !== "writing") return;
+    await ctx.db.patch(videoId, { ...kit, version: 2, status: "rendering", updatedAt: Date.now() });
+  } });
+
+export const renderFailed = internalMutation({ args: { videoId: v.id("answer_videos"), format: v.string(), error: v.string() }, handler: async (ctx, { videoId, format, error }) => {
+  const video = await ctx.db.get(videoId);
+  if (!video || format !== "landscape" || video.status !== "rendering") return;
+  await ctx.db.patch(videoId, { status: "failed", error: error.slice(0, 300), updatedAt: Date.now() });
 } });
 
 export const videoContext = internalQuery({ args: { videoId: v.id("answer_videos") }, handler: async (ctx, { videoId }) => {
@@ -156,17 +194,9 @@ export const videoContext = internalQuery({ args: { videoId: v.id("answer_videos
       ctaText: site.ctaText ?? "", ctaUrl: site.ctaUrl ?? "" } };
 } });
 
-export const saveVideoKit = internalMutation({ args: { videoId: v.id("answer_videos"), title: v.string(), description: v.string(), tags: v.array(v.string()),
-  segments: v.array(v.object({ heading: v.string(), lines: v.array(v.string()), narration: v.string() })), productSegment: v.number(),
-  audioId: v.id("_storage"), screenshotId: v.optional(v.id("_storage")), durationMs: v.number(), costMicroUsd: v.number() }, handler: async (ctx, { videoId, ...kit }) => {
-  const video = await ctx.db.get(videoId);
-  if (!video || video.status !== "writing") return;
-  await ctx.db.patch(videoId, { ...kit, status: "ready", updatedAt: Date.now() });
-} });
-
 export const failVideo = internalMutation({ args: { videoId: v.id("answer_videos"), error: v.string(), costMicroUsd: v.number() }, handler: async (ctx, { videoId, error, costMicroUsd }) => {
   const video = await ctx.db.get(videoId);
-  if (!video || video.status !== "writing") return;
+  if (!video || (video.status !== "writing" && video.status !== "rendering")) return;
   await ctx.db.patch(videoId, { status: "failed", error: error.slice(0, 300), costMicroUsd, updatedAt: Date.now() });
 } });
 

@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     "convex/_generated/**",
     ".wordpress-fixture/**", // Downloaded vendor runtime; connector/test sources remain linted.
+    ".remotion/**", // P400: the generated Remotion bundle (npm run bundle:video); its sources in video/ remain linted.
+    ".agents/**", // Installed agent skills (not app code).
   ]),
   {
     // Existing integration boundaries still contain deliberately untyped

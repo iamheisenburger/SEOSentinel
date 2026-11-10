@@ -173,7 +173,30 @@ export const answersTables = {
     createdAt: v.number(),
     updatedAt: v.number(),
     costMicroUsd: v.number(),
+    /** P400: an animated video rendered by Pentra (2); the first videos (1) were assembled in the owner's browser. */
+    version: v.optional(v.number()),
+    /** P400: the scenes, each with its own voice. */
+    scenes: v.optional(v.array(v.object({ kind: v.string(), heading: v.string(), items: v.array(v.string()), emphasis: v.array(v.string()),
+      narration: v.string(), audioId: v.id("_storage"), audioMs: v.number() }))),
+    accent: v.optional(v.string()),
+    /** P400: the rendered MP4s: 16:9 for YouTube, 9:16 for Shorts. */
+    landscapeId: v.optional(v.id("_storage")),
+    verticalId: v.optional(v.id("_storage")),
   }).index("by_site", ["siteId"]),
+
+  /** P400: one render of a video on Pentra's render route, claimed once with its ticket. */
+  answer_video_renders: defineTable({
+    siteId: v.id("sites"),
+    videoId: v.id("answer_videos"),
+    ticket: v.string(),
+    format: v.string(), // landscape | vertical
+    status: v.string(), // queued | rendering | done | failed
+    storageId: v.optional(v.id("_storage")),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    claimedAt: v.optional(v.number()),
+    finishedAt: v.optional(v.number()),
+  }).index("by_ticket", ["ticket"]).index("by_video", ["videoId"]),
 
   /** Get named (P398): the business's directory listing, written once from its own facts. */
   answer_listing_kits: defineTable({

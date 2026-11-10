@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "npm run bundle:video && next build",
     "start": "next start",
     "lint": "eslint",
     "test": "NODE_OPTIONS=--max-old-space-size=8192 node --experimental-strip-types --test --test-concurrency=1 tests/*.test.ts",
@@ -17,14 +17,20 @@
     "test:wordpress:mysql": "node scripts/wordpress-fixture.mjs --mysql --test",
     "typecheck": "tsc --noEmit",
     "scan:secrets": "node scripts/secret-scan.mjs",
-    "check:schema": "node scripts/schema-compatibility.mjs"
+    "check:schema": "node scripts/schema-compatibility.mjs",
+    "bundle:video": "remotion bundle video/index.ts --out-dir .remotion --public-dir video/public --log=error"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
     "@clerk/backend": "^3.16.0",
     "@clerk/nextjs": "^7.7.0",
     "@clerk/themes": "^2.4.57",
+    "@remotion/google-fonts": "4.0.542",
+    "@remotion/media": "4.0.542",
+    "@remotion/transitions": "4.0.542",
+    "@remotion/vercel": "4.0.542",
     "@types/nodemailer": "^8.0.1",
+    "@vercel/sandbox": "3.9.1",
     "convex": "^1.30.0",
     "date-fns": "^4.1.0",
     "imapflow": "^1.7.6",
@@ -43,12 +49,16 @@
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "remark-rehype": "^11.1.2",
+    "remotion": "4.0.542",
     "tldts": "^7.4.10",
     "unified": "^11.0.5",
     "zod": "^4.1.13"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
+    "@remotion/bundler": "4.0.542",
+    "@remotion/cli": "4.0.542",
+    "@remotion/renderer": "4.0.542",
     "@tailwindcss/postcss": "^4",
     "@types/mailparser": "^3.4.6",
     "@types/node": "^20",
