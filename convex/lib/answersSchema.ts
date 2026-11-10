@@ -43,6 +43,8 @@ export const answersSiteSettings = v.object({
   location: v.optional(v.string()),
   setupError: v.optional(v.string()),
   setupErrorAt: v.optional(v.number()),
+  /** Get named (P397): when the owner last asked Pentra to prepare the work (lists, pitches, community drafts). */
+  growthPreparedAt: v.optional(v.number()),
 });
 
 const latestForQuestion = v.object({
@@ -129,6 +131,26 @@ export const answersTables = {
     .index("by_site_asked", ["siteId", "askedAt"])
     .index("by_question_asked", ["questionId", "askedAt"])
     .index("by_site_cited", ["siteId", "cited", "askedAt"]),
+
+  /** Get named (P397): one reply drafted for a community thread the assistants cite; a person posts it. */
+  answer_posts: defineTable({
+    siteId: v.id("sites"),
+    url: v.string(),
+    platform: v.string(),
+    title: v.optional(v.string()),
+    questions: v.array(v.string()),
+    answers: v.number(),
+    draft: v.string(),
+    fits: v.boolean(),
+    threadRead: v.boolean(),
+    status: v.string(), // todo | posted | skipped
+    postedUrl: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    costMicroUsd: v.number(),
+  })
+    .index("by_site", ["siteId"])
+    .index("by_site_url", ["siteId", "url"]),
 
   answer_texts: defineTable({
     siteId: v.id("sites"),

@@ -9,6 +9,7 @@
  */
 
 import type * as actions_answerEmail from "../actions/answerEmail.js";
+import type * as actions_answerGrowth from "../actions/answerGrowth.js";
 import type * as actions_answerPages from "../actions/answerPages.js";
 import type * as actions_answerPublish from "../actions/answerPublish.js";
 import type * as actions_answers from "../actions/answers.js";
@@ -44,6 +45,7 @@ import type * as actions_siteHealth from "../actions/siteHealth.js";
 import type * as actions_smartlead from "../actions/smartlead.js";
 import type * as actions_syndication from "../actions/syndication.js";
 import type * as actions_underfilledPlanRecovery from "../actions/underfilledPlanRecovery.js";
+import type * as answerGrowth from "../answerGrowth.js";
 import type * as answerPages from "../answerPages.js";
 import type * as answerPublish from "../answerPublish.js";
 import type * as answers from "../answers.js";
@@ -70,6 +72,7 @@ import type * as jobs from "../jobs.js";
 import type * as lib_accountDeletion from "../lib/accountDeletion.js";
 import type * as lib_aiAnswers from "../lib/aiAnswers.js";
 import type * as lib_answerEngine from "../lib/answerEngine.js";
+import type * as lib_answerGrowth from "../lib/answerGrowth.js";
 import type * as lib_answerPages from "../lib/answerPages.js";
 import type * as lib_answerPublishing from "../lib/answerPublishing.js";
 import type * as lib_answerQuestions from "../lib/answerQuestions.js";
@@ -296,6 +299,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   "actions/answerEmail": typeof actions_answerEmail;
+  "actions/answerGrowth": typeof actions_answerGrowth;
   "actions/answerPages": typeof actions_answerPages;
   "actions/answerPublish": typeof actions_answerPublish;
   "actions/answers": typeof actions_answers;
@@ -331,6 +335,7 @@ declare const fullApi: ApiFromModules<{
   "actions/smartlead": typeof actions_smartlead;
   "actions/syndication": typeof actions_syndication;
   "actions/underfilledPlanRecovery": typeof actions_underfilledPlanRecovery;
+  answerGrowth: typeof answerGrowth;
   answerPages: typeof answerPages;
   answerPublish: typeof answerPublish;
   answers: typeof answers;
@@ -357,6 +362,7 @@ declare const fullApi: ApiFromModules<{
   "lib/accountDeletion": typeof lib_accountDeletion;
   "lib/aiAnswers": typeof lib_aiAnswers;
   "lib/answerEngine": typeof lib_answerEngine;
+  "lib/answerGrowth": typeof lib_answerGrowth;
   "lib/answerPages": typeof lib_answerPages;
   "lib/answerPublishing": typeof lib_answerPublishing;
   "lib/answerQuestions": typeof lib_answerQuestions;

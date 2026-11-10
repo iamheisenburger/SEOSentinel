@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Component, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Check, ChevronsUpDown, CreditCard, FileText, LayoutDashboard, Menu, MessageSquareText, Quote, Settings, Users, X,
+  Check, ChevronsUpDown, CreditCard, FileText, LayoutDashboard, Menu, MessageSquareText, Quote, Settings, Target, Users, X,
 } from "lucide-react";
 import { Wordmark } from "@/components/marketing/wordmark";
 import { SourceGlyph } from "@/components/ui/evidence-card";
@@ -13,6 +13,7 @@ import { cx } from "@/lib/cx";
 
 export const ANSWERS_NAV = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
+  { href: "/dashboard/get-named", label: "Get named", icon: Target },
   { href: "/dashboard/questions", label: "Questions", icon: MessageSquareText },
   { href: "/dashboard/pages", label: "Answer pages", icon: FileText },
   { href: "/dashboard/citations", label: "Citations", icon: Quote },
