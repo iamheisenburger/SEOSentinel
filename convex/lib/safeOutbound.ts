@@ -3,6 +3,7 @@
 import { servingHost, type ServingHost } from "./platformRedirects.ts";
 import { lookup } from "node:dns/promises";
 import { request } from "node:https";
+import { brotliDecompressSync, gunzipSync, inflateRawSync, inflateSync } from "node:zlib";
 import { isIP } from "node:net";
 import type { LookupFunction } from "node:net";
 
@@ -192,6 +193,18 @@ export async function validatePublicHttpsUrl(
   return (await resolvePinnedPublicUrl(input, expectedHost)).url;
 }
 
+/** P404: a body as text even when the server compressed it anyway. Pentra asks for no compression, but some servers
+ * (BuiltWith's, Nov 10 2026) send gzip or Brotli regardless, and the bytes were read as text. Decompressed output is
+ * capped (eight times the response limit) so a small compressed body can't expand without bound. */
+export function decodeBody(body: Buffer, encoding: string, maxBytes: number): Buffer {
+  const e = encoding.toLowerCase().split(",").map((x) => x.trim()).filter((x) => x && x !== "identity").pop() ?? "";
+  const limit = { maxOutputLength: Math.max(maxBytes * 8, 1_000_000) };
+  if (e === "gzip" || e === "x-gzip") return gunzipSync(body, limit);
+  if (e === "br") return brotliDecompressSync(body, limit);
+  if (e === "deflate") { try { return inflateSync(body, limit); } catch { return inflateRawSync(body, limit); } }
+  return body;
+}
+
 function requestPinnedText(
   target: { url: URL; address: ResolvedAddress },
   options: Required<Pick<SafePublicTextOptions, "maxBytes" | "timeoutMs">> &
@@ -255,11 +268,14 @@ function requestPinnedText(
           chunks.push(bytes);
         });
         response.on("end", () => {
-          resolve({
-            status,
-            headers: response.headers,
-            text: Buffer.concat(chunks).toString("utf8"),
-          });
+          let text: string;
+          try {
+            text = decodeBody(Buffer.concat(chunks), String(response.headers["content-encoding"] ?? ""), options.maxBytes).toString("utf8");
+          } catch {
+            reject(new Error("Outbound response couldn't be decompressed"));
+            return;
+          }
+          resolve({ status, headers: response.headers, text });
         });
         response.on("error", reject);
       },

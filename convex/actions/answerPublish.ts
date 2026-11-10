@@ -13,6 +13,7 @@ import { safeRequestPublicHttps } from "../lib/safeOutbound";
 import { publishToCms, type CmsRequest, type CmsSite } from "../lib/cmsPublishers";
 import { cmsUrlStructure, isApiCmsMethod } from "../lib/cmsDestinations";
 import { hostOf } from "../lib/answerEngine";
+import { retryOnConflict } from "../lib/retryOnConflict";
 
 const cmsRequest: CmsRequest = async (url, init) => {
   const target = new URL(url);
@@ -98,9 +99,13 @@ async function githubRequest(token: string, url: string, init: { method: string;
  * page is a rewrite (its file is the previous version's). */
 async function commitFile(token: string, owner: string, repo: string, branch: string, path: string, content: string, message: string) {
   const base = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${path.split("/").map(encodeURIComponent).join("/")}`;
-  const existing = await githubRequest(token, `${base}?ref=${encodeURIComponent(branch)}`, { method: "GET" });
-  const sha = existing.status === 200 && typeof existing.json.sha === "string" ? existing.json.sha : undefined;
-  const put = await githubRequest(token, base, { method: "PUT", body: { message, branch, content: Buffer.from(content, "utf8").toString("base64"), ...(sha ? { sha } : {}) } });
+  // P404: two pages committed at the same moment race for the branch; the loser gets 409 ("is at X but expected Y").
+  // A 409 is a refusal (nothing was written), so the file is read again and the commit retried.
+  const put = await retryOnConflict(async () => {
+    const existing = await githubRequest(token, `${base}?ref=${encodeURIComponent(branch)}`, { method: "GET" });
+    const sha = existing.status === 200 && typeof existing.json.sha === "string" ? existing.json.sha : undefined;
+    return githubRequest(token, base, { method: "PUT", body: { message, branch, content: Buffer.from(content, "utf8").toString("base64"), ...(sha ? { sha } : {}) } });
+  });
   if (put.status !== 200 && put.status !== 201) throw new Error(`GitHub refused the commit (${put.status}): ${String(put.json.message ?? put.text).slice(0, 200)}`);
   const commit = (put.json.commit ?? {}) as { sha?: string; html_url?: string };
   return { sha: commit.sha ?? "", commitUrl: commit.html_url ?? "" };

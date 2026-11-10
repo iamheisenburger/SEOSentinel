@@ -229,6 +229,7 @@ import type * as lib_publisherProvisioning from "../lib/publisherProvisioning.js
 import type * as lib_researchGrouping from "../lib/researchGrouping.js";
 import type * as lib_researchPasses from "../lib/researchPasses.js";
 import type * as lib_researchSeeds from "../lib/researchSeeds.js";
+import type * as lib_retryOnConflict from "../lib/retryOnConflict.js";
 import type * as lib_revisionArtifact from "../lib/revisionArtifact.js";
 import type * as lib_safeMarkdownHtml from "../lib/safeMarkdownHtml.js";
 import type * as lib_safeOutbound from "../lib/safeOutbound.js";
@@ -524,6 +525,7 @@ declare const fullApi: ApiFromModules<{
   "lib/researchGrouping": typeof lib_researchGrouping;
   "lib/researchPasses": typeof lib_researchPasses;
   "lib/researchSeeds": typeof lib_researchSeeds;
+  "lib/retryOnConflict": typeof lib_retryOnConflict;
   "lib/revisionArtifact": typeof lib_revisionArtifact;
   "lib/safeMarkdownHtml": typeof lib_safeMarkdownHtml;
   "lib/safeOutbound": typeof lib_safeOutbound;
