@@ -439,7 +439,8 @@ test("a hosted address is attached by the hourly pass and is live only when it s
   const now = f.now();
   const siteId = f.add("sites", { domain: "acme.example", userId: "user_hosted", siteName: "Acme", createdAt: now, updatedAt: now,
     answers: { enabled: true, enabledAt: now, source: "signup", confirmedAt: now, autopublish: true, weeklyEmail: true, country: "US", lastSnapshotRunId: "answer_runs:0",
-      lastFullRunAt: now, lastRecheckAt: now, publishing: { target: "hosted", hostedDomain: "answers.acme.example", hostedStatus: "pending_dns", hostedCheckedAt: now - 3_600_000 } } });
+      lastFullRunAt: now, lastRecheckAt: now, growthPreparedAt: now,
+      publishing: { target: "hosted", hostedDomain: "answers.acme.example", hostedStatus: "pending_dns", hostedCheckedAt: now - 3_600_000 } } });
   f.add("answer_host_index", { host: "answers.acme.example", siteId, createdAt: now });
   f.add("account_plan_entitlements", { userId: "user_hosted", planFeatures: ["pentra_answers"], maxSites: 1, maxArticles: 0, syncVersion: 1, syncStartedAt: now });
 

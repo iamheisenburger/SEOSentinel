@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { Check, Copy, Download, ExternalLink, Film } from "lucide-react";
 import { api } from "../../../../convex/_generated/api";
@@ -9,25 +9,13 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { fieldStyles } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
-import { Panel, PanelSkeleton } from "@/components/answers/ui";
+import { Panel } from "@/components/answers/ui";
 import { userErrorMessage } from "@/lib/user-error";
 import { cx } from "@/lib/cx";
 
 type Extras = NonNullable<FunctionReturnType<typeof api.answerGrowthKit.extras>>;
 
-/** Get named, part two: comparison pages, answer videos and directory listings. */
-export function GetNamedKit({ siteId }: { siteId: string }) {
-  const extras = useQuery(api.answerGrowthKit.extras, { siteId: siteId as Id<"sites"> });
-  if (extras === undefined) return <PanelSkeleton lines={6} />;
-  if (extras === null) return null;
-  return (
-    <>
-      <Videos siteId={siteId} extras={extras} />
-      <Comparisons siteId={siteId} extras={extras} />
-      <Listings siteId={siteId} extras={extras} />
-    </>
-  );
-}
+export type GetNamedExtras = Extras;
 
 function useAct() {
   const { toast } = useToast();
@@ -49,7 +37,7 @@ function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) 
 
 // ── Comparison pages ──
 
-function Comparisons({ siteId, extras }: { siteId: string; extras: Extras }) {
+export function Comparisons({ siteId, extras }: { siteId: string; extras: Extras }) {
   const write = useMutation(api.answerGrowthKit.writeComparison);
   const act = useAct();
   const [busy, setBusy] = useState<string | null>(null);
@@ -82,7 +70,7 @@ function Comparisons({ siteId, extras }: { siteId: string; extras: Extras }) {
 
 // ── Answer videos ──
 
-function Videos({ siteId, extras }: { siteId: string; extras: Extras }) {
+export function Videos({ siteId, extras }: { siteId: string; extras: Extras }) {
   const make = useMutation(api.answerGrowthKit.makeVideo);
   const act = useAct();
   const [busy, setBusy] = useState<string | null>(null);
@@ -186,7 +174,7 @@ function VideoRow({ video }: { video: Extras["videos"][number] }) {
 
 // ── Directory listings ──
 
-function Listings({ siteId, extras }: { siteId: string; extras: Extras }) {
+export function Listings({ siteId, extras }: { siteId: string; extras: Extras }) {
   const make = useMutation(api.answerGrowthKit.makeListingKit);
   const setListing = useMutation(api.answerGrowthKit.setListing);
   const act = useAct();

@@ -9,7 +9,7 @@ import { ANSWERS_OWNER_DOMAINS, ANSWERS_PLAN, answersAllows, competitorFromDomai
 import { countryCode } from "./lib/aiAnswers";
 import { ANSWERS_WEEK_MS, siteAnswersAccess } from "./answers";
 
-const WEEK_MS = ANSWERS_WEEK_MS, RECHECK_GAP_MS = 22 * 3_600_000, SETUP_RETRY_MS = 6 * 3_600_000;
+const WEEK_MS = ANSWERS_WEEK_MS, RECHECK_GAP_MS = 22 * 3_600_000, SETUP_RETRY_MS = 6 * 3_600_000, GROWTH_EVERY_MS = 23 * 3_600_000;
 
 /** Pentra's own sites carry code-made settings; each version applies once.
  * 2 (Nov 8 2026): competitor names re-derived ("copy.ai" is Copy.ai, never the word "Copy"); dawnlist and LeadPilot publish
@@ -191,6 +191,13 @@ async function dispatchSite(ctx: MutationCtx, site: Doc<"sites">, now: number): 
     ];
     let delay = 0;
     for (const page of waiting) { await ctx.scheduler.runAfter(delay, internal.actions.answerPublish.publishPage, { pageId: page._id }); delay += 15_000; }
+  }
+  // P403: the Get named work, done for the owner once a day on the plan: threads found, replies and pitches prepared, then
+  // the listing, comparison pages and the week's video started (answerGrowthKit.autoWork). Nothing is posted or sent.
+  if (allows.weekly && now - (settings.growthPreparedAt ?? 0) >= GROWTH_EVERY_MS) {
+    await ctx.db.patch(site._id, { answers: { ...settings, growthPreparedAt: now } });
+    await ctx.scheduler.runAfter(0, internal.actions.answerGrowth.prepare, { siteId: site._id });
+    await ctx.scheduler.runAfter(5 * 60_000, internal.answerGrowthKit.autoWork, { siteId: site._id });
   }
   if (!allows.weekly || asking) return 0;
   const lastFull = settings.lastFullRunAt ?? 0;

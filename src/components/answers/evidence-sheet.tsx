@@ -14,6 +14,7 @@ import type { Check } from "@/lib/answers/types";
 import { ASSISTANTS } from "@/lib/product-facts";
 import { cx } from "@/lib/cx";
 import { ChipScroller } from "@/components/answers/ui";
+import { businessKey } from "@/lib/answers/business-key";
 
 /* ─── What a count opens ───────────────────────────────────────────────── */
 
@@ -242,7 +243,9 @@ function RunAnswers({ target, business, onPush }: { target: Extract<EvidenceTarg
   const data = useAnswersQuery("runAnswers", { runId: target.runId });
   const [assistant, setAssistant] = useState(target.assistant ?? "all");
   const [outcome, setOutcome] = useState<RunOutcome | "all">(target.outcome ?? "all");
-  const scoped = useMemo(() => (data ?? []).filter((c) => !target.competitor || c.competitorsNamed.includes(target.competitor)), [data, target.competitor]);
+  // P403: a business the answers recommend is found by any of its spellings, tracked or not.
+  const scoped = useMemo(() => (data ?? []).filter((c) => !target.competitor || c.competitorsNamed.includes(target.competitor)
+    || (c.businessesNamed ?? []).some((n) => businessKey(n) === businessKey(target.competitor!))), [data, target.competitor]);
   const filtered = useMemo(() => scoped.filter((c) => (assistant === "all" || c.assistant === assistant) && matchesOutcome(c, outcome))
     .sort((a, b) => b.askedAt - a.askedAt), [scoped, assistant, outcome]);
   if (data === undefined) return <ListSkeleton />;

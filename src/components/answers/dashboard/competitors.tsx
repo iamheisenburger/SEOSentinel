@@ -12,9 +12,10 @@ import { parseCompetitor, useCompetitorLookup } from "@/components/answers/onboa
 import { useAnswersActions, useAnswersQuery } from "@/lib/answers/backend";
 import { latestFullRun, rivalOnlyQuestions } from "@/lib/answers/derive";
 import { assistantLabel, num, plural, shortDate } from "@/lib/answers/format";
-import type { Check, Competitor, Overview, Run } from "@/lib/answers/types";
+import type { Check, Competitor, Overview } from "@/lib/answers/types";
 import { ASSISTANTS } from "@/lib/product-facts";
 import { userErrorMessage } from "@/lib/user-error";
+import { recommendedRows } from "@/lib/answers/business-key";
 import { cx } from "@/lib/cx";
 
 export function AnswersCompetitors({ siteId }: { siteId: string }) {
@@ -24,26 +25,20 @@ export function AnswersCompetitors({ siteId }: { siteId: string }) {
   return <CompetitorsBody overview={overview} />;
 }
 
-type ShareRow = { name: string; you: boolean; total: number; byAssistant: Record<string, number> };
-
-/** You and each competitor: answers naming them in the latest full run, per assistant (counted from its answer log). */
-function shareRows(run: Run, log: Check[] | null | undefined, businessName: string, competitors: Competitor[]): ShareRow[] | null {
-  if (!log) return null;
-  const answered = log.filter((c) => c.status === "answered");
-  const count = (test: (c: Check) => boolean) => Object.fromEntries(ASSISTANTS.map((a) => [a.id, answered.filter((c) => c.assistant === a.id && test(c)).length]));
-  const names = [...new Set([...competitors.map((c) => c.name), ...(run.competitors ?? []).map((c) => c.name)])];
-  const rows: ShareRow[] = [
-    { name: businessName, you: true, total: answered.filter((c) => c.named).length, byAssistant: count((c) => c.named) },
-    ...names.map((name) => ({ name, you: false, total: answered.filter((c) => c.competitorsNamed.includes(name)).length, byAssistant: count((c) => c.competitorsNamed.includes(name)) })),
-  ];
-  return rows.sort((a, b) => b.total - a.total || Number(b.you) - Number(a.you));
-}
-
 function CompetitorsBody({ overview }: { overview: Overview }) {
   const run = latestFullRun(overview.runs);
   const log = useRunLog(run?.runId);
   const open = useEvidence();
-  const rows = useMemo(() => (run ? shareRows(run, log, overview.site.name, overview.site.competitors) : null), [run, log, overview.site.name, overview.site.competitors]);
+  const rows = useMemo(() => (run && log ? recommendedRows(log, overview.site.name, overview.site.competitors, ASSISTANTS.map((a) => a.id)) : null),
+    [run, log, overview.site.name, overview.site.competitors]);
+  const actions = useAnswersActions();
+  const { toast } = useToast();
+  const track = async (name: string) => {
+    try {
+      await actions.confirmSetup({ siteId: overview.site.siteId, competitors: [...overview.site.competitors, { name }], country: overview.site.country });
+      toast(`Tracking ${name}. Its count joins every answer from the next run.`, "success");
+    } catch (e) { toast(userErrorMessage(e, "Pentra couldn't save that. Try again."), "error"); }
+  };
   const rivals = rows?.filter((r) => !r.you && r.total > 0) ?? [];
   const [selected, setSelected] = useState<string | null>(null);
   const focus = selected ?? rivals[0]?.name ?? null;
@@ -51,9 +46,9 @@ function CompetitorsBody({ overview }: { overview: Overview }) {
 
   return (
     <>
-      <ScreenHeader title="Competitors" meta={run ? `${plural(overview.site.competitors.length, "competitor")} tracked · answers from the run of ${shortDate(run.finishedAt ?? run.createdAt)}` : `${plural(overview.site.competitors.length, "competitor")} tracked`} />
+      <ScreenHeader title="Competitors" meta={run ? `Who the AI recommends · answers from the run of ${shortDate(run.finishedAt ?? run.createdAt)} · ${plural(overview.site.competitors.length, "competitor")} tracked` : `${plural(overview.site.competitors.length, "competitor")} tracked`} />
       {run ? (
-        <Panel title="Who the answers name" description="Answers naming each business in the latest full run, by assistant. Every count opens its answers.">
+        <Panel title="Who the AI recommends" description="Every business the answers recommend in the latest full run, by assistant, most first. Track one to watch it closely; every count opens its answers.">
           {rows === null ? (
             <PanelSkeleton lines={5} className="border-0 p-0" />
           ) : (
@@ -71,6 +66,10 @@ function CompetitorsBody({ overview }: { overview: Overview }) {
                     <tr key={`${row.name}-${row.you}`} className={cx("border-b border-border last:border-b-0", row.you && "bg-you-tint")}>
                       <th scope="row" className={cx("py-2.5 pr-4 text-[14px] font-normal", row.you ? "font-medium text-text" : "text-text-2")}>
                         <span className="pl-2">{row.name}</span>{row.you && <span className="ml-1.5 text-text-3">(you)</span>}
+                        {!row.you && !row.tracked && overview.site.competitors.length < 8 && (
+                          <button type="button" onClick={() => track(row.name)} className="ml-2 rounded-[4px] border border-border px-1.5 py-0.5 text-[11px] text-text-3 hover:border-border-strong hover:text-text">Track</button>
+                        )}
+                        {row.tracked && <span className="ml-2 text-[11px] text-text-3">tracked</span>}
                       </th>
                       <td className="py-2.5 pr-4 text-right">
                         <CountCell value={row.total} label={`${row.total} answers named ${row.name}`}

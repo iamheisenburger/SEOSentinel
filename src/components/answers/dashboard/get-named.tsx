@@ -9,7 +9,8 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { ChipScroller, Notice, Panel, PanelSkeleton, ScreenHeader } from "@/components/answers/ui";
-import { GetNamedKit } from "@/components/answers/dashboard/get-named-kit";
+import { Comparisons, Listings, Videos, type GetNamedExtras } from "@/components/answers/dashboard/get-named-kit";
+import { Tabs, useTabParam } from "@/components/ui/tabs";
 import { plural } from "@/lib/answers/format";
 import { userErrorMessage } from "@/lib/user-error";
 import { cx } from "@/lib/cx";
@@ -37,36 +38,86 @@ export function AnswersGetNamed({ siteId }: { siteId: string }) {
 
 type Plan = NonNullable<FunctionReturnType<typeof api.answerGrowth.plan>>;
 
+const TABS = ["today", "replies", "pitches", "videos", "listings", "comparisons", "research"] as const;
+type Tab = (typeof TABS)[number];
+
 function Body({ siteId, plan }: { siteId: string; plan: Plan }) {
   const prepare = useMutation(api.answerGrowth.prepare);
+  const extras = useQuery(api.answerGrowthKit.extras, { siteId: siteId as Id<"sites"> });
+  const pitches = useQuery(api.linkOpportunities.listForSite, { siteId: siteId as Id<"sites"> });
+  const [tab, setTab] = useTabParam<Tab>("tab", TABS, "today");
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const run = async () => {
     setBusy(true);
     try {
       await prepare({ siteId: siteId as Id<"sites"> });
-      toast("Preparing: who wins, pages to pitch and replies to post appear here as they're ready.", "success");
+      toast("Preparing new work now. It appears here as it's ready.", "success");
     } catch (e) {
       toast(userErrorMessage(e, "Pentra couldn't start. Try again."), "error");
     } finally { setBusy(false); }
   };
   const { you } = plan;
+  const replies = plan.posts.filter((p) => p.status === "todo").length;
+  const ready = pitches?.items.filter((o) => o.status === "ready" && !o.approved).length ?? 0;
+  const videos = extras?.videos.filter((v) => v.version === 2 && v.status === "ready").length ?? 0;
+  const making = extras?.videos.filter((v) => v.status === "writing" || v.status === "rendering").length ?? 0;
+  const listings = extras?.listing.directories.filter((d) => d.status === "todo").length ?? 0;
+  const comparisons = extras?.comparisons ?? [];
+  const toWrite = comparisons.filter((c) => !c.page || c.page.status === "not_written").length;
   return (
     <>
       <ScreenHeader title="Get named"
-        meta={`From ${plural(you.answered, "answer")} to ${plural(you.questions, "question")} over the last ${plan.windowDays} days`}
-        actions={<Button onClick={run} loading={busy} loadingLabel="Starting…">Prepare the work</Button>} />
-      <Notice tone="you">
-        <strong className="font-medium text-text">{you.name}</strong> is recommended in {you.named} of {you.answered} answers
-        ({you.questionsNamed} of {you.questions} questions). Its pages are read as a source in {you.cited}.
-        Assistants recommend the businesses the pages they read name: below is who wins now, those pages, and the work to get onto them.
-      </Notice>
-      <Recommended plan={plan} />
-      <SourcesPanel plan={plan} />
-      <Posts plan={plan} />
-      <Pitches siteId={siteId} />
-      <GetNamedKit siteId={siteId} />
+        meta={plan.preparedAt ? `New work is prepared every day · last ${new Date(plan.preparedAt).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}` : "New work is prepared every day"}
+        actions={<Button variant="secondary" onClick={run} loading={busy} loadingLabel="Starting…">Prepare more now</Button>} />
+      <div>
+        <Tabs label="Get named" idPrefix="named" active={tab} onChange={(id) => setTab(id as Tab)}
+          tabs={[{ id: "today", label: "Today" }, { id: "replies", label: "Replies", count: replies }, { id: "pitches", label: "Pitches", count: ready },
+            { id: "videos", label: "Videos", count: videos }, { id: "listings", label: "Listings", count: listings },
+            { id: "comparisons", label: "Comparisons", count: toWrite }, { id: "research", label: "Where AI looks" }]} />
+        <div id={`named-panel-${tab}`} role="tabpanel" aria-labelledby={`named-tab-${tab}`} className="mt-5 flex flex-col gap-5">
+          {tab === "today" && (
+            <>
+              <Notice tone="you">
+                <strong className="font-medium text-text">{you.name}</strong> is recommended in <strong className="font-medium text-text">{you.named} of {you.answered}</strong> AI
+                answers so far. AI recommends the businesses that the pages it reads name. Each job below puts {you.name} on those pages.
+              </Notice>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <TodoCard count={replies} unit="replies to post" what="Reddit and Quora threads the AI reads. Copy, post, mark posted." onOpen={() => setTab("replies")} />
+                <TodoCard count={ready} unit="pitches to send" what="Emails to writers of the articles the AI quotes. Read, then Send." onOpen={() => setTab("pitches")} />
+                <TodoCard count={videos} unit={making ? `videos ready · ${making} being made` : "videos to upload"} what="Finished one-minute videos. Download, upload to YouTube." onOpen={() => setTab("videos")} />
+                <TodoCard count={listings} unit="directories to join" what="Sign up and paste the listing Pentra wrote." onOpen={() => setTab("listings")} />
+                <TodoCard count={comparisons.filter((c) => c.page?.status === "published").length} unit={`of ${comparisons.length} comparison pages live`}
+                  what="Pages beside the rivals the AI recommends. Pentra writes and publishes them." onOpen={() => setTab("comparisons")} done />
+                <TodoCard count={plan.recommended.length} unit="businesses the AI recommends" what={plan.recommended.slice(0, 3).map((r) => r.name).join(", ") || "Who wins today, and the pages the AI reads."}
+                  onOpen={() => setTab("research")} done />
+              </div>
+            </>
+          )}
+          {tab === "replies" && <Posts plan={plan} />}
+          {tab === "pitches" && <Pitches siteId={siteId} />}
+          {tab === "videos" && (extras ? <Videos siteId={siteId} extras={extras as GetNamedExtras} /> : <PanelSkeleton lines={5} />)}
+          {tab === "listings" && (extras ? <Listings siteId={siteId} extras={extras as GetNamedExtras} /> : <PanelSkeleton lines={5} />)}
+          {tab === "comparisons" && (extras ? <Comparisons siteId={siteId} extras={extras as GetNamedExtras} /> : <PanelSkeleton lines={5} />)}
+          {tab === "research" && <><Recommended plan={plan} /><SourcesPanel plan={plan} /></>}
+        </div>
+      </div>
     </>
+  );
+}
+
+/** One job on the Today tab: how many are waiting, what it is in one line, and the way in. */
+function TodoCard({ count, unit, what, onOpen, done }: { count: number; unit: string; what: string; onOpen: () => void; done?: boolean }) {
+  return (
+    <button type="button" onClick={onOpen}
+      className="group flex flex-col gap-2 rounded-card border border-border bg-surface-1 p-4 text-left transition-colors duration-[var(--d-instant)] hover:border-border-strong hover:bg-surface-2">
+      <div className="flex items-baseline gap-2">
+        <span className={cx("font-mono text-[26px] font-medium tabular-nums", count > 0 && !done ? "text-text" : "text-text-3")}>{count}</span>
+        <span className="text-[13px] text-text-2">{unit}</span>
+      </div>
+      <p className="text-[13px] leading-[19px] text-text-3">{what}</p>
+      <span className="text-[12px] font-medium text-text-2 group-hover:text-text">Open →</span>
+    </button>
   );
 }
 

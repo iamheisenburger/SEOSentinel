@@ -426,7 +426,7 @@ test("questions, pages, citations, competitors, settings and billing render from
   assert.match(citations, new RegExp(`${answersCiting} answers cited your site · all ${answersCiting} cited a Pentra page`));
   assert.doesNotMatch(citations, /pages cited|\d+ citations ·/);
   assert.match(text(harness("new-plan~paid", "dashboard/citations").html), /No citations yet/);
-  assert.match(text(harness("dashboard~paid", "dashboard/competitors").html), /Who the answers name/);
+  assert.match(text(harness("dashboard~paid", "dashboard/competitors").html), /Who the AI recommends/);
   const settings = harness("dashboard~paid", "dashboard/settings").html;
   assert.match(text(settings), /answers\.kettlewooddecks\.com/);
   assert.match(text(settings), /Publishing to kettlewood\/kettlewooddecks\.com on GitHub/);

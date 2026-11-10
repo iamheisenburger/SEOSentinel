@@ -2,7 +2,7 @@
  * buttons for each. Every model call runs in convex/actions/answerGrowthKit.ts with spend held first; nothing is posted,
  * uploaded or submitted without the owner. */
 import { ConvexError, v } from "convex/values";
-import { internalMutation, internalQuery, mutation, query, type QueryCtx } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { answersEnabled } from "./lib/answersAccess";
@@ -31,14 +31,92 @@ async function requireSite(ctx: QueryCtx, siteId: Id<"sites">) {
 }
 const monthStart = () => Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1);
 
+/** The rivals the answers recommend whose own site they cite, most-named first. */
+function rivalsFrom(site: Doc<"sites">, checks: readonly Doc<"answer_checks">[]) {
+  const answered = checks.filter((c) => c.status === "answered");
+  return rivalPairs(recommendedInstead(answered, businessOf(site), 25), sourceMap(checks, [], 200).map((s) => s.domain), site.domain, 6);
+}
+const recentChecks = (ctx: QueryCtx, siteId: Id<"sites">) =>
+  ctx.db.query("answer_checks").withIndex("by_site_asked", (q) => q.eq("siteId", siteId).gte("askedAt", Date.now() - WINDOW_MS)).take(800);
+
+/** A comparison page started for one rival (shared by the owner's button and the daily work). */
+async function startComparison(ctx: MutationCtx, site: Doc<"sites">, name: string, domain: string) {
+  const rivalDomain = hostOf(domain);
+  const rivalName = name.replace(/\s+/g, " ").trim().slice(0, 80);
+  if (!rivalName || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(rivalDomain) || rivalDomain === hostOf(site.domain)) throw new ConvexError("That competitor's name or address doesn't look right.");
+  const pages = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", site._id)).take(1000);
+  if (pages.some((p) => p.comparisonWith && hostOf(p.comparisonWith.domain) === rivalDomain && LIVE_PAGE.has(p.status))) throw new ConvexError("That comparison page already exists.");
+  const thisMonth = pages.filter((p) => p.createdAt >= monthStart()).length;
+  if (thisMonth >= ANSWER_PAGES_PER_MONTH + 5) throw new ConvexError(`This month's ${ANSWER_PAGES_PER_MONTH} pages are written. More next month.`);
+  const business = businessOf(site);
+  const question = `${business.name} vs ${rivalName}`;
+  const now = Date.now();
+  // The page's question is never asked: a question naming the business would count it as named in every answer.
+  const questionId = await ctx.db.insert("answer_questions", { siteId: site._id, question, key: `${questionKey(question)} comparison`, intent: "comparison",
+    source: "comparison", status: "removed", createdAt: now });
+  const pageId = await ctx.db.insert("answer_pages", { siteId: site._id, questionId, question, status: "writing", title: question,
+    slug: uniqueSlug(question, new Set(pages.map((p) => p.slug))), metaDescription: "", markdown: "", facts: [], sources: [], issues: [], version: 1, contentHash: "",
+    writerModel: "", costMicroUsd: 0, createdAt: now, updatedAt: now, citations: 0, comparisonWith: { name: rivalName, domain: rivalDomain } });
+  await ctx.db.patch(questionId, { pageId });
+  await ctx.scheduler.runAfter(0, internal.actions.answerGrowthKit.writeComparison, { pageId });
+  return pageId;
+}
+
+/** An answer video started for one question (shared by the owner's button and the daily work). */
+async function startVideo(ctx: MutationCtx, siteId: Id<"sites">, question: string) {
+  const q = question.replace(/\s+/g, " ").trim().slice(0, 200);
+  if (q.length < 8) throw new ConvexError("Pick a question for the video.");
+  const videos = await ctx.db.query("answer_videos").withIndex("by_site", (x) => x.eq("siteId", siteId)).take(400);
+  if (videos.filter((x) => x.status === "writing" || x.status === "rendering").length >= 3) throw new ConvexError("Three videos are being made. Start another when one is ready.");
+  if (videos.filter((x) => x.createdAt >= monthStart()).length >= VIDEOS_PER_MONTH) throw new ConvexError(`This month's ${VIDEOS_PER_MONTH} videos are made. More next month.`);
+  const now = Date.now();
+  const videoId = await ctx.db.insert("answer_videos", { siteId, question: q, status: "writing", version: 2, createdAt: now, updatedAt: now, costMicroUsd: 0 });
+  await ctx.scheduler.runAfter(0, internal.actions.answerGrowthKit.makeVideoKit, { videoId });
+  return videoId;
+}
+
+/** The directory listing written (shared by the owner's button and the daily work). */
+async function startListingKit(ctx: MutationCtx, siteId: Id<"sites">) {
+  const kitId = await ctx.db.insert("answer_listing_kits", { siteId, status: "writing", createdAt: Date.now(), costMicroUsd: 0 });
+  await ctx.scheduler.runAfter(0, internal.actions.answerGrowthKit.makeListingKit, { kitId });
+  return kitId;
+}
+
+/** P403, done for the owner every day (from the hourly dispatcher, after the day's preparation): the listing written once,
+ * one new comparison page a day until the three most-recommended rivals have one, and one video a week for the question
+ * whose answers lean most on video. Anything that can't start today is simply tried tomorrow. */
+export const autoWork = internalMutation({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
+  const site = await ctx.db.get(siteId);
+  if (!site || !answersEnabled(site)) return { started: [] as string[] };
+  const started: string[] = [];
+  const now = Date.now();
+  const kit = await ctx.db.query("answer_listing_kits").withIndex("by_site", (q) => q.eq("siteId", siteId)).order("desc").first();
+  if (!kit || (kit.status === "failed" && now - kit.createdAt > 86_400_000)) { await startListingKit(ctx, siteId); started.push("listing"); }
+  const checks = await recentChecks(ctx, siteId);
+  const pages = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", siteId)).take(1000);
+  const compared = pages.filter((p) => p.comparisonWith && p.status !== "not_written");
+  if (compared.length < 3) {
+    const next = rivalsFrom(site, checks).find((r) => !pages.some((p) => p.comparisonWith && hostOf(p.comparisonWith.domain) === r.domain));
+    if (next) { try { await startComparison(ctx, site, next.name, next.domain); started.push(`comparison:${next.domain}`); } catch { /* tomorrow */ } }
+  }
+  const videos = await ctx.db.query("answer_videos").withIndex("by_site", (q) => q.eq("siteId", siteId)).take(400);
+  const lastVideo = Math.max(0, ...videos.filter((x) => x.status !== "failed").map((x) => x.createdAt));
+  if (now - lastVideo >= 7 * 86_400_000) {
+    const made = new Set(videos.map((x) => x.question));
+    const next = videoQuestions(checks.filter((c) => c.status === "answered"), 20).find((q) => !made.has(q.question));
+    if (next) { try { await startVideo(ctx, siteId, next.question); started.push("video"); } catch { /* tomorrow */ } }
+  }
+  return { started };
+} });
+
 export const extras = query({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }) => {
   const site = await ownedSite(ctx, siteId);
   if (!site) return null;
-  const checks = await ctx.db.query("answer_checks").withIndex("by_site_asked", (q) => q.eq("siteId", siteId).gte("askedAt", Date.now() - WINDOW_MS)).take(800);
+  const checks = await recentChecks(ctx, siteId);
   const answered = checks.filter((c) => c.status === "answered");
   const business = businessOf(site);
   const sources = sourceMap(checks, [], 200);
-  const rivals = rivalPairs(recommendedInstead(answered, business, 25), sources.map((s) => s.domain), site.domain, 6);
+  const rivals = rivalsFrom(site, checks);
   const pages = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", siteId)).take(600);
   const comparisons = rivals.map((r) => {
     const page = pages.filter((p) => p.comparisonWith && hostOf(p.comparisonWith.domain) === r.domain).sort((a, b) => b.createdAt - a.createdAt)[0];
@@ -80,25 +158,7 @@ export const extras = query({ args: { siteId: v.id("sites") }, handler: async (c
 
 export const writeComparison = mutation({ args: { siteId: v.id("sites"), name: v.string(), domain: v.string() }, handler: async (ctx, { siteId, name, domain }) => {
   const site = await requireSite(ctx, siteId);
-  const rivalDomain = hostOf(domain);
-  const rivalName = name.replace(/\s+/g, " ").trim().slice(0, 80);
-  if (!rivalName || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(rivalDomain) || rivalDomain === hostOf(site.domain)) throw new ConvexError("That competitor's name or address doesn't look right.");
-  const pages = await ctx.db.query("answer_pages").withIndex("by_site_status", (q) => q.eq("siteId", siteId)).take(1000);
-  if (pages.some((p) => p.comparisonWith && hostOf(p.comparisonWith.domain) === rivalDomain && LIVE_PAGE.has(p.status))) throw new ConvexError("That comparison page already exists.");
-  const thisMonth = pages.filter((p) => p.createdAt >= monthStart()).length;
-  if (thisMonth >= ANSWER_PAGES_PER_MONTH + 5) throw new ConvexError(`This month's ${ANSWER_PAGES_PER_MONTH} pages are written. More next month.`);
-  const business = businessOf(site);
-  const question = `${business.name} vs ${rivalName}`;
-  const now = Date.now();
-  // The page's question is never asked: a question naming the business would count it as named in every answer.
-  const questionId = await ctx.db.insert("answer_questions", { siteId, question, key: `${questionKey(question)} comparison`, intent: "comparison", source: "comparison",
-    status: "removed", createdAt: now });
-  const pageId = await ctx.db.insert("answer_pages", { siteId, questionId, question, status: "writing", title: question, slug: uniqueSlug(question, new Set(pages.map((p) => p.slug))),
-    metaDescription: "", markdown: "", facts: [], sources: [], issues: [], version: 1, contentHash: "", writerModel: "", costMicroUsd: 0, createdAt: now, updatedAt: now,
-    citations: 0, comparisonWith: { name: rivalName, domain: rivalDomain } });
-  await ctx.db.patch(questionId, { pageId });
-  await ctx.scheduler.runAfter(0, internal.actions.answerGrowthKit.writeComparison, { pageId });
-  return { pageId };
+  return { pageId: await startComparison(ctx, site, name, domain) };
 } });
 
 export const comparisonContext = internalQuery({ args: { pageId: v.id("answer_pages") }, handler: async (ctx, { pageId }) => {
@@ -119,15 +179,7 @@ export const comparisonContext = internalQuery({ args: { pageId: v.id("answer_pa
 
 export const makeVideo = mutation({ args: { siteId: v.id("sites"), question: v.string() }, handler: async (ctx, { siteId, question }) => {
   await requireSite(ctx, siteId);
-  const q = question.replace(/\s+/g, " ").trim().slice(0, 200);
-  if (q.length < 8) throw new ConvexError("Pick a question for the video.");
-  const videos = await ctx.db.query("answer_videos").withIndex("by_site", (x) => x.eq("siteId", siteId)).take(400);
-  if (videos.filter((x) => x.status === "writing" || x.status === "rendering").length >= 3) throw new ConvexError("Three videos are being made. Start another when one is ready.");
-  if (videos.filter((x) => x.createdAt >= monthStart()).length >= VIDEOS_PER_MONTH) throw new ConvexError(`This month's ${VIDEOS_PER_MONTH} videos are made. More next month.`);
-  const now = Date.now();
-  const videoId = await ctx.db.insert("answer_videos", { siteId, question: q, status: "writing", version: 2, createdAt: now, updatedAt: now, costMicroUsd: 0 });
-  await ctx.scheduler.runAfter(0, internal.actions.answerGrowthKit.makeVideoKit, { videoId });
-  return { videoId };
+  return { videoId: await startVideo(ctx, siteId, question) };
 } });
 
 export const setVideo = mutation({ args: { videoId: v.id("answer_videos"), status: v.union(v.literal("ready"), v.literal("uploaded"), v.literal("skipped")),
@@ -206,9 +258,7 @@ export const makeListingKit = mutation({ args: { siteId: v.id("sites") }, handle
   await requireSite(ctx, siteId);
   const last = await ctx.db.query("answer_listing_kits").withIndex("by_site", (q) => q.eq("siteId", siteId)).order("desc").first();
   if (last && Date.now() - last.createdAt < 3_600_000 && last.status !== "failed") throw new ConvexError("The listing was written less than an hour ago.");
-  const kitId = await ctx.db.insert("answer_listing_kits", { siteId, status: "writing", createdAt: Date.now(), costMicroUsd: 0 });
-  await ctx.scheduler.runAfter(0, internal.actions.answerGrowthKit.makeListingKit, { kitId });
-  return { kitId };
+  return { kitId: await startListingKit(ctx, siteId) };
 } });
 
 export const setListing = mutation({ args: { siteId: v.id("sites"), domain: v.string(), name: v.string(),
