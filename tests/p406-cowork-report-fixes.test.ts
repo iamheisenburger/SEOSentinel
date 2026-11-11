@@ -110,3 +110,11 @@ test("a waiting reply written from the title alone is written again from its thr
   const action = readFileSync("convex/actions/answerGrowth.ts", "utf8");
   assert.match(action, /if \(!thread\.postId \|\| read\.text\) \{/, "no second title-only draft is paid for");
 });
+
+test("P407: the preparation starts no new thread past its time limit, well inside an action's ten minutes", () => {
+  const action = readFileSync("convex/actions/answerGrowth.ts", "utf8");
+  const limit = Number(/const PREPARE_TIME_MS = (\d+) \* 60_000;/.exec(action)?.[1]);
+  assert.ok(limit > 0 && limit <= 7, `${limit} minutes`);
+  assert.ok(action.indexOf("const deadline = Date.now() + PREPARE_TIME_MS;") < action.indexOf("internal.answerGrowth.prepareContext"), "the clock starts with the action");
+  assert.match(action, /for \(const thread of work\) \{\n    if \(Date\.now\(\) > deadline\) break;/);
+});

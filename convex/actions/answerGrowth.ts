@@ -19,6 +19,9 @@ import { structuredToolChoice } from "../lib/toolChoice";
 const anthropic = () => new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 2, timeout: 120_000, fetch });
 /** Listing one answer's businesses: ~500 tokens in, ~40 out of Haiku. */
 const LIST_HOLD_MICRO_USD = 200;
+/** P407: the preparation starts no new thread after this long (an action has ten minutes; a thread is read and written
+ * in about twenty seconds, and up to eighteen are due since P406); the rest wait for the next preparation. */
+const PREPARE_TIME_MS = 6 * 60_000;
 
 /** One treg call (GET with a query, or POST with a body): the reply and its reported charge. A call whose answer was lost
  * is charged at its bound. Never throws. */
@@ -58,6 +61,7 @@ async function threadText(thread: { url: string; title: string | null }, siteId:
 }
 
 export const prepare = internalAction({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }): Promise<{ listed: number; drafted: number; redrafted: number }> => {
+  const deadline = Date.now() + PREPARE_TIME_MS;
   const context = await ctx.runQuery(internal.answerGrowth.prepareContext, { siteId });
   if (!context || !process.env.ANTHROPIC_API_KEY) return { listed: 0, drafted: 0, redrafted: 0 };
   const client = anthropic();
@@ -125,6 +129,7 @@ export const prepare = internalAction({ args: { siteId: v.id("sites") }, handler
     .slice(0, 12);
   const work = [...toDraft, ...context.redraft.map((p) => ({ ...p, foundBy: "cited" as const }))];
   for (const thread of work) {
+    if (Date.now() > deadline) break;
     const hold = await ctx.runMutation(internal.answers.holdSpend, { siteId, purpose: "growth_post", microUsd: POST_HOLD_MICRO_USD });
     if (!hold.ok) break;
     let cost = 0, sent = false;
