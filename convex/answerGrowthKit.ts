@@ -153,7 +153,9 @@ export const extras = query({ args: { siteId: v.id("sites") }, handler: async (c
         features: kit.features ?? [], useCases: kit.useCases ?? [], pricing: kit.pricing ?? "", audience: kit.audience ?? "", faqs: kit.faqs ?? [] } : null,
         createdAt: kit.createdAt } : null,
       directories,
-      counts: { live: directories.filter((d) => d.status === "live").length, submitted: directories.filter((d) => d.status === "submitted").length, total: directories.length },
+      // P406: "to do" counts the directories not yet marked live, submitted or skipped (it showed the list's length, which never moved).
+      counts: { live: directories.filter((d) => d.status === "live").length, submitted: directories.filter((d) => d.status === "submitted").length,
+        skipped: directories.filter((d) => d.status === "skipped").length, todo: directories.filter((d) => d.status === "todo").length, total: directories.length },
     },
   };
 } });

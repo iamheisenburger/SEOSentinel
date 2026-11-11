@@ -88,6 +88,45 @@ export function redditThreadText(json: unknown): string | null {
     replies.length ? `Top replies so far:\n${replies.join("\n")}` : ""].filter(Boolean).join("\n");
 }
 
+/** P406: Reddit refuses Pentra's servers (every one of the first 55 drafts was written from the title alone), so a Reddit
+ * thread is read through treg: the post and its replies by the thread's address, about $0.002 a thread. */
+export const REDDIT_THREAD_ENDPOINT = "scrapecreators.x.v1-reddit-post-comments";
+export const REDDIT_THREAD_MAX_MICRO_USD = 5_000;
+/** A Quora or forum page through treg's page reader when the site blocks direct reads (Quora always does). */
+export const THREAD_PAGE_MAX_MICRO_USD = 10_000;
+/** Drafts written from the title alone that are written again from the thread, per preparation (the next ones to post). */
+export const REDRAFTS_PER_PREPARATION = 6;
+
+/** The thread as text from treg's Reddit reply (`post` and `comments[]`, replies nested under `replies.items`): the post,
+ * then the most-upvoted top-level replies. */
+export function scrapedRedditThreadText(json: unknown): string | null {
+  const data = json as { post?: { title?: unknown; selftext?: unknown; subreddit?: unknown }; comments?: unknown } | null;
+  const post = data?.post;
+  if (!post || typeof post.title !== "string" || !post.title.trim()) return null;
+  const comments = (Array.isArray(data!.comments) ? data!.comments : []) as Array<{ body?: unknown; score?: unknown }>;
+  const replies = comments.filter((c) => typeof c?.body === "string" && c.body.trim() && !/^\[(deleted|removed)\]$/i.test(c.body.trim()))
+    .sort((a, b) => (typeof b.score === "number" ? b.score : 0) - (typeof a.score === "number" ? a.score : 0)).slice(0, 6)
+    .map((c) => `- ${(c.body as string).replace(/\s+/g, " ").trim().slice(0, 500)}`);
+  const selftext = typeof post.selftext === "string" ? post.selftext.trim() : "";
+  return [`Subreddit: r/${typeof post.subreddit === "string" ? post.subreddit : "?"}`, `Title: ${post.title.trim()}`, selftext ? `Post: ${selftext.slice(0, 2500)}` : "",
+    replies.length ? `Top replies so far:\n${replies.join("\n")}` : ""].filter(Boolean).join("\n");
+}
+
+const TITLE_STOP = new Set(["the", "and", "for", "with", "what", "how", "why", "are", "you", "your", "can", "does", "should", "best", "way", "that", "this", "from", "have",
+  "quora", "reddit", "into", "about", "who", "which", "when", "where", "there", "their", "them", "they", "any", "some"]);
+const titleWords = (title: string) => [...new Set(title.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, " ").split(/\s+/).filter((w) => w.length > 2 && !TITLE_STOP.has(w)))];
+
+/** A Quora or forum page as thread text, only when the page is the thread: it carries most of the thread title's words
+ * (a sign-in wall, a bot check or another page doesn't). */
+export function forumThreadText(title: string | null, pageText: string): string | null {
+  const text = pageText.replace(/\s+/g, " ").trim();
+  if (text.length < 200) return null;
+  const words = titleWords((title ?? "").replace(/\s[-|–]\s[^-|–]+$/, ""));
+  const lower = text.toLowerCase();
+  if (!words.length || words.filter((w) => lower.includes(w)).length < Math.ceil(words.length * 0.6)) return null;
+  return [`Title: ${(title ?? "").trim()}`, `The thread's page (question and answers, as read):\n${text.slice(0, 3000)}`].join("\n");
+}
+
 export type BusinessFacts = { name: string; domain: string; summary?: string; features?: readonly string[]; pricing?: string; audience?: string };
 
 export const POST_MODEL = "claude-sonnet-5-5";

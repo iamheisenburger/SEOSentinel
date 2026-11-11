@@ -15,12 +15,12 @@ import { internal } from "../_generated/api";
 import { v } from "convex/values";
 import type { Id } from "../_generated/dataModel";
 import { safeFetchPublicText } from "../lib/safeOutbound";
-import { contactDiscoveryUrls, extractContactCandidates, selectBestContact } from "../lib/outreachContacts";
+import { contactDiscoveryUrls, extractContactCandidates, isContactableAddress, isDeskAddress, selectBestContact } from "../lib/outreachContacts";
 import { requestsOutreachOptOut } from "../lib/outreachInbound";
 import { decryptOutreachCredentials, outreachCredentialKeyConfig, type EncryptedOutreachCredentials } from "../lib/outreachCredentialEncryption";
 import { classifySmtpFailure, smtpTransportOptions } from "../lib/outreachSmtp";
-import { aiCitedPages, euAddressIn, recipientCountryAllowed, checkPitch, emailFooter, followUpEmail, linkToSite, nextSendAt, pageIntersectionRequest, parsePageIntersection, pitchRequest, pitchTarget,
-  readListingPage, PITCH_MAX_TOKENS, PITCH_TOOL, type ListingPage } from "../lib/linkOutreach";
+import { aiCitedPages, euAddressIn, recipientCountryAllowed, checkPitch, emailFooter, followUpEmail, linkToSite, nextSendAt, nextTurnAt, pageIntersectionRequest, parsePageIntersection,
+  pitchRequest, pitchTarget, readListingPage, PITCH_MAX_TOKENS, PITCH_TOOL, type ListingPage } from "../lib/linkOutreach";
 import { competitorPairs, linkCompetitors } from "../lib/linkOpportunities";
 import { meterDataForSeoCost, pageIntersection } from "./seoData";
 import { BUYER_FIT_MODEL, buyerFitCostMicroUsd } from "../lib/topicFit";
@@ -231,7 +231,10 @@ export const sendNext = internalAction({ args: { siteId: v.id("sites") }, handle
     const fresh = events.length ? await ctx.runQuery(internal.linkOpportunities.sendContext, { siteId }) : turn;
     const next = fresh?.next;
     const at = nextSendAt(now, turn.sentAt);
-    if (next && at <= now + 60_000) {
+    // P406: an email prepared for a desk address (support, legal, no-reply) or an escape's leftover is set aside, never sent.
+    if (next && next.kind === "first" && (!isContactableAddress(next.to) || isDeskAddress(next.to))) {
+      await ctx.runMutation(internal.linkOpportunities.setAsideDesk, { siteId, id: next.id });
+    } else if (next && at <= now + 60_000) {
       const domain = turn.mailbox.email.split("@")[1];
       const messageId = `<pentra-link-${randomUUID()}@${domain}>`;
       // The send is recorded as attempted before it goes out: an attempt with no receipt is never sent again.
@@ -258,10 +261,10 @@ export const sendNext = internalAction({ args: { siteId: v.id("sites") }, handle
       }
     }
   } catch (turnError) { error = turnError instanceof Error ? turnError.message : String(turnError); }
-  // The next turn: at once (paced) when an email is waiting, else when the next follow-up falls due, else asleep until new work.
+  // The next turn: at once (paced) when an email is waiting, else when the next follow-up falls due, and within six hours
+  // while an email waits for an answer (P406); else asleep until new work.
   const after = await ctx.runQuery(internal.linkOpportunities.sendContext, { siteId });
-  const nextAt = !after ? null : after.next ? nextSendAt(Date.now(), after.sentAt)
-    : after.nextFollowUpAt !== null ? nextSendAt(Math.max(Date.now(), after.nextFollowUpAt), after.sentAt) : null;
+  const nextAt = !after ? null : nextTurnAt(Date.now(), { sentAt: after.sentAt, hasNext: Boolean(after.next), nextFollowUpAt: after.nextFollowUpAt, awaiting: after.awaiting });
   await ctx.runMutation(internal.linkOpportunities.sendTurnDone, { siteId, nextAt, ...(error ? { error: error.slice(0, 300) } : {}) });
   return { sent, nextAt, ...(error ? { error: error.slice(0, 200) } : {}) };
 } });

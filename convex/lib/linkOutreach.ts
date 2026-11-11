@@ -280,6 +280,30 @@ export function nextSendAt(now: number, sentAt: readonly number[]): number {
   return t;
 }
 
+/** P406: every send the caps count: the emails sent and the ones going out at this moment (an attempt not yet confirmed).
+ * The caps used to count only confirmed sends, so two send turns running at once both saw room and both sent (two
+ * emails in the same minute, four in a day, on Nov 10). */
+export function sendTimes(rows: ReadonlyArray<{ sends?: ReadonlyArray<{ at: number }>; pendingSend?: { at: number } }>, now: number): number[] {
+  return rows.flatMap((o) => [...(o.sends ?? []).map((s) => s.at), ...(o.pendingSend ? [o.pendingSend.at] : [])]).filter((t) => now - t < 8 * DAY);
+}
+
+/** Whether an email may go out now (within the minute a send turn allows itself): inside the window, spaced, under the caps. */
+export const sendAllowedNow = (now: number, sentAt: readonly number[]) => nextSendAt(now, sentAt) <= now + 60_000;
+
+/** P406: while an email waits for an answer, the inbox is read at least this often, so a reply, bounce or opt-out shows
+ * within hours even when nothing is due to go out (draft mode, weekends, the days before a follow-up). */
+export const INBOX_READ_EVERY_MS = 6 * 3_600_000;
+/** Answers are looked for this long after an address was last written to. */
+export const INBOX_WATCH_DAYS = 30;
+
+/** When the sender wakes next: for the next email (paced), else for the next follow-up, and in any case to read the inbox
+ * while an email waits for an answer; null when there is nothing to send or wait for. */
+export function nextTurnAt(now: number, turn: { sentAt: readonly number[]; hasNext: boolean; nextFollowUpAt: number | null; awaiting: boolean }): number | null {
+  const send = turn.hasNext ? nextSendAt(now, turn.sentAt) : turn.nextFollowUpAt !== null ? nextSendAt(Math.max(now, turn.nextFollowUpAt), turn.sentAt) : null;
+  const inbox = turn.awaiting ? now + INBOX_READ_EVERY_MS : null;
+  return send === null ? inbox : inbox === null ? send : Math.min(send, inbox);
+}
+
 /** A first email whose follow-up is due: sent LINK_FOLLOW_UP_DAYS ago, one send only, and no reply, bounce or opt-out. */
 export function followUpDue(o: { sends?: ReadonlyArray<{ at: number; kind: string }>; repliedAt?: number; bouncedAt?: number; optedOutAt?: number }, now: number): boolean {
   const sends = o.sends ?? [];

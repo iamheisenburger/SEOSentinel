@@ -65,6 +65,48 @@ const NON_CONTACT_LOCAL_PARTS = new Set([
   "sentry",
 ]);
 
+/**
+ * P406: customer support desks. Their inbox is a ticket queue for customers'
+ * problems, so a link request there is never read by anyone who edits a page
+ * (pitches went to support desks on Nov 10). Compared with dots, dashes and
+ * underscores removed, so "customer.support" and "help-desk" match too.
+ */
+const SUPPORT_DESKS = new Set([
+  "support",
+  "help",
+  "helpdesk",
+  "techsupport",
+  "customersupport",
+  "customerservice",
+  "customercare",
+  "customersuccess",
+  "care",
+  "service",
+]);
+
+/** True for an address that reaches a desk rather than a person who edits pages. */
+export function isDeskAddress(email: string): boolean {
+  const localPart = normalizeEmail(email).split("@")[0] ?? "";
+  return NON_CONTACT_LOCAL_PARTS.has(localPart) || SUPPORT_DESKS.has(localPart.replace(/[._-]+/g, ""));
+}
+
+/**
+ * P406: page source spells characters in escaped forms (JSON `>`, `\x3e`,
+ * `&#62;`, `&gt;`, `&commat;`). Scanned raw, an escape glues itself to the
+ * address beside it (one such malformed address was emailed on Nov 10), so the
+ * source is decoded before any address is read from it.
+ */
+export function decodeForScan(html: string): string {
+  const char = (code: number) => (Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : " ");
+  const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " ", commat: "@", period: ".", sol: "/", colon: ":" };
+  return String(html || "")
+    .replace(/\\+u([0-9a-fA-F]{4})/g, (_m, hex: string) => char(parseInt(hex, 16)))
+    .replace(/\\+x([0-9a-fA-F]{2})/g, (_m, hex: string) => char(parseInt(hex, 16)))
+    .replace(/&#x([0-9a-fA-F]{1,6});?/g, (_m, hex: string) => char(parseInt(hex, 16)))
+    .replace(/&#(\d{1,7});?/g, (_m, dec: string) => char(Number(dec)))
+    .replace(/&(amp|lt|gt|quot|apos|nbsp|commat|period|sol|colon);/gi, (_m, name: string) => named[name.toLowerCase()] ?? " ");
+}
+
 /** Hosts that appear in page source but never belong to the site's own team. */
 const NON_CONTACT_DOMAINS = [
   "example.com",
@@ -91,7 +133,7 @@ const PREFERRED_LOCAL_PARTS: Array<{ match: RegExp; role: string; bonus: number 
   { match: /^press|^media|^pr$/, role: "press", bonus: 25 },
   { match: /^web(master)?$/, role: "webmaster", bonus: 25 },
   { match: /^marketing|^growth/, role: "marketing", bonus: 20 },
-  { match: /^hello|^hi$|^contact|^info|^team|^support/, role: "general", bonus: 10 },
+  { match: /^hello|^hi$|^contact|^info|^team/, role: "general", bonus: 10 },
 ];
 
 const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}/g;
@@ -195,6 +237,8 @@ export function isContactableAddress(email: string): boolean {
   if (/\.(png|jpe?g|gif|svg|webp|css|js|woff2?)$/i.test(normalized)) return false;
   const [localPart, host] = normalized.split("@");
   if (NON_CONTACT_LOCAL_PARTS.has(localPart)) return false;
+  // An escape's leftover ("u003e" from a JSON-escaped ">") is never part of a real address.
+  if (/^u00[0-9a-f]{2}/.test(localPart)) return false;
   if (NON_CONTACT_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`))) return false;
   // Hashed or tracking-style local parts are machine addresses.
   if (/^[0-9a-f]{16,}$/.test(localPart)) return false;
@@ -221,7 +265,7 @@ export function extractContactCandidates(args: {
   html: string;
   siteDomain: string;
 }): ContactCandidate[] {
-  const html = String(args.html || "");
+  const html = decodeForScan(String(args.html || ""));
   const siteDomain = String(args.siteDomain || "").toLowerCase().replace(/^www\./, "");
   const found = new Map<string, ContactCandidate>();
 
@@ -230,8 +274,10 @@ export function extractContactCandidates(args: {
     discoveryMethod: ContactCandidate["discoveryMethod"],
     methodBonus: number,
   ) => {
-    const email = normalizeEmail(rawEmail);
-    if (!isContactableAddress(email)) return;
+    let decoded = rawEmail;
+    try { decoded = decodeURIComponent(rawEmail); } catch { /* not URL-encoded */ }
+    const email = normalizeEmail(decoded);
+    if (!isContactableAddress(email) || isDeskAddress(email)) return;
     if (!isSameOrganisation(email, siteDomain)) return;
     const localPart = email.split("@")[0];
     const { role, bonus } = roleFor(localPart);

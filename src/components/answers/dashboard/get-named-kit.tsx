@@ -192,7 +192,8 @@ export function Listings({ siteId, extras }: { siteId: string; extras: Extras })
           onClick={() => act(() => make({ siteId: siteId as Id<"sites"> }), "Writing your listing: about a minute.")}>
           {kit?.status === "writing" ? "Writing your listing…" : f ? "Write it again" : "Write my listing"}
         </Button>
-        <span className="font-mono text-[12px] text-text-3">{extras.listing.counts.live} live · {extras.listing.counts.submitted} submitted · {extras.listing.counts.total} to do</span>
+        <span className="font-mono text-[12px] text-text-3">{extras.listing.counts.live} live · {extras.listing.counts.submitted} submitted · {extras.listing.counts.todo} to do
+          {extras.listing.counts.skipped ? ` · ${extras.listing.counts.skipped} skipped` : ""}</span>
         {kit?.status === "failed" && <span className="text-[12px] text-[#F2994A]">{kit.error}</span>}
       </div>
       {f && (

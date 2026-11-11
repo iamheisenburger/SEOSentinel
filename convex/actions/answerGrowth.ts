@@ -8,28 +8,58 @@ import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { v } from "convex/values";
 import { NAMED_MODEL, NAMED_TOOL, namedBusinessesRequest, namedCostMicroUsd, parseNamedBusinesses } from "../lib/answerEngine";
-import { parsePostDraft, POST_HOLD_MICRO_USD, POST_MODEL, POST_TOOL, postCostMicroUsd, postDraftRequest, redditThreadText } from "../lib/answerGrowth";
+import { forumThreadText, parsePostDraft, POST_HOLD_MICRO_USD, POST_MODEL, POST_TOOL, postCostMicroUsd, postDraftRequest, REDDIT_THREAD_ENDPOINT, REDDIT_THREAD_MAX_MICRO_USD,
+  scrapedRedditThreadText, THREAD_PAGE_MAX_MICRO_USD } from "../lib/answerGrowth";
 import { parseThreadResults, THREAD_SEARCH_ENDPOINT, THREAD_SEARCH_MAX_MICRO_USD, THREAD_SEARCH_QUESTIONS, threadSearchRequest } from "../lib/growthKit";
+import { challengeText, htmlToText, looksLikeMarkup, markdownToText } from "../lib/pageText";
 import { safeFetchPublicText } from "../lib/safeOutbound";
+import { tregPageText } from "../lib/tregFetch";
 import { structuredToolChoice } from "../lib/toolChoice";
 
 const anthropic = () => new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 2, timeout: 120_000, fetch });
 /** Listing one answer's businesses: ~500 tokens in, ~40 out of Haiku. */
 const LIST_HOLD_MICRO_USD = 200;
 
-async function threadText(url: string): Promise<string | null> {
-  if (!/reddit\.com\/r\/[^/]+\/comments\//i.test(url)) return null;
+/** One treg call (GET with a query, or POST with a body): the reply and its reported charge. A call whose answer was lost
+ * is charged at its bound. Never throws. */
+async function tregRead(endpoint: string, init: { query?: Record<string, string>; body?: unknown }, maxMicroUsd: number, siteId: string): Promise<{ json: unknown; costMicroUsd: number }> {
+  const token = process.env.TREG_TOKEN;
+  if (!token) return { json: null, costMicroUsd: 0 };
+  const post = init.body !== undefined;
   try {
-    const u = new URL(url);
-    const fetched = await safeFetchPublicText(`https://www.reddit.com${u.pathname.replace(/\/+$/, "")}.json?limit=8`, { timeoutMs: 12_000, maxBytes: 600_000,
-      allowedContentTypes: [/^application\/json(?:;|$)/i] });
-    return redditThreadText(JSON.parse(fetched.text));
-  } catch { return null; }
+    const response = await fetch(`https://treg.to/call/${endpoint}${init.query ? `?${new URLSearchParams(init.query)}` : ""}`, { method: post ? "POST" : "GET",
+      signal: AbortSignal.timeout(60_000), headers: { "X-Treg-Token": token, "X-Treg-Route-Max-Cost": String(maxMicroUsd / 1e6),
+        "X-Treg-Meta": `site=${siteId}, feature=pentra-get-named-thread`, ...(post ? { "Content-Type": "application/json" } : {}) },
+      ...(post ? { body: JSON.stringify(init.body) } : {}) });
+    const charged = Number(response.headers.get("X-Treg-Cost-Micro"));
+    const costMicroUsd = response.headers.has("X-Treg-Cost-Micro") && Number.isSafeInteger(charged) && charged >= 0 ? charged : response.ok ? maxMicroUsd : 0;
+    return { json: response.ok ? await response.json().catch(() => null) : null, costMicroUsd };
+  } catch { return { json: null, costMicroUsd: maxMicroUsd }; }
 }
 
-export const prepare = internalAction({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }): Promise<{ listed: number; drafted: number }> => {
+/** P406: the thread's own words, and what reading them cost. Reddit refuses Pentra's servers (403), so a Reddit thread
+ * is read through treg; a Quora or forum page directly when the site allows it, else through treg's page reader. Only a
+ * page that is the thread counts (never a sign-in wall or a bot check). */
+async function threadText(thread: { url: string; title: string | null }, siteId: string): Promise<{ text: string | null; costMicroUsd: number }> {
+  if (/reddit\.com\/r\/[^/]+\/comments\//i.test(thread.url)) {
+    const read = await tregRead(REDDIT_THREAD_ENDPOINT, { query: { url: thread.url } }, REDDIT_THREAD_MAX_MICRO_USD, siteId);
+    return { text: scrapedRedditThreadText(read.json), costMicroUsd: read.costMicroUsd };
+  }
+  try {
+    const page = await safeFetchPublicText(thread.url, { sameHostRedirects: true, timeoutMs: 12_000 });
+    if (!challengeText(page.text)) {
+      const text = forumThreadText(thread.title, looksLikeMarkup(page.text) ? htmlToText(page.text) : markdownToText(page.text));
+      if (text) return { text, costMicroUsd: 0 };
+    }
+  } catch { /* blocked or unreachable: the reader below */ }
+  const read = await tregRead("treg.web.extract", { body: { url: thread.url } }, THREAD_PAGE_MAX_MICRO_USD, siteId);
+  const markdown = read.json ? tregPageText(read.json) : "";
+  return { text: markdown && !challengeText(markdown) ? forumThreadText(thread.title, markdownToText(markdown)) : null, costMicroUsd: read.costMicroUsd };
+}
+
+export const prepare = internalAction({ args: { siteId: v.id("sites") }, handler: async (ctx, { siteId }): Promise<{ listed: number; drafted: number; redrafted: number }> => {
   const context = await ctx.runQuery(internal.answerGrowth.prepareContext, { siteId });
-  if (!context || !process.env.ANTHROPIC_API_KEY) return { listed: 0, drafted: 0 };
+  if (!context || !process.env.ANTHROPIC_API_KEY) return { listed: 0, drafted: 0, redrafted: 0 };
   const client = anthropic();
 
   // 1) Who each answer names.
@@ -88,29 +118,40 @@ export const prepare = internalAction({ args: { siteId: v.id("sites") }, handler
     await ctx.runMutation(internal.answers.settleSpend, { spendId: searchHold.spendId, actualMicroUsd: spent, sent });
   } else if (searchHold.ok) await ctx.runMutation(internal.answers.settleSpend, { spendId: searchHold.spendId, actualMicroUsd: 0, sent: false });
 
-  // 4) One reply per thread: the cited ones first, then the ones found by search (at most twelve a preparation).
-  let drafted = 0;
-  const toDraft = [...context.threads.map((t) => ({ ...t, foundBy: "cited" as const })), ...found.map((t) => ({ ...t, foundBy: "search" as const }))].slice(0, 12);
-  for (const thread of toDraft) {
+  // 4) One reply per thread: the cited ones first, then the ones found by search (at most twelve a preparation); then
+  // (P406) the waiting replies written from the title alone, written again when their thread can now be read.
+  let drafted = 0, redrafted = 0;
+  const toDraft = [...context.threads.map((t) => ({ ...t, foundBy: "cited" as const, postId: null })), ...found.map((t) => ({ ...t, foundBy: "search" as const, postId: null }))]
+    .slice(0, 12);
+  const work = [...toDraft, ...context.redraft.map((p) => ({ ...p, foundBy: "cited" as const }))];
+  for (const thread of work) {
     const hold = await ctx.runMutation(internal.answers.holdSpend, { siteId, purpose: "growth_post", microUsd: POST_HOLD_MICRO_USD });
     if (!hold.ok) break;
     let cost = 0, sent = false;
     try {
-      const text = await threadText(thread.url);
-      const req = postDraftRequest({ url: thread.url, title: thread.title, text, questions: thread.questions }, context.business);
-      sent = true;
-      const res = await client.messages.create({ model: POST_MODEL, max_tokens: 1_500, system: req.system, messages: [{ role: "user", content: req.userMessage }],
-        tools: [{ name: POST_TOOL, description: "Record the reply to post.", input_schema: req.inputSchema }], tool_choice: structuredToolChoice(POST_MODEL, POST_TOOL) });
-      cost = postCostMicroUsd(res.usage);
-      const tool = res.content.find((b) => b.type === "tool_use" && b.name === POST_TOOL);
-      const draft = parsePostDraft(tool && tool.type === "tool_use" ? tool.input : null);
-      if (draft) {
-        await ctx.runMutation(internal.answerGrowth.savePost, { siteId, url: thread.url, ...(thread.title ? { title: thread.title.slice(0, 300) } : {}),
-          questions: thread.questions, answers: thread.answers, draft: draft.reply, fits: draft.fits, threadRead: text !== null, costMicroUsd: cost, found: thread.foundBy });
-        drafted++;
+      const read = await threadText(thread, siteId);
+      cost += read.costMicroUsd;
+      sent = read.costMicroUsd > 0;
+      // A waiting reply is written again only from its thread; when the thread still can't be read, its draft stays.
+      if (!thread.postId || read.text) {
+        const req = postDraftRequest({ url: thread.url, title: thread.title, text: read.text, questions: thread.questions }, context.business);
+        sent = true;
+        const res = await client.messages.create({ model: POST_MODEL, max_tokens: 1_500, system: req.system, messages: [{ role: "user", content: req.userMessage }],
+          tools: [{ name: POST_TOOL, description: "Record the reply to post.", input_schema: req.inputSchema }], tool_choice: structuredToolChoice(POST_MODEL, POST_TOOL) });
+        cost += postCostMicroUsd(res.usage);
+        const tool = res.content.find((b) => b.type === "tool_use" && b.name === POST_TOOL);
+        const draft = parsePostDraft(tool && tool.type === "tool_use" ? tool.input : null);
+        if (draft && thread.postId) {
+          await ctx.runMutation(internal.answerGrowth.saveRedraft, { postId: thread.postId, draft: draft.reply, fits: draft.fits, costMicroUsd: cost });
+          redrafted++;
+        } else if (draft) {
+          await ctx.runMutation(internal.answerGrowth.savePost, { siteId, url: thread.url, ...(thread.title ? { title: thread.title.slice(0, 300) } : {}),
+            questions: thread.questions, answers: thread.answers, draft: draft.reply, fits: draft.fits, threadRead: read.text !== null, costMicroUsd: cost, found: thread.foundBy });
+          drafted++;
+        }
       }
     } catch { /* drafted next time */ }
     await ctx.runMutation(internal.answers.settleSpend, { spendId: hold.spendId, actualMicroUsd: cost, sent });
   }
-  return { listed, drafted };
+  return { listed, drafted, redrafted };
 } });

@@ -69,7 +69,7 @@ export const DIRECTORIES: readonly Directory[] = [
   { name: "TrustRadius", domain: "trustradius.com", submitUrl: "https://www.trustradius.com/vendors", kinds: ["software"] },
   { name: "SourceForge", domain: "sourceforge.net", submitUrl: "https://sourceforge.net/software/vendors/", kinds: ["software"] },
   { name: "SoftwareSuggest", domain: "softwaresuggest.com", submitUrl: "https://www.softwaresuggest.com/vendors", kinds: ["software"] },
-  { name: "SaaSworthy", domain: "saasworthy.com", submitUrl: "https://www.saasworthy.com/list-your-product", kinds: ["software"] },
+  { name: "SaaSworthy", domain: "saasworthy.com", submitUrl: "https://www.saasworthy.com/", kinds: ["software"], note: "Press 'List Your Product' at the top of the page." },
   { name: "Tekpon", domain: "tekpon.com", submitUrl: "https://tekpon.com/get-listed/", kinds: ["software"] },
   { name: "BetaList", domain: "betalist.com", submitUrl: "https://betalist.com/submit", kinds: ["software"], note: "For products launched in the last few months." },
   { name: "Indie Hackers", domain: "indiehackers.com", submitUrl: "https://www.indiehackers.com/products/new", kinds: ["software"] },

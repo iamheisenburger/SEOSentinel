@@ -12,7 +12,8 @@ import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { publishedArticlePageUrl } from "./lib/searchPerformance";
 import { encryptOutreachCredentials, outreachCredentialKeyConfig } from "./lib/outreachCredentialEncryption";
 import { imapPresetForSmtpHost, SMTP_PRESETS } from "./lib/outreachSmtp";
-import { editorialSite, followUpDue, LINK_FOLLOW_UP_DAYS, LINK_PAGES_PER_WEEK, recipientCountryAllowed } from "./lib/linkOutreach";
+import { editorialSite, followUpDue, INBOX_WATCH_DAYS, LINK_FOLLOW_UP_DAYS, LINK_PAGES_PER_WEEK, recipientCountryAllowed, sendAllowedNow, sendTimes } from "./lib/linkOutreach";
+import { isContactableAddress, isDeskAddress } from "./lib/outreachContacts";
 import { citedPagesFromAnswers, rivalDomainsFromAnswers } from "./lib/linkOpportunities";
 import { ConvexError } from "convex/values";
 import { onNewSystem } from "./siteDiagnosis";
@@ -195,9 +196,12 @@ export const listForSite = query({ args: { siteId: v.id("sites") }, handler: asy
   if (!site) return null;
   const all = await rows(ctx, siteId);
   const count = (...statuses: string[]) => all.filter((o) => statuses.includes(o.status)).length;
-  const order: Record<string, number> = { replied: 0, ready: 1, sent: 2, won: 3, new: 4, no_contact: 5, skipped: 6, opted_out: 7, bounced: 8, lost: 9, dismissed: 10 };
+  // P406: every page already written to comes before the pages not yet read, so a site with many found pages still lists
+  // what happened to each email (a bounce sorted after 50 new pages fell off the list).
+  const order: Record<string, number> = { replied: 0, ready: 1, sent: 2, won: 3, bounced: 4, opted_out: 5, lost: 6, new: 7, no_contact: 8, skipped: 9, dismissed: 10 };
   return { mode: site.linkOutreach ?? "off",
-    counts: { found: all.length, ready: count("ready"), contacted: count("sent", "replied", "won", "lost", "opted_out", "bounced"), replied: count("replied"), won: count("won") },
+    counts: { found: all.length, ready: count("ready"), contacted: count("sent", "replied", "won", "lost", "opted_out", "bounced"), replied: count("replied"), won: count("won"),
+      bounced: count("bounced"), optedOut: count("opted_out") },
     items: all.filter((o) => o.url).sort((a, b) => (order[a.status] ?? 20) - (order[b.status] ?? 20) || b.rank - a.rank).slice(0, 60).map((o) => ({
       id: o._id, status: o.status, url: o.url!, title: o.title || o.domain, domain: o.domain, rank: o.rank, source: o.source ?? "competitor_links", linksTo: o.linksTo,
       contact: o.contact?.email ?? null, uncertain: Boolean(o.pendingSend),
@@ -225,8 +229,11 @@ export const dismiss = mutation({ args: { siteId: v.id("sites"), id: v.id("link_
 /** Schedules the sender for now, unless a turn is already booked sooner. */
 async function wakeSender(ctx: MutationCtx, siteId: Id<"sites">, at: number) {
   const m = await mailboxOf(ctx, siteId);
-  if (!m || m.status !== "ready" || (m.nextRunAt !== undefined && m.nextRunAt > Date.now() && m.nextRunAt <= at)) return;
-  await ctx.db.patch(m._id, { nextRunAt: at });
+  if (!m || m.status !== "ready") return;
+  const booked = m.nextRunAt !== undefined && m.nextRunAt > Date.now() ? m.nextRunAt : undefined;
+  if (booked !== undefined && booked <= at) return;
+  // P406: a later booking stays on record, so the turn started here doesn't book a second chain beside it (sendTurnDone).
+  if (booked === undefined) await ctx.db.patch(m._id, { nextRunAt: at });
   await ctx.scheduler.runAt(at, internal.actions.linkOutreach.sendNext, { siteId });
 }
 
@@ -237,26 +244,32 @@ export const sendContext = internalQuery({ args: { siteId: v.id("sites") }, hand
   const site = await ctx.db.get(siteId), m = await mailboxOf(ctx, siteId);
   if (!site || site.deletionStatus || !m || m.status !== "ready" || !site.linkOutreach || site.linkOutreach === "find") return null;
   const all = await rows(ctx, siteId), now = Date.now();
-  const sentAt = all.flatMap((o) => (o.sends ?? []).map((s) => s.at)).filter((t) => now - t < 8 * DAY);
+  // P406: an email going out at this moment counts toward the caps too.
+  const sentAt = sendTimes(all, now);
   const suppressed = new Set(all.filter((o) => o.optedOutAt || o.bouncedAt).flatMap((o) => o.contact ? [o.contact.email] : []));
   // An attempt with no receipt (pendingSend) is never sent again: the owner sees it as uncertain.
   // P371: US and UK sites only, by the site's domain and the contact's address, checked again at every send.
   // P376: never a user-written platform (dev.to and the like), checked again at every send.
   const allowed = (o: (typeof all)[number]) => recipientCountryAllowed(o.domain) && (!o.contact || recipientCountryAllowed(o.contact.email)) && editorialSite(o.domain);
-  const followUp = all.find((o) => o.status === "sent" && !o.pendingSend && followUpDue(o, now) && o.contact && !suppressed.has(o.contact.email) && allowed(o));
+  // P406: no follow-up to an address that turns out to be a desk (support, legal, no-reply) or an escape's leftover.
+  const followUp = all.find((o) => o.status === "sent" && !o.pendingSend && followUpDue(o, now) && o.contact && !suppressed.has(o.contact.email) && allowed(o) &&
+    isContactableAddress(o.contact.email) && !isDeskAddress(o.contact.email));
   const first = all.filter((o) => o.status === "ready" && !o.pendingSend && o.contact && o.pitch && !suppressed.has(o.contact.email) && allowed(o) &&
     (site.linkOutreach === "send" || o.approvedAt))
     .sort((a, b) => (a.approvedAt ? 0 : 1) - (b.approvedAt ? 0 : 1) || b.rank - a.rank)[0];
   const next = followUp ?? first;
   // When the next follow-up falls due (first emails with no answer yet), so the sender wakes for it.
-  const waiting = all.filter((o) => o.status === "sent" && !o.pendingSend && o.sends?.length === 1 && o.contact && !suppressed.has(o.contact.email))
+  const waiting = all.filter((o) => o.status === "sent" && !o.pendingSend && o.sends?.length === 1 && o.contact && !suppressed.has(o.contact.email) &&
+    isContactableAddress(o.contact.email) && !isDeskAddress(o.contact.email))
     .map((o) => o.sends![0].at + LINK_FOLLOW_UP_DAYS * DAY);
+  // P406: the addresses whose answers are looked for: written to in the last INBOX_WATCH_DAYS days (bounded work per turn).
+  const contacted = all.filter((o) => o.status === "sent" && o.contact && o.sends?.length && now - o.sends[o.sends.length - 1].at < INBOX_WATCH_DAYS * DAY)
+    .map((o) => ({ id: o._id, email: o.contact!.email, since: o.sends![0].at }));
   return { mailbox: { id: m._id, email: m.email, senderName: m.senderName, postalAddress: m.postalAddress, smtp: m.smtp, imap: m.imap, credentials: m.credentials },
     site: { name: site.siteName ?? site.domain, domain: site.domain }, sentAt,
     next: next ? { id: next._id, url: next.url ?? `https://${next.domain}/`, domain: next.domain, kind: followUp ? "follow_up" as const : "first" as const, to: next.contact!.email, subject: next.pitch!.subject, body: next.pitch!.body,
       theirTitle: next.title ?? next.domain, ourTitle: next.target?.title ?? site.siteName ?? site.domain, inReplyTo: next.sends?.[0]?.messageId ?? null } : null,
-    nextFollowUpAt: waiting.length ? Math.min(...waiting) : null,
-    contacted: all.filter((o) => o.status === "sent" && o.contact && o.sends?.length).map((o) => ({ id: o._id, email: o.contact!.email, since: o.sends![0].at })) };
+    nextFollowUpAt: waiting.length ? Math.min(...waiting) : null, contacted, awaiting: contacted.length > 0 };
 } });
 
 /** Records an email as about to go out. A row already carrying an attempt (its outcome unknown) is refused: Pentra never
@@ -266,8 +279,19 @@ export const claimSend = internalMutation({ args: { siteId: v.id("sites"), id: v
   const o = await ctx.db.get(id), site = await ctx.db.get(siteId);
   if (!o || !site || o.siteId !== siteId || o.pendingSend || site.deletionStatus || !site.linkOutreach || site.linkOutreach === "find") return { ok: false };
   if (kind === "first" ? o.status !== "ready" || (site.linkOutreach !== "send" && !o.approvedAt) : o.status !== "sent" || !followUpDue(o, Date.now())) return { ok: false };
-  await ctx.db.patch(id, { pendingSend: { kind, messageId: messageId.slice(0, 300), at: Date.now() } });
+  // P406: the pace is checked here, in the one transaction every send passes through, against every email sent or going
+  // out: two send turns running at once can no longer both send (Convex runs these one after the other).
+  const now = Date.now();
+  if (!sendAllowedNow(now, sendTimes(await rows(ctx, siteId), now))) return { ok: false };
+  await ctx.db.patch(id, { pendingSend: { kind, messageId: messageId.slice(0, 300), at: now } });
   return { ok: true };
+} });
+
+/** P406: a prepared email whose address is a desk (support, legal, no-reply) or an escape's leftover is set aside, never sent. */
+export const setAsideDesk = internalMutation({ args: { siteId: v.id("sites"), id: v.id("link_opportunities") }, handler: async (ctx, { siteId, id }) => {
+  const o = await ctx.db.get(id);
+  if (!o || o.siteId !== siteId || o.pendingSend || o.status !== "ready") return;
+  await ctx.db.patch(id, { status: "skipped", note: "The address is a support, legal or no-reply desk, not someone who edits the page" });
 } });
 
 /** The mailbox accepted the email: the attempt becomes a send. */
@@ -322,8 +346,13 @@ export const sendTurnDone = internalMutation({ args: { siteId: v.id("sites"), ne
       await ctx.db.patch(m._id, { status: "failed", note: `Sending stopped: the mailbox refused the login (${error.slice(0, 120)})`, nextRunAt: undefined, updatedAt: Date.now() });
       return;
     }
-    await ctx.db.patch(m._id, { nextRunAt: nextAt ?? undefined, ...(error ? { note: `Last send failed: ${error.slice(0, 160)}` } : {}), updatedAt: Date.now() });
-    if (nextAt !== null) await ctx.scheduler.runAt(nextAt, internal.actions.linkOutreach.sendNext, { siteId });
+    // P406: one chain of turns per mailbox. Each Send press or wake used to start a chain that never merged back (four woke
+    // together at 13:00 on Nov 10); a turn now books the next one only when no turn is already booked at or before it.
+    const now = Date.now();
+    const booked = m.nextRunAt !== undefined && m.nextRunAt > now ? m.nextRunAt : undefined;
+    const book = nextAt !== null && (booked === undefined || nextAt < booked);
+    await ctx.db.patch(m._id, { nextRunAt: book ? nextAt! : booked, ...(error ? { note: `Last send failed: ${error.slice(0, 160)}` } : {}), updatedAt: now });
+    if (book) await ctx.scheduler.runAt(nextAt!, internal.actions.linkOutreach.sendNext, { siteId });
   } });
 
 /** P369: what finding at once needs: the latest diagnosis's page one (the competitors) and the pages the AI answers cited. */

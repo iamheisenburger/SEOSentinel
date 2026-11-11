@@ -232,6 +232,10 @@ function Pitches({ siteId }: { siteId: string }) {
   if (data === undefined) return <PanelSkeleton lines={4} />;
   if (data === null) return null;
   const ready = data.items.filter((o) => o.status === "ready");
+  // P406: every email already sent, with what became of it (a bounce used to be counted nowhere and listed nowhere).
+  const sent = data.items.filter((o) => ["sent", "replied", "won", "bounced", "opted_out", "lost"].includes(o.status));
+  const outcome: Record<string, string> = { sent: "waiting for a reply", replied: "replied: answer it from your mailbox", won: "link won", bounced: "bounced: the address doesn't exist",
+    opted_out: "asked not to be emailed", lost: "the link was removed" };
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     try { await fn(); toast(ok, "success"); } catch (e) { toast(userErrorMessage(e, "Couldn't do that. Try again."), "error"); }
   };
@@ -241,6 +245,7 @@ function Pitches({ siteId }: { siteId: string }) {
         : "Emails to the editors of pages that name your competitors. Nothing goes out until you press Send."}>
       <p className="mb-3 font-mono text-[12px] text-text-3">
         {data.counts.found} pages found · {data.counts.ready} ready · {data.counts.contacted} contacted · {data.counts.replied} replied · {data.counts.won} links won
+        {data.counts.bounced ? ` · ${data.counts.bounced} bounced` : ""}{data.counts.optedOut ? ` · ${data.counts.optedOut} opted out` : ""}
       </p>
       {ready.length ? (
         <ul className="flex flex-col divide-y divide-border">
@@ -251,7 +256,7 @@ function Pitches({ siteId }: { siteId: string }) {
                   <a href={o.url} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1.5 text-[14px] text-text hover:underline">
                     <span className="truncate">{o.title}</span><ExternalLink aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-text-4" strokeWidth={1.5} />
                   </a>
-                  <p className="mt-0.5 truncate text-[12px] text-text-3">to {o.contact ?? "?"} · links to {o.linksTo.join(", ")}</p>
+                  <p className="mt-0.5 truncate text-[12px] text-text-3">to {o.contact ?? "?"}{o.linksTo.length ? ` · links to ${o.linksTo.join(", ")}` : o.source === "ai_answer" ? " · the assistants cite this page" : ""}</p>
                 </div>
                 <Button size="sm" variant="ghost" onClick={() => setOpen(open === o.id ? null : o.id)}>{open === o.id ? "Hide" : "Read"}</Button>
               </div>
@@ -271,6 +276,22 @@ function Pitches({ siteId }: { siteId: string }) {
           ))}
         </ul>
       ) : <p className="text-[13px] text-text-3">No pitch ready yet. Pentra looks for pages when the work is prepared; pages that name no competitor are set aside.</p>}
+      {sent.length > 0 && (
+        <div className="mt-5">
+          <p className="mono-caps mb-1 text-text-3">Sent</p>
+          <ul className="flex flex-col divide-y divide-border">
+            {sent.map((o) => (
+              <li key={o.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2">
+                <a href={o.url} target="_blank" rel="noreferrer" className="min-w-0 max-w-full truncate text-[13px] text-text-2 hover:underline">{o.title}</a>
+                <span className="text-[12px] text-text-3">
+                  to {o.contact ?? "?"}{o.sentAt ? ` · ${new Date(o.sentAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : ""}
+                  {o.followedUpAt ? " · followed up" : ""} · <span className={o.status === "replied" || o.status === "won" ? "text-text" : undefined}>{outcome[o.status] ?? o.status}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </Panel>
   );
 }
