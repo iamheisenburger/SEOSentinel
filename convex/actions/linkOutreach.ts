@@ -15,11 +15,11 @@ import { internal } from "../_generated/api";
 import { v } from "convex/values";
 import type { Id } from "../_generated/dataModel";
 import { safeFetchPublicText } from "../lib/safeOutbound";
-import { contactDiscoveryUrls, extractContactCandidates, isContactableAddress, isDeskAddress, selectBestContact } from "../lib/outreachContacts";
+import { contactDiscoveryUrls, extractContactCandidates, isContactableAddress, isDeskAddress, linkContactRole, peopleNamedIn, selectBestContact } from "../lib/outreachContacts";
 import { requestsOutreachOptOut } from "../lib/outreachInbound";
 import { decryptOutreachCredentials, outreachCredentialKeyConfig, type EncryptedOutreachCredentials } from "../lib/outreachCredentialEncryption";
 import { classifySmtpFailure, smtpTransportOptions } from "../lib/outreachSmtp";
-import { aiCitedPages, euAddressIn, recipientCountryAllowed, checkPitch, emailFooter, followUpEmail, linkToSite, nextSendAt, nextTurnAt, pageIntersectionRequest, parsePageIntersection,
+import { aiCitedPages, OUTSIDE_US_UK_NOTE, shownOutsideUsUk, recipientCountryAllowed, checkPitch, emailFooter, followUpEmail, linkToSite, nextSendAt, nextTurnAt, pageIntersectionRequest, parsePageIntersection,
   pitchRequest, pitchTarget, readListingPage, PITCH_MAX_TOKENS, PITCH_TOOL, type ListingPage } from "../lib/linkOutreach";
 import { competitorPairs, linkCompetitors } from "../lib/linkOpportunities";
 import { meterDataForSeoCost, pageIntersection } from "./seoData";
@@ -64,15 +64,17 @@ export const prepare = internalAction({ args: { siteId: v.id("sites") }, handler
       const read = readListingPage(fetched.text, fetched.url, { competitors: o.linksTo, siteDomain: site.domain, language: site.language, aiCited: o.source === "ai_answer" });
       if (!read.ok) { results.push({ id: o.id, status: read.linksToSite ? "won" as const : "skipped" as const, note: read.reason }); continue; }
       // Who runs the page: an address it publishes, else one on its contact or about page (never a guessed address).
-      let contact = selectBestContact(extractContactCandidates({ html: fetched.text, siteDomain: o.domain }));
+      // P408: only the page's author or someone the site names, or an editorial, press, marketing or general inbox.
+      const people = peopleNamedIn(fetched.text);
+      let contact = selectBestContact(extractContactCandidates({ html: fetched.text, siteDomain: o.domain, knownRolesOnly: true }));
       for (const url of contactDiscoveryUrls({ sourceUrl: o.url, siteDomain: o.domain, limit: 4 }).slice(1)) {
         if (contact) break;
-        try { const page = await fetchPage(url); contact = selectBestContact(extractContactCandidates({ html: page.text, siteDomain: o.domain })); } catch { /* next */ }
+        try { const page = await fetchPage(url); contact = selectBestContact(extractContactCandidates({ html: page.text, siteDomain: o.domain, knownRolesOnly: true, people })); } catch { /* next */ }
       }
-      if (!contact) { results.push({ id: o.id, status: "no_contact" as const, title: read.title, kind: read.kind, note: "No published email address on the site" }); continue; }
-      // P371: US and UK sites only: never one whose contact address or contact/about page is in the EU/EEA.
-      if (!recipientCountryAllowed(contact.email) || await showsEuAddress(o.url, o.domain, fetched.text)) {
-        results.push({ id: o.id, status: "skipped" as const, title: read.title, note: "The site shows an EU/EEA address: Pentra writes only to US and UK sites" }); continue;
+      if (!contact) { results.push({ id: o.id, status: "no_contact" as const, title: read.title, kind: read.kind, note: "No published email address for the page's author or an editorial or general inbox" }); continue; }
+      // P371, P408: US and UK sites only: never one whose contact address or pages show a business outside them.
+      if (!recipientCountryAllowed(contact.email) || (await readSite(o.url, o.domain, fetched.text)).outside) {
+        results.push({ id: o.id, status: "skipped" as const, title: read.title, note: OUTSIDE_US_UK_NOTE }); continue;
       }
       if (suppressed.has(contact.email)) { results.push({ id: o.id, status: "skipped" as const, title: read.title, note: "That address asked not to be emailed" }); continue; }
       const target = pitchTarget({ kind: read.kind, title: read.title }, { name: site.name, homeUrl: site.homeUrl, articles: site.articles });
@@ -146,13 +148,19 @@ export const findNow = internalAction({ args: { siteId: v.id("sites") }, handler
   return { found: all.length };
 } });
 
-/** P371: whether the site's contact or about page (or the page already read) shows an EU/EEA postal address. */
-async function showsEuAddress(pageUrl: string, domain: string, pageText?: string): Promise<boolean> {
-  if (pageText && euAddressIn(pageText)) return true;
-  for (const url of contactDiscoveryUrls({ sourceUrl: pageUrl, siteDomain: domain, limit: 4 }).slice(1, 4)) {
-    try { if (euAddressIn((await fetchPage(url)).text)) return true; } catch { /* not there */ }
+/** P371, P408: the site's live pages (the page itself, then its contact and about pages): whether they show a business
+ * outside the US and the UK, how many could be read, and the people they name (who an address may belong to). */
+async function readSite(pageUrl: string, domain: string, pageHtml?: string): Promise<{ read: number; outside: boolean; people: string[][] }> {
+  const people: string[][] = [];
+  let read = 0;
+  for (const url of contactDiscoveryUrls({ sourceUrl: pageUrl, siteDomain: domain, limit: 4 })) {
+    let html = url === pageUrl ? pageHtml : undefined;
+    if (html === undefined) { try { html = (await fetchPage(url)).text; } catch { continue; } }
+    read++;
+    if (shownOutsideUsUk(html, { articlePage: url === pageUrl })) return { read, outside: true, people };
+    people.push(...peopleNamedIn(html));
   }
-  return false;
+  return { read, outside: false, people };
 }
 
 type Mailbox = { id: Id<"link_mailboxes">; email: string; senderName: string; postalAddress: string; smtp: { host: string; port: number };
@@ -238,10 +246,14 @@ export const sendNext = internalAction({ args: { siteId: v.id("sites") }, handle
       const domain = turn.mailbox.email.split("@")[1];
       const messageId = `<pentra-link-${randomUUID()}@${domain}>`;
       // The send is recorded as attempted before it goes out: an attempt with no receipt is never sent again.
-      // P371: checked again just before a first email: a site showing an EU/EEA address is set aside, never written to.
-      const euSite = next.kind === "first" && await showsEuAddress(next.url, next.domain);
-      if (euSite) await ctx.runMutation(internal.linkOpportunities.setAsideForCountry, { siteId, id: next.id });
-      const claim = euSite ? { ok: false } : await ctx.runMutation(internal.linkOpportunities.claimSend, { siteId, id: next.id, kind: next.kind, messageId });
+      // P371, P408: just before a first email the site is read again, and the email is set aside, never sent, when its
+      // pages show a business outside the US and the UK, when its address reaches neither someone the site names nor an
+      // editorial, press, marketing or general inbox (an email written before this check), or when no page can be read.
+      const site = next.kind === "first" ? await readSite(next.url, next.domain) : null;
+      const setAside = !site ? null : site.outside ? "country" as const : !site.read ? "unread" as const : !linkContactRole(next.to, site.people) ? "desk" as const : null;
+      if (setAside === "country") await ctx.runMutation(internal.linkOpportunities.setAsideForCountry, { siteId, id: next.id });
+      else if (setAside) await ctx.runMutation(internal.linkOpportunities.setAsideDesk, { siteId, id: next.id, unread: setAside === "unread" });
+      const claim = setAside ? { ok: false } : await ctx.runMutation(internal.linkOpportunities.claimSend, { siteId, id: next.id, kind: next.kind, messageId });
       if (claim.ok) {
         const body = next.kind === "follow_up" ? followUpEmail({ theirTitle: next.theirTitle, ourTitle: next.ourTitle, firstName: turn.mailbox.senderName.split(" ")[0] }).body : next.body;
         const transport = transportFor(turn.mailbox, secrets.smtpPassword);

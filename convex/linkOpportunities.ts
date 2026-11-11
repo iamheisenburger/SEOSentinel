@@ -12,7 +12,8 @@ import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { publishedArticlePageUrl } from "./lib/searchPerformance";
 import { encryptOutreachCredentials, outreachCredentialKeyConfig } from "./lib/outreachCredentialEncryption";
 import { imapPresetForSmtpHost, SMTP_PRESETS } from "./lib/outreachSmtp";
-import { editorialSite, followUpDue, INBOX_WATCH_DAYS, LINK_FOLLOW_UP_DAYS, LINK_PAGES_PER_WEEK, recipientCountryAllowed, sendAllowedNow, sendTimes } from "./lib/linkOutreach";
+import { editorialSite, followUpDue, INBOX_WATCH_DAYS, LINK_FOLLOW_UP_DAYS, LINK_PAGES_PER_WEEK, NOT_AN_EDITOR_NOTE, OUTSIDE_US_UK_NOTE, recipientCountryAllowed, sendAllowedNow,
+  sendTimes, UNREAD_BEFORE_SENDING_NOTE } from "./lib/linkOutreach";
 import { isContactableAddress, isDeskAddress } from "./lib/outreachContacts";
 import { citedPagesFromAnswers, rivalDomainsFromAnswers } from "./lib/linkOpportunities";
 import { ConvexError } from "convex/values";
@@ -287,12 +288,15 @@ export const claimSend = internalMutation({ args: { siteId: v.id("sites"), id: v
   return { ok: true };
 } });
 
-/** P406: a prepared email whose address is a desk (support, legal, no-reply) or an escape's leftover is set aside, never sent. */
-export const setAsideDesk = internalMutation({ args: { siteId: v.id("sites"), id: v.id("link_opportunities") }, handler: async (ctx, { siteId, id }) => {
-  const o = await ctx.db.get(id);
-  if (!o || o.siteId !== siteId || o.pendingSend || o.status !== "ready") return;
-  await ctx.db.patch(id, { status: "skipped", note: "The address is a support, legal or no-reply desk, not someone who edits the page" });
-} });
+/** P406: a prepared email whose address is a desk (support, legal, no-reply) or an escape's leftover is set aside, never sent.
+ * P408: and one whose address reaches no one the site names and no editorial or general inbox, or whose page can't be read
+ * just before sending. */
+export const setAsideDesk = internalMutation({ args: { siteId: v.id("sites"), id: v.id("link_opportunities"), unread: v.optional(v.boolean()) },
+  handler: async (ctx, { siteId, id, unread }) => {
+    const o = await ctx.db.get(id);
+    if (!o || o.siteId !== siteId || o.pendingSend || o.status !== "ready") return;
+    await ctx.db.patch(id, { status: "skipped", note: unread ? UNREAD_BEFORE_SENDING_NOTE : NOT_AN_EDITOR_NOTE });
+  } });
 
 /** The mailbox accepted the email: the attempt becomes a send. */
 export const recordSend = internalMutation({ args: { siteId: v.id("sites"), id: v.id("link_opportunities"), kind: v.union(v.literal("first"), v.literal("follow_up")),
@@ -310,11 +314,11 @@ export const releaseSend = internalMutation({ args: { siteId: v.id("sites"), id:
     await ctx.db.patch(id, { pendingSend: undefined, note: note.slice(0, 200) });
   } });
 
-/** P371: a page whose site shows an EU/EEA address is set aside, never written to. */
+/** P371, P408: a page whose site shows a business outside the US and the UK is set aside, never written to. */
 export const setAsideForCountry = internalMutation({ args: { siteId: v.id("sites"), id: v.id("link_opportunities") }, handler: async (ctx, { siteId, id }) => {
   const o = await ctx.db.get(id);
   if (!o || o.siteId !== siteId || o.pendingSend || !["new", "ready", "no_contact"].includes(o.status)) return;
-  await ctx.db.patch(id, { status: "skipped", note: "The site shows an EU/EEA address: Pentra writes only to US and UK sites" });
+  await ctx.db.patch(id, { status: "skipped", note: OUTSIDE_US_UK_NOTE });
 } });
 
 /** The mailbox to check (its encrypted credentials stay server side). */

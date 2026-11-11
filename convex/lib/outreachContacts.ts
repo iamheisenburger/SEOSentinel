@@ -133,8 +133,52 @@ const PREFERRED_LOCAL_PARTS: Array<{ match: RegExp; role: string; bonus: number 
   { match: /^press|^media|^pr$/, role: "press", bonus: 25 },
   { match: /^web(master)?$/, role: "webmaster", bonus: 25 },
   { match: /^marketing|^growth/, role: "marketing", bonus: 20 },
-  { match: /^hello|^hi$|^contact|^info|^team/, role: "general", bonus: 10 },
+  { match: /^hello|^hi$|^hey$|^contact|^info|^team|^enquir|^inquir|^office$|^mail$/, role: "general", bonus: 10 },
 ];
+
+/**
+ * P408: the people a page credits, by name: its author in the page's
+ * metadata (JSON-LD, meta author, rel=author) or a byline ("By Jane Doe").
+ * Each name as lowercased words without accents.
+ */
+export function peopleNamedIn(html: string): string[][] {
+  const source = decodeForScan(String(html || ""));
+  const names = new Set<string>();
+  const add = (raw: string) => {
+    const name = raw.replace(/<[^>]+>/g, " ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/['’]/g, "").replace(/\s+/g, " ").trim();
+    if (name.length >= 2 && name.length <= 60 && !/^https?:|[/@]/.test(name)) names.add(name.toLowerCase());
+  };
+  for (const m of source.matchAll(/"@type"\s*:\s*"Person"[^{}]*?"name"\s*:\s*"([^"]+)"/g)) add(m[1]);
+  for (const m of source.matchAll(/"name"\s*:\s*"([^"]+)"[^{}]*?"@type"\s*:\s*"Person"/g)) add(m[1]);
+  for (const m of source.matchAll(/"author"\s*:\s*\[?\s*\{[^{}]*?"name"\s*:\s*"([^"]+)"/g)) add(m[1]);
+  for (const m of source.matchAll(/"author"\s*:\s*"([^"]+)"/g)) add(m[1]);
+  for (const m of source.matchAll(/<meta\b[^>]*>/gi)) {
+    if (!/\b(?:name|property)=["'](?:author|article:author)["']/i.test(m[0])) continue;
+    const content = /\bcontent=["']([^"']+)["']/i.exec(m[0])?.[1];
+    if (content) add(content);
+  }
+  for (const m of source.matchAll(/<a\b[^>]*\brel=["'][^"']*\bauthor\b[^"']*["'][^>]*>([\s\S]{2,120}?)<\/a>/gi)) add(m[1]);
+  // A byline is an element of its own that starts with "By" ("By Jane Doe", "By <a>Jane Doe</a> · March 3"), never a
+  // title's "... compared by" or a sentence's "by"; a date after the name is not part of it.
+  const months = "January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec";
+  const byline = new RegExp(String.raw`>\s*By:?\s+(?:<[^>]+>\s*)*([A-Z][a-z]+(?:[ \t]+(?!(?:${months})\b)[A-Z][a-zA-Z'-]+){0,2})`, "g");
+  const body = source.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<title[\s\S]*?<\/title>/gi, " ");
+  for (const m of body.matchAll(byline)) add(m[1]);
+  return [...names].map((name) => name.split(/[\s.]+/).filter((word) => word.length >= 2)).filter((words) => words.length > 0);
+}
+
+/** P408: whether an address's local part is one of these people's names (jane, doe, jane.doe, j.doe, jdoe, janedoe). */
+export function namesPerson(localPart: string, people: readonly string[][]): boolean {
+  const parts = localPart.toLowerCase().split(/[._-]+/).filter(Boolean);
+  return people.some((words) => {
+    const first = words[0], last = words.length > 1 ? words[words.length - 1] : undefined;
+    if (parts.length === 1) {
+      const p = parts[0];
+      return p === first || (last !== undefined && (p === last || p === first + last || p === first[0] + last));
+    }
+    return parts.length === 2 && last !== undefined && (parts[0] === first || parts[0] === first[0]) && parts[1] === last;
+  });
+}
 
 const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}/g;
 
@@ -245,13 +289,28 @@ export function isContactableAddress(email: string): boolean {
   return true;
 }
 
-function roleFor(localPart: string): { role?: string; bonus: number } {
+function roleFor(localPart: string, people?: readonly string[][]): { role?: string; bonus: number } {
   for (const entry of PREFERRED_LOCAL_PARTS) {
     if (entry.match.test(localPart)) return { role: entry.role, bonus: entry.bonus };
   }
+  // P408: with the site's people known, an address is a person's only when it names one of them. Any one-word address
+  // passed for a first name before, so a department's desk outranked the general inbox as a "person".
+  if (people) return namesPerson(localPart, people) ? { role: "individual", bonus: 30 } : { bonus: 0 };
   // A personal-looking address (first.last, firstname) reaches a human.
   if (/^[a-z]+([._-][a-z]+)?$/.test(localPart)) return { role: "individual", bonus: 30 };
   return { bonus: 0 };
+}
+
+/**
+ * P408: who an address reaches for a link request, given the people the
+ * site's pages name: "individual" (one of them), an editorial, press,
+ * webmaster, marketing or general inbox, or undefined for a department or
+ * desk (no one there edits the page).
+ */
+export function linkContactRole(email: string, people: readonly string[][]): string | undefined {
+  const normalized = normalizeEmail(email);
+  if (!isContactableAddress(normalized) || isDeskAddress(normalized)) return undefined;
+  return roleFor(normalized.split("@")[0], people).role;
 }
 
 /**
@@ -264,10 +323,15 @@ function roleFor(localPart: string): { role?: string; bonus: number } {
 export function extractContactCandidates(args: {
   html: string;
   siteDomain: string;
+  /** P408 (link requests): keep only addresses that reach a person the site names or an editorial, press, webmaster,
+   * marketing or general inbox; `people` adds names read on the site's other pages. */
+  knownRolesOnly?: boolean;
+  people?: readonly string[][];
 }): ContactCandidate[] {
   const html = decodeForScan(String(args.html || ""));
   const siteDomain = String(args.siteDomain || "").toLowerCase().replace(/^www\./, "");
   const found = new Map<string, ContactCandidate>();
+  const people = args.knownRolesOnly ? [...(args.people ?? []), ...peopleNamedIn(String(args.html || ""))] : undefined;
 
   const consider = (
     rawEmail: string,
@@ -280,7 +344,8 @@ export function extractContactCandidates(args: {
     if (!isContactableAddress(email) || isDeskAddress(email)) return;
     if (!isSameOrganisation(email, siteDomain)) return;
     const localPart = email.split("@")[0];
-    const { role, bonus } = roleFor(localPart);
+    const { role, bonus } = roleFor(localPart, people);
+    if (people && !role) return;
     const score = bonus + methodBonus;
     const existing = found.get(email);
     if (existing && existing.score >= score) return;

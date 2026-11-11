@@ -151,7 +151,7 @@ test("the weekly email says what the title tests and the link work did, in plain
 });
 
 test("P371: link emails go only to US and UK sites: never an EU/EEA (or Swiss) domain, contact address or postal address", async () => {
-  const { recipientCountryAllowed, euAddressIn } = await import("../convex/lib/linkOutreach.ts");
+  const { recipientCountryAllowed, addressOutsideUsUk: euAddressIn } = await import("../convex/lib/linkOutreach.ts");
   for (const ok of ["saasreviews.com", "blog.example.co.uk", "tools.io", "growth.ai", "site.us", "editor@b2bweekly.com", "x@shop.co.uk"]) assert.equal(recipientCountryAllowed(ok), true, ok);
   for (const no of ["marketing.de", "agency.fr", "blog.nl", "x.ie", "y.eu", "z.ch", "a.at", "b.no", "c.is", "d.li", "editor@site.es", "e.ca", "f.com.au", "g.in"])
     assert.equal(recipientCountryAllowed(no), false, no);
@@ -161,8 +161,8 @@ test("P371: link emails go only to US and UK sites: never an EU/EEA (or Swiss) d
   assert.equal(euAddressIn("123 Main Street, Austin, TX 78701, United States"), false);
   assert.equal(euAddressIn("10 Downing St, London SW1A 2AA, United Kingdom"), false);
   const action = readFileSync("convex/actions/linkOutreach.ts", "utf8");
-  assert.match(action, /if \(!recipientCountryAllowed\(contact\.email\) \|\| await showsEuAddress\(o\.url, o\.domain, fetched\.text\)\) \{/, "checked when the email is written");
-  assert.match(action, /const euSite = next\.kind === "first" && await showsEuAddress\(next\.url, next\.domain\);/, "and again just before it is sent");
+  assert.match(action, /if \(!recipientCountryAllowed\(contact\.email\) \|\| \(await readSite\(o\.url, o\.domain, fetched\.text\)\)\.outside\) \{/, "checked when the email is written");
+  assert.match(action, /const site = next\.kind === "first" \? await readSite\(next\.url, next\.domain\) : null;/, "and again just before it is sent");
   const records = readFileSync("convex/linkOpportunities.ts", "utf8");
   assert.match(records, /const allowed = \(o: \(typeof all\)\[number\]\) => recipientCountryAllowed\(o\.domain\) && \(!o\.contact \|\| recipientCountryAllowed\(o\.contact\.email\)\) && editorialSite\(o\.domain\);/);
   assert.match(records, /throw new ConvexError\("Enter a postal address/, "the owner sees the message, not 'Server Error'");

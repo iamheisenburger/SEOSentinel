@@ -6,6 +6,7 @@
  * prepares the emails for the owner to send with one click. Every check here is objective; no model decides anything.
  * Pure. */
 import { isEntrenchedHost } from "./serpAttainability.ts";
+import { decodeForScan } from "./outreachContacts.ts";
 
 const DAY = 86_400_000;
 
@@ -245,7 +246,7 @@ export const consentFirst = (domain: string) => CONSENT_FIRST_TLDS.includes(host
 
 /** P371 (Nov 6 2026, Arshad): link emails go only to US and UK sites. Never to the EU/EEA (and never DE/AT/CH): a site on an
  * EU/EEA country domain, any other country domain but .us and .uk (country domains used as generic ones, like .io and .ai,
- * excepted), or a site whose contact or about page shows an EU/EEA address. */
+ * excepted), or a site whose pages show a business outside the US and the UK (P408: shownOutsideUsUk). */
 export const EU_EEA_TLDS = ["at", "be", "bg", "hr", "cy", "cz", "dk", "ee", "fi", "fr", "de", "gr", "hu", "ie", "it", "lv", "lt", "lu", "mt", "nl", "pl", "pt",
   "ro", "sk", "si", "es", "se", "is", "li", "no", "eu", "ch"];
 const GENERIC_COUNTRY_TLDS = ["io", "ai", "co", "me", "tv", "gg", "ly", "so", "to", "fm", "cc", "sh", "app", "dev"];
@@ -255,10 +256,74 @@ export function recipientCountryAllowed(domainOrEmail: string): boolean {
   return tld.length !== 2 || ["us", "uk"].includes(tld) || GENERIC_COUNTRY_TLDS.includes(tld);
 }
 const EU_EEA_COUNTRIES = String.raw`Austria|Österreich|Belgium|Belgique|België|Bulgaria|Croatia|Hrvatska|Cyprus|Czech Republic|Czechia|Denmark|Danmark|Estonia|Finland|Suomi|France|Germany|Deutschland|Greece|Hungary|Magyarország|Ireland|Éire|Italy|Italia|Latvia|Lithuania|Luxembourg|Malta|Netherlands|Nederland|The Netherlands|Poland|Polska|Portugal|Romania|România|Slovakia|Slovenia|Spain|España|Sweden|Sverige|Iceland|Ísland|Liechtenstein|Norway|Norge|Switzerland|Schweiz|Suisse|Svizzera`;
-/** An EU/EEA postal address on a contact or about page: a country's name within a short distance of a postal code. */
-export function euAddressIn(text: string): boolean {
-  return new RegExp(String.raw`\b\d{4,5}\b[^\n]{0,80}\b(?:${EU_EEA_COUNTRIES})\b|\b(?:${EU_EEA_COUNTRIES})\b[^\n]{0,20}\b\d{4,5}\b`, "i")
-    .test(text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "));
+/** P408: every other country (English and common local names), for "US and UK only". Left out: names a US state or city
+ * shares with no other meaning (Georgia). */
+const OTHER_COUNTRIES = String.raw`Afghanistan|Albania|Algeria|Andorra|Angola|Anguilla|Antigua and Barbuda|Argentina|Armenia|Aruba|Australia|Azerbaijan|Bahamas|Bahrain|Bangladesh|Barbados|Belarus|Belize|Benin|Bermuda|Bhutan|Bolivia|Bosnia and Herzegovina|Botswana|Brazil|Brasil|Brunei|Burkina Faso|Burundi|Cambodia|Cameroon|Canada|Cape Verde|Cayman Islands|Central African Republic|Chad|Chile|China|Colombia|Comoros|Congo|Costa Rica|Côte d'Ivoire|Côte d’Ivoire|Ivory Coast|Cuba|Curaçao|Djibouti|Dominica|Dominican Republic|Ecuador|Egypt|El Salvador|Equatorial Guinea|Eritrea|Eesti|Eswatini|Ethiopia|Fiji|Gabon|Gambia|Ghana|Gibraltar|Greenland|Grenada|Guadeloupe|Guatemala|Guernsey|Guinea|Guinea-Bissau|Guyana|Haiti|Honduras|Hong Kong|India|Indonesia|Iran|Iraq|Isle of Man|Israel|Jamaica|Japan|Jersey|Jordan|Kazakhstan|Kenya|Kiribati|Korea|South Korea|North Korea|Kosovo|Kuwait|Kyrgyzstan|Laos|Latvija|Lebanon|Lesotho|Liberia|Libya|Lietuva|Macao|Macau|Madagascar|Malawi|Malaysia|Maldives|Mali|Marshall Islands|Martinique|Mauritania|Mauritius|Mexico|México|Micronesia|Moldova|Monaco|Mongolia|Montenegro|Morocco|Mozambique|Myanmar|Burma|Namibia|Nauru|Nepal|New Caledonia|New Zealand|Nicaragua|Niger|Nigeria|North Macedonia|Oman|Pakistan|Palau|Palestine|Panama|Papua New Guinea|Paraguay|Peru|Perú|Philippines|Qatar|Réunion|Russia|Russian Federation|Rwanda|Saint Kitts and Nevis|Saint Lucia|Saint Vincent and the Grenadines|Samoa|San Marino|Saudi Arabia|Senegal|Serbia|Seychelles|Sierra Leone|Singapore|Slovensko|Slovenija|Solomon Islands|Somalia|South Africa|South Sudan|Sri Lanka|Sudan|Suriname|Syria|Taiwan|Tajikistan|Tanzania|Thailand|Timor-Leste|Togo|Tonga|Trinidad and Tobago|Tunisia|Turkey|Türkiye|Turkmenistan|Tuvalu|Uganda|Ukraine|United Arab Emirates|UAE|Uruguay|Uzbekistan|Vanuatu|Vatican City|Venezuela|Vietnam|Viet Nam|Yemen|Zambia|Zimbabwe`;
+/** A whole country name (letters on neither side; JavaScript's \b doesn't see accented letters), never the end of a US
+ * state's or the UK's own name ("New Mexico", "Northern Ireland"), and never a US town ("Lebanon, PA 17042"). */
+const countryName = (names: string) => String.raw`(?<!\p{L})(?<!New |Northern |American )(?:${names})(?!\p{L})(?![^\n]{0,6}\b[A-Z]{2} \d{5}\b)`;
+const NOT_A_YEAR = String.raw`(?!(?:199\d|20[0-3]\d)\b)`;
+const US_STATES = "AL|AK|AZ|AR|CA|CO|CT|DE|DC|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY";
+/** A postal code: 4-6 digits that aren't a recent year (every footer carries "© 2026") or a US ZIP after its state, or a
+ * Canadian code ("V6B 1A1"). */
+const POSTAL_CODE = String.raw`(?<![\p{L}\d.,])(?<!\b(?:${US_STATES}),?\s)(?:${NOT_A_YEAR}\d{4,6}|[A-Z]\d[A-Z] ?\d[A-Z]\d)\b`;
+/** A US address (state and ZIP) or a UK postcode: the business is present in the US or the UK. */
+const US_UK_ADDRESS = new RegExp(String.raw`\b(?:${US_STATES}),? \d{5}(?:-\d{4})?\b|\b[A-Z]{1,2}\d[A-Z\d]? \d[A-Z]{2}\b`);
+const US_UK_NAME = String.raw`(?<!\p{L})(?:United States(?: of America)?|USA|U\.S\.A\.|United Kingdom|UK|U\.K\.|Great Britain|England|Scotland|(?<!South )Wales|Northern Ireland)(?!\p{L})`;
+/** The rest of one address, up to 80 characters: an address ends at its country, so a US or UK name closes it (an office
+ * listed after a US address is another address). */
+const SAME_ADDRESS = String.raw`(?:(?!${US_UK_NAME})[^\n]){0,80}?`;
+/** P371, P408: a postal address outside the US and the UK: a postal code followed by a country's name (any country but the
+ * US and the UK), or an EU/EEA country's name followed by its postal code. */
+export function addressOutsideUsUk(text: string): boolean {
+  const flat = decodeForScan(text.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
+  return new RegExp(String.raw`${POSTAL_CODE}${SAME_ADDRESS}${countryName(`${EU_EEA_COUNTRIES}|${OTHER_COUNTRIES}`)}`, "u").test(flat)
+    || new RegExp(String.raw`${countryName(EU_EEA_COUNTRIES)}[^\n]{0,20}?(?<![\d.,])${NOT_A_YEAR}\d{4,5}\b`, "u").test(flat);
+}
+/** Company forms registered only outside the US and the UK (a German GmbH, a Dutch B.V., an Indian Pvt Ltd...). */
+const FOREIGN_COMPANY_FORM = /(?<![\p{L}])(?:GmbH|GMBH|gGmbH|UG \(haftungsbeschränkt\)|SARL|S\.A\.R\.L\.|SASU|EURL|S\.à r\.l\.|S\.r\.l\.|S\.R\.L\.|S\.p\.A\.|B\.V\.|BVBA|ApS|OÜ|[Ss]p\. z o\.o\.|s\.r\.o\.|Kft\.|d\.o\.o\.|Pvt\.? Ltd|Pvt\.? Limited|Private Limited|PRIVATE LIMITED|Pty\.? Ltd|Pte\.? Ltd|Sdn\.? Bhd)(?![\p{L}])/u;
+/** The site's own part of a page that carries an article: after its main content (the footer), where the business that
+ * runs the site names itself; the article above names other companies. */
+function siteOwnPart(html: string): string {
+  const ends = [...html.matchAll(/<\/main>|<\/article>/gi)];
+  if (ends.length) return html.slice(ends[ends.length - 1].index!);
+  const footer = html.search(/<footer\b|<(?:div|section)\b[^>]*\b(?:id|class)=["'][^"']*\bfooter\b/i);
+  return footer >= 0 ? html.slice(footer) : "";
+}
+export const OUTSIDE_US_UK_NOTE = "The site shows a business outside the US and the UK: Pentra writes only to US and UK sites";
+/** P408: why an email written before the P408 checks is set aside just before sending. */
+export const NOT_AN_EDITOR_NOTE = "The address reaches a department or desk, not the page's author or an editorial or general inbox";
+export const UNREAD_BEFORE_SENDING_NOTE = "The page couldn't be read just before sending";
+/** P408 (Nov 11 2026): whether a page shows that the business behind it is outside the US and the UK. The P371 check only
+ * knew an EU/EEA country's name beside a postal code, but businesses write their address at home without their country
+ * ("10115 Berlin"), and no other country was known at all. Now, any of:
+ * - the page's declared locale names another region (lang="en-AU", og:locale "de_DE");
+ * - it links a legal-notice page only EU law asks for (Impressum, Mentions légales, Aviso legal, Note legali);
+ * - its phone links dial only countries other than the US (+1) and the UK (+44);
+ * - a company form registered abroad, or a postal address in another country (on a page carrying an article, only in its
+ *   footer: the article names other companies), unless the business also shows a US or UK address there.
+ * A page that shows none of these (or needs JavaScript to show anything) is not refused: Pentra can't tell. */
+export function shownOutsideUsUk(html: string, opts: { articlePage?: boolean } = {}): boolean {
+  const source = String(html || "");
+  const region = (/<html\b[^>]*?\blang=["']?[a-z]{2,3}[-_]([a-z]{2})(?=["'\s>])/i.exec(source)
+    ?? /<meta\b[^>]*\bproperty=["']og:locale["'][^>]*\bcontent=["'][a-z]{2,3}[-_]([a-z]{2})["']/i.exec(source)
+    ?? /<meta\b[^>]*\bcontent=["'][a-z]{2,3}[-_]([a-z]{2})["'][^>]*\bproperty=["']og:locale["']/i.exec(source))?.[1]?.toUpperCase();
+  if (region && !["US", "GB", "UK"].includes(region)) return true;
+  if (/>\s*(?:Impressum|Imprint|Mentions l[ée]gales|Aviso legal|Note legali)\s*</i.test(source)) return true;
+  // Phone links in international form: abroad when none dials the US or the UK (a mistyped US number can lose its "1").
+  const dialled = [...source.matchAll(/href=["']tel:([^"']+)["']/gi)].map((m) => {
+    const digits = m[1].replace(/%2B/gi, "+").replace(/[^\d+]/g, "");
+    return digits.startsWith("+") ? digits.slice(1) : digits.startsWith("00") ? digits.slice(2) : "";
+  }).filter((number) => number.length >= 7);
+  if (dialled.length && !dialled.some((number) => number.startsWith("1") || number.startsWith("44"))) return true;
+  const own = opts.articlePage ? siteOwnPart(source) : source;
+  const text = decodeForScan(own.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
+  // A company or an address abroad doesn't count when the business also shows it is in the US or the UK: offices and
+  // partners elsewhere are named beside a US or UK address, a UK phone or a page set for the UK (en-GB is chosen; a
+  // content system's default is en-US, so that one proves nothing).
+  if (!FOREIGN_COMPANY_FORM.test(text) && !addressOutsideUsUk(text)) return false;
+  const inUsUk = US_UK_ADDRESS.test(text) || region === "GB" || region === "UK" || dialled.some((number) => number.startsWith("44"));
+  return !inUsUk;
 }
 
 export const inSendWindow = (t: number) => { const d = new Date(t), day = d.getUTCDay(), h = d.getUTCHours();
