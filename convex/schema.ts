@@ -1884,6 +1884,9 @@ export default defineSchema({
     lostAt: v.optional(v.number()),
     checkedAt: v.optional(v.number()),
     note: v.optional(v.string()),
+    /** P409: no follow-up: the first email went out under older rules, and the site no longer passes them (abroad, a desk,
+     * unreadable). The row stays "sent", so an answer still counts. */
+    followUpStoppedAt: v.optional(v.number()),
   }).index("by_site_domain", ["siteId", "domain"]),
 
   // P368: the owner's mailbox for link emails (SMTP to send, IMAP to see replies), its password encrypted with the outreach

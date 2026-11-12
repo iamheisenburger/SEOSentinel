@@ -273,12 +273,26 @@ const US_UK_NAME = String.raw`(?<!\p{L})(?:United States(?: of America)?|USA|U\.
 /** The rest of one address, up to 80 characters: an address ends at its country, so a US or UK name closes it (an office
  * listed after a US address is another address). */
 const SAME_ADDRESS = String.raw`(?:(?!${US_UK_NAME})[^\n]){0,80}?`;
+/** P409: a Canadian address: a province or territory, then a postal code in Canada's own format ("Toronto, ON M5J 2M2").
+ * No other country writes a code like it, so the address needs no country name. A Canadian business shares the US's +1
+ * phone numbers and English pages, so its address written at home is often the only sign of where it is. */
+const CANADIAN_ADDRESS = String.raw`(?<!\p{L})(?:AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT|Alberta|British Columbia|Manitoba|New Brunswick|Newfoundland and Labrador|Nova Scotia|Northwest Territories|Nunavut|Ontario|Prince Edward Island|Quebec|Québec|Saskatchewan|Yukon),? [ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z] ?\d[ABCEGHJ-NPRSTV-Z]\d(?![\p{L}\d])`;
 /** P371, P408: a postal address outside the US and the UK: a postal code followed by a country's name (any country but the
- * US and the UK), or an EU/EEA country's name followed by its postal code. */
+ * US and the UK), or an EU/EEA country's name followed by its postal code; P409: or a Canadian address. */
 export function addressOutsideUsUk(text: string): boolean {
   const flat = decodeForScan(text.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
   return new RegExp(String.raw`${POSTAL_CODE}${SAME_ADDRESS}${countryName(`${EU_EEA_COUNTRIES}|${OTHER_COUNTRIES}`)}`, "u").test(flat)
-    || new RegExp(String.raw`${countryName(EU_EEA_COUNTRIES)}[^\n]{0,20}?(?<![\d.,])${NOT_A_YEAR}\d{4,5}\b`, "u").test(flat);
+    || new RegExp(String.raw`${countryName(EU_EEA_COUNTRIES)}[^\n]{0,20}?(?<![\d.,])${NOT_A_YEAR}\d{4,5}\b`, "u").test(flat)
+    || new RegExp(CANADIAN_ADDRESS, "u").test(flat);
+}
+const US_STATE_NAMES = "Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming";
+/** P409: a business saying in words where it is registered or based, with no postal code ("registered in Nigeria", "based
+ * in Cape Town, South Africa", "Headquarters: 12 Marina Road, Lagos, Nigeria"): the place's names, then a country other
+ * than the US and the UK that ends the place. Never a US town named after a country ("Lebanon, PA", "Jersey City"), and
+ * never a list that runs on to the US or the UK ("based in the US, UK and Canada" names no place first). */
+const STATED_BASE = new RegExp(String.raw`(?:\b(?:[Rr]egistered|[Ii]ncorporated|[Bb]ased|[Hh]eadquartered|[Ll]ocated) (?:in|out of|at)|\b(?:HQ|Headquarters|Head [Oo]ffice|Registered [Oo]ffice|Registered [Aa]ddress):) (?:the )?(?:[\p{Lu}\d][\p{L}\d.'’-]*,? ){0,6}?${countryName(`${EU_EEA_COUNTRIES}|${OTHER_COUNTRIES}`)}(?!,? (?:${US_STATES}|${US_STATE_NAMES})(?!\p{L}))(?! City(?!\p{L}))`, "u");
+export function statesBaseOutsideUsUk(text: string): boolean {
+  return STATED_BASE.test(decodeForScan(text.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " "));
 }
 /** Company forms registered only outside the US and the UK (a German GmbH, a Dutch B.V., an Indian Pvt Ltd...). */
 const FOREIGN_COMPANY_FORM = /(?<![\p{L}])(?:GmbH|GMBH|gGmbH|UG \(haftungsbeschränkt\)|SARL|S\.A\.R\.L\.|SASU|EURL|S\.à r\.l\.|S\.r\.l\.|S\.R\.L\.|S\.p\.A\.|B\.V\.|BVBA|ApS|OÜ|[Ss]p\. z o\.o\.|s\.r\.o\.|Kft\.|d\.o\.o\.|Pvt\.? Ltd|Pvt\.? Limited|Private Limited|PRIVATE LIMITED|Pty\.? Ltd|Pte\.? Ltd|Sdn\.? Bhd)(?![\p{L}])/u;
@@ -294,6 +308,9 @@ export const OUTSIDE_US_UK_NOTE = "The site shows a business outside the US and 
 /** P408: why an email written before the P408 checks is set aside just before sending. */
 export const NOT_AN_EDITOR_NOTE = "The address reaches a department or desk, not the page's author or an editorial or general inbox";
 export const UNREAD_BEFORE_SENDING_NOTE = "The page couldn't be read just before sending";
+/** P409: why a follow-up isn't sent: the first email went out under older rules, and today's would not go. */
+export const noFollowUpNote = (reason: "country" | "desk" | "unread") =>
+  `No follow-up. ${reason === "country" ? OUTSIDE_US_UK_NOTE : reason === "desk" ? NOT_AN_EDITOR_NOTE : UNREAD_BEFORE_SENDING_NOTE}`;
 /** P408 (Nov 11 2026): whether a page shows that the business behind it is outside the US and the UK. The P371 check only
  * knew an EU/EEA country's name beside a postal code, but businesses write their address at home without their country
  * ("10115 Berlin"), and no other country was known at all. Now, any of:
@@ -302,6 +319,8 @@ export const UNREAD_BEFORE_SENDING_NOTE = "The page couldn't be read just before
  * - its phone links dial only countries other than the US (+1) and the UK (+44);
  * - a company form registered abroad, or a postal address in another country (on a page carrying an article, only in its
  *   footer: the article names other companies), unless the business also shows a US or UK address there.
+ * P409 (Nov 12 2026): the address also counts without its country when its format is Canada's (the one neighbour whose
+ * phones and pages look like the US's), and so does the business saying where it is registered or based.
  * A page that shows none of these (or needs JavaScript to show anything) is not refused: Pentra can't tell. */
 export function shownOutsideUsUk(html: string, opts: { articlePage?: boolean } = {}): boolean {
   const source = String(html || "");
@@ -321,7 +340,7 @@ export function shownOutsideUsUk(html: string, opts: { articlePage?: boolean } =
   // A company or an address abroad doesn't count when the business also shows it is in the US or the UK: offices and
   // partners elsewhere are named beside a US or UK address, a UK phone or a page set for the UK (en-GB is chosen; a
   // content system's default is en-US, so that one proves nothing).
-  if (!FOREIGN_COMPANY_FORM.test(text) && !addressOutsideUsUk(text)) return false;
+  if (!FOREIGN_COMPANY_FORM.test(text) && !addressOutsideUsUk(text) && !statesBaseOutsideUsUk(text)) return false;
   const inUsUk = US_UK_ADDRESS.test(text) || region === "GB" || region === "UK" || dialled.some((number) => number.startsWith("44"));
   return !inUsUk;
 }
@@ -370,7 +389,9 @@ export function nextTurnAt(now: number, turn: { sentAt: readonly number[]; hasNe
 }
 
 /** A first email whose follow-up is due: sent LINK_FOLLOW_UP_DAYS ago, one send only, and no reply, bounce or opt-out. */
-export function followUpDue(o: { sends?: ReadonlyArray<{ at: number; kind: string }>; repliedAt?: number; bouncedAt?: number; optedOutAt?: number }, now: number): boolean {
+export function followUpDue(o: { sends?: ReadonlyArray<{ at: number; kind: string }>; repliedAt?: number; bouncedAt?: number; optedOutAt?: number;
+  followUpStoppedAt?: number }, now: number): boolean {
   const sends = o.sends ?? [];
-  return sends.length === 1 && sends[0].kind === "first" && !o.repliedAt && !o.bouncedAt && !o.optedOutAt && now - sends[0].at >= LINK_FOLLOW_UP_DAYS * DAY;
+  return sends.length === 1 && sends[0].kind === "first" && !o.repliedAt && !o.bouncedAt && !o.optedOutAt && !o.followUpStoppedAt &&
+    now - sends[0].at >= LINK_FOLLOW_UP_DAYS * DAY;
 }

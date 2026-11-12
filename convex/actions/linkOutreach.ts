@@ -249,9 +249,11 @@ export const sendNext = internalAction({ args: { siteId: v.id("sites") }, handle
       // P371, P408: just before a first email the site is read again, and the email is set aside, never sent, when its
       // pages show a business outside the US and the UK, when its address reaches neither someone the site names nor an
       // editorial, press, marketing or general inbox (an email written before this check), or when no page can be read.
-      const site = next.kind === "first" ? await readSite(next.url, next.domain) : null;
-      const setAside = !site ? null : site.outside ? "country" as const : !site.read ? "unread" as const : !linkContactRole(next.to, site.people) ? "desk" as const : null;
-      if (setAside === "country") await ctx.runMutation(internal.linkOpportunities.setAsideForCountry, { siteId, id: next.id });
+      // P409: a follow-up too: one whose first email went out under older rules is never sent where a first wouldn't go.
+      const site = await readSite(next.url, next.domain);
+      const setAside = site.outside ? "country" as const : !site.read ? "unread" as const : !linkContactRole(next.to, site.people) ? "desk" as const : null;
+      if (setAside && next.kind === "follow_up") await ctx.runMutation(internal.linkOpportunities.stopFollowUp, { siteId, id: next.id, reason: setAside });
+      else if (setAside === "country") await ctx.runMutation(internal.linkOpportunities.setAsideForCountry, { siteId, id: next.id });
       else if (setAside) await ctx.runMutation(internal.linkOpportunities.setAsideDesk, { siteId, id: next.id, unread: setAside === "unread" });
       const claim = setAside ? { ok: false } : await ctx.runMutation(internal.linkOpportunities.claimSend, { siteId, id: next.id, kind: next.kind, messageId });
       if (claim.ok) {

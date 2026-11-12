@@ -162,7 +162,7 @@ test("P371: link emails go only to US and UK sites: never an EU/EEA (or Swiss) d
   assert.equal(euAddressIn("10 Downing St, London SW1A 2AA, United Kingdom"), false);
   const action = readFileSync("convex/actions/linkOutreach.ts", "utf8");
   assert.match(action, /if \(!recipientCountryAllowed\(contact\.email\) \|\| \(await readSite\(o\.url, o\.domain, fetched\.text\)\)\.outside\) \{/, "checked when the email is written");
-  assert.match(action, /const site = next\.kind === "first" \? await readSite\(next\.url, next\.domain\) : null;/, "and again just before it is sent");
+  assert.match(action, /const site = await readSite\(next\.url, next\.domain\);/, "and again just before it is sent (P409: follow-ups too)");
   const records = readFileSync("convex/linkOpportunities.ts", "utf8");
   assert.match(records, /const allowed = \(o: \(typeof all\)\[number\]\) => recipientCountryAllowed\(o\.domain\) && \(!o\.contact \|\| recipientCountryAllowed\(o\.contact\.email\)\) && editorialSite\(o\.domain\);/);
   assert.match(records, /throw new ConvexError\("Enter a postal address/, "the owner sees the message, not 'Server Error'");

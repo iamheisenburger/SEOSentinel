@@ -12,8 +12,8 @@ import { articleMatchesCurrentDomain } from "./lib/siteDomainBinding";
 import { publishedArticlePageUrl } from "./lib/searchPerformance";
 import { encryptOutreachCredentials, outreachCredentialKeyConfig } from "./lib/outreachCredentialEncryption";
 import { imapPresetForSmtpHost, SMTP_PRESETS } from "./lib/outreachSmtp";
-import { editorialSite, followUpDue, INBOX_WATCH_DAYS, LINK_FOLLOW_UP_DAYS, LINK_PAGES_PER_WEEK, NOT_AN_EDITOR_NOTE, OUTSIDE_US_UK_NOTE, recipientCountryAllowed, sendAllowedNow,
-  sendTimes, UNREAD_BEFORE_SENDING_NOTE } from "./lib/linkOutreach";
+import { editorialSite, followUpDue, INBOX_WATCH_DAYS, LINK_FOLLOW_UP_DAYS, LINK_PAGES_PER_WEEK, noFollowUpNote, NOT_AN_EDITOR_NOTE, OUTSIDE_US_UK_NOTE,
+  recipientCountryAllowed, sendAllowedNow, sendTimes, UNREAD_BEFORE_SENDING_NOTE } from "./lib/linkOutreach";
 import { isContactableAddress, isDeskAddress } from "./lib/outreachContacts";
 import { citedPagesFromAnswers, rivalDomainsFromAnswers } from "./lib/linkOpportunities";
 import { ConvexError } from "convex/values";
@@ -260,7 +260,7 @@ export const sendContext = internalQuery({ args: { siteId: v.id("sites") }, hand
     .sort((a, b) => (a.approvedAt ? 0 : 1) - (b.approvedAt ? 0 : 1) || b.rank - a.rank)[0];
   const next = followUp ?? first;
   // When the next follow-up falls due (first emails with no answer yet), so the sender wakes for it.
-  const waiting = all.filter((o) => o.status === "sent" && !o.pendingSend && o.sends?.length === 1 && o.contact && !suppressed.has(o.contact.email) &&
+  const waiting = all.filter((o) => o.status === "sent" && !o.pendingSend && o.sends?.length === 1 && !o.followUpStoppedAt && o.contact && !suppressed.has(o.contact.email) &&
     isContactableAddress(o.contact.email) && !isDeskAddress(o.contact.email))
     .map((o) => o.sends![0].at + LINK_FOLLOW_UP_DAYS * DAY);
   // P406: the addresses whose answers are looked for: written to in the last INBOX_WATCH_DAYS days (bounded work per turn).
@@ -319,6 +319,15 @@ export const setAsideForCountry = internalMutation({ args: { siteId: v.id("sites
   const o = await ctx.db.get(id);
   if (!o || o.siteId !== siteId || o.pendingSend || !["new", "ready", "no_contact"].includes(o.status)) return;
   await ctx.db.patch(id, { status: "skipped", note: OUTSIDE_US_UK_NOTE });
+} });
+
+/** P409: a follow-up goes only where a first email would go today. One whose first email went out under older rules to a
+ * business abroad, a desk, or a site that can't be read now is never sent; the row stays "sent", so an answer still counts. */
+export const stopFollowUp = internalMutation({ args: { siteId: v.id("sites"), id: v.id("link_opportunities"),
+  reason: v.union(v.literal("country"), v.literal("desk"), v.literal("unread")) }, handler: async (ctx, { siteId, id, reason }) => {
+  const o = await ctx.db.get(id);
+  if (!o || o.siteId !== siteId || o.pendingSend || o.status !== "sent" || o.followUpStoppedAt) return;
+  await ctx.db.patch(id, { followUpStoppedAt: Date.now(), note: noFollowUpNote(reason) });
 } });
 
 /** The mailbox to check (its encrypted credentials stay server side). */

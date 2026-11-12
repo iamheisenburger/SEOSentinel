@@ -109,7 +109,7 @@ test("emails are written to those people only, and checked again on the live pag
   const action = readFileSync("convex/actions/linkOutreach.ts", "utf8");
   assert.equal(action.match(/knownRolesOnly: true/g)?.length, 2, "the page itself and its contact or about pages");
   const send = action.slice(action.indexOf("export const sendNext"));
-  assert.match(send, /const site = next\.kind === "first" \? await readSite\(next\.url, next\.domain\) : null;/);
+  assert.match(send, /const site = await readSite\(next\.url, next\.domain\);/, "P409: before follow-ups too");
   assert.match(send, /!linkContactRole\(next\.to, site\.people\) \? "desk" as const/);
   assert.ok(send.indexOf("readSite(next.url") < send.indexOf("internal.linkOpportunities.claimSend"), "read before anything is claimed or sent");
   assert.match(action, /if \(shownOutsideUsUk\(html, \{ articlePage: url === pageUrl \}\)\) return \{ read, outside: true, people \};/);
